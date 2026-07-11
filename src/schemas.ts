@@ -99,6 +99,47 @@ export const flagEvaluationSchema = z.object({
 
 export type FlagEvaluationInput = z.infer<typeof flagEvaluationSchema>;
 
+// ===== Browser Experience =====
+
+export const experienceSurfaceSchema = z.object({
+  key: keySchema,
+  name: z.string().trim().min(1),
+  purpose: semanticText,
+});
+
+export type CreateExperienceSurfaceInput = z.infer<typeof experienceSurfaceSchema>;
+
+const experienceRouteSchema = z.string().min(1).max(500)
+  .refine((route) => route.startsWith('/'), 'route must start with "/"')
+  .refine((route) => !route.includes('?') && !route.includes('#'), 'route must not include a query string or hash');
+const experienceCommonSchema = z.object({
+  distinct_id: z.string().min(1).max(200),
+  session_id: z.string().min(1).max(200),
+  route: experienceRouteSchema,
+  sequence: z.number().int().min(0).max(1_000_000),
+});
+const experienceLabelSchema = z.string().trim().min(1).max(120).regex(
+  /^[a-z][a-z0-9_.:-]*$/,
+  'label must be a stable lowercase identifier, not captured page text',
+);
+
+export const experienceEventSchema = z.discriminatedUnion('kind', [
+  experienceCommonSchema.extend({ kind: z.literal('page_viewed') }),
+  experienceCommonSchema.extend({
+    kind: z.literal('element_clicked'), label: experienceLabelSchema,
+    x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
+  }),
+  experienceCommonSchema.extend({ kind: z.literal('scroll_depth'), depth: z.number().int().min(0).max(100) }),
+  experienceCommonSchema.extend({ kind: z.literal('client_error'), error_type: z.enum(['error', 'unhandled_rejection']) }),
+]);
+
+export const experienceCaptureSchema = z.object({
+  surface: keySchema,
+  events: z.array(experienceEventSchema).min(1).max(100),
+});
+
+export type ExperienceCaptureInput = z.infer<typeof experienceCaptureSchema>;
+
 const experimentMetricKeysSchema = z.array(keySchema).max(5).default([]).superRefine((keys, ctx) => {
   const seen = new Set<string>();
   for (const [index, key] of keys.entries()) {

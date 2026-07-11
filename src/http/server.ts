@@ -28,10 +28,13 @@ import {
 import {
   concludeExperiment, createExperiment, getExperimentResults, listExperiments, startExperiment, updateExperiment,
 } from '../services/experiments.js';
+import {
+  archiveExperienceSurface, captureExperienceEvents, createExperienceSurface, listExperienceSurfaces,
+} from '../services/experience.js';
 import { parseDateInput } from '../dates.js';
 import {
   deprecateMetricSchema,
-  concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
+  concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, updateMetricSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema,
 } from '../schemas.js';
@@ -166,6 +169,12 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await ingestProject(ctx, req.auth);
     const body = flagEvaluationSchema.parse(req.body);
     return evaluateFeatureFlag(ctx.pool, ctx.eventStore, project.id, req.auth.env, body);
+  });
+
+  app.post('/i/v1/experience/events', async (req) => {
+    requireKind(req.auth, 'ingest');
+    const project = await ingestProject(ctx, req.auth);
+    return captureExperienceEvents(ctx.pool, ctx.eventStore, project.id, req.auth.env, experienceCaptureSchema.parse(req.body));
   });
 }
 
@@ -363,6 +372,26 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await resolveProject(req);
     const { env } = req.query as { env?: string };
     return getProjectSchema(ctx.pool, ctx.eventStore, project, env ?? 'prod');
+  });
+
+  // ----- browser experience -----
+  app.post('/api/v1/projects/:slug/experience/surfaces', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return reply.status(201).send(await createExperienceSurface(ctx.pool, project.id, experienceSurfaceSchema.parse(req.body)));
+  });
+
+  app.get('/api/v1/projects/:slug/experience/surfaces', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { surfaces: await listExperienceSurfaces(ctx.pool, project.id) };
+  });
+
+  app.post('/api/v1/projects/:slug/experience/surfaces/:key/archive', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return archiveExperienceSurface(ctx.pool, project.id, key);
   });
 
   // ----- feature delivery -----
