@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestEnv, type TestEnv } from './helpers.js';
+import { api, createTestEnv, type TestEnv } from './helpers.js';
 
 let env: TestEnv;
 
@@ -33,5 +33,69 @@ describe('flags and experiments schema', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe('feature flags', () => {
+  const P = () => `/api/v1/projects/${env.projectSlug}`;
+
+  async function createActiveFlag(
+    key: string,
+    variants: Array<{ key: string; rollout_percentage: number; payload?: Record<string, unknown> }>,
+  ): Promise<void> {
+    const created = await api(env, env.secretToken, 'POST', `${P()}/flags`, {
+      key,
+      name: key.replaceAll('_', ' '),
+      purpose: `Safely roll out the ${key.replaceAll('_', ' ')} product change.`,
+      variants,
+      status: 'active',
+    });
+    expect(created.status).toBe(201);
+  }
+
+  it('keeps an actor on one variant and appends registered exposure events', async () => {
+    await createActiveFlag('checkout_copy', [
+      { key: 'control', rollout_percentage: 50 },
+      { key: 'test', rollout_percentage: 50, payload: { label: 'Pay now' } },
+    ]);
+
+    const first = await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'checkout_copy', distinct_id: 'actor-42', session_id: 's-42',
+    });
+    const second = await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'checkout_copy', distinct_id: 'actor-42', session_id: 's-42',
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.body.variant).toEqual(first.body.variant);
+    expect(first.body.variant.key).toMatch(/^(control|test)$/);
+
+    const events = await api(env, env.secretToken, 'GET', `${P()}/events/sample?event=%24feature_flag_called&limit=10`);
+    expect(events.body.events).toHaveLength(2);
+    expect(events.body.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: '$feature_flag_called', distinct_id: 'actor-42', session_id: 's-42', registered: true,
+        properties: expect.objectContaining({ flag_key: 'checkout_copy', variant: first.body.variant.key }),
+      }),
+    ]));
+  });
+
+  it('returns no variant and emits no exposure when the allocation is empty', async () => {
+    await createActiveFlag('empty_rollout', [{ key: 'control', rollout_percentage: 0 }]);
+
+    const evaluated = await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'empty_rollout', distinct_id: 'actor-empty',
+    });
+
+    expect(evaluated.status).toBe(200);
+    expect(evaluated.body).toEqual({ key: 'empty_rollout', variant: null });
+    const events = await api(env, env.secretToken, 'GET', `${P()}/events/sample?event=%24feature_flag_called&limit=20`);
+    expect(events.body.events.some((event: { properties: { flag_key?: string } }) => event.properties.flag_key === 'empty_rollout')).toBe(false);
+  });
+
+  it('keeps flag management unavailable to ingest keys', async () => {
+    const listed = await api(env, env.ingestToken, 'GET', `${P()}/flags`);
+    expect(listed.status).toBe(403);
+    expect(listed.body.error.code).toBe('wrong_key_kind');
   });
 });

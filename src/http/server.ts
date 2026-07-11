@@ -22,11 +22,15 @@ import { clearIngestWarnings, listIngestWarnings, type WarningKind } from '../se
 import { listDataQualityIssues } from '../services/dataQuality.js';
 import { explainMetricUsage } from '../services/metricUsage.js';
 import { getProjectSchema } from '../services/schema.js';
+import {
+  archiveFeatureFlag, createFeatureFlag, evaluateFeatureFlag, listFeatureFlags, updateFeatureFlag,
+} from '../services/flags.js';
 import { parseDateInput } from '../dates.js';
 import {
   deprecateMetricSchema,
-  defineFunnelSchema, entityUpsertSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
+  defineFunnelSchema, entityUpsertSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, updateMetricSchema, type PropertyFilter,
+  updateFeatureFlagSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -152,6 +156,13 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await ingestProject(ctx, req.auth);
     const body = entityUpsertSchema.parse(req.body);
     return upsertEntities(ctx.pool, project.id, req.auth.env, body);
+  });
+
+  app.post('/i/v1/flags/evaluate', async (req) => {
+    requireKind(req.auth, 'ingest');
+    const project = await ingestProject(ctx, req.auth);
+    const body = flagEvaluationSchema.parse(req.body);
+    return evaluateFeatureFlag(ctx.pool, ctx.eventStore, project.id, req.auth.env, body);
   });
 }
 
@@ -349,6 +360,35 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await resolveProject(req);
     const { env } = req.query as { env?: string };
     return getProjectSchema(ctx.pool, ctx.eventStore, project, env ?? 'prod');
+  });
+
+  // ----- feature delivery -----
+  app.post('/api/v1/projects/:slug/flags', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const input = featureFlagSchema.parse(req.body);
+    return reply.status(201).send(await createFeatureFlag(ctx.pool, project.id, input));
+  });
+
+  app.get('/api/v1/projects/:slug/flags', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { flags: await listFeatureFlags(ctx.pool, project.id) };
+  });
+
+  app.patch('/api/v1/projects/:slug/flags/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const patch = updateFeatureFlagSchema.parse(req.body);
+    return updateFeatureFlag(ctx.pool, project.id, key, patch);
+  });
+
+  app.post('/api/v1/projects/:slug/flags/:key/archive', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return archiveFeatureFlag(ctx.pool, project.id, key);
   });
 
   app.post('/api/v1/projects/:slug/metrics', async (req, reply) => {
