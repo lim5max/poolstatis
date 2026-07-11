@@ -48,6 +48,19 @@ describe('flags and experiments schema', () => {
     });
 
     expect(imprecise.success).toBe(false);
+
+    const validTwoDecimal = featureFlagSchema!.safeParse({
+      key: 'small_precise_shares',
+      name: 'Small precise shares',
+      purpose: 'Accept normal two-decimal allocations despite binary floating point.',
+      variants: [
+        { key: 'a', rollout_percentage: 0.07 },
+        { key: 'b', rollout_percentage: 0.29 },
+        { key: 'c', rollout_percentage: 1.13 },
+      ],
+    });
+
+    expect(validTwoDecimal.success).toBe(true);
   });
 });
 
@@ -215,6 +228,41 @@ describe('experiments', () => {
       api(env, env.secretToken, 'POST', `${P()}/experiments/concurrent_start_experiment/start`),
     ]);
     expect(attempts.map((attempt) => attempt.status).sort()).toEqual([200, 409]);
+  });
+
+  it('does not let a draft patch overtake a concurrent start', async () => {
+    await activeMetric(env, { key: 'locked_patch_outcome', source: { event: 'locked.patch.outcome' } });
+    await createActiveFlag('locked_patch_flag');
+    const created = await api(env, env.secretToken, 'POST', `${P()}/experiments`, {
+      key: 'locked_patch_experiment',
+      name: 'Locked patch experiment',
+      hypothesis: 'A draft patch must not rewrite an experiment being started.',
+      flag_key: 'locked_patch_flag',
+      primary_metric_key: 'locked_patch_outcome',
+    });
+    expect(created.status).toBe(201);
+
+    const connection = await env.pool.connect();
+    try {
+      await connection.query('BEGIN');
+      await connection.query(
+        'SELECT id FROM experiments WHERE project_id = (SELECT id FROM projects WHERE slug = $1) AND key = $2 FOR UPDATE',
+        [env.projectSlug, 'locked_patch_experiment'],
+      );
+      const start = api(env, env.secretToken, 'POST', `${P()}/experiments/locked_patch_experiment/start`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const patch = api(env, env.secretToken, 'PATCH', `${P()}/experiments/locked_patch_experiment`, {
+        hypothesis: 'This patch must lose the race to the start transition.',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await connection.query('COMMIT');
+
+      const attempts = await Promise.all([start, patch]);
+      expect(attempts.map((attempt) => attempt.status).sort()).toEqual([200, 409]);
+    } finally {
+      await connection.query('ROLLBACK').catch(() => {});
+      connection.release();
+    }
   });
 
   it('does not start an experiment before its flag allocates all traffic', async () => {

@@ -97,27 +97,40 @@ export async function updateExperiment(
   key: string,
   patch: UpdateExperimentInput,
 ): Promise<Experiment> {
-  const experiment = await getExperiment(pool, projectId, key);
-  if (experiment.status !== 'draft') {
-    throw new ApiError(409, 'experiment_not_draft', `experiment "${key}" is ${experiment.status}`, 'only draft experiments may change their hypothesis or metric definitions');
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+    const experiment = await getExperiment(db, projectId, key, true);
+    if (experiment.status !== 'draft') {
+      throw new ApiError(409, 'experiment_not_draft', `experiment "${key}" is ${experiment.status}`, 'only draft experiments may change their hypothesis or metric definitions');
+    }
+    if (patch.primary_metric_key) await verifyMetricExists(db, projectId, patch.primary_metric_key);
+    if (patch.secondary_metric_keys) {
+      for (const metricKey of patch.secondary_metric_keys) await verifyMetricExists(db, projectId, metricKey);
+    }
+    const { rows } = await db.query<Experiment>(
+      `UPDATE experiments SET
+         name = COALESCE($3, name),
+         hypothesis = COALESCE($4, hypothesis),
+         primary_metric_key = COALESCE($5, primary_metric_key),
+         secondary_metric_keys = COALESCE($6, secondary_metric_keys),
+         updated_at = now()
+       WHERE project_id = $1 AND key = $2 AND status = 'draft'
+       RETURNING ${EXPERIMENT_COLS}`,
+      [projectId, key, patch.name ?? null, patch.hypothesis ?? null, patch.primary_metric_key ?? null,
+        patch.secondary_metric_keys ?? null],
+    );
+    if (!rows[0]) {
+      throw new ApiError(409, 'experiment_not_draft', `experiment "${key}" is no longer draft`, 'retry after reading the current experiment state');
+    }
+    await db.query('COMMIT');
+    return mapExperiment(rows[0]);
+  } catch (err) {
+    await db.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    db.release();
   }
-  if (patch.primary_metric_key) await verifyMetricExists(pool, projectId, patch.primary_metric_key);
-  if (patch.secondary_metric_keys) {
-    for (const metricKey of patch.secondary_metric_keys) await verifyMetricExists(pool, projectId, metricKey);
-  }
-  const { rows } = await pool.query<Experiment>(
-    `UPDATE experiments SET
-       name = COALESCE($3, name),
-       hypothesis = COALESCE($4, hypothesis),
-       primary_metric_key = COALESCE($5, primary_metric_key),
-       secondary_metric_keys = COALESCE($6, secondary_metric_keys),
-       updated_at = now()
-     WHERE project_id = $1 AND key = $2
-     RETURNING ${EXPERIMENT_COLS}`,
-    [projectId, key, patch.name ?? null, patch.hypothesis ?? null, patch.primary_metric_key ?? null,
-      patch.secondary_metric_keys ?? null],
-  );
-  return mapExperiment(rows[0]!);
 }
 
 export async function startExperiment(pool: pg.Pool, projectId: string, key: string, now = new Date()): Promise<Experiment> {
@@ -272,7 +285,7 @@ function validateExperimentMetric(metric: Metric): void {
   }
 }
 
-async function verifyMetricExists(pool: pg.Pool, projectId: string, key: string): Promise<void> {
+async function verifyMetricExists(pool: Db, projectId: string, key: string): Promise<void> {
   await getMetric(pool, projectId, key);
 }
 

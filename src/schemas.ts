@@ -36,7 +36,7 @@ const keySchema = z
 // ===== Feature delivery: flags and experiments =====
 
 const rolloutPercentageSchema = z.number().min(0).max(100).finite()
-  .refine((percentage) => Number.isInteger(percentage * 100),
+  .refine((percentage) => Math.abs(percentage * 100 - Math.round(percentage * 100)) < 1e-8,
     'rollout percentage must use no more than two decimal places');
 
 export const featureFlagVariantSchema = z.object({
