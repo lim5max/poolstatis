@@ -8,6 +8,8 @@ import type {
 } from '../schemas.js';
 import type { EventStore } from '../stores/eventStore.js';
 
+type Db = pg.Pool | pg.PoolClient;
+
 export interface FeatureFlagVariant {
   key: string;
   rollout_percentage: number;
@@ -70,9 +72,9 @@ export async function createFeatureFlag(
   }
 }
 
-export async function getFeatureFlag(pool: pg.Pool, projectId: string, key: string): Promise<FeatureFlag> {
+export async function getFeatureFlag(pool: Db, projectId: string, key: string, lock = false): Promise<FeatureFlag> {
   const { rows } = await pool.query<FeatureFlag>(
-    `SELECT ${FLAG_COLS} FROM feature_flags WHERE project_id = $1 AND key = $2`,
+    `SELECT ${FLAG_COLS} FROM feature_flags WHERE project_id = $1 AND key = $2${lock ? ' FOR UPDATE' : ''}`,
     [projectId, key],
   );
   if (!rows[0]) {
@@ -98,51 +100,72 @@ export async function updateFeatureFlag(
   key: string,
   patch: UpdateFeatureFlagInput,
 ): Promise<FeatureFlag> {
-  const existing = await getFeatureFlag(pool, projectId, key);
-  if (existing.status === 'archived') {
-    throw new ApiError(
-      409,
-      'feature_flag_archived',
-      `feature flag "${key}" is archived`,
-      'create a new flag instead of modifying historical delivery configuration',
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+    const existing = await getFeatureFlag(db, projectId, key, true);
+    if (existing.status === 'archived') {
+      throw new ApiError(
+        409,
+        'feature_flag_archived',
+        `feature flag "${key}" is archived`,
+        'create a new flag instead of modifying historical delivery configuration',
+      );
+    }
+    await ensureNoRunningExperiment(db, projectId, key);
+    const { rows } = await db.query<FeatureFlag>(
+      `UPDATE feature_flags SET
+         name = COALESCE($3, name),
+         purpose = COALESCE($4, purpose),
+         variants = COALESCE($5, variants),
+         status = COALESCE($6, status),
+         updated_at = now()
+       WHERE project_id = $1 AND key = $2
+       RETURNING ${FLAG_COLS}`,
+      [
+        projectId,
+        key,
+        patch.name ?? null,
+        patch.purpose ?? null,
+        patch.variants === undefined ? null : JSON.stringify(patch.variants),
+        patch.status ?? null,
+      ],
     );
+    if (!rows[0]) throw notFound('feature_flag');
+    await db.query('COMMIT');
+    return mapFlag(rows[0]);
+  } catch (err) {
+    await db.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    db.release();
   }
-  await ensureNoRunningExperiment(pool, projectId, key);
-  const { rows } = await pool.query<FeatureFlag>(
-    `UPDATE feature_flags SET
-       name = COALESCE($3, name),
-       purpose = COALESCE($4, purpose),
-       variants = COALESCE($5, variants),
-       status = COALESCE($6, status),
-       updated_at = now()
-     WHERE project_id = $1 AND key = $2
-     RETURNING ${FLAG_COLS}`,
-    [
-      projectId,
-      key,
-      patch.name ?? null,
-      patch.purpose ?? null,
-      patch.variants === undefined ? null : JSON.stringify(patch.variants),
-      patch.status ?? null,
-    ],
-  );
-  if (!rows[0]) throw notFound('feature_flag');
-  return mapFlag(rows[0]);
 }
 
 export async function archiveFeatureFlag(pool: pg.Pool, projectId: string, key: string): Promise<FeatureFlag> {
-  await ensureNoRunningExperiment(pool, projectId, key);
-  const { rows } = await pool.query<FeatureFlag>(
-    `UPDATE feature_flags SET status = 'archived', updated_at = now()
-     WHERE project_id = $1 AND key = $2
-     RETURNING ${FLAG_COLS}`,
-    [projectId, key],
-  );
-  if (!rows[0]) throw notFound('feature_flag');
-  return mapFlag(rows[0]);
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+    await getFeatureFlag(db, projectId, key, true);
+    await ensureNoRunningExperiment(db, projectId, key);
+    const { rows } = await db.query<FeatureFlag>(
+      `UPDATE feature_flags SET status = 'archived', updated_at = now()
+       WHERE project_id = $1 AND key = $2
+       RETURNING ${FLAG_COLS}`,
+      [projectId, key],
+    );
+    if (!rows[0]) throw notFound('feature_flag');
+    await db.query('COMMIT');
+    return mapFlag(rows[0]);
+  } catch (err) {
+    await db.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    db.release();
+  }
 }
 
-async function ensureNoRunningExperiment(pool: pg.Pool, projectId: string, key: string): Promise<void> {
+async function ensureNoRunningExperiment(pool: Db, projectId: string, key: string): Promise<void> {
   const { rows: running } = await pool.query<{ key: string }>(
     `SELECT key FROM experiments WHERE project_id = $1 AND flag_key = $2 AND status = 'running' LIMIT 1`,
     [projectId, key],
@@ -191,6 +214,7 @@ export async function evaluateFeatureFlag(
         payload: selected.payload ?? null,
       },
       registered: true,
+      isSystem: true,
     }]);
   }
   return { key: flag.key, variant };

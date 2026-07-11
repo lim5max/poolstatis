@@ -10,6 +10,8 @@ export interface StorableEvent {
   sessionId: string | null;
   properties: Record<string, unknown>;
   registered: boolean;
+  /** Set only by trusted platform code; public ingest always writes false. */
+  isSystem?: boolean;
 }
 
 export interface TrendQuery {

@@ -143,7 +143,7 @@ export async function deprecateMetric(
   return rows[0];
 }
 
-export async function getMetric(pool: pg.Pool, projectId: string, key: string): Promise<Metric> {
+export async function getMetric(pool: pg.Pool | pg.PoolClient, projectId: string, key: string): Promise<Metric> {
   const { rows } = await pool.query(
     `SELECT ${METRIC_COLS} FROM metrics WHERE project_id = $1 AND key = $2`,
     [projectId, key],

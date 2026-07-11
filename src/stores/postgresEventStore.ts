@@ -35,13 +35,13 @@ export class PostgresEventStore implements EventStore {
     const rows = events.map((e) => {
       params.push(
         e.projectId, e.env, e.event, e.timestamp, e.distinctId,
-        e.sessionId, JSON.stringify(e.properties), e.registered,
+        e.sessionId, JSON.stringify(e.properties), e.registered, e.isSystem ?? false,
       );
-      const base = params.length - 8;
-      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8})`;
+      const base = params.length - 9;
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
     });
     await this.pool.query(
-      `INSERT INTO events (project_id, env, event, "timestamp", distinct_id, session_id, properties, registered)
+      `INSERT INTO events (project_id, env, event, "timestamp", distinct_id, session_id, properties, registered, is_system)
        VALUES ${rows.join(', ')}`,
       params,
     );
@@ -332,6 +332,7 @@ export class PostgresEventStore implements EventStore {
          WHERE project_id = $1
            AND env = $2
            AND event = '$feature_flag_called'
+           AND is_system = true
            AND properties->>'flag_key' = $3
            AND "timestamp" >= $4
            AND "timestamp" < $5

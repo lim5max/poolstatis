@@ -35,7 +35,9 @@ const keySchema = z
 
 // ===== Feature delivery: flags and experiments =====
 
-const rolloutPercentageSchema = z.number().min(0).max(100).finite();
+const rolloutPercentageSchema = z.number().min(0).max(100).finite()
+  .refine((percentage) => Number.isInteger(percentage * 100),
+    'rollout percentage must use no more than two decimal places');
 
 export const featureFlagVariantSchema = z.object({
   key: keySchema,
@@ -58,12 +60,12 @@ function validateVariants(
     }
     seen.add(variant.key);
   }
-  const total = variants.reduce((sum, variant) => sum + variant.rollout_percentage, 0);
-  if (total > 100) {
+  const totalBasisPoints = variants.reduce((sum, variant) => sum + Math.round(variant.rollout_percentage * 100), 0);
+  if (totalBasisPoints > 10_000) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['variants'],
-      message: `variant allocation totals ${total}%; it must not exceed 100%`,
+      message: `variant allocation totals ${totalBasisPoints / 100}%; it must not exceed 100%`,
     });
   }
 }

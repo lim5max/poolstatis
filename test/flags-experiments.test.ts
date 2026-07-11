@@ -19,7 +19,7 @@ describe('flags and experiments schema', () => {
     expect(rows[0]).toEqual({ flags: 'feature_flags', experiments: 'experiments' });
   });
 
-  it('rejects duplicate variants and allocation above one hundred percent', async () => {
+  it('rejects duplicate variants, allocation above one hundred percent, and imprecise traffic shares', async () => {
     const schemas = await import('../src/schemas.js') as Record<string, unknown>;
     const featureFlagSchema = schemas.featureFlagSchema as { safeParse: (value: unknown) => { success: boolean } } | undefined;
     expect(featureFlagSchema).toBeDefined();
@@ -35,6 +35,19 @@ describe('flags and experiments schema', () => {
     });
 
     expect(result.success).toBe(false);
+
+    const imprecise = featureFlagSchema!.safeParse({
+      key: 'checkout_copy_precise',
+      name: 'Checkout copy precision',
+      purpose: 'Keep rollout allocation exactly representable as basis points.',
+      variants: [
+        { key: 'control', rollout_percentage: 33.333 },
+        { key: 'test_a', rollout_percentage: 33.333 },
+        { key: 'test_b', rollout_percentage: 33.334 },
+      ],
+    });
+
+    expect(imprecise.success).toBe(false);
   });
 });
 
@@ -156,6 +169,52 @@ describe('experiments', () => {
     expect(result.body.variants.reduce((total: number, variant: { exposed: number }) => total + variant.exposed, 0)).toBe(2);
     expect(result.body.variants.reduce((total: number, variant: { converted: number }) => total + variant.converted, 0)).toBe(1);
     expect(result.body.variants.reduce((total: number, variant: { probability_best: number }) => total + variant.probability_best, 0)).toBeCloseTo(1, 5);
+  });
+
+  it('counts only server-emitted flag exposures, even if a client sends a registered lookalike event', async () => {
+    await activeMetric(env, { key: 'system_exposure_outcome', source: { event: 'system.exposure.outcome' } });
+    // An active metric can make this direct ingest event registered. That must
+    // still never let a caller manufacture an experiment assignment.
+    await activeMetric(env, { key: 'lookalike_exposure_event', source: { event: '$feature_flag_called' } });
+    await createActiveFlag('system_exposure_flag');
+    await createAndStartExperiment('system_exposure_experiment', 'system_exposure_flag', 'system_exposure_outcome');
+
+    const forged = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{
+        event: '$feature_flag_called',
+        distinct_id: 'forged-actor',
+        properties: { flag_key: 'system_exposure_flag', variant: 'control' },
+      }],
+    });
+    expect(forged.status).toBe(200);
+
+    const evaluated = await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'system_exposure_flag', distinct_id: 'real-actor',
+    });
+    expect(evaluated.status).toBe(200);
+
+    const result = await api(env, env.secretToken, 'GET', `${P()}/experiments/system_exposure_experiment/results?env=prod`);
+    expect(result.status).toBe(200);
+    expect(result.body.variants.reduce((total: number, variant: { exposed: number }) => total + variant.exposed, 0)).toBe(1);
+  });
+
+  it('allows only one concurrent start transition', async () => {
+    await activeMetric(env, { key: 'concurrent_start_outcome', source: { event: 'concurrent.start.outcome' } });
+    await createActiveFlag('concurrent_start_flag');
+    const created = await api(env, env.secretToken, 'POST', `${P()}/experiments`, {
+      key: 'concurrent_start_experiment',
+      name: 'Concurrent start experiment',
+      hypothesis: 'Concurrent start requests must produce exactly one state transition.',
+      flag_key: 'concurrent_start_flag',
+      primary_metric_key: 'concurrent_start_outcome',
+    });
+    expect(created.status).toBe(201);
+
+    const attempts = await Promise.all([
+      api(env, env.secretToken, 'POST', `${P()}/experiments/concurrent_start_experiment/start`),
+      api(env, env.secretToken, 'POST', `${P()}/experiments/concurrent_start_experiment/start`),
+    ]);
+    expect(attempts.map((attempt) => attempt.status).sort()).toEqual([200, 409]);
   });
 
   it('does not start an experiment before its flag allocates all traffic', async () => {

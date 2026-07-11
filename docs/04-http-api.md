@@ -111,17 +111,19 @@ POST   /api/v1/projects/{slug}/insights
 
 Feature flag хранит обязательный `purpose`, стабильный server-side salt и
 variants `{key, rollout_percentage, payload?}`. Проценты не могут превышать
-100%; один и тот же `distinct_id` всегда получает тот же вариант, пока salt не
-меняется (он никогда не меняется через API). `draft` и `archived` флаги не
-доступны рантайму.
+100% и задаются с точностью до 0.01% (basis points); один и тот же
+`distinct_id` всегда получает тот же вариант, пока salt не меняется (он
+никогда не меняется через API). `draft` и `archived` флаги не доступны
+рантайму.
 
 Эксперимент ссылается на один flag и на `active` registry metric типа `count`
 или `unique_actors`. Старт возможен только для active flag с распределением
 ровно 100%. Результат сопоставляет первый `$feature_flag_called` пользователя в
-окне эксперимента с outcome-event **после** exposure, затем возвращает по
-вариантам `exposed`, `converted`, `conversion_rate`, `uplift_vs_control`, 95%
-Beta credible interval и `probability_best` для primary и всех declared
-secondary metrics.
+окне эксперимента с outcome-event **после** exposure. Учитываются только
+события exposure, созданные серверным evaluator (публичный ingest не может
+подделать assignment). Затем возвращаются `exposed`, `converted`,
+`conversion_rate`, `uplift_vs_control`, 95% Beta credible interval и
+`probability_best` для primary и всех declared secondary metrics.
 
 `POST /flags/{key}/evaluate` в Platform API создан для MCP/debugging и не
 создаёт exposure. Рантайм всегда использует ingest endpoint выше.

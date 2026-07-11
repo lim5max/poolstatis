@@ -7,6 +7,8 @@ import { getMetric, type Metric } from './registry.js';
 import { getFeatureFlag, type FeatureFlag } from './flags.js';
 import { summarizeExperimentVariants, type VariantExperimentStats } from './experimentStats.js';
 
+type Db = pg.Pool | pg.PoolClient;
+
 export interface Experiment {
   id: string;
   key: string;
@@ -72,9 +74,9 @@ export async function createExperiment(pool: pg.Pool, projectId: string, input: 
   }
 }
 
-export async function getExperiment(pool: pg.Pool, projectId: string, key: string): Promise<Experiment> {
+export async function getExperiment(pool: Db, projectId: string, key: string, lock = false): Promise<Experiment> {
   const { rows } = await pool.query<Experiment>(
-    `SELECT ${EXPERIMENT_COLS} FROM experiments WHERE project_id = $1 AND key = $2`,
+    `SELECT ${EXPERIMENT_COLS} FROM experiments WHERE project_id = $1 AND key = $2${lock ? ' FOR UPDATE' : ''}`,
     [projectId, key],
   );
   if (!rows[0]) throw notFound('experiment', `no experiment "${key}" in this project — call list_experiments first`);
@@ -119,21 +121,34 @@ export async function updateExperiment(
 }
 
 export async function startExperiment(pool: pg.Pool, projectId: string, key: string, now = new Date()): Promise<Experiment> {
-  const experiment = await getExperiment(pool, projectId, key);
-  if (experiment.status !== 'draft') {
-    throw new ApiError(409, 'experiment_not_draft', `experiment "${key}" is ${experiment.status}`, 'only draft experiments can be started');
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+    const experiment = await getExperiment(db, projectId, key, true);
+    if (experiment.status !== 'draft') {
+      throw new ApiError(409, 'experiment_not_draft', `experiment "${key}" is ${experiment.status}`, 'only draft experiments can be started');
+    }
+    const flag = await getFeatureFlag(db, projectId, experiment.flag_key, true);
+    validateExperimentFlag(flag);
+    const metrics = [experiment.primary_metric_key, ...experiment.secondary_metric_keys];
+    for (const metricKey of metrics) validateExperimentMetric(await getMetric(db, projectId, metricKey));
+    const { rows } = await db.query<Experiment>(
+      `UPDATE experiments SET status = 'running', started_at = $3, updated_at = now()
+       WHERE project_id = $1 AND key = $2 AND status = 'draft'
+       RETURNING ${EXPERIMENT_COLS}`,
+      [projectId, key, now],
+    );
+    if (!rows[0]) {
+      throw new ApiError(409, 'experiment_not_draft', `experiment "${key}" is no longer draft`, 'retry after reading the current experiment state');
+    }
+    await db.query('COMMIT');
+    return mapExperiment(rows[0]);
+  } catch (err) {
+    await db.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    db.release();
   }
-  const flag = await getFeatureFlag(pool, projectId, experiment.flag_key);
-  validateExperimentFlag(flag);
-  const metrics = [experiment.primary_metric_key, ...experiment.secondary_metric_keys];
-  for (const metricKey of metrics) validateExperimentMetric(await getMetric(pool, projectId, metricKey));
-  const { rows } = await pool.query<Experiment>(
-    `UPDATE experiments SET status = 'running', started_at = $3, updated_at = now()
-     WHERE project_id = $1 AND key = $2
-     RETURNING ${EXPERIMENT_COLS}`,
-    [projectId, key, now],
-  );
-  return mapExperiment(rows[0]!);
 }
 
 export async function concludeExperiment(
@@ -143,17 +158,30 @@ export async function concludeExperiment(
   decision: Experiment['decision'],
   now = new Date(),
 ): Promise<Experiment> {
-  const experiment = await getExperiment(pool, projectId, key);
-  if (experiment.status !== 'running') {
-    throw new ApiError(409, 'experiment_not_running', `experiment "${key}" is ${experiment.status}`, 'only a running experiment can be concluded');
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+    const experiment = await getExperiment(db, projectId, key, true);
+    if (experiment.status !== 'running') {
+      throw new ApiError(409, 'experiment_not_running', `experiment "${key}" is ${experiment.status}`, 'only a running experiment can be concluded');
+    }
+    const { rows } = await db.query<Experiment>(
+      `UPDATE experiments SET status = 'concluded', concluded_at = $3, decision = $4, updated_at = now()
+       WHERE project_id = $1 AND key = $2 AND status = 'running'
+       RETURNING ${EXPERIMENT_COLS}`,
+      [projectId, key, now, decision ? JSON.stringify(decision) : null],
+    );
+    if (!rows[0]) {
+      throw new ApiError(409, 'experiment_not_running', `experiment "${key}" is no longer running`, 'retry after reading the current experiment state');
+    }
+    await db.query('COMMIT');
+    return mapExperiment(rows[0]);
+  } catch (err) {
+    await db.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    db.release();
   }
-  const { rows } = await pool.query<Experiment>(
-    `UPDATE experiments SET status = 'concluded', concluded_at = $3, decision = $4, updated_at = now()
-     WHERE project_id = $1 AND key = $2
-     RETURNING ${EXPERIMENT_COLS}`,
-    [projectId, key, now, decision ? JSON.stringify(decision) : null],
-  );
-  return mapExperiment(rows[0]!);
 }
 
 export async function getExperimentResults(
@@ -227,9 +255,11 @@ function validateExperimentFlag(flag: FeatureFlag): void {
   if (flag.status !== 'active') {
     throw new ApiError(409, 'experiment_flag_not_active', `flag "${flag.key}" is ${flag.status}`, 'activate the feature flag before starting an experiment');
   }
-  const allocation = flag.variants.reduce((total, variant) => total + variant.rollout_percentage, 0);
-  if (Math.abs(allocation - 100) > 1e-9) {
-    throw new ApiError(409, 'experiment_flag_allocation_incomplete', `flag "${flag.key}" allocates ${allocation}% of traffic`, 'an experiment requires exactly 100% allocation across its variants');
+  const allocationBasisPoints = flag.variants.reduce(
+    (total, variant) => total + Math.round(variant.rollout_percentage * 100), 0,
+  );
+  if (allocationBasisPoints !== 10_000) {
+    throw new ApiError(409, 'experiment_flag_allocation_incomplete', `flag "${flag.key}" allocates ${allocationBasisPoints / 100}% of traffic`, 'an experiment requires exactly 100% allocation across its variants');
   }
 }
 

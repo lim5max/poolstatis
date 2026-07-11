@@ -44,8 +44,9 @@ tables.
 `feature_flags` stores `id`, `project_id`, a unique snake-case `key`, `name`,
 mandatory `purpose`, `status` (`draft`, `active`, `archived`), a stable random
 `salt`, and a `variants` JSON array. Every variant has a unique snake-case
-`key`, optional JSON `payload`, and `rollout_percentage` in `[0, 100]`. The
-total allocation must be at most 100%. A gap means no variant is assigned.
+`key`, optional JSON `payload`, and `rollout_percentage` in `[0, 100]` with
+at most two decimal places. The total allocation must be at most 100%. A gap
+means no variant is assigned.
 
 `experiments` stores `id`, `project_id`, a unique snake-case `key`, `name`,
 mandatory `hypothesis`, `flag_key`, `primary_metric_key`, optional unique
@@ -56,8 +57,10 @@ an active event-based metric.
 
 An exposure remains an immutable normal event, not a parallel analytics store:
 `$feature_flag_called` with properties `{flag_key, variant, payload}`. The
-server appends it with `registered=true` using `EventStore`; this prevents a
-valid system event from becoming an unregistered-instrumentation warning.
+server appends it with `registered=true` and a private `is_system=true` marker
+using `EventStore`; this prevents a valid system event from becoming an
+unregistered-instrumentation warning and prevents public-ingest lookalikes from
+creating experiment assignments.
 
 ## APIs and data flow
 
