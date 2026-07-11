@@ -3,6 +3,8 @@ import type {
   ActorSummary,
   EntityStatusEvidence,
   EntityStatusEvidenceQuery,
+  ExperimentResultsQuery,
+  ExperimentVariantOutcome,
   EventStore,
   EventNameStat,
   EventStatsQuery,
@@ -313,6 +315,52 @@ export class PostgresEventStore implements EventStore {
       FROM per GROUP BY n ORDER BY n`;
     const { rows } = await this.pool.query(sql, params);
     return rows.map((r) => ({ intervals_active: Number(r.intervals_active), actors: Number(r.actors) }));
+  }
+
+  async experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]> {
+    const params: unknown[] = [q.projectId, q.env, q.flagKey, q.from, q.to, q.metricEvent];
+    const outcomeFilters = compileFilters(q.metricFilters, 'e.properties', params)
+      .map((clause) => ` AND ${clause}`)
+      .join('');
+    const { rows } = await this.pool.query<{ variant: string; exposed: string; converted: string }>(
+      `WITH first_exposures AS (
+         SELECT DISTINCT ON (distinct_id)
+           distinct_id,
+           properties->>'variant' AS variant,
+           "timestamp" AS exposed_at
+         FROM events
+         WHERE project_id = $1
+           AND env = $2
+           AND event = '$feature_flag_called'
+           AND properties->>'flag_key' = $3
+           AND "timestamp" >= $4
+           AND "timestamp" < $5
+         ORDER BY distinct_id, "timestamp"
+       ),
+       outcomes AS (
+         SELECT DISTINCT x.distinct_id
+         FROM first_exposures x
+         JOIN events e ON e.project_id = $1
+           AND e.env = $2
+           AND e.event = $6
+           AND e.distinct_id = x.distinct_id
+           AND e."timestamp" >= x.exposed_at
+           AND e."timestamp" < $5${outcomeFilters}
+       )
+       SELECT x.variant,
+              count(*)::int AS exposed,
+              count(o.distinct_id)::int AS converted
+       FROM first_exposures x
+       LEFT JOIN outcomes o ON o.distinct_id = x.distinct_id
+       GROUP BY x.variant
+       ORDER BY x.variant`,
+      params,
+    );
+    return rows.map((row) => ({
+      variant: row.variant,
+      exposed: Number(row.exposed),
+      converted: Number(row.converted),
+    }));
   }
 
   async purge(projectId: string, env?: string, distinctId?: string): Promise<number> {

@@ -25,12 +25,15 @@ import { getProjectSchema } from '../services/schema.js';
 import {
   archiveFeatureFlag, createFeatureFlag, evaluateFeatureFlag, listFeatureFlags, updateFeatureFlag,
 } from '../services/flags.js';
+import {
+  concludeExperiment, createExperiment, getExperimentResults, listExperiments, startExperiment, updateExperiment,
+} from '../services/experiments.js';
 import { parseDateInput } from '../dates.js';
 import {
   deprecateMetricSchema,
-  defineFunnelSchema, entityUpsertSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
+  concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, updateMetricSchema, type PropertyFilter,
-  updateFeatureFlagSchema,
+  updateExperimentSchema, updateFeatureFlagSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -389,6 +392,48 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await resolveProject(req);
     const { key } = req.params as { key: string };
     return archiveFeatureFlag(ctx.pool, project.id, key);
+  });
+
+  app.post('/api/v1/projects/:slug/experiments', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const input = createExperimentSchema.parse(req.body);
+    return reply.status(201).send(await createExperiment(ctx.pool, project.id, input));
+  });
+
+  app.get('/api/v1/projects/:slug/experiments', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { experiments: await listExperiments(ctx.pool, project.id) };
+  });
+
+  app.patch('/api/v1/projects/:slug/experiments/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return updateExperiment(ctx.pool, project.id, key, updateExperimentSchema.parse(req.body));
+  });
+
+  app.post('/api/v1/projects/:slug/experiments/:key/start', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return startExperiment(ctx.pool, project.id, key);
+  });
+
+  app.post('/api/v1/projects/:slug/experiments/:key/conclude', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return concludeExperiment(ctx.pool, project.id, key, concludeExperimentSchema.parse(req.body).decision ?? null);
+  });
+
+  app.get('/api/v1/projects/:slug/experiments/:key/results', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const { env } = req.query as { env?: string };
+    return getExperimentResults(ctx.pool, ctx.eventStore, project.id, key, env ?? 'prod');
   });
 
   app.post('/api/v1/projects/:slug/metrics', async (req, reply) => {

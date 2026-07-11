@@ -3,6 +3,8 @@ import type {
   ActorSummary,
   EntityStatusEvidence,
   EntityStatusEvidenceQuery,
+  ExperimentResultsQuery,
+  ExperimentVariantOutcome,
   EventNameStat,
   EventStatsQuery,
   EventStore,
@@ -94,6 +96,10 @@ export class BufferedEventStore implements EventStore {
 
   stickiness(q: IntervalActivityQuery): Promise<StickinessBin[]> {
     return this.inner.stickiness(q);
+  }
+
+  experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]> {
+    return this.inner.experimentResults(q);
   }
 
   sample(q: SampleQuery): Promise<RawEvent[]> {

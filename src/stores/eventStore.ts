@@ -168,6 +168,23 @@ export interface StickinessBin {
   actors: number;
 }
 
+/** First-exposure experiment outcome counts, grouped by the allocated variant. */
+export interface ExperimentResultsQuery {
+  projectId: string;
+  env: string;
+  flagKey: string;
+  metricEvent: string;
+  metricFilters: PropertyFilter[];
+  from: Date;
+  to: Date;
+}
+
+export interface ExperimentVariantOutcome {
+  variant: string;
+  exposed: number;
+  converted: number;
+}
+
 /**
  * The narrow storage interface the whole platform depends on.
  * Every method must be implementable efficiently on both Postgres and
@@ -180,6 +197,7 @@ export interface EventStore {
   retention(q: RetentionQuery): Promise<RetentionCohort[]>;
   lifecycle(q: IntervalActivityQuery): Promise<LifecyclePoint[]>;
   stickiness(q: IntervalActivityQuery): Promise<StickinessBin[]>;
+  experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;

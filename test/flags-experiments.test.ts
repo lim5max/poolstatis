@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { api, createTestEnv, type TestEnv } from './helpers.js';
+import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
 
 let env: TestEnv;
 
@@ -97,5 +97,86 @@ describe('feature flags', () => {
     const listed = await api(env, env.ingestToken, 'GET', `${P()}/flags`);
     expect(listed.status).toBe(403);
     expect(listed.body.error.code).toBe('wrong_key_kind');
+  });
+});
+
+describe('experiments', () => {
+  const P = () => `/api/v1/projects/${env.projectSlug}`;
+
+  async function createActiveFlag(key: string): Promise<void> {
+    const created = await api(env, env.secretToken, 'POST', `${P()}/flags`, {
+      key,
+      name: key.replaceAll('_', ' '),
+      purpose: `Safely measure the effect of ${key.replaceAll('_', ' ')} in production.`,
+      variants: [
+        { key: 'control', rollout_percentage: 50 },
+        { key: 'test', rollout_percentage: 50, payload: { label: 'Pay now' } },
+      ],
+      status: 'active',
+    });
+    expect(created.status).toBe(201);
+  }
+
+  async function createAndStartExperiment(key: string, flagKey: string, metricKey: string): Promise<void> {
+    const created = await api(env, env.secretToken, 'POST', `${P()}/experiments`, {
+      key,
+      name: key.replaceAll('_', ' '),
+      hypothesis: `Changing ${flagKey.replaceAll('_', ' ')} will improve ${metricKey.replaceAll('_', ' ')}.`,
+      flag_key: flagKey,
+      primary_metric_key: metricKey,
+    });
+    expect(created.status).toBe(201);
+    const started = await api(env, env.secretToken, 'POST', `${P()}/experiments/${key}/start`);
+    expect(started.status).toBe(200);
+  }
+
+  it('counts only registered outcomes after an actor first sees the running experiment', async () => {
+    await activeMetric(env, { key: 'checkout_completed', source: { event: 'checkout.completed' } });
+    await createActiveFlag('checkout_experiment_flag');
+    await createAndStartExperiment('checkout_copy_test', 'checkout_experiment_flag', 'checkout_completed');
+
+    await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{ event: 'checkout.completed', distinct_id: 'before-exposure' }],
+    });
+    await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'checkout_experiment_flag', distinct_id: 'before-exposure',
+    });
+    await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'checkout_experiment_flag', distinct_id: 'converted-after-exposure',
+    });
+    await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{ event: 'checkout.completed', distinct_id: 'converted-after-exposure' }],
+    });
+
+    const result = await api(env, env.secretToken, 'GET', `${P()}/experiments/checkout_copy_test/results?env=prod`);
+    expect(result.status).toBe(200);
+    expect(result.body.status).toBe('running');
+    expect(result.body.variants.reduce((total: number, variant: { exposed: number }) => total + variant.exposed, 0)).toBe(2);
+    expect(result.body.variants.reduce((total: number, variant: { converted: number }) => total + variant.converted, 0)).toBe(1);
+    expect(result.body.variants.reduce((total: number, variant: { probability_best: number }) => total + variant.probability_best, 0)).toBeCloseTo(1, 5);
+  });
+
+  it('does not start an experiment before its flag allocates all traffic', async () => {
+    await activeMetric(env, { key: 'incomplete_delivery_completed', source: { event: 'delivery.completed' } });
+    const flag = await api(env, env.secretToken, 'POST', `${P()}/flags`, {
+      key: 'incomplete_delivery_flag',
+      name: 'Incomplete delivery flag',
+      purpose: 'Hold back a portion of traffic while the delivery is being prepared.',
+      variants: [{ key: 'control', rollout_percentage: 50 }],
+      status: 'active',
+    });
+    expect(flag.status).toBe(201);
+    const experiment = await api(env, env.secretToken, 'POST', `${P()}/experiments`, {
+      key: 'incomplete_delivery_test',
+      name: 'Incomplete delivery test',
+      hypothesis: 'The incomplete delivery should not be measured before full assignment exists.',
+      flag_key: 'incomplete_delivery_flag',
+      primary_metric_key: 'incomplete_delivery_completed',
+    });
+    expect(experiment.status).toBe(201);
+
+    const started = await api(env, env.secretToken, 'POST', `${P()}/experiments/incomplete_delivery_test/start`);
+    expect(started.status).toBe(409);
+    expect(started.body.error.code).toBe('experiment_flag_allocation_incomplete');
   });
 });
