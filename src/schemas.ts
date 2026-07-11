@@ -33,6 +33,107 @@ const keySchema = z
   .max(100)
   .regex(/^[a-z][a-z0-9_]*$/, 'keys are snake_case identifiers, e.g. checkout_conversion');
 
+// ===== Feature delivery: flags and experiments =====
+
+const rolloutPercentageSchema = z.number().min(0).max(100).finite();
+
+export const featureFlagVariantSchema = z.object({
+  key: keySchema,
+  rollout_percentage: rolloutPercentageSchema,
+  payload: z.record(z.unknown()).optional(),
+});
+
+function validateVariants(
+  variants: Array<{ key: string; rollout_percentage: number }>,
+  ctx: z.RefinementCtx,
+): void {
+  const seen = new Set<string>();
+  for (const [index, variant] of variants.entries()) {
+    if (seen.has(variant.key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['variants', index, 'key'],
+        message: `duplicate variant key "${variant.key}"`,
+      });
+    }
+    seen.add(variant.key);
+  }
+  const total = variants.reduce((sum, variant) => sum + variant.rollout_percentage, 0);
+  if (total > 100) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['variants'],
+      message: `variant allocation totals ${total}%; it must not exceed 100%`,
+    });
+  }
+}
+
+export const featureFlagSchema = z.object({
+  key: keySchema,
+  name: z.string().trim().min(1),
+  purpose: semanticText,
+  variants: z.array(featureFlagVariantSchema).min(1).max(10),
+  status: z.enum(['draft', 'active']).default('draft'),
+}).superRefine((flag, ctx) => validateVariants(flag.variants, ctx));
+
+export type CreateFeatureFlagInput = z.infer<typeof featureFlagSchema>;
+
+export const updateFeatureFlagSchema = z.object({
+  name: z.string().trim().min(1).optional(),
+  purpose: semanticText.optional(),
+  variants: z.array(featureFlagVariantSchema).min(1).max(10).optional(),
+  status: z.enum(['draft', 'active']).optional(),
+}).superRefine((flag, ctx) => {
+  if (flag.variants) validateVariants(flag.variants, ctx);
+});
+
+export type UpdateFeatureFlagInput = z.infer<typeof updateFeatureFlagSchema>;
+
+export const flagEvaluationSchema = z.object({
+  key: keySchema,
+  distinct_id: z.string().min(1).max(200),
+  session_id: z.string().max(200).optional(),
+});
+
+export type FlagEvaluationInput = z.infer<typeof flagEvaluationSchema>;
+
+const experimentMetricKeysSchema = z.array(keySchema).max(5).default([]).superRefine((keys, ctx) => {
+  const seen = new Set<string>();
+  for (const [index, key] of keys.entries()) {
+    if (seen.has(key)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index], message: `duplicate metric key "${key}"` });
+    }
+    seen.add(key);
+  }
+});
+
+export const createExperimentSchema = z.object({
+  key: keySchema,
+  name: z.string().trim().min(1),
+  hypothesis: semanticText,
+  flag_key: keySchema,
+  primary_metric_key: keySchema,
+  secondary_metric_keys: experimentMetricKeysSchema,
+});
+
+export type CreateExperimentInput = z.infer<typeof createExperimentSchema>;
+
+export const updateExperimentSchema = z.object({
+  name: z.string().trim().min(1).optional(),
+  hypothesis: semanticText.optional(),
+  primary_metric_key: keySchema.optional(),
+  secondary_metric_keys: experimentMetricKeysSchema.optional(),
+});
+
+export type UpdateExperimentInput = z.infer<typeof updateExperimentSchema>;
+
+export const concludeExperimentSchema = z.object({
+  decision: z.object({
+    outcome: z.enum(['ship', 'iterate', 'stop', 'inconclusive']),
+    rationale: semanticText,
+  }).optional(),
+});
+
 // ===== Metric registry =====
 
 export const metricCategorySchema = z.enum([
