@@ -10,10 +10,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
+  concludeExperimentSchema, createExperimentSchema,
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
-  registerEntityTypeSchema, registerMetricSchema, retentionQuerySchema, stickinessQuerySchema,
-  trendQuerySchema, updateMetricSchema,
+  featureFlagSchema, flagEvaluationSchema, registerEntityTypeSchema, registerMetricSchema,
+  retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
+  updateMetricSchema,
 } from '../schemas.js';
 import { INSTRUMENTATION_STANDARD } from './standard.js';
 
@@ -191,6 +193,94 @@ jsonTool(
   'List defined funnels with their goals and steps.',
   { project },
   wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/funnels`)),
+);
+
+// ===== Feature delivery =====
+
+jsonTool(
+  'create_feature_flag',
+  'Create a project feature flag. Every flag needs a real purpose and deterministic percentage variants. Start in draft until rollout is intentionally activated.',
+  { project, flag: featureFlagSchema },
+  wrap(({ project: slug, flag }) => api('POST', `/api/v1/projects/${slug}/flags`, flag)),
+);
+
+jsonTool(
+  'list_feature_flags',
+  'List feature delivery flags with their purpose, status and allocation.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/flags`)),
+);
+
+jsonTool(
+  'update_feature_flag',
+  'Update a draft or active feature flag. Archived flags are immutable so historical delivery and experiment results stay interpretable.',
+  { project, key: z.string(), patch: updateFeatureFlagSchema },
+  wrap(({ project: slug, key, patch }) => api('PATCH', `/api/v1/projects/${slug}/flags/${encodeURIComponent(key)}`, patch)),
+);
+
+jsonTool(
+  'archive_feature_flag',
+  'Archive a feature flag. Refuses while a running experiment depends on it.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api('POST', `/api/v1/projects/${slug}/flags/${encodeURIComponent(key)}/archive`)),
+);
+
+jsonTool(
+  'evaluate_feature_flag',
+  'Inspect deterministic assignment for a stable distinct_id without recording an exposure event. Use this to debug rollout; product SDK evaluation records exposure automatically.',
+  {
+    project,
+    key: z.string(),
+    distinct_id: flagEvaluationSchema.shape.distinct_id,
+    session_id: flagEvaluationSchema.shape.session_id,
+  },
+  wrap(({ project: slug, key, distinct_id, session_id }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/flags/${encodeURIComponent(key)}/evaluate`,
+    { distinct_id, ...(session_id ? { session_id } : {}) },
+  )),
+);
+
+jsonTool(
+  'create_experiment',
+  'Create an experiment draft tying a hypothesis to one flag and declared outcome metrics. Starting it requires a fully allocated active flag and active event metrics.',
+  { project, experiment: createExperimentSchema },
+  wrap(({ project: slug, experiment }) => api('POST', `/api/v1/projects/${slug}/experiments`, experiment)),
+);
+
+jsonTool(
+  'list_experiments',
+  'List feature experiments and their lifecycle status.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/experiments`)),
+);
+
+jsonTool(
+  'update_experiment',
+  'Update a draft experiment before it starts.',
+  { project, key: z.string(), patch: updateExperimentSchema },
+  wrap(({ project: slug, key, patch }) => api('PATCH', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}`, patch)),
+);
+
+jsonTool(
+  'start_experiment',
+  'Start a draft experiment. The linked flag must be active and allocate exactly 100% of traffic.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api('POST', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/start`)),
+);
+
+jsonTool(
+  'conclude_experiment',
+  'Conclude a running experiment and optionally record the agent decision with rationale.',
+  { project, key: z.string(), conclusion: concludeExperimentSchema },
+  wrap(({ project: slug, key, conclusion }) => api('POST', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/conclude`, conclusion)),
+);
+
+jsonTool(
+  'get_experiment_results',
+  'Measure an experiment after first exposure: exposed actors, conversion, uplift, credible intervals and chance to win for each variant.',
+  { project, key: z.string(), env: z.string().default('prod') },
+  wrap(({ project: slug, key, env }) => api('GET', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/results?env=${encodeURIComponent(env)}`)),
 );
 
 // ===== Queries (analysis-time) =====

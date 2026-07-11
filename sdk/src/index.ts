@@ -36,6 +36,17 @@ export interface PoolstatisEvent {
   properties?: Record<string, unknown>;
 }
 
+/** A stable assignment returned by the Poolstatis feature-delivery service. */
+export interface FeatureFlagVariant {
+  key: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface FeatureFlagOptions {
+  /** Optional session id copied onto the automatic exposure event. */
+  sessionId?: string;
+}
+
 interface EntityUpsert {
   entity_type: string;
   entity_id: string;
@@ -72,6 +83,7 @@ export class Poolstatis {
   private events: PoolstatisEvent[] = [];
   private entities: EntityUpsert[] = [];
   private retries: PendingBatch[] = []; // batches that failed transiently, resent with their original id
+  private flags = new Map<string, FeatureFlagVariant | null>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private unbindUnload: (() => void) | null = null;
   private flushing = false;
@@ -108,6 +120,44 @@ export class Poolstatis {
   identify(entityType: string, entityId: string, properties: Record<string, unknown>): void {
     this.entities.push({ entity_type: entityType, entity_id: entityId, properties });
     if (this.entities.length >= this.maxBatchSize) void this.flush();
+  }
+
+  /**
+   * Evaluate one remote feature flag for a stable actor. A successful first
+   * evaluation records the server-side exposure event; later reads for this
+   * client/actor/key use the cached assignment and don't inflate exposure data.
+   * A failed evaluation safely resolves to `null` (the product's control path)
+   * and reports the error through the standard `onError` hook.
+   */
+  async getFeatureFlag(
+    key: string,
+    distinctId: string,
+    options: FeatureFlagOptions = {},
+  ): Promise<FeatureFlagVariant | null> {
+    const cacheKey = `${key}\u0000${distinctId}`;
+    if (this.flags.has(cacheKey)) return this.flags.get(cacheKey)!;
+    try {
+      const response = await this.evaluateFlag({
+        key,
+        distinct_id: distinctId,
+        ...(options.sessionId ? { session_id: options.sessionId } : {}),
+      });
+      this.flags.set(cacheKey, response.variant);
+      return response.variant;
+    } catch (err) {
+      this.onError(err);
+      return null;
+    }
+  }
+
+  /** Evaluate several flags. Each key follows the same exposure-safe cache path. */
+  async getFeatureFlags(
+    keys: string[],
+    distinctId: string,
+    options: FeatureFlagOptions = {},
+  ): Promise<Record<string, FeatureFlagVariant | null>> {
+    const variants = await Promise.all(keys.map(async (key) => [key, await this.getFeatureFlag(key, distinctId, options)] as const));
+    return Object.fromEntries(variants);
   }
 
   /**
@@ -187,6 +237,31 @@ export class Poolstatis {
       if (i < attempts - 1) await delay(250 * 2 ** i);
     }
     return 'retry';
+  }
+
+  private async evaluateFlag(body: { key: string; distinct_id: string; session_id?: string }): Promise<{ variant: FeatureFlagVariant | null }> {
+    const res = await this.fetchImpl(`${this.url}/i/v1/flags/evaluate`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.key}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const payload = await res.json().catch(() => null) as { variant?: unknown } | null;
+    if (!res.ok) throw new Error(`feature flag evaluation rejected: ${res.status}`);
+    if (!payload || !('variant' in payload)) throw new Error('feature flag evaluation returned an invalid response');
+    if (payload.variant === null) return { variant: null };
+    if (typeof payload.variant !== 'object' || typeof (payload.variant as { key?: unknown }).key !== 'string') {
+      throw new Error('feature flag evaluation returned an invalid variant');
+    }
+    const variant = payload.variant as { key: string; payload?: unknown };
+    if (variant.payload !== undefined && (typeof variant.payload !== 'object' || variant.payload === null || Array.isArray(variant.payload))) {
+      throw new Error('feature flag evaluation returned an invalid variant payload');
+    }
+    return {
+      variant: {
+        key: variant.key,
+        ...(variant.payload ? { payload: variant.payload as Record<string, unknown> } : {}),
+      },
+    };
   }
 
   private startTimer(): void {

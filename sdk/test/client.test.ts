@@ -122,4 +122,30 @@ describe('@poolstatis/sdk', () => {
     releaseFirst();
     await periodic;
   });
+
+  it('evaluates a feature flag once per actor and key, then uses the cached variant', async () => {
+    const calls: Call[] = [];
+    const fn = vi.fn(async (urlStr: string, init: RequestInit) => {
+      calls.push({ path: new URL(urlStr).pathname, body: JSON.parse(init.body as string), keepalive: (init as any).keepalive });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ key: 'checkout_copy', variant: { key: 'test', payload: { label: 'Pay now' } } }),
+      } as Response;
+    }) as unknown as typeof fetch;
+    const ph = createClient({ url: 'http://x', ingestKey: 'pk_test', fetch: fn });
+
+    await expect(ph.getFeatureFlag('checkout_copy', 'u1', { sessionId: 's1' })).resolves.toEqual({
+      key: 'test', payload: { label: 'Pay now' },
+    });
+    await expect(ph.getFeatureFlag('checkout_copy', 'u1', { sessionId: 'another-session' })).resolves.toEqual({
+      key: 'test', payload: { label: 'Pay now' },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      path: '/i/v1/flags/evaluate',
+      body: { key: 'checkout_copy', distinct_id: 'u1', session_id: 's1' },
+    });
+  });
 });

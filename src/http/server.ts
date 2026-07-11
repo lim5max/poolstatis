@@ -394,6 +394,16 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     return archiveFeatureFlag(ctx.pool, project.id, key);
   });
 
+  // Platform/MCP inspection path: intentionally evaluates without appending an
+  // exposure event, so an agent can debug targeting without changing analysis.
+  app.post('/api/v1/projects/:slug/flags/:key/evaluate', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const body = flagEvaluationSchema.omit({ key: true }).parse(req.body);
+    return evaluateFeatureFlag(ctx.pool, ctx.eventStore, project.id, req.auth.env, { key, ...body }, { emitExposure: false });
+  });
+
   app.post('/api/v1/projects/:slug/experiments', async (req, reply) => {
     platform(req);
     const project = await resolveProject(req);
