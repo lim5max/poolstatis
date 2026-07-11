@@ -35,6 +35,61 @@ export interface Funnel {
   window_seconds: number;
 }
 
+export type FeatureFlagStatus = 'draft' | 'active' | 'archived';
+
+export interface FeatureFlagVariant {
+  key: string;
+  rollout_percentage: number;
+  payload?: Record<string, unknown>;
+}
+
+export interface FeatureFlag {
+  id: string;
+  key: string;
+  name: string;
+  purpose: string;
+  status: FeatureFlagStatus;
+  salt: string;
+  variants: FeatureFlagVariant[];
+  created_at: string;
+  updated_at: string;
+}
+
+export type ExperimentStatus = 'draft' | 'running' | 'concluded';
+
+export interface Experiment {
+  id: string;
+  key: string;
+  name: string;
+  hypothesis: string;
+  flag_key: string;
+  primary_metric_key: string;
+  secondary_metric_keys: string[];
+  status: ExperimentStatus;
+  started_at: string | null;
+  concluded_at: string | null;
+  decision: { outcome: 'ship' | 'iterate' | 'stop' | 'inconclusive'; rationale: string } | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExperimentResult {
+  key: string;
+  status: ExperimentStatus;
+  primary_metric: Pick<Metric, 'key' | 'name' | 'purpose'>;
+  started_at: string;
+  concluded_at: string | null;
+  variants: Array<{
+    key: string;
+    exposed: number;
+    converted: number;
+    conversion_rate: number;
+    uplift_vs_control: number | null;
+    credible_interval: { lower: number; upper: number };
+    probability_best: number;
+  }>;
+}
+
 export interface EntityType {
   name: string;
   description: string;

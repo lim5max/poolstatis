@@ -1,5 +1,5 @@
 import type {
-  AccountMe, ApiKeyRow, DataQualityResponse, EntityRow, Funnel, HostedOnboardingResult, IngestWarning, Metric, MetricStatus, MetricUsage,
+  AccountMe, ApiKeyRow, DataQualityResponse, EntityRow, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, Metric, MetricStatus, MetricUsage,
   PersonSummary, ProjectSchema, ProjectWithStats, SampleEvent, SampleFilter,
 } from './types';
 
@@ -98,6 +98,51 @@ export class PoolstatisClient {
 
   funnels(slug: string) {
     return this.req<{ funnels: Funnel[] }>('GET', `/api/v1/projects/${slug}/funnels`).then((r) => r.funnels);
+  }
+
+  // ---- feature delivery ----
+  flags(slug: string) {
+    return this.req<{ flags: FeatureFlag[] }>('GET', `/api/v1/projects/${slug}/flags`).then((r) => r.flags);
+  }
+
+  createFlag(slug: string, body: {
+    key: string; name: string; purpose: string; status: Exclude<FeatureFlagStatus, 'archived'>;
+    variants: Array<{ key: string; rollout_percentage: number; payload?: Record<string, unknown> }>;
+  }) {
+    return this.req<FeatureFlag>('POST', `/api/v1/projects/${slug}/flags`, body);
+  }
+
+  updateFlag(slug: string, key: string, body: Partial<{
+    name: string; purpose: string; status: Exclude<FeatureFlagStatus, 'archived'>;
+    variants: Array<{ key: string; rollout_percentage: number; payload?: Record<string, unknown> }>;
+  }>) {
+    return this.req<FeatureFlag>('PATCH', `/api/v1/projects/${slug}/flags/${encodeURIComponent(key)}`, body);
+  }
+
+  archiveFlag(slug: string, key: string) {
+    return this.req<FeatureFlag>('POST', `/api/v1/projects/${slug}/flags/${encodeURIComponent(key)}/archive`);
+  }
+
+  experiments(slug: string) {
+    return this.req<{ experiments: Experiment[] }>('GET', `/api/v1/projects/${slug}/experiments`).then((r) => r.experiments);
+  }
+
+  createExperiment(slug: string, body: {
+    key: string; name: string; hypothesis: string; flag_key: string; primary_metric_key: string; secondary_metric_keys?: string[];
+  }) {
+    return this.req<Experiment>('POST', `/api/v1/projects/${slug}/experiments`, body);
+  }
+
+  startExperiment(slug: string, key: string) {
+    return this.req<Experiment>('POST', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/start`);
+  }
+
+  concludeExperiment(slug: string, key: string, decision?: { outcome: 'ship' | 'iterate' | 'stop' | 'inconclusive'; rationale: string }) {
+    return this.req<Experiment>('POST', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/conclude`, decision ? { decision } : {});
+  }
+
+  experimentResults(slug: string, key: string, env = 'prod') {
+    return this.req<ExperimentResult>('GET', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/results?env=${encodeURIComponent(env)}`);
   }
 
   // ---- data inspection ----
