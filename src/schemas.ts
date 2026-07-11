@@ -379,6 +379,27 @@ export const stickinessQuerySchema = z.object({
   env: z.string().default('prod'),
 });
 
+// Browser Experience map: meaningful interaction evidence for one
+// purpose-tagged surface. This maps clicks, not cursor movement or gaze.
+export const interactionMapQuerySchema = z.object({
+  kind: z.literal('interaction_map'),
+  surface: keySchema,
+  date_from: dateStr,
+  date_to: dateStr.nullable().optional(),
+  grid: z.number().int().min(2).max(64).default(16),
+  env: z.string().default('prod'),
+});
+
+export const experienceSessionQuerySchema = z.object({
+  kind: z.literal('experience_session'),
+  surface: keySchema,
+  session_id: z.string().min(1).max(200),
+  date_from: dateStr.default('-7d'),
+  date_to: dateStr.nullable().optional(),
+  limit: z.number().int().min(1).max(500).default(200),
+  env: z.string().default('prod'),
+});
+
 export const purgeDataSchema = z.object({
   env: z.string().min(1),
   scope: z.enum(['events', 'entities', 'all']),
@@ -395,6 +416,8 @@ export const querySchema = z.discriminatedUnion('kind', [
   retentionQuerySchema,
   lifecycleQuerySchema,
   stickinessQuerySchema,
+  interactionMapQuerySchema,
+  experienceSessionQuerySchema,
 ]);
 
 export type TrendQueryInput = z.infer<typeof trendQuerySchema>;
@@ -403,4 +426,6 @@ export type EntitiesQueryInput = z.infer<typeof entitiesQuerySchema>;
 export type RetentionQueryInput = z.infer<typeof retentionQuerySchema>;
 export type LifecycleQueryInput = z.infer<typeof lifecycleQuerySchema>;
 export type StickinessQueryInput = z.infer<typeof stickinessQuerySchema>;
+export type InteractionMapQueryInput = z.infer<typeof interactionMapQuerySchema>;
+export type ExperienceSessionQueryInput = z.infer<typeof experienceSessionQuerySchema>;
 export type QueryInput = z.infer<typeof querySchema>;

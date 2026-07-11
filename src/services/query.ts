@@ -2,7 +2,9 @@ import type pg from 'pg';
 import type { EventStore } from '../stores/eventStore.js';
 import type {
   EntitiesQueryInput,
+  ExperienceSessionQueryInput,
   FunnelQueryInput,
+  InteractionMapQueryInput,
   LifecycleQueryInput,
   PropertyFilter,
   QueryInput,
@@ -14,6 +16,7 @@ import { parseDateInput } from '../dates.js';
 import { badRequest } from '../errors.js';
 import { getFunnel, getMetric, type Metric } from './registry.js';
 import { countEntities, queryEntities } from './entities.js';
+import { getExperienceSurface } from './experience.js';
 
 export interface QueryMeta {
   computed_at: string;
@@ -55,6 +58,26 @@ export type QueryResult =
       interval: string;
       bins: Array<{ intervals_active: number; actors: number }>;
       meta: QueryMeta;
+    }
+  | {
+      kind: 'interaction_map';
+      surface: { key: string; name: string; purpose: string; status: 'active' | 'archived' };
+      grid: number;
+      cells: Array<{ x: number; y: number; count: number; actors: number }>;
+      labels: Array<{ label: string; count: number; actors: number }>;
+      meta: QueryMeta;
+    }
+  | {
+      kind: 'experience_session';
+      surface: { key: string; name: string; purpose: string; status: 'active' | 'archived' };
+      session_id: string;
+      events: Array<{
+        timestamp: string; kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
+        route: string; sequence: number; label?: string; x?: number; y?: number; depth?: number;
+        error_type?: 'error' | 'unhandled_rejection';
+      }>;
+      summary: { page_views: number; clicks: number; max_scroll_depth: number; client_errors: number };
+      meta: QueryMeta;
     };
 
 export class QueryService {
@@ -77,6 +100,10 @@ export class QueryService {
         return this.lifecycle(projectId, q, now);
       case 'stickiness':
         return this.stickiness(projectId, q, now);
+      case 'interaction_map':
+        return this.interactionMap(projectId, q, now);
+      case 'experience_session':
+        return this.experienceSession(projectId, q, now);
     }
   }
 
@@ -313,6 +340,44 @@ export class QueryService {
         date_range: { from: from.toISOString(), to: to.toISOString() },
         sampling: null,
       },
+    };
+  }
+
+  private async interactionMap(projectId: string, q: InteractionMapQueryInput, now: Date): Promise<QueryResult> {
+    const [surface] = await Promise.all([getExperienceSurface(this.pool, projectId, q.surface)]);
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const result = await this.eventStore.interactionMap({
+      projectId, env: q.env, surface: q.surface, from, to, grid: q.grid,
+    });
+    return {
+      kind: 'interaction_map',
+      surface: { key: surface.key, name: surface.name, purpose: surface.purpose, status: surface.status },
+      grid: q.grid,
+      ...result,
+      meta: { computed_at: now.toISOString(), date_range: { from: from.toISOString(), to: to.toISOString() }, sampling: null },
+    };
+  }
+
+  private async experienceSession(projectId: string, q: ExperienceSessionQueryInput, now: Date): Promise<QueryResult> {
+    const surface = await getExperienceSurface(this.pool, projectId, q.surface);
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const events = await this.eventStore.experienceSession({
+      projectId, env: q.env, surface: q.surface, sessionId: q.session_id, from, to, limit: q.limit,
+    });
+    return {
+      kind: 'experience_session',
+      surface: { key: surface.key, name: surface.name, purpose: surface.purpose, status: surface.status },
+      session_id: q.session_id,
+      events,
+      summary: {
+        page_views: events.filter((event) => event.kind === 'page_viewed').length,
+        clicks: events.filter((event) => event.kind === 'element_clicked').length,
+        max_scroll_depth: events.reduce((max, event) => event.kind === 'scroll_depth' ? Math.max(max, event.depth ?? 0) : max, 0),
+        client_errors: events.filter((event) => event.kind === 'client_error').length,
+      },
+      meta: { computed_at: now.toISOString(), date_range: { from: from.toISOString(), to: to.toISOString() }, sampling: null },
     };
   }
 }

@@ -187,6 +187,55 @@ export interface ExperimentVariantOutcome {
   converted: number;
 }
 
+export interface InteractionMapQuery {
+  projectId: string;
+  env: string;
+  surface: string;
+  from: Date;
+  to: Date;
+  grid: number;
+}
+
+export interface InteractionMapCell {
+  x: number;
+  y: number;
+  count: number;
+  actors: number;
+}
+
+export interface InteractionMapLabel {
+  label: string;
+  count: number;
+  actors: number;
+}
+
+export interface InteractionMapResult {
+  cells: InteractionMapCell[];
+  labels: InteractionMapLabel[];
+}
+
+export interface ExperienceSessionQuery {
+  projectId: string;
+  env: string;
+  surface: string;
+  sessionId: string;
+  from: Date;
+  to: Date;
+  limit: number;
+}
+
+export interface ExperienceSessionEvent {
+  timestamp: string;
+  kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
+  route: string;
+  sequence: number;
+  label?: string;
+  x?: number;
+  y?: number;
+  depth?: number;
+  error_type?: 'error' | 'unhandled_rejection';
+}
+
 /**
  * The narrow storage interface the whole platform depends on.
  * Every method must be implementable efficiently on both Postgres and
@@ -200,6 +249,8 @@ export interface EventStore {
   lifecycle(q: IntervalActivityQuery): Promise<LifecyclePoint[]>;
   stickiness(q: IntervalActivityQuery): Promise<StickinessBin[]>;
   experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]>;
+  interactionMap(q: InteractionMapQuery): Promise<InteractionMapResult>;
+  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;

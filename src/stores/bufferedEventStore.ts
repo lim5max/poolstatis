@@ -5,11 +5,15 @@ import type {
   EntityStatusEvidenceQuery,
   ExperimentResultsQuery,
   ExperimentVariantOutcome,
+  ExperienceSessionEvent,
+  ExperienceSessionQuery,
   EventNameStat,
   EventStatsQuery,
   EventStore,
   FunnelQuery,
   IntervalActivityQuery,
+  InteractionMapQuery,
+  InteractionMapResult,
   LifecyclePoint,
   RawEvent,
   RetentionCohort,
@@ -100,6 +104,14 @@ export class BufferedEventStore implements EventStore {
 
   experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]> {
     return this.inner.experimentResults(q);
+  }
+
+  interactionMap(q: InteractionMapQuery): Promise<InteractionMapResult> {
+    return this.inner.interactionMap(q);
+  }
+
+  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]> {
+    return this.inner.experienceSession(q);
   }
 
   sample(q: SampleQuery): Promise<RawEvent[]> {

@@ -13,7 +13,7 @@ import {
   concludeExperimentSchema, createExperimentSchema,
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
-  featureFlagSchema, flagEvaluationSchema, registerEntityTypeSchema, registerMetricSchema,
+  experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
   retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
   updateMetricSchema,
 } from '../schemas.js';
@@ -195,6 +195,29 @@ jsonTool(
   wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/funnels`)),
 );
 
+// ===== Browser Experience =====
+
+jsonTool(
+  'create_experience_surface',
+  'Declare a browser surface before enabling the optional BrowserExperience SDK. The purpose states which UX decision the captured interactions should inform.',
+  { project, surface: experienceSurfaceSchema },
+  wrap(({ project: slug, surface }) => api('POST', `/api/v1/projects/${slug}/experience/surfaces`, surface)),
+);
+
+jsonTool(
+  'list_experience_surfaces',
+  'List purpose-tagged Browser Experience surfaces and their capture status.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/experience/surfaces`)),
+);
+
+jsonTool(
+  'archive_experience_surface',
+  'Stop new Browser Experience capture for a surface while preserving its existing interaction history.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api('POST', `/api/v1/projects/${slug}/experience/surfaces/${encodeURIComponent(key)}/archive`)),
+);
+
 // ===== Feature delivery =====
 
 jsonTool(
@@ -325,6 +348,20 @@ jsonTool(
   'Stickiness histogram: how many distinct intervals each actor was active in over the range. High bars at the right = a habit-forming product.',
   { project, query: stickinessQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'stickiness', ...query })),
+);
+
+jsonTool(
+  'query_interaction_map',
+  'Return a purpose-tagged click heatmap for one Browser Experience surface. Cells represent normalized click coordinates, not gaze or pointer movement.',
+  { project, query: interactionMapQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'interaction_map', ...query })),
+);
+
+jsonTool(
+  'get_experience_session',
+  'Read the privacy-safe ordered interaction timeline for one known Browser Experience session. It contains only paths, stable labels, coordinates, scroll depth and coarse error type — never DOM/text.',
+  { project, query: experienceSessionQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'experience_session', ...query })),
 );
 
 jsonTool(

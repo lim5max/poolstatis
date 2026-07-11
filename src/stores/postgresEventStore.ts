@@ -5,11 +5,15 @@ import type {
   EntityStatusEvidenceQuery,
   ExperimentResultsQuery,
   ExperimentVariantOutcome,
+  ExperienceSessionEvent,
+  ExperienceSessionQuery,
   EventStore,
   EventNameStat,
   EventStatsQuery,
   FunnelQuery,
   IntervalActivityQuery,
+  InteractionMapQuery,
+  InteractionMapResult,
   LifecyclePoint,
   RawEvent,
   RetentionCohort,
@@ -364,6 +368,59 @@ export class PostgresEventStore implements EventStore {
     }));
   }
 
+  async interactionMap(q: InteractionMapQuery): Promise<InteractionMapResult> {
+    const params: unknown[] = [q.projectId, q.env, q.surface, q.from, q.to, q.grid];
+    const [cells, labels] = await Promise.all([
+      this.pool.query<{ x: string; y: string; count: string; actors: string }>(
+        `SELECT
+           least($6 - 1, floor((properties->>'x')::double precision * $6)::int) AS x,
+           least($6 - 1, floor((properties->>'y')::double precision * $6)::int) AS y,
+           count(*)::int AS count,
+           count(DISTINCT distinct_id)::int AS actors
+         FROM events
+         WHERE project_id = $1 AND env = $2
+           AND event = 'experience.element_clicked' AND is_system = true
+           AND properties->>'surface' = $3
+           AND "timestamp" >= $4 AND "timestamp" < $5
+         GROUP BY 1, 2
+         ORDER BY count DESC, y, x`,
+        params,
+      ),
+      this.pool.query<{ label: string; count: string; actors: string }>(
+        `SELECT properties->>'label' AS label, count(*)::int AS count, count(DISTINCT distinct_id)::int AS actors
+         FROM events
+         WHERE project_id = $1 AND env = $2
+           AND event = 'experience.element_clicked' AND is_system = true
+           AND properties->>'surface' = $3
+           AND "timestamp" >= $4 AND "timestamp" < $5
+         GROUP BY 1
+         ORDER BY count DESC, label
+         LIMIT 20`,
+        params.slice(0, 5),
+      ),
+    ]);
+    return {
+      cells: cells.rows.map((row) => ({ x: Number(row.x), y: Number(row.y), count: Number(row.count), actors: Number(row.actors) })),
+      labels: labels.rows.map((row) => ({ label: row.label, count: Number(row.count), actors: Number(row.actors) })),
+    };
+  }
+
+  async experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]> {
+    const { rows } = await this.pool.query<{ event: string; timestamp: Date; properties: Record<string, unknown> }>(
+      `SELECT event, "timestamp", properties
+       FROM events
+       WHERE project_id = $1 AND env = $2 AND session_id = $3
+         AND is_system = true
+         AND event IN ('experience.page_viewed', 'experience.element_clicked', 'experience.scroll_depth', 'experience.client_error')
+         AND properties->>'surface' = $4
+         AND "timestamp" >= $5 AND "timestamp" < $6
+       ORDER BY "timestamp", (properties->>'sequence')::int
+       LIMIT $7`,
+      [q.projectId, q.env, q.sessionId, q.surface, q.from, q.to, q.limit],
+    );
+    return rows.map((row) => toExperienceSessionEvent(row));
+  }
+
   async purge(projectId: string, env?: string, distinctId?: string): Promise<number> {
     const params: unknown[] = [projectId];
     let sql = 'DELETE FROM events WHERE project_id = $1';
@@ -605,6 +662,25 @@ function isPartitionOverlapError(err: unknown): boolean {
 
 function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function toExperienceSessionEvent(
+  row: { event: string; timestamp: Date; properties: Record<string, unknown> },
+): ExperienceSessionEvent {
+  const properties = row.properties;
+  const base = {
+    timestamp: toIso(row.timestamp),
+    route: String(properties.route),
+    sequence: Number(properties.sequence),
+  };
+  if (row.event === 'experience.element_clicked') {
+    return { ...base, kind: 'element_clicked', label: String(properties.label), x: Number(properties.x), y: Number(properties.y) };
+  }
+  if (row.event === 'experience.scroll_depth') return { ...base, kind: 'scroll_depth', depth: Number(properties.depth) };
+  if (row.event === 'experience.client_error') {
+    return { ...base, kind: 'client_error', error_type: properties.error_type as 'error' | 'unhandled_rejection' };
+  }
+  return { ...base, kind: 'page_viewed' };
 }
 
 /**

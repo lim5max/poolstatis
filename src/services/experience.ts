@@ -96,6 +96,7 @@ export async function captureExperienceEvents(
       distinctId: item.distinct_id,
       sessionId: item.session_id,
       registered: true,
+      isSystem: true,
       properties: { surface: input.surface, route: item.route, sequence: item.sequence },
     };
     switch (item.kind) {

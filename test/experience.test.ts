@@ -51,6 +51,40 @@ describe('browser experience surfaces and ingest', () => {
         properties: { surface: 'checkout', route: '/checkout', sequence: 4, error_type: 'unhandled_rejection' },
       }),
     ]));
+
+    // A caller with a public ingest token can still submit a similarly named
+    // raw event. It must never affect the trusted experience map.
+    await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{
+        event: 'experience.element_clicked', distinct_id: 'forged-actor', session_id: 'forged-session',
+        properties: { surface: 'checkout', route: '/checkout', sequence: 1, label: 'pay_now', x: 0.25, y: 0.5 },
+      }],
+    });
+
+    const map = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'interaction_map', surface: 'checkout', date_from: '-1d', env: 'prod', grid: 4,
+    });
+    expect(map.status).toBe(200);
+    expect(map.body).toEqual(expect.objectContaining({
+      kind: 'interaction_map', grid: 4,
+      cells: [{ x: 1, y: 2, count: 1, actors: 1 }],
+      labels: [{ label: 'pay_now', count: 1, actors: 1 }],
+    }));
+
+    const session = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'experience_session', surface: 'checkout', session_id: 'session-1', date_from: '-1d', env: 'prod',
+    });
+    expect(session.status).toBe(200);
+    expect(session.body).toEqual(expect.objectContaining({
+      kind: 'experience_session',
+      summary: { page_views: 1, clicks: 1, max_scroll_depth: 75, client_errors: 1 },
+      events: expect.arrayContaining([
+        expect.objectContaining({ kind: 'page_viewed', sequence: 1, route: '/checkout' }),
+        expect.objectContaining({ kind: 'element_clicked', sequence: 2, label: 'pay_now', x: 0.25, y: 0.5 }),
+        expect.objectContaining({ kind: 'scroll_depth', sequence: 3, depth: 75 }),
+        expect.objectContaining({ kind: 'client_error', sequence: 4, error_type: 'unhandled_rejection' }),
+      ]),
+    }));
   });
 
   it('rejects unsafe routes and stops capture when a surface is archived', async () => {
