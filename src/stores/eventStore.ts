@@ -10,8 +10,18 @@ export interface StorableEvent {
   sessionId: string | null;
   properties: Record<string, unknown>;
   registered: boolean;
-  /** Set only by trusted platform code; public ingest always writes false. */
+  /** Set only by trusted server-side platform code (for example flag exposure). */
   isSystem?: boolean;
+  /** Physical ingest route that accepted the event; never a user-defined property. */
+  eventSource?: 'ingest' | 'experience' | 'system';
+}
+
+/** A transport batch whose idempotency must cover the event write itself. */
+export interface IdempotentAppend {
+  projectId: string;
+  env: string;
+  batchId: string;
+  events: StorableEvent[];
 }
 
 export interface TrendQuery {
@@ -243,6 +253,8 @@ export interface ExperienceSessionEvent {
  */
 export interface EventStore {
   append(events: StorableEvent[]): Promise<void>;
+  /** Returns false when the batch was already durably appended. */
+  appendIdempotent(batch: IdempotentAppend): Promise<boolean>;
   trend(q: TrendQuery): Promise<TrendPoint[]>;
   funnel(q: FunnelQuery): Promise<number[]>; // actor count per step
   retention(q: RetentionQuery): Promise<RetentionCohort[]>;

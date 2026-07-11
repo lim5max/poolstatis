@@ -10,6 +10,7 @@ import type {
   EventNameStat,
   EventStatsQuery,
   EventStore,
+  IdempotentAppend,
   FunnelQuery,
   IntervalActivityQuery,
   InteractionMapQuery,
@@ -80,6 +81,12 @@ export class BufferedEventStore implements EventStore {
         this.scheduleFlush();
       }
     });
+  }
+
+  appendIdempotent(batch: IdempotentAppend): Promise<boolean> {
+    // Batch identity must cover the physical write; buffering would separate
+    // the idempotency record from the event commit, so delegate directly.
+    return this.inner.appendIdempotent(batch);
   }
 
   trend(q: TrendQuery): Promise<TrendPoint[]> {

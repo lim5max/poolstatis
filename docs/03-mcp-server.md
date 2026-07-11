@@ -69,6 +69,22 @@ get_experiment_results(project, key, {env?})
 `$feature_flag_called` при первом evaluation, MCP-tool намеренно этого не
 делает.
 
+### Browser Experience (consent → interaction evidence)
+
+```
+create_experience_surface(project, {key, name, purpose})
+list_experience_surfaces(project)
+archive_experience_surface(project, key)
+query_interaction_map(project, {surface, date_from, date_to?, grid?, env?})
+get_experience_session(project, {surface, session_id, date_from?, date_to?, limit?, env?})
+```
+
+Surface обязана иметь реальный `purpose`; без active surface SDK не примет
+capture. Карта показывает нормализованные **клики**, а не взгляд или курсор.
+Timeline содержит только developer-provided stable route key, stable label,
+координаты, scroll depth и тип клиентской ошибки — DOM, URL/path, текст, input
+values, stacks и network data в Poolstatis не отправляются.
+
 ### Запросы (analysis-time)
 
 Все запросы — Query DSL за `EventStore` (см. [04-http-api.md](04-http-api.md)):

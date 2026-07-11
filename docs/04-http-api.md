@@ -74,6 +74,39 @@ Merge-семантика: присланные ключи перезаписыв
 результат на `(flag, distinct_id)` в течение жизни клиента, чтобы один рендер не
 раздувал данные.
 
+### POST /i/v1/experience/events
+
+Optional Browser Experience SDK использует этот endpoint после явного consent.
+Сначала platform token создаёт active surface с `key`, `name` и `purpose`;
+ingest key затем отправляет только типизированные interaction events для этой
+surface:
+
+```jsonc
+{
+  "surface": "checkout",
+  "batch_id": "browser-batch-uuid",
+  "events": [{
+    "kind": "element_clicked",
+    "distinct_id": "user_8a21",
+    "session_id": "opaque-session-id",
+    "route": "checkout",
+    "sequence": 7,
+    "label": "pay_now",
+    "x": 0.62,
+    "y": 0.48
+  }]
+}
+// → { "accepted": 1 }
+```
+
+Допустимы только `page_viewed`, labelled `element_clicked`, `scroll_depth` и
+`client_error`. `route` — developer-provided stable key, а не URL/path. API
+откажет unknown/archived surface, invalid route key, duplicate fields и
+неразрешённые поля. `batch_id` обязателен и сохраняется на retry, поэтому
+потерянный HTTP response не удваивает карту. DOM, URL/path, текст, CSS
+selectors, input values, error stack/message и network data не являются частью
+этого контракта.
+
 ## Platform API
 
 CRUD-слой 1:1 с тулами MCP (см. [03-mcp-server.md](03-mcp-server.md)):
@@ -100,6 +133,9 @@ PATCH  /api/v1/projects/{slug}/experiments/{key}
 POST   /api/v1/projects/{slug}/experiments/{key}/start
 POST   /api/v1/projects/{slug}/experiments/{key}/conclude
 GET    /api/v1/projects/{slug}/experiments/{key}/results?env=prod
+POST   /api/v1/projects/{slug}/experience/surfaces
+GET    /api/v1/projects/{slug}/experience/surfaces
+POST   /api/v1/projects/{slug}/experience/surfaces/{key}/archive
 POST   /api/v1/projects/{slug}/query          ← единая точка Query DSL
 GET    /api/v1/projects/{slug}/events/sample
 GET    /api/v1/projects/{slug}/data-quality
@@ -127,6 +163,17 @@ variants `{key, rollout_percentage, payload?}`. Проценты не могут
 
 `POST /flags/{key}/evaluate` в Platform API создан для MCP/debugging и не
 создаёт exposure. Рантайм всегда использует ingest endpoint выше.
+
+## Browser Experience queries
+
+`POST /query` поддерживает `kind: "interaction_map"` с `{surface, date_from,
+date_to?, grid?, env?}` и возвращает нормализованные click cells + labelled
+totals. `kind: "experience_session"` принимает `{surface, session_id,
+date_from?, date_to?, limit?, env?}` и возвращает privacy-safe timeline с
+summary. Оба запроса учитывают только события, принятые typed Experience
+endpoint; generic `/i/v1/events` с похожим именем не попадает в эти результаты.
+Как и любой `pk_` write key, typed endpoint не является anti-fraud границей:
+доверяй данным как product telemetry, а не как доказательству действий пользователя.
 
 ## Query DSL
 

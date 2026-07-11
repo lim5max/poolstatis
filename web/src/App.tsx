@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { motion } from 'motion/react';
-import { LayoutGrid, List, Database, KeyRound, Settings, Target, ChevronsUpDown, Menu, X, type PoolstatisIcon } from '@/components/icons';
+import { LayoutGrid, List, Database, GridView, KeyRound, Settings, Target, ChevronsUpDown, Menu, X, type PoolstatisIcon } from '@/components/icons';
 import { auth0Enabled } from './auth0';
 import { useStore } from './store';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,7 @@ import { Setup } from './screens/Setup';
 import { Person } from './screens/Person';
 import { Onboarding } from './screens/Onboarding';
 import { Experiments } from './screens/Experiments';
+import { Experience } from './screens/Experience';
 
 type NavItem = { to: string; Icon: PoolstatisIcon; label: string; end?: boolean };
 const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
@@ -27,12 +28,13 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     { to: '/data', Icon: Database, label: 'Data' },
     { to: '/keys', Icon: KeyRound, label: 'Keys' },
     { to: '/experiments', Icon: Target, label: 'Experiments' },
+    { to: '/experience', Icon: GridView, label: 'Experience' },
   ] },
   { label: 'System', items: [{ to: '/setup', Icon: Settings, label: 'Setup & MCP' }] },
 ];
-const TITLES: Record<string, string> = { '/': 'Projects', '/registry': 'Registry', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/setup': 'Setup & MCP' };
+const TITLES: Record<string, string> = { '/': 'Projects', '/registry': 'Registry', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/setup': 'Setup & MCP' };
 const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' : TITLES[path] ?? 'Poolstatis');
-const isProjectScoped = (path: string) => path === '/' || path.startsWith('/registry') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments');
+const isProjectScoped = (path: string) => path === '/' || path.startsWith('/registry') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience');
 
 export function App() {
   const { client } = useStore();
@@ -226,6 +228,7 @@ function Main() {
           <Route path="/data/person/:distinctId" element={<Guarded><Person /></Guarded>} />
           <Route path="/keys" element={<Guarded><Keys /></Guarded>} />
           <Route path="/experiments" element={<Guarded><Experiments /></Guarded>} />
+          <Route path="/experience" element={<Guarded><Experience /></Guarded>} />
           <Route path="/setup" element={<Setup />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

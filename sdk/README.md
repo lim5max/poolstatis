@@ -72,6 +72,40 @@ The `distinctId` must be a stable authenticated product id, never a generated
 session id. The evaluation request is an exposure event, so do not call it in a
 tight loop; a single shared `Poolstatis` client handles this automatically.
 
+## Browser Experience (optional module)
+
+The `@poolstatis/sdk/experience` entrypoint is deliberately separate from the
+core client. It records a consent-gated session timeline of developer-provided
+route keys,
+**labelled** clicks, scroll milestones and a coarse client-error type. It does
+not collect DOM snapshots, text/input values, CSS selectors, URL query/hash,
+stacks or error messages.
+
+First create an active, purpose-tagged surface through MCP or the Platform API,
+then mark only meaningful product controls:
+
+```ts
+import { createClient } from '@poolstatis/sdk';
+import { BrowserExperience } from '@poolstatis/sdk/experience';
+
+const analytics = createClient({ url: 'https://analytics.example.com', ingestKey: 'pk_…' });
+const experience = new BrowserExperience({
+  client: analytics,
+  surface: 'checkout',
+  distinctId: () => currentUser.id,
+  route: () => 'checkout', // stable key; never pass window.location.pathname
+  hasConsent: () => consent.has('product_analytics'),
+});
+
+await experience.start();
+// <button data-poolsatis-label="pay_now">Pay now</button>
+// Call `experience.stop()` if consent is withdrawn or the app unmounts.
+```
+
+The agent can use `query_interaction_map` for normalised click cells and
+`get_experience_session` for a known session id. These are interaction maps,
+not gaze or full session replay.
+
 ## Notes
 
 - Runs anywhere `fetch` exists (Node ≥18, modern browsers). Inject `fetch` otherwise.

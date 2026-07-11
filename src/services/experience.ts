@@ -78,7 +78,7 @@ export async function captureExperienceEvents(
   env: string,
   input: ExperienceCaptureInput,
   now = new Date(),
-): Promise<{ accepted: number }> {
+): Promise<{ accepted: number; duplicate?: boolean }> {
   const surface = await getExperienceSurface(pool, projectId, input.surface);
   if (surface.status !== 'active') {
     throw new ApiError(
@@ -96,7 +96,7 @@ export async function captureExperienceEvents(
       distinctId: item.distinct_id,
       sessionId: item.session_id,
       registered: true,
-      isSystem: true,
+      eventSource: 'experience' as const,
       properties: { surface: input.surface, route: item.route, sequence: item.sequence },
     };
     switch (item.kind) {
@@ -110,8 +110,10 @@ export async function captureExperienceEvents(
         return { ...base, event: 'experience.client_error', properties: { ...base.properties, error_type: item.error_type } };
     }
   });
-  await eventStore.append(events);
-  return { accepted: events.length };
+  const appended = await eventStore.appendIdempotent({
+    projectId, env, batchId: input.batch_id, events,
+  });
+  return appended ? { accepted: events.length } : { accepted: 0, duplicate: true };
 }
 
 function isUniqueViolation(err: unknown): boolean {

@@ -1,6 +1,6 @@
 import type {
   AccountMe, ApiKeyRow, DataQualityResponse, EntityRow, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, Metric, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, SampleEvent, SampleFilter,
+  PersonSummary, ProjectSchema, ProjectWithStats, SampleEvent, SampleFilter, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse,
 } from './types';
 
 export class ApiError extends Error {
@@ -143,6 +143,27 @@ export class PoolstatisClient {
 
   experimentResults(slug: string, key: string, env = 'prod') {
     return this.req<ExperimentResult>('GET', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/results?env=${encodeURIComponent(env)}`);
+  }
+
+  // ---- browser experience ----
+  experienceSurfaces(slug: string) {
+    return this.req<{ surfaces: ExperienceSurface[] }>('GET', `/api/v1/projects/${slug}/experience/surfaces`).then((r) => r.surfaces);
+  }
+
+  createExperienceSurface(slug: string, body: { key: string; name: string; purpose: string }) {
+    return this.req<ExperienceSurface>('POST', `/api/v1/projects/${slug}/experience/surfaces`, body);
+  }
+
+  archiveExperienceSurface(slug: string, key: string) {
+    return this.req<ExperienceSurface>('POST', `/api/v1/projects/${slug}/experience/surfaces/${encodeURIComponent(key)}/archive`);
+  }
+
+  interactionMap(slug: string, body: { surface: string; date_from: string; date_to?: string; env: string; grid: number }) {
+    return this.req<InteractionMapResponse>('POST', `/api/v1/projects/${slug}/query`, { kind: 'interaction_map', ...body });
+  }
+
+  experienceSession(slug: string, body: { surface: string; session_id: string; date_from?: string; date_to?: string; env: string; limit?: number }) {
+    return this.req<ExperienceSessionResponse>('POST', `/api/v1/projects/${slug}/query`, { kind: 'experience_session', ...body });
   }
 
   // ---- data inspection ----

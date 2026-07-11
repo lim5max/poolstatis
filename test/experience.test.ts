@@ -21,21 +21,23 @@ describe('browser experience surfaces and ingest', () => {
     expect(created.status).toBe(201);
     expect(created.body).toEqual(expect.objectContaining({ key: 'checkout', status: 'active' }));
 
-    const captured = await api(env, env.ingestToken, 'POST', '/i/v1/experience/events', {
+    const capturePayload = {
       surface: 'checkout',
+      batch_id: 'checkout-capture-1',
       events: [
-        { kind: 'page_viewed', distinct_id: 'actor-1', session_id: 'session-1', route: '/checkout', sequence: 1 },
+        { kind: 'page_viewed', distinct_id: 'actor-1', session_id: 'session-1', route: 'checkout', sequence: 1 },
         {
-          kind: 'element_clicked', distinct_id: 'actor-1', session_id: 'session-1', route: '/checkout',
+          kind: 'element_clicked', distinct_id: 'actor-1', session_id: 'session-1', route: 'checkout',
           label: 'pay_now', x: 0.25, y: 0.5, sequence: 2,
         },
-        { kind: 'scroll_depth', distinct_id: 'actor-1', session_id: 'session-1', route: '/checkout', depth: 75, sequence: 3 },
+        { kind: 'scroll_depth', distinct_id: 'actor-1', session_id: 'session-1', route: 'checkout', depth: 75, sequence: 3 },
         {
-          kind: 'client_error', distinct_id: 'actor-1', session_id: 'session-1', route: '/checkout',
+          kind: 'client_error', distinct_id: 'actor-1', session_id: 'session-1', route: 'checkout',
           error_type: 'unhandled_rejection', sequence: 4,
         },
       ],
-    });
+    };
+    const captured = await api(env, env.ingestToken, 'POST', '/i/v1/experience/events', capturePayload);
     expect(captured.status).toBe(200);
     expect(captured.body).toEqual({ accepted: 4 });
 
@@ -44,11 +46,11 @@ describe('browser experience surfaces and ingest', () => {
     expect(events.body.events).toEqual(expect.arrayContaining([
       expect.objectContaining({
         event: 'experience.element_clicked', session_id: 'session-1', registered: true,
-        properties: { surface: 'checkout', route: '/checkout', sequence: 2, label: 'pay_now', x: 0.25, y: 0.5 },
+        properties: { surface: 'checkout', route: 'checkout', sequence: 2, label: 'pay_now', x: 0.25, y: 0.5 },
       }),
       expect.objectContaining({
         event: 'experience.client_error',
-        properties: { surface: 'checkout', route: '/checkout', sequence: 4, error_type: 'unhandled_rejection' },
+        properties: { surface: 'checkout', route: 'checkout', sequence: 4, error_type: 'unhandled_rejection' },
       }),
     ]));
 
@@ -79,12 +81,16 @@ describe('browser experience surfaces and ingest', () => {
       kind: 'experience_session',
       summary: { page_views: 1, clicks: 1, max_scroll_depth: 75, client_errors: 1 },
       events: expect.arrayContaining([
-        expect.objectContaining({ kind: 'page_viewed', sequence: 1, route: '/checkout' }),
+        expect.objectContaining({ kind: 'page_viewed', sequence: 1, route: 'checkout' }),
         expect.objectContaining({ kind: 'element_clicked', sequence: 2, label: 'pay_now', x: 0.25, y: 0.5 }),
         expect.objectContaining({ kind: 'scroll_depth', sequence: 3, depth: 75 }),
         expect.objectContaining({ kind: 'client_error', sequence: 4, error_type: 'unhandled_rejection' }),
       ]),
     }));
+
+    const duplicate = await api(env, env.ingestToken, 'POST', '/i/v1/experience/events', capturePayload);
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body).toEqual({ accepted: 0, duplicate: true });
   });
 
   it('rejects unsafe routes and stops capture when a surface is archived', async () => {
@@ -97,9 +103,20 @@ describe('browser experience surfaces and ingest', () => {
 
     const unsafe = await api(env, env.ingestToken, 'POST', '/i/v1/experience/events', {
       surface: 'settings',
+      batch_id: 'settings-unsafe-route',
       events: [{ kind: 'page_viewed', distinct_id: 'actor-2', session_id: 'session-2', route: '/settings?token=secret', sequence: 1 }],
     });
     expect(unsafe.status).toBe(400);
+
+    const extra = await api(env, env.ingestToken, 'POST', '/i/v1/experience/events', {
+      surface: 'settings',
+      batch_id: 'settings-extra-field',
+      events: [{
+        kind: 'page_viewed', distinct_id: 'actor-2', session_id: 'session-2', route: 'settings', sequence: 2,
+        captured_dom: '<input value="private">',
+      }],
+    });
+    expect(extra.status).toBe(400);
 
     const archived = await api(env, env.secretToken, 'POST', `${P()}/experience/surfaces/settings/archive`);
     expect(archived.status).toBe(200);
@@ -107,7 +124,8 @@ describe('browser experience surfaces and ingest', () => {
 
     const blocked = await api(env, env.ingestToken, 'POST', '/i/v1/experience/events', {
       surface: 'settings',
-      events: [{ kind: 'page_viewed', distinct_id: 'actor-2', session_id: 'session-2', route: '/settings', sequence: 1 }],
+      batch_id: 'settings-archived',
+      events: [{ kind: 'page_viewed', distinct_id: 'actor-2', session_id: 'session-2', route: 'settings', sequence: 1 }],
     });
     expect(blocked.status).toBe(409);
     expect(blocked.body.error.code).toBe('experience_surface_not_active');

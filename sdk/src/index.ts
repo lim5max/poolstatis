@@ -45,7 +45,16 @@ export type ExperienceCaptureEvent =
 
 export interface ExperienceCaptureBatch {
   surface: string;
+  batch_id: string;
   events: ExperienceCaptureEvent[];
+}
+
+/** The optional BrowserExperience module uses this to decide whether to retry a whole stable batch. */
+export class ExperienceCaptureError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = 'ExperienceCaptureError';
+  }
 }
 
 /** A stable assignment returned by the Poolstatis feature-delivery service. */
@@ -180,7 +189,10 @@ export class Poolstatis {
   async captureExperience(batch: ExperienceCaptureBatch): Promise<void> {
     const result = await this.send('/i/v1/experience/events', batch);
     if (result === 'ok') return;
-    throw new Error(result === 'drop' ? 'browser experience capture rejected' : 'browser experience capture could not be delivered');
+    throw new ExperienceCaptureError(
+      result === 'drop' ? 'browser experience capture rejected' : 'browser experience capture could not be delivered',
+      result === 'retry',
+    );
   }
 
   /**

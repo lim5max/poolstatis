@@ -109,34 +109,33 @@ export const experienceSurfaceSchema = z.object({
 
 export type CreateExperienceSurfaceInput = z.infer<typeof experienceSurfaceSchema>;
 
-const experienceRouteSchema = z.string().min(1).max(500)
-  .refine((route) => route.startsWith('/'), 'route must start with "/"')
-  .refine((route) => !route.includes('?') && !route.includes('#'), 'route must not include a query string or hash');
+const experienceLabelSchema = z.string().trim().min(1).max(120).regex(
+  /^[a-z][a-z0-9_.:-]*$/,
+  'label must be a stable lowercase identifier, not captured page text',
+);
+const experienceRouteSchema = experienceLabelSchema.describe('a developer-provided stable route key, never a raw URL or path');
 const experienceCommonSchema = z.object({
   distinct_id: z.string().min(1).max(200),
   session_id: z.string().min(1).max(200),
   route: experienceRouteSchema,
   sequence: z.number().int().min(0).max(1_000_000),
 });
-const experienceLabelSchema = z.string().trim().min(1).max(120).regex(
-  /^[a-z][a-z0-9_.:-]*$/,
-  'label must be a stable lowercase identifier, not captured page text',
-);
 
 export const experienceEventSchema = z.discriminatedUnion('kind', [
-  experienceCommonSchema.extend({ kind: z.literal('page_viewed') }),
+  experienceCommonSchema.extend({ kind: z.literal('page_viewed') }).strict(),
   experienceCommonSchema.extend({
     kind: z.literal('element_clicked'), label: experienceLabelSchema,
     x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
-  }),
-  experienceCommonSchema.extend({ kind: z.literal('scroll_depth'), depth: z.number().int().min(0).max(100) }),
-  experienceCommonSchema.extend({ kind: z.literal('client_error'), error_type: z.enum(['error', 'unhandled_rejection']) }),
+  }).strict(),
+  experienceCommonSchema.extend({ kind: z.literal('scroll_depth'), depth: z.number().int().min(0).max(100) }).strict(),
+  experienceCommonSchema.extend({ kind: z.literal('client_error'), error_type: z.enum(['error', 'unhandled_rejection']) }).strict(),
 ]);
 
 export const experienceCaptureSchema = z.object({
   surface: keySchema,
+  batch_id: z.string().min(1).max(200),
   events: z.array(experienceEventSchema).min(1).max(100),
-});
+}).strict();
 
 export type ExperienceCaptureInput = z.infer<typeof experienceCaptureSchema>;
 

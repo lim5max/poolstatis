@@ -37,7 +37,7 @@ It is an optional module, not enabled by the core SDK. Its constructor requires
 a `Poolstatis` client, `surface`, stable `distinctId` (string or provider), and
 `hasConsent()`. It creates one opaque session id per instance and captures:
 
-- `page_viewed` (path only, without query/hash);
+- `page_viewed` (a developer-provided stable route key, never a URL/path);
 - labelled `element_clicked` events (only `[data-poolsatis-label]`);
 - `scroll_depth` milestones (25/50/75/100%);
 - a coarse `client_error` type (`error` or `unhandled_rejection`), without
@@ -45,7 +45,7 @@ a `Poolstatis` client, `surface`, stable `distinctId` (string or provider), and
 
 Each interaction is sent as a small typed batch to `/i/v1/experience/events`.
 The ingest route rejects unknown/archived surfaces, labels over 120 characters,
-routes containing query/hash, invalid normalized coordinates, batches over 100,
+invalid route keys, invalid normalized coordinates, batches over 100,
 and any capture for which the caller did not use an active surface. It stores
 the normalized event names `experience.page_viewed`,
 `experience.element_clicked`, `experience.scroll_depth`, and
@@ -76,7 +76,7 @@ data boundary.
 
 - Capture is opt-in and is a no-op until `hasConsent()` returns true.
 - `stop()` detaches all browser listeners; `start()` is idempotent.
-- No text values, DOM snapshots, selectors, URLs with query/hash, error
+- No text values, DOM snapshots, selectors, URLs/paths, error
   messages/stacks, or raw pointer paths are transmitted.
 - Archiving a surface immediately rejects new capture; old events remain
   available for analysis and standard project retention/purge rules apply.
@@ -85,6 +85,6 @@ data boundary.
 
 Backend tests cover schema, surface lifecycle, rejected payloads, map bins and
 timeline ordering. SDK tests use a minimal fake browser to prove consent,
-label filtering, scroll milestones, route redaction, and listener teardown.
+label filtering, route-key isolation, scroll milestones, and listener teardown.
 An MCP stdio E2E test creates a surface and queries captured data through the
 real server. Admin production build and code review are required before handoff.

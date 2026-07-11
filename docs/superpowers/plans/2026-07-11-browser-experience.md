@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- No DOM snapshots, text values, CSS selectors, query/hash URL parts, error messages/stacks, or pointer paths.
+- No DOM snapshots, text values, CSS selectors, URLs/paths, error messages/stacks, or pointer paths.
 - Capture requires a `hasConsent` callback and only works for active surfaces.
 - Every new query branch follows schema → QueryService → EventStore → MCP → admin → test.
 - All manual edits use `apply_patch`; run typecheck, backend tests, SDK tests and web build before handoff.
@@ -56,7 +56,7 @@
 - Exports `BrowserExperience` and `BrowserExperienceOptions` from `@poolstatis/sdk/experience`.
 - Calls `POST /i/v1/experience/events` with an opaque session id.
 
-- [ ] Write failing SDK tests for consent, labelled click capture, route redaction, scroll milestones and teardown.
+- [ ] Write failing SDK tests for consent, labelled click capture, route-key isolation, scroll milestones and teardown.
 - [ ] Run `pnpm --dir sdk vitest run test/experience.test.ts` and verify the missing module failure.
 - [ ] Implement browser-only module without importing it from the core SDK entrypoint.
 - [ ] Re-run SDK tests and commit `feat: add browser experience sdk module`.

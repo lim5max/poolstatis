@@ -8,6 +8,7 @@ import type {
   ExperienceSessionEvent,
   ExperienceSessionQuery,
   EventStore,
+  IdempotentAppend,
   EventNameStat,
   EventStatsQuery,
   FunnelQuery,
@@ -35,17 +36,55 @@ export class PostgresEventStore implements EventStore {
     if (events.length === 0) return;
     await this.ensurePartitions(events.map((e) => e.timestamp));
 
+    await this.insert(this.pool, events);
+  }
+
+  /**
+   * Atomically claims a Browser Experience batch and writes its events on one
+   * connection. A lost HTTP response can therefore only observe a completed
+   * batch, never append the same clicks twice on retry.
+   */
+  async appendIdempotent(batch: IdempotentAppend): Promise<boolean> {
+    if (batch.events.length === 0) return true;
+    await this.ensurePartitions(batch.events.map((event) => event.timestamp));
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const claim = await client.query(
+        `INSERT INTO experience_batches (project_id, env, batch_id, status, completed_at, last_error)
+         VALUES ($1, $2, $3, 'completed', now(), NULL)
+         ON CONFLICT (project_id, env, batch_id) DO NOTHING
+         RETURNING batch_id`,
+        [batch.projectId, batch.env, batch.batchId],
+      );
+      if ((claim.rowCount ?? 0) === 0) {
+        await client.query('COMMIT');
+        return false;
+      }
+      await this.insert(client, batch.events);
+      await client.query('COMMIT');
+      return true;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async insert(client: pg.Pool | pg.PoolClient, events: StorableEvent[]): Promise<void> {
     const params: unknown[] = [];
     const rows = events.map((e) => {
       params.push(
         e.projectId, e.env, e.event, e.timestamp, e.distinctId,
         e.sessionId, JSON.stringify(e.properties), e.registered, e.isSystem ?? false,
+        e.eventSource ?? (e.isSystem ? 'system' : 'ingest'),
       );
-      const base = params.length - 9;
-      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
+      const base = params.length - 10;
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
     });
-    await this.pool.query(
-      `INSERT INTO events (project_id, env, event, "timestamp", distinct_id, session_id, properties, registered, is_system)
+    await client.query(
+      `INSERT INTO events (project_id, env, event, "timestamp", distinct_id, session_id, properties, registered, is_system, event_source)
        VALUES ${rows.join(', ')}`,
       params,
     );
@@ -379,7 +418,7 @@ export class PostgresEventStore implements EventStore {
            count(DISTINCT distinct_id)::int AS actors
          FROM events
          WHERE project_id = $1 AND env = $2
-           AND event = 'experience.element_clicked' AND is_system = true
+           AND event = 'experience.element_clicked' AND event_source = 'experience'
            AND properties->>'surface' = $3
            AND "timestamp" >= $4 AND "timestamp" < $5
          GROUP BY 1, 2
@@ -390,7 +429,7 @@ export class PostgresEventStore implements EventStore {
         `SELECT properties->>'label' AS label, count(*)::int AS count, count(DISTINCT distinct_id)::int AS actors
          FROM events
          WHERE project_id = $1 AND env = $2
-           AND event = 'experience.element_clicked' AND is_system = true
+           AND event = 'experience.element_clicked' AND event_source = 'experience'
            AND properties->>'surface' = $3
            AND "timestamp" >= $4 AND "timestamp" < $5
          GROUP BY 1
@@ -410,7 +449,7 @@ export class PostgresEventStore implements EventStore {
       `SELECT event, "timestamp", properties
        FROM events
        WHERE project_id = $1 AND env = $2 AND session_id = $3
-         AND is_system = true
+         AND event_source = 'experience'
          AND event IN ('experience.page_viewed', 'experience.element_clicked', 'experience.scroll_depth', 'experience.client_error')
          AND properties->>'surface' = $4
          AND "timestamp" >= $5 AND "timestamp" < $6

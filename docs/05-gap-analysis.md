@@ -33,9 +33,24 @@ allocated active flag.
 
 This changes the next browser-oriented priority: do **not** bolt DOM recording
 onto `events`. First ship a consent-gated Browser Experience SDK that emits
-labelled page, scroll, rage-click, dead-click and error signals, then aggregate
-them through a typed interaction-map query. Full Session Replay follows only
+labelled page, click, scroll and coarse error signals, then aggregate them
+through a typed interaction-map query. Full Session Replay follows only
 with masking, deletion, sampling and encrypted object storage.
+
+## Implementation update — 2026-07-11 (Browser Experience)
+
+The first browser-oriented module is now shipped: purpose-tagged active
+surfaces gate an optional `@poolstatis/sdk/experience` module. It records only
+consent-gated developer-provided route keys, labelled clicks, scroll milestones and coarse client
+error types, and exposes a typed click interaction map plus a session timeline
+through REST, MCP and the admin. Route provenance keeps generic raw ingest
+events with matching names out of these results; a public ingest key remains a
+write credential, not an anti-fraud boundary.
+
+This is intentionally **not** DOM Session Replay or gaze tracking. Full replay
+remains blocked on per-field masking, consent withdrawal, deletion, sampling,
+encrypted object storage and retention policy — it must never be added to the
+immutable Postgres events table.
 
 ---
 

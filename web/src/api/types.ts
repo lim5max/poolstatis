@@ -102,6 +102,44 @@ export interface ExperimentResult {
   }>;
 }
 
+export type ExperienceSurfaceStatus = 'active' | 'archived';
+
+export interface ExperienceSurface {
+  id: string;
+  key: string;
+  name: string;
+  purpose: string;
+  status: ExperienceSurfaceStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InteractionMapResponse {
+  kind: 'interaction_map';
+  surface: Pick<ExperienceSurface, 'key' | 'name' | 'purpose' | 'status'>;
+  grid: number;
+  cells: Array<{ x: number; y: number; count: number; actors: number }>;
+  labels: Array<{ label: string; count: number; actors: number }>;
+}
+
+export interface ExperienceSessionResponse {
+  kind: 'experience_session';
+  surface: Pick<ExperienceSurface, 'key' | 'name' | 'purpose' | 'status'>;
+  session_id: string;
+  events: Array<{
+    timestamp: string;
+    kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
+    route: string;
+    sequence: number;
+    label?: string;
+    x?: number;
+    y?: number;
+    depth?: number;
+    error_type?: 'error' | 'unhandled_rejection';
+  }>;
+  summary: { page_views: number; clicks: number; max_scroll_depth: number; client_errors: number };
+}
+
 export interface EntityType {
   name: string;
   description: string;
