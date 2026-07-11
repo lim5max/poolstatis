@@ -88,6 +88,18 @@ export interface ExperimentResult {
     credible_interval: { lower: number; upper: number };
     probability_best: number;
   }>;
+  secondary_metrics: Array<{
+    metric: Pick<Metric, 'key' | 'name' | 'purpose'>;
+    variants: Array<{
+      key: string;
+      exposed: number;
+      converted: number;
+      conversion_rate: number;
+      uplift_vs_control: number | null;
+      credible_interval: { lower: number; upper: number };
+      probability_best: number;
+    }>;
+  }>;
 }
 
 export interface EntityType {

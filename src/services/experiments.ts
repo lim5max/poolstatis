@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { ApiError, notFound } from '../errors.js';
 import type { CreateExperimentInput, UpdateExperimentInput } from '../schemas.js';
+import type { PropertyFilter } from '../schemas.js';
 import type { EventStore, ExperimentVariantOutcome } from '../stores/eventStore.js';
 import { getMetric, type Metric } from './registry.js';
 import { getFeatureFlag, type FeatureFlag } from './flags.js';
@@ -28,6 +29,12 @@ export interface ExperimentResults {
   primary_metric: Pick<Metric, 'key' | 'name' | 'purpose'>;
   started_at: string;
   concluded_at: string | null;
+  variants: VariantExperimentStats[];
+  secondary_metrics: ExperimentMetricResults[];
+}
+
+export interface ExperimentMetricResults {
+  metric: Pick<Metric, 'key' | 'name' | 'purpose'>;
   variants: VariantExperimentStats[];
 }
 
@@ -164,25 +171,48 @@ export async function getExperimentResults(
   const flag = await getFeatureFlag(pool, projectId, experiment.flag_key);
   const metric = await getMetric(pool, projectId, experiment.primary_metric_key);
   validateExperimentMetric(metric);
-  const source = metric.source as { event: string; filters?: Array<{ property: string; op: any; value?: unknown }> };
-  const observed = await eventStore.experimentResults({
-    projectId,
-    env,
-    flagKey: experiment.flag_key,
-    metricEvent: source.event,
-    metricFilters: (source.filters ?? []) as any,
-    from: new Date(experiment.started_at),
-    to: experiment.concluded_at ? new Date(experiment.concluded_at) : now,
-  });
-  const variants = mergeVariantOutcomes(flag, observed);
+  const to = experiment.concluded_at ? new Date(experiment.concluded_at) : now;
+  const from = new Date(experiment.started_at);
+  const [variants, secondary_metrics] = await Promise.all([
+    getMetricResults(eventStore, projectId, env, experiment.flag_key, flag, metric, from, to),
+    Promise.all(experiment.secondary_metric_keys.map(async (metricKey) => {
+      const secondary = await getMetric(pool, projectId, metricKey);
+      validateExperimentMetric(secondary);
+      return { metric: secondary, variants: await getMetricResults(eventStore, projectId, env, experiment.flag_key, flag, secondary, from, to) };
+    })),
+  ]);
   return {
     key: experiment.key,
     status: experiment.status,
     primary_metric: { key: metric.key, name: metric.name, purpose: metric.purpose },
     started_at: new Date(experiment.started_at).toISOString(),
     concluded_at: experiment.concluded_at ? new Date(experiment.concluded_at).toISOString() : null,
-    variants: summarizeExperimentVariants(variants),
+    variants,
+    secondary_metrics,
   };
+}
+
+async function getMetricResults(
+  eventStore: EventStore,
+  projectId: string,
+  env: string,
+  flagKey: string,
+  flag: FeatureFlag,
+  metric: Metric,
+  from: Date,
+  to: Date,
+): Promise<VariantExperimentStats[]> {
+  const source = metric.source as { event: string; filters?: PropertyFilter[] };
+  const observed = await eventStore.experimentResults({
+    projectId,
+    env,
+    flagKey,
+    metricEvent: source.event,
+    metricFilters: source.filters ?? [],
+    from,
+    to,
+  });
+  return summarizeExperimentVariants(mergeVariantOutcomes(flag, observed));
 }
 
 function mergeVariantOutcomes(flag: FeatureFlag, observed: ExperimentVariantOutcome[]) {

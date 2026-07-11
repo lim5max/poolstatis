@@ -181,6 +181,48 @@ describe('experiments', () => {
     expect(started.status).toBe(409);
     expect(started.body.error.code).toBe('experiment_flag_allocation_incomplete');
   });
+
+  it('locks a running experiment flag so allocations cannot rewrite its historical variants', async () => {
+    await activeMetric(env, { key: 'locked_flag_completed', source: { event: 'locked.completed' } });
+    await createActiveFlag('locked_experiment_flag');
+    await createAndStartExperiment('locked_experiment', 'locked_experiment_flag', 'locked_flag_completed');
+
+    const patched = await api(env, env.secretToken, 'PATCH', `${P()}/flags/locked_experiment_flag`, {
+      variants: [{ key: 'control', rollout_percentage: 100 }],
+    });
+
+    expect(patched.status).toBe(409);
+    expect(patched.body.error.code).toBe('feature_flag_in_running_experiment');
+  });
+
+  it('returns declared secondary metric outcomes alongside the primary result', async () => {
+    await activeMetric(env, { key: 'secondary_primary_completed', source: { event: 'primary.completed' } });
+    await activeMetric(env, { key: 'secondary_guardrail_failed', source: { event: 'guardrail.failed' } });
+    await createActiveFlag('secondary_metric_flag');
+    const created = await api(env, env.secretToken, 'POST', `${P()}/experiments`, {
+      key: 'secondary_metric_experiment',
+      name: 'Secondary metric experiment',
+      hypothesis: 'The treatment should increase completion without increasing the guardrail failure rate.',
+      flag_key: 'secondary_metric_flag',
+      primary_metric_key: 'secondary_primary_completed',
+      secondary_metric_keys: ['secondary_guardrail_failed'],
+    });
+    expect(created.status).toBe(201);
+    expect((await api(env, env.secretToken, 'POST', `${P()}/experiments/secondary_metric_experiment/start`)).status).toBe(200);
+    await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', { key: 'secondary_metric_flag', distinct_id: 'secondary-actor' });
+    await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [
+        { event: 'primary.completed', distinct_id: 'secondary-actor' },
+        { event: 'guardrail.failed', distinct_id: 'secondary-actor' },
+      ],
+    });
+
+    const result = await api(env, env.secretToken, 'GET', `${P()}/experiments/secondary_metric_experiment/results?env=prod`);
+    expect(result.body.secondary_metrics).toEqual([
+      expect.objectContaining({ metric: expect.objectContaining({ key: 'secondary_guardrail_failed' }) }),
+    ]);
+    expect(result.body.secondary_metrics[0].variants.reduce((total: number, variant: { converted: number }) => total + variant.converted, 0)).toBe(1);
+  });
 });
 
 describe('feature delivery documentation', () => {

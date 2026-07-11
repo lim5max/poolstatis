@@ -120,7 +120,8 @@ variants `{key, rollout_percentage, payload?}`. Проценты не могут
 ровно 100%. Результат сопоставляет первый `$feature_flag_called` пользователя в
 окне эксперимента с outcome-event **после** exposure, затем возвращает по
 вариантам `exposed`, `converted`, `conversion_rate`, `uplift_vs_control`, 95%
-Beta credible interval и `probability_best`.
+Beta credible interval и `probability_best` для primary и всех declared
+secondary metrics.
 
 `POST /flags/{key}/evaluate` в Platform API создан для MCP/debugging и не
 создаёт exposure. Рантайм всегда использует ingest endpoint выше.

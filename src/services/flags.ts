@@ -107,6 +107,7 @@ export async function updateFeatureFlag(
       'create a new flag instead of modifying historical delivery configuration',
     );
   }
+  await ensureNoRunningExperiment(pool, projectId, key);
   const { rows } = await pool.query<FeatureFlag>(
     `UPDATE feature_flags SET
        name = COALESCE($3, name),
@@ -130,6 +131,18 @@ export async function updateFeatureFlag(
 }
 
 export async function archiveFeatureFlag(pool: pg.Pool, projectId: string, key: string): Promise<FeatureFlag> {
+  await ensureNoRunningExperiment(pool, projectId, key);
+  const { rows } = await pool.query<FeatureFlag>(
+    `UPDATE feature_flags SET status = 'archived', updated_at = now()
+     WHERE project_id = $1 AND key = $2
+     RETURNING ${FLAG_COLS}`,
+    [projectId, key],
+  );
+  if (!rows[0]) throw notFound('feature_flag');
+  return mapFlag(rows[0]);
+}
+
+async function ensureNoRunningExperiment(pool: pg.Pool, projectId: string, key: string): Promise<void> {
   const { rows: running } = await pool.query<{ key: string }>(
     `SELECT key FROM experiments WHERE project_id = $1 AND flag_key = $2 AND status = 'running' LIMIT 1`,
     [projectId, key],
@@ -142,14 +155,6 @@ export async function archiveFeatureFlag(pool: pg.Pool, projectId: string, key: 
       'conclude the experiment before archiving its flag so results stay interpretable',
     );
   }
-  const { rows } = await pool.query<FeatureFlag>(
-    `UPDATE feature_flags SET status = 'archived', updated_at = now()
-     WHERE project_id = $1 AND key = $2
-     RETURNING ${FLAG_COLS}`,
-    [projectId, key],
-  );
-  if (!rows[0]) throw notFound('feature_flag');
-  return mapFlag(rows[0]);
 }
 
 export async function evaluateFeatureFlag(
