@@ -22,6 +22,13 @@ ph.track('doc.exported', user.id);
 // Entities — mutable state (merge semantics; null deletes a key).
 ph.identify('account', account.id, { plan: 'pro', seats: 7 });
 
+// Feature delivery — stable per user; the first call automatically records
+// a $feature_flag_called exposure for experiment measurement.
+const checkoutCopy = await ph.getFeatureFlag('checkout_copy', user.id, {
+  sessionId: session.id,
+});
+if (checkoutCopy?.key === 'test') showCheckoutCta(checkoutCopy.payload?.label as string);
+
 // Optional: force-send (e.g. server-side, before exit).
 await ph.flush();
 ```
@@ -36,6 +43,10 @@ await ph.flush();
   `batch_id`; the server dedups, so events are never double-counted. 4xx (your bug) is
   reported via `onError` and not retried.
 - **Bounded memory** — `maxQueue` drops oldest if the backend is unreachable for a long time.
+- **Exposure-safe feature flags** — `getFeatureFlag()` evaluates active flags
+  remotely once per `(flag, distinct_id)` client lifetime, caches the stable
+  variant and lets the server record the experiment exposure exactly where it
+  belongs.
 
 ## Options
 
@@ -48,6 +59,18 @@ await ph.flush();
 | `maxQueue` | `10000` | in-memory cap (drop oldest) |
 | `fetch` | global | inject a fetch impl (tests / old runtimes) |
 | `onError` | noop | called when a flush fails after retries |
+
+## Feature flags
+
+`getFeatureFlag(key, distinctId, { sessionId? })` resolves to
+`{ key, payload? }` or `null` when the flag has no allocation or evaluation
+cannot be reached. `null` is the safe control path; failures also call
+`onError`. `getFeatureFlags(keys, distinctId, options?)` evaluates several
+flags through the same cache.
+
+The `distinctId` must be a stable authenticated product id, never a generated
+session id. The evaluation request is an exposure event, so do not call it in a
+tight loop; a single shared `Poolstatis` client handles this automatically.
 
 ## Notes
 

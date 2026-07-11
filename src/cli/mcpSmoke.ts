@@ -50,6 +50,8 @@ try {
   const projects = await callTool('list_projects', {});
   const schema = await callTool('get_project_schema', { project, env });
   const funnels = await callTool('list_funnels', { project });
+  const flags = await callTool('list_feature_flags', { project });
+  const experiments = await callTool('list_experiments', { project });
   const sample = await callTool('sample_events', { project, env, limit: 100 });
   const warnings = await callTool('list_ingest_warnings', { project, env });
   const quality = await callTool('list_data_quality_issues', { project, env, limit: 50 });
@@ -83,6 +85,8 @@ try {
     projects_visible: asArray(projects.projects).length,
     active_metrics: activeMetrics.length,
     funnels: asArray(schema.funnels).length,
+    feature_flags: asArray(flags.flags).length,
+    experiments: asArray(experiments.experiments).length,
     observed_events_30d: observedEvents.reduce((sum: number, row: unknown) => sum + Number((row as { count?: unknown }).count ?? 0), 0),
     sample_events: {
       total: sampleEvents.length,

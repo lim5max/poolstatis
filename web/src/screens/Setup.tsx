@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 const TOOLS = [
   ['Context', ['list_projects', 'get_project_schema']],
   ['Registry', ['register_metric', 'update_metric', 'deprecate_metric', 'explain_metric_usage', 'list_metrics', 'delete_metric', 'register_entity_type', 'define_funnel', 'list_funnels', 'delete_funnel']],
+  ['Feature delivery', ['create_feature_flag', 'list_feature_flags', 'update_feature_flag', 'archive_feature_flag', 'evaluate_feature_flag', 'create_experiment', 'list_experiments', 'update_experiment', 'start_experiment', 'conclude_experiment', 'get_experiment_results']],
   ['Queries', ['query_trend', 'query_funnel', 'query_entities', 'query_retention', 'query_lifecycle', 'query_stickiness', 'sample_events']],
   ['Diagnostics', ['list_ingest_warnings', 'list_data_quality_issues']],
   ['Insights', ['list_insights', 'create_insight', 'resolve_insight']],

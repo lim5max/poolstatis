@@ -45,6 +45,30 @@ list_funnels(project)
 delete_funnel(project, key)
 ```
 
+### Feature delivery (ship → measure → decide)
+
+```
+create_feature_flag(project, {key, name, purpose, variants, status?})
+list_feature_flags(project)
+update_feature_flag(project, key, patch)
+archive_feature_flag(project, key)             // отказ, если есть running experiment
+evaluate_feature_flag(project, key, {distinct_id, session_id?})
+  // inspect-only: не записывает exposure, поэтому безопасен для debug
+
+create_experiment(project, {key, name, hypothesis, flag_key, primary_metric_key, secondary_metric_keys?})
+list_experiments(project)
+update_experiment(project, key, patch)         // только draft
+start_experiment(project, key)                  // active flag + 100% allocation + active metrics
+conclude_experiment(project, key, {decision?})
+get_experiment_results(project, key, {env?})
+  // exposure, conversion, uplift, credible interval, probability_best по variant
+```
+
+Флаги используют stable `distinct_id`; до identity merge не пытайся ими
+склеивать anonymous и authenticated id. Продуктовый SDK автоматически пишет
+`$feature_flag_called` при первом evaluation, MCP-tool намеренно этого не
+делает.
+
 ### Запросы (analysis-time)
 
 Все запросы — Query DSL за `EventStore` (см. [04-http-api.md](04-http-api.md)):

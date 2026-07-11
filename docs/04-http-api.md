@@ -52,6 +52,28 @@
 
 Merge-семантика: присланные ключи перезаписывают существующие, отсутствующие сохраняются.
 
+### POST /i/v1/flags/evaluate
+
+Оценка feature flag из продукта. Нужен тот же write-only `pk_` ключ, что и
+для SDK. `distinct_id` обязан быть стабильным: deterministic assignment и
+экспериментная статистика строятся именно по нему.
+
+```jsonc
+{
+  "key": "checkout_copy",
+  "distinct_id": "user_8a21",
+  "session_id": "s_b1f0" // optional
+}
+// → { "key": "checkout_copy", "variant": { "key": "test", "payload": { "label": "Pay now" } } }
+// либо { "key": "checkout_copy", "variant": null } для нераспределённого трафика
+```
+
+Только `active` флаги можно оценивать. Когда вернулся variant, endpoint
+записывает зарегистрированное системное событие `$feature_flag_called` c
+`flag_key`, `variant` и `payload`. Это exposure для эксперимента; SDK кэширует
+результат на `(flag, distinct_id)` в течение жизни клиента, чтобы один рендер не
+раздувал данные.
+
 ## Platform API
 
 CRUD-слой 1:1 с тулами MCP (см. [03-mcp-server.md](03-mcp-server.md)):
@@ -67,12 +89,41 @@ GET    /api/v1/projects/{slug}/metrics
 POST   /api/v1/projects/{slug}/entity-types
 POST   /api/v1/projects/{slug}/funnels
 GET    /api/v1/projects/{slug}/funnels
+POST   /api/v1/projects/{slug}/flags
+GET    /api/v1/projects/{slug}/flags
+PATCH  /api/v1/projects/{slug}/flags/{key}
+POST   /api/v1/projects/{slug}/flags/{key}/archive
+POST   /api/v1/projects/{slug}/flags/{key}/evaluate  ← inspect only, не пишет exposure
+POST   /api/v1/projects/{slug}/experiments
+GET    /api/v1/projects/{slug}/experiments
+PATCH  /api/v1/projects/{slug}/experiments/{key}
+POST   /api/v1/projects/{slug}/experiments/{key}/start
+POST   /api/v1/projects/{slug}/experiments/{key}/conclude
+GET    /api/v1/projects/{slug}/experiments/{key}/results?env=prod
 POST   /api/v1/projects/{slug}/query          ← единая точка Query DSL
 GET    /api/v1/projects/{slug}/events/sample
 GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+## Feature delivery and experiments
+
+Feature flag хранит обязательный `purpose`, стабильный server-side salt и
+variants `{key, rollout_percentage, payload?}`. Проценты не могут превышать
+100%; один и тот же `distinct_id` всегда получает тот же вариант, пока salt не
+меняется (он никогда не меняется через API). `draft` и `archived` флаги не
+доступны рантайму.
+
+Эксперимент ссылается на один flag и на `active` registry metric типа `count`
+или `unique_actors`. Старт возможен только для active flag с распределением
+ровно 100%. Результат сопоставляет первый `$feature_flag_called` пользователя в
+окне эксперимента с outcome-event **после** exposure, затем возвращает по
+вариантам `exposed`, `converted`, `conversion_rate`, `uplift_vs_control`, 95%
+Beta credible interval и `probability_best`.
+
+`POST /flags/{key}/evaluate` в Platform API создан для MCP/debugging и не
+создаёт exposure. Рантайм всегда использует ingest endpoint выше.
 
 ## Query DSL
 

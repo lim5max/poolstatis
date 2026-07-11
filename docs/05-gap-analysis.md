@@ -20,6 +20,23 @@ The gaps fall into three buckets:
 
 Everything genuinely infra-heavy — session replay, autocapture, HogQL/SQL, ClickHouse/Kafka, real-time CDP fan-out — is correctly skipped or deferred. Replay and SQL are not merely expensive; they are *anti-fits* for an agent consumer and for the semantics-first thesis.
 
+## Implementation update — 2026-07-11
+
+**Feature delivery is now shipped as v1.** Poolstatis has project-scoped
+feature flags with deterministic server evaluation, multivariate payloads and
+automatic `$feature_flag_called` exposure events. Experiments bind one active
+flag to active `count`/`unique_actors` metrics and return post-exposure
+conversion, uplift, Beta credible intervals and chance-to-win through REST,
+MCP, SDK and the headless admin. v1 intentionally requires stable
+`distinct_id`, has no cohort/property targeting, and only starts with a 100%
+allocated active flag.
+
+This changes the next browser-oriented priority: do **not** bolt DOM recording
+onto `events`. First ship a consent-gated Browser Experience SDK that emits
+labelled page, scroll, rage-click, dead-click and error signals, then aggregate
+them through a typed interaction-map query. Full Session Replay follows only
+with masking, deletion, sampling and encrypted object storage.
+
 ---
 
 ## What grounds these recommendations (code reality)
@@ -47,17 +64,15 @@ Ranked by **(fit × value) / effort**, excluding infra-heavy items.
 | 2 | **Actor link + identity merge** | M | Foundational; unblocks anonymous→identified funnels, accurate cohorts, and better retention. Explicit, audited, reversible alias *fact* resolved at query time — a correctness win over PostHog's destructive ingest-order merge. |
 | 3 | **Funnel correlation analysis** | M | Signature feature. Registry-constrained candidate space makes it cheap *and* meaningful; explains drop-off in terms of declared purpose. |
 | 4 | **Static cohorts** | S | Materialized entities-query result; reuses Entity + entities query + compileFilters; purpose-tagged; composes as a query filter and flag/experiment target. |
-| 5 | **Feature flags** (def + deterministic eval + multivariate + payloads + definitions endpoint) | M | Pure-functional over Postgres rows; a flag is a registry entry with a `purpose`; reuses the existing filter AST. Substrate for experiments. |
-| 6 | **`$feature_flag_called` exposure events (+ dedup)** | S | Linchpin that makes experiments computable; collapses onto the existing Event + registry; ship with flag eval. |
-| 7 | **Experiment = flag bound to metrics + Bayesian significance** | M | Closes the agent's ship→measure→decide loop. Bayesian chance-to-win is pure math over Postgres aggregates and more agent-legible than p-values. |
-| 8 | **Property taxonomy on the registry** | M | Extends existing registry tables; lets an agent introspect "what properties, what do they mean, are they trusted?"; surfaces via existing schema endpoint. |
-| 9 | **Materialized rollups for registered metrics/funnels** | M | The registry tells you *in advance* what to precompute — a performance advantage PostHog leaves manual. Keeps single-Postgres fast; buys time before any ClickHouse migration. |
+| 5 | **Browser Experience SDK + interaction map** | M | Consent-gated, labelled interaction/friction signals give UX evidence without storing private DOM or bypassing the metric registry. |
+| 6 | **Property taxonomy on the registry** | M | Extends existing registry tables; lets an agent introspect "what properties, what do they mean, are they trusted?"; surfaces via existing schema endpoint. |
+| 7 | **Materialized rollups for registered metrics/funnels** | M | The registry tells you *in advance* what to precompute — a performance advantage PostHog leaves manual. Keeps single-Postgres fast; buys time before any ClickHouse migration. |
 
 **Recommended sequencing into waves:**
 
 - **Wave A (trust + first value):** onboarding proof gates, website/SaaS/AI metric packs, MCP verification tools, and the first real query result.
 - **Wave B (foundation + flagship reads):** actor link/identity merge → funnel correlation. This wave delivers differentiated, computable insights on a correct actor model.
-- **Wave C (the agent loop):** static cohorts → feature flags + exposure events → experiments + significance. Cohorts land first so flag/experiment targeting can reference them.
+- **Wave C (targeting + qualitative signals):** static cohorts → Browser Experience SDK + typed interaction map. Cohorts make future UX segmentation and flag targeting correct.
 - **Wave D (semantic + performance hardening, can overlap):** property taxonomy and materialized rollups. Both extend existing tables and are agent-invisible but compounding.
 
 > **Cross-cutting rule:** every object above ships its REST CRUD **and** its MCP tool in the same change — never as a follow-on. The mandatory `purpose`/`goal` metadata is what makes the MCP responses self-describing.
@@ -81,7 +96,7 @@ Ranked by **(fit × value) / effort**, excluding infra-heavy items.
 - **Single-source incremental external import** (L) — join Stripe plan/MRR to entities; narrow, explicitly-registered import only — never the 60-connector marketplace; strains the lightweight constraint.
 - **Experiments without flags (variant property on events)** (S) — a config option on the experiment, essentially free once the experiment query exists; lets agents analyze externally-assigned experiments.
 - **Experiment health: SRM + sample-size/MDE/runtime** (S) — cheap pure functions; only meaningful after the experiment + significance core.
-- **Heatmap-style friction signals as registered metrics** (M) — rageclick/deadclick/scroll-depth reframed as purpose-tagged metrics; presumes a frontend SDK emitting the source events.
+- **Session Replay add-on** (L) — encrypted object storage, rrweb masking/block selectors, consent, retention/deletion and sampling. Replay metadata can join analytics by session id, but DOM chunks must never enter the Postgres event table.
 - **Per-key rate limiting + remaining CRUD coverage** (S) — lands incrementally as features ship; rate limiting once there is load to protect.
 - **Ingestion-warnings / dead-letter table** (M) — agent-inspectable "accepted-but-couldn't-process" log; extend the existing `registered`/207-error handling. (Full Kafka/ClickHouse pipeline stays deferred; keep `EventStore` as the swap seam.)
 
@@ -91,7 +106,7 @@ Ranked by **(fit × value) / effort**, excluding infra-heavy items.
 
 | Feature | Why skip |
 |---------|----------|
-| **Session Replay (rrweb DOM recording)** | Heaviest, most infra-intensive PostHog feature (Rust capture → Kafka → Snappy/S3 → ClickHouse + byte-range playback); incompatible with single-Postgres. Replay is human-watch-pixels with no semantic purpose to register — contradicts the computable-insight thesis. The only useful slice (metadata-only Session aggregate) is captured by the deferred Session primitive. |
+| **Session Replay inside `events` / single Postgres** | Still an anti-fit: DOM chunks cannot safely share the immutable analytics event table. A future Replay add-on must use consent, masking, retention/deletion and encrypted object storage; its metadata may join analytics by session id. |
 | **Network & console capture (replay add-on)** | Inherits replay's fit/infra problems; the salvageable reframing (latency/error-rate as registered value metrics) needs no new primitive — already expressible. |
 | **Autocapture (DOM event collection)** | Philosophical opposite of Poolstatis: high-volume, semantically-empty events whose meaning is reverse-engineered from CSS selectors. Presumes a browser UI; volume hits single-Postgres hardest. The one good idea (flag unregistered events) already exists. |
 | **HogQL / raw SQL access** | Anti-fit *by design*. Raw SQL bypasses the registry that makes insights computable/attributable. The closed DSL is a feature; the correct escape hatch is richer DSL query types, not SQL. |

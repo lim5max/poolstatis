@@ -181,7 +181,27 @@ Minimal, high-signal sets. Adapt names to the product; keep the shape.
 
 ---
 
-## 10. The agent workflow
+## 10. Feature delivery and experiments
+
+Use a feature flag when the product needs to ship guarded code safely or test
+alternatives. Every flag needs a decision-oriented \`purpose\`; every experiment
+needs a falsifiable \`hypothesis\` and an active registered outcome metric.
+
+1. Create the flag with deterministic variants and deploy both code paths.
+2. Activate the flag only when its allocation and targeting are intentional.
+3. For A/B work, create and start an experiment only after the flag allocates
+   100% of traffic. The SDK evaluation automatically records
+   \`$feature_flag_called\`; do not fake an exposure by manually adding a
+   \`variant\` property to outcome events.
+4. Read \`get_experiment_results\`, then conclude with \`ship\`, \`iterate\`, \`stop\`
+   or \`inconclusive\` plus a rationale. Conclusion freezes the observation window.
+
+Flags and experiments currently require stable authenticated \`distinct_id\`.
+Do not use temporary anonymous/session ids until actor identity merge ships.
+
+---
+
+## 11. The agent workflow
 
 1. **Read the schema** (\`poolstatis://{project}/schema\` or \`get_project_schema\`)
    to see what metrics, funnels, entity types and observed events already exist.

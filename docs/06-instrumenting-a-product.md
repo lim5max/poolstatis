@@ -134,6 +134,29 @@ ph.track("signup.completed", user.id, { plan: "free" });
 ph.identify("account", user.accountId, { plan: "free", seats: 1 }); // mutable state → entity
 ```
 
+### 2.1 Roll out and measure a product change
+
+Create an active flag and an experiment in **Experiments** admin (or with the
+matching MCP tools). The experiment needs a 100%-allocated flag and an active
+`count`/`unique_actors` metric as outcome.
+
+```ts
+const variant = await ph.getFeatureFlag("checkout_copy", user.id, {
+  sessionId: session.id,
+});
+
+if (variant?.key === "test") {
+  showCheckoutCta(variant.payload?.label as string);
+} else {
+  showCheckoutCta("Checkout");
+}
+```
+
+Do not add `variant` manually to your outcome events: Poolstatis records the
+first `$feature_flag_called` exposure itself and only counts outcomes that occur
+after it. Use the experiment result before concluding it; conclusion freezes the
+measurement window and records the decision rationale.
+
 **Other languages / no SDK** — POST directly (the same shape the SDK sends). Batch up to 500
 events and send a `batch_id` for idempotent retries:
 

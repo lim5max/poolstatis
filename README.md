@@ -150,6 +150,8 @@ Implemented:
 - Entities
 - Query DSL for `trend`, `funnel`, `entities`, `retention`, `lifecycle`, and
   `stickiness`
+- Deterministic feature flags, automatic exposure events, and Bayesian A/B
+  experiment results over registered metrics
 - MCP server with typed tools and resources
 - Headless admin SPA
 - Instrumentation standard
@@ -157,5 +159,5 @@ Implemented:
 - Docker Compose self-hosting path
 
 Next priorities are tracked in [docs/05-gap-analysis.md](docs/05-gap-analysis.md):
-actor merge and identity, static cohorts, feature flags, experiments, and funnel
-correlation.
+actor merge and identity, static cohorts, funnel correlation, Browser Experience
+signals/interaction maps, and a privacy-gated Session Replay add-on.

@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
 
 let env: TestEnv;
@@ -178,5 +180,18 @@ describe('experiments', () => {
     const started = await api(env, env.secretToken, 'POST', `${P()}/experiments/incomplete_delivery_test/start`);
     expect(started.status).toBe(409);
     expect(started.body.error.code).toBe('experiment_flag_allocation_incomplete');
+  });
+});
+
+describe('feature delivery documentation', () => {
+  it('documents the REST, MCP and SDK workflow', async () => {
+    const [httpApi, mcp, sdk] = await Promise.all([
+      readFile(resolve('docs/04-http-api.md'), 'utf8'),
+      readFile(resolve('docs/03-mcp-server.md'), 'utf8'),
+      readFile(resolve('sdk/README.md'), 'utf8'),
+    ]);
+    expect(httpApi).toContain('/i/v1/flags/evaluate');
+    expect(mcp).toContain('get_experiment_results');
+    expect(sdk).toContain('getFeatureFlag');
   });
 });
