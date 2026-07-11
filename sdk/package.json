@@ -7,7 +7,10 @@
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./experience": { "types": "./dist/experience.d.ts", "import": "./dist/experience.js" }
+  },
   "files": ["dist"],
   "sideEffects": false,
   "engines": { "node": ">=18" },

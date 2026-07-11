@@ -36,6 +36,18 @@ export interface PoolstatisEvent {
   properties?: Record<string, unknown>;
 }
 
+/** Narrow wire contract consumed by the optional Browser Experience module. */
+export type ExperienceCaptureEvent =
+  | { kind: 'page_viewed'; distinct_id: string; session_id: string; route: string; sequence: number }
+  | { kind: 'element_clicked'; distinct_id: string; session_id: string; route: string; sequence: number; label: string; x: number; y: number }
+  | { kind: 'scroll_depth'; distinct_id: string; session_id: string; route: string; sequence: number; depth: number }
+  | { kind: 'client_error'; distinct_id: string; session_id: string; route: string; sequence: number; error_type: 'error' | 'unhandled_rejection' };
+
+export interface ExperienceCaptureBatch {
+  surface: string;
+  events: ExperienceCaptureEvent[];
+}
+
 /** A stable assignment returned by the Poolstatis feature-delivery service. */
 export interface FeatureFlagVariant {
   key: string;
@@ -158,6 +170,17 @@ export class Poolstatis {
   ): Promise<Record<string, FeatureFlagVariant | null>> {
     const variants = await Promise.all(keys.map(async (key) => [key, await this.getFeatureFlag(key, distinctId, options)] as const));
     return Object.fromEntries(variants);
+  }
+
+  /**
+   * Send a typed Browser Experience batch immediately. This is public solely
+   * so the optional `@poolstatis/sdk/experience` module can reuse the SDK's
+   * configured endpoint, key, retry policy and error hook.
+   */
+  async captureExperience(batch: ExperienceCaptureBatch): Promise<void> {
+    const result = await this.send('/i/v1/experience/events', batch);
+    if (result === 'ok') return;
+    throw new Error(result === 'drop' ? 'browser experience capture rejected' : 'browser experience capture could not be delivered');
   }
 
   /**
