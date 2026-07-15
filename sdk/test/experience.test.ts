@@ -98,7 +98,7 @@ describe('BrowserExperience', () => {
     await experience.start();
     browser.dispatch('click', {
       target: {
-        closest: (selector: string) => selector === '[data-poolstatis-label]'
+        closest: (selector: string) => selector === '[data-poolstatis-label], [data-poolsatis-label]'
           ? { getAttribute: (name: string) => name === 'data-poolstatis-label' ? 'pay_now' : null }
           : null,
       },
@@ -107,7 +107,7 @@ describe('BrowserExperience', () => {
     });
     browser.dispatch('click', {
       target: {
-        closest: (selector: string) => selector === '[data-poolsatis-label]'
+        closest: (selector: string) => selector === '[data-poolstatis-label], [data-poolsatis-label]'
           ? { getAttribute: (name: string) => name === 'data-poolsatis-label' ? 'legacy_pay_now' : null }
           : null,
       },
@@ -119,6 +119,38 @@ describe('BrowserExperience', () => {
     expect(batches.flatMap((batch) => batch.events)
       .filter((event) => event.kind === 'element_clicked')
       .map((event) => event.label)).toEqual(['pay_now', 'legacy_pay_now']);
+  });
+
+  it('keeps the nearest labelled element when canonical and legacy attributes are nested', async () => {
+    const browser = new FakeWindow();
+    const batches: Array<{ events: Array<Record<string, unknown>> }> = [];
+    const experience = new BrowserExperience({
+      client: { captureExperience: async (batch) => { batches.push(batch); } },
+      surface: 'checkout', distinctId: 'actor-1', route: 'checkout', hasConsent: () => true, browser,
+      sessionId: 'session-1',
+    });
+
+    await experience.start();
+    browser.dispatch('click', {
+      target: {
+        closest: (selector: string) => {
+          if (selector === '[data-poolstatis-label]') {
+            return { getAttribute: (name: string) => name === 'data-poolstatis-label' ? 'parent_canonical' : null };
+          }
+          if (selector === '[data-poolsatis-label]') {
+            return { getAttribute: (name: string) => name === 'data-poolsatis-label' ? 'nearest_legacy' : null };
+          }
+          return { getAttribute: (name: string) => name === 'data-poolsatis-label' ? 'nearest_legacy' : null };
+        },
+      },
+      clientX: 250,
+      clientY: 250,
+    });
+    await experience.flush();
+
+    expect(batches.flatMap((batch) => batch.events)
+      .filter((event) => event.kind === 'element_clicked')
+      .map((event) => event.label)).toEqual(['nearest_legacy']);
   });
 
   it('does not retain a permanently rejected capture batch in memory', async () => {

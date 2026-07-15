@@ -216,11 +216,12 @@ export class BrowserExperience {
 }
 
 const labelAttributes = ['data-poolstatis-label', 'data-poolsatis-label'] as const;
+const labelSelector = labelAttributes.map((attribute) => `[${attribute}]`).join(', ');
 
 function labelFor(target: unknown): string | null {
   const closest = target && typeof target === 'object' ? (target as { closest?: (selector: string) => unknown }).closest : undefined;
+  const element = closest?.(labelSelector) as { getAttribute?: (name: string) => string | null } | null | undefined;
   for (const attribute of labelAttributes) {
-    const element = closest?.(`[${attribute}]`) as { getAttribute?: (name: string) => string | null } | null | undefined;
     const label = element?.getAttribute?.(attribute) ?? null;
     if (label && LABEL.test(label)) return label;
   }
