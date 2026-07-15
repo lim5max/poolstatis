@@ -38,7 +38,7 @@ a `Poolstatis` client, `surface`, stable `distinctId` (string or provider), and
 `hasConsent()`. It creates one opaque session id per instance and captures:
 
 - `page_viewed` (a developer-provided stable route key, never a URL/path);
-- labelled `element_clicked` events (only `[data-poolsatis-label]`);
+- labelled `element_clicked` events (only `[data-poolstatis-label]`);
 - `scroll_depth` milestones (25/50/75/100%);
 - a coarse `client_error` type (`error` or `unhandled_rejection`), without
   message/stack data.

@@ -18,14 +18,14 @@ is the customer's job via MCP/SDK.
 
 ## Repository boundaries
 
-- This repo (`/Users/maksimstil/Desktop/poolsatis`) is the source-available system repo:
+- This repo (`/Users/maksimstil/Desktop/poolstatis`) is the source-available system repo:
   backend, ingest, MCP, SDK, admin SPA, migrations, technical docs, and Docker self-host.
 - The marketing site, public docs UI, `/login`, `/signup`, Vercel waitlist function, and
-  Resend waitlist config live in `/Users/maksimstil/Desktop/poolsatis-site`.
+  Resend waitlist config live in `/Users/maksimstil/Desktop/poolstatis-site`.
 - Future Cloud-only code (hosted auth, billing, managed infra, Cloud ops) belongs in a
   separate private repo, not in this source-available system repo.
 - Do not reintroduce `site/` here. If copy/docs changes affect the landing or public docs UI,
-  switch to `/Users/maksimstil/Desktop/poolsatis-site`.
+  switch to `/Users/maksimstil/Desktop/poolstatis-site`.
 
 ## Commands
 

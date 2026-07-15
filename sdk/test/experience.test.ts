@@ -86,6 +86,41 @@ describe('BrowserExperience', () => {
     expect(browser.listenerCount('click')).toBe(0);
   });
 
+  it('uses the canonical Poolstatis label attribute and keeps the legacy attribute compatible', async () => {
+    const browser = new FakeWindow();
+    const batches: Array<{ events: Array<Record<string, unknown>> }> = [];
+    const experience = new BrowserExperience({
+      client: { captureExperience: async (batch) => { batches.push(batch); } },
+      surface: 'checkout', distinctId: 'actor-1', route: 'checkout', hasConsent: () => true, browser,
+      sessionId: 'session-1',
+    });
+
+    await experience.start();
+    browser.dispatch('click', {
+      target: {
+        closest: (selector: string) => selector === '[data-poolstatis-label]'
+          ? { getAttribute: (name: string) => name === 'data-poolstatis-label' ? 'pay_now' : null }
+          : null,
+      },
+      clientX: 250,
+      clientY: 250,
+    });
+    browser.dispatch('click', {
+      target: {
+        closest: (selector: string) => selector === '[data-poolsatis-label]'
+          ? { getAttribute: (name: string) => name === 'data-poolsatis-label' ? 'legacy_pay_now' : null }
+          : null,
+      },
+      clientX: 250,
+      clientY: 250,
+    });
+    await experience.flush();
+
+    expect(batches.flatMap((batch) => batch.events)
+      .filter((event) => event.kind === 'element_clicked')
+      .map((event) => event.label)).toEqual(['pay_now', 'legacy_pay_now']);
+  });
+
   it('does not retain a permanently rejected capture batch in memory', async () => {
     const browser = new FakeWindow();
     let consent = false;

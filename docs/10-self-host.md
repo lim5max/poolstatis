@@ -9,8 +9,8 @@ Docker Compose is the recommended self-host path. It runs:
 ## Quick start
 
 ```bash
-git clone https://github.com/lim5max/poolsatis.git
-cd poolsatis
+git clone https://github.com/lim5max/poolstatis.git
+cd poolstatis
 
 docker compose -f docker-compose.selfhost.yml up -d --build
 curl http://localhost:3300/health
@@ -60,7 +60,7 @@ For an agent config, use the same URL and token:
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "--dir", "/path/to/poolsatis", "mcp"],
+      "args": ["--silent", "--dir", "/path/to/poolstatis", "mcp"],
       "env": {
         "POOLSTATIS_URL": "http://localhost:3300",
         "POOLSTATIS_TOKEN": "pt_..."

@@ -14,7 +14,7 @@ Do not open a public issue for vulnerabilities.
 
 Use GitHub private vulnerability reporting for this repository when available:
 
-https://github.com/lim5max/poolsatis/security/advisories/new
+https://github.com/lim5max/poolstatis/security/advisories/new
 
 If that flow is unavailable, contact the maintainer privately before disclosing
 details. Include:

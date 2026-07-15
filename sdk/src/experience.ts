@@ -215,11 +215,16 @@ export class BrowserExperience {
   }
 }
 
+const labelAttributes = ['data-poolstatis-label', 'data-poolsatis-label'] as const;
+
 function labelFor(target: unknown): string | null {
   const closest = target && typeof target === 'object' ? (target as { closest?: (selector: string) => unknown }).closest : undefined;
-  const element = closest?.('[data-poolsatis-label]') as { getAttribute?: (name: string) => string | null } | null | undefined;
-  const label = element?.getAttribute?.('data-poolsatis-label') ?? null;
-  return label && LABEL.test(label) ? label : null;
+  for (const attribute of labelAttributes) {
+    const element = closest?.(`[${attribute}]`) as { getAttribute?: (name: string) => string | null } | null | undefined;
+    const label = element?.getAttribute?.(attribute) ?? null;
+    if (label && LABEL.test(label)) return label;
+  }
+  return null;
 }
 
 function clamp(value: number): number {

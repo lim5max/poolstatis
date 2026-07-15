@@ -14,7 +14,7 @@ one-time onboarding tokens, managed ingest, retention, backups, upgrades, and
 uptime. Cloud should not be described as required for the product to work.
 
 The public landing/docs/waitlist surface is intentionally outside this repo in
-`/Users/maksimstil/Desktop/poolsatis-site`. Cloud-only product code should live
+`/Users/maksimstil/Desktop/poolstatis-site`. Cloud-only product code should live
 in a future private repo.
 
 ## License
@@ -70,7 +70,7 @@ Database-backed tests require Docker Postgres on `localhost:5444`.
 ## Separate site repo
 
 The Vercel landing/docs/waitlist surface lives in
-`/Users/maksimstil/Desktop/poolsatis-site`. Treat it as a separate private repo
+`/Users/maksimstil/Desktop/poolstatis-site`. Treat it as a separate private repo
 by default. Its own README covers Vercel env and waitlist settings.
 
 Do not copy `api/waitlist.ts`, Resend env, marketing pages, or public docs UI back
@@ -87,7 +87,7 @@ into this system repo.
    event, activate a metric, and query it.
 5. Run the Docker self-host path from `docs/10-self-host.md` on a clean machine
    or clean Docker volume.
-6. Verify `/Users/maksimstil/Desktop/poolsatis-site` separately before deploying
+6. Verify `/Users/maksimstil/Desktop/poolstatis-site` separately before deploying
    the landing/docs/waitlist surface.
 7. Update the public README with the real Cloud status before announcing.
 

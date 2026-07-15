@@ -98,7 +98,7 @@ const experience = new BrowserExperience({
 });
 
 await experience.start();
-// <button data-poolsatis-label="pay_now">Pay now</button>
+// <button data-poolstatis-label="pay_now">Pay now</button>
 // Call `experience.stop()` if consent is withdrawn or the app unmounts.
 ```
 

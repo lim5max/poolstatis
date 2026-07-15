@@ -55,7 +55,7 @@ This command is publish-ready. Keep the hosted runner status as `publish_pending
 
 - Run backend tests after auth/schema changes.
 - Run `pnpm --dir web build` after admin UI changes. Landing/public docs changes
-  live in `/Users/maksimstil/Desktop/poolsatis-site` and should be verified there
+live in `/Users/maksimstil/Desktop/poolstatis-site` and should be verified there
   with `pnpm build`.
 - Use browser E2E for signup/onboarding/setup surfaces, including mobile overflow and console errors.
 - Request subagent code review and UI review before finalizing broad auth/onboarding changes.
