@@ -86,6 +86,21 @@ Set at minimum:
 - `POOLSTATIS_PUBLIC_URL` to the public HTTPS URL,
 - `POOLSTATIS_ADMIN_PORT` and `POOLSTATIS_API_PORT` only if the defaults conflict.
 
+Protection defaults are enabled without extra setup: per-key/project token
+buckets and a retention sweep every 15 minutes. Tune `RATE_LIMIT_*` only from
+measured traffic; tune `RETENTION_BATCH_SIZE` and
+`RETENTION_MAX_BATCHES`/`RETENTION_MAX_ROWS_PER_RUN` if maintenance I/O competes
+with reads. Existing event partitions receive their operational indexes online
+in the background; the API is already available, while retention waits for a
+successful index read-back. Indexing and cleanup use a dedicated one-connection
+maintenance pool, independent of `DATABASE_POOL_MAX`. To run a
+bounded sweep explicitly:
+
+```bash
+docker compose -f docker-compose.selfhost.yml run --rm poolstatis \
+  node dist/cli/retention.js
+```
+
 Put the admin/API behind a reverse proxy such as Caddy, Nginx, or Traefik for TLS.
 Keep Postgres private to the Docker network. Back up the `poolstatis_pgdata` volume.
 
@@ -100,6 +115,7 @@ docker compose -f docker-compose.selfhost.yml ps
 docker compose -f docker-compose.selfhost.yml logs -f poolstatis
 docker compose -f docker-compose.selfhost.yml pull
 docker compose -f docker-compose.selfhost.yml up -d --build
+docker compose -f docker-compose.selfhost.yml run --rm poolstatis node dist/cli/retention.js
 ```
 
 Dangerous: this removes all local data.

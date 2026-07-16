@@ -52,6 +52,26 @@ remains blocked on per-field masking, consent withdrawal, deletion, sampling,
 encrypted object storage and retention policy — it must never be added to the
 immutable Postgres events table.
 
+## Implementation update — 2026-07-16 (bounded realtime path)
+
+The current Postgres path now has bounded in-process batching with in-flight
+backpressure, atomic 24-hour ingest idempotency, a one-second bounded
+single-flight Query DSL cache with same-process write invalidation, and
+purpose-built Browser Experience read indexes. `pnpm load:smoke` measures HTTP
+ingest, verifies the accepted event delta, and reports cached and uncached
+registered-metric reads separately with p50/p95/p99, throughput and a non-zero
+exit on SLO violations. This hardens the present ceiling; it does not
+replace the still-planned durable queue, semantic rollups, or a measured
+ClickHouse migration.
+
+Per-process tenant isolation and retention enforcement are now implemented:
+hierarchical key+project token buckets cover ingest and Platform/MCP HTTP,
+while a singleton bounded worker enforces each project's event retention and
+cleans both idempotency tables. Event-partition retention indexes are built
+concurrently and attached online; API startup remains available while the
+retention worker waits for index read-back. Multi-instance Cloud still needs a shared
+edge/Redis quota layer; the local limiter deliberately remains as a fail-safe.
+
 ---
 
 ## What grounds these recommendations (code reality)
@@ -112,7 +132,8 @@ Ranked by **(fit × value) / effort**, excluding infra-heavy items.
 - **Experiments without flags (variant property on events)** (S) — a config option on the experiment, essentially free once the experiment query exists; lets agents analyze externally-assigned experiments.
 - **Experiment health: SRM + sample-size/MDE/runtime** (S) — cheap pure functions; only meaningful after the experiment + significance core.
 - **Session Replay add-on** (L) — encrypted object storage, rrweb masking/block selectors, consent, retention/deletion and sampling. Replay metadata can join analytics by session id, but DOM chunks must never enter the Postgres event table.
-- **Per-key rate limiting + remaining CRUD coverage** (S) — lands incrementally as features ship; rate limiting once there is load to protect.
+- **Shared Cloud quota layer** (S) — Redis/edge counters make the existing
+  per-key + canonical-project process limiter global across API replicas.
 - **Ingestion-warnings / dead-letter table** (M) — agent-inspectable "accepted-but-couldn't-process" log; extend the existing `registered`/207-error handling. (Full Kafka/ClickHouse pipeline stays deferred; keep `EventStore` as the swap seam.)
 
 ---

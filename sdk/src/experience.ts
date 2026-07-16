@@ -1,7 +1,12 @@
-import { ExperienceCaptureError, type ExperienceCaptureBatch, type ExperienceCaptureEvent } from './index.js';
+import {
+  ExperienceCaptureError,
+  type ExperienceCaptureBatch,
+  type ExperienceCaptureEvent,
+  type ExperienceCaptureOptions,
+} from './index.js';
 
 export interface BrowserExperienceClient {
-  captureExperience(batch: ExperienceCaptureBatch): Promise<void>;
+  captureExperience(batch: ExperienceCaptureBatch, options?: ExperienceCaptureOptions): Promise<void>;
 }
 
 export interface BrowserExperienceEnvironment {
@@ -32,7 +37,9 @@ export interface BrowserExperienceOptions {
 
 const MILESTONES = [25, 50, 75, 100] as const;
 const LABEL = /^[a-z][a-z0-9_.:-]*$/;
-const MAX_BATCH_EVENTS = 100;
+// Keeps the worst-case JSON body comfortably below the browser's shared
+// keepalive budget when the same batch is retried during pagehide.
+const MAX_BATCH_EVENTS = 25;
 const DEFAULT_MAX_QUEUE = 1_000;
 const RETRY_DELAY_MS = 1_000;
 
@@ -53,6 +60,7 @@ export class BrowserExperience {
   private flushScheduled = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private flushing = false;
+  private inFlightBatch: ExperienceCaptureBatch | null = null;
 
   private readonly onClick = (event: { target?: unknown; clientX?: number; clientY?: number }) => {
     const label = labelFor(event.target);
@@ -93,6 +101,10 @@ export class BrowserExperience {
     if (base) this.enqueue({ kind: 'client_error', ...base, error_type: 'unhandled_rejection' });
   };
 
+  private readonly onPageHide = () => {
+    void this.flush({ keepalive: true });
+  };
+
   constructor(private readonly options: BrowserExperienceOptions) {
     const browser = options.browser ?? browserFromGlobal();
     if (!browser) throw new Error('BrowserExperience requires a browser environment — do not construct it during SSR');
@@ -109,6 +121,7 @@ export class BrowserExperience {
     this.browser.addEventListener('scroll', this.onScroll);
     this.browser.addEventListener('error', this.onError);
     this.browser.addEventListener('unhandledrejection', this.onUnhandledRejection);
+    this.browser.addEventListener('pagehide', this.onPageHide);
     const base = this.common();
     if (base) this.enqueue({ kind: 'page_viewed', ...base });
     await this.flush();
@@ -122,18 +135,43 @@ export class BrowserExperience {
     this.browser.removeEventListener('scroll', this.onScroll);
     this.browser.removeEventListener('error', this.onError);
     this.browser.removeEventListener('unhandledrejection', this.onUnhandledRejection);
+    this.browser.removeEventListener('pagehide', this.onPageHide);
+    if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+    if (!this.options.hasConsent()) this.clearQueue();
   }
 
   /** Send bounded chunks. Consent revocation drops every unsent interaction immediately. */
-  async flush(): Promise<void> {
-    if (this.flushing) return;
+  async flush(options: ExperienceCaptureOptions = {}): Promise<void> {
     if (!this.options.hasConsent()) { this.clearQueue(); return; }
+    if (options.keepalive) {
+      // Browsers share a small keepalive body budget across the page. One
+      // bounded batch gives the navigation-time interaction the best chance
+      // of delivery without flooding that budget with the entire queue.
+      const batch = this.inFlightBatch ?? this.nextBatch();
+      if (!batch) return;
+      if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+      try {
+        await this.options.client.captureExperience(batch, { keepalive: true });
+      } catch (err) {
+        if (batch !== this.inFlightBatch
+          && err instanceof ExperienceCaptureError
+          && err.retryable
+          && this.canRetry(batch)) {
+          this.retryBatches.unshift(batch);
+        }
+      }
+      return;
+    }
+    if (this.flushing) return;
+    const explicitWhileStopped = !this.started;
     this.flushing = true;
     try {
       while (true) {
+        if (!this.started && !explicitWhileStopped) break;
         const batch = this.nextBatch();
         if (!batch) break;
         try {
+          this.inFlightBatch = batch;
           await this.options.client.captureExperience(batch);
         } catch (err) {
           if (err instanceof ExperienceCaptureError && err.retryable && this.canRetry(batch)) {
@@ -143,6 +181,8 @@ export class BrowserExperience {
           // The core client already reports both permanent and exhausted
           // transport failures through onError. Do not retain a bad batch forever.
           break;
+        } finally {
+          if (this.inFlightBatch === batch) this.inFlightBatch = null;
         }
       }
     } finally {
@@ -192,11 +232,12 @@ export class BrowserExperience {
   }
 
   private scheduleFlush(delay = 0): void {
+    if (!this.started) return;
     if (delay > 0) {
       if (this.retryTimer) return;
       this.retryTimer = setTimeout(() => {
         this.retryTimer = null;
-        void this.flush();
+        if (this.started) void this.flush();
       }, delay);
       return;
     }
@@ -204,7 +245,7 @@ export class BrowserExperience {
     this.flushScheduled = true;
     queueMicrotask(() => {
       this.flushScheduled = false;
-      void this.flush();
+      if (this.started) void this.flush();
     });
   }
 
@@ -219,8 +260,9 @@ const labelAttributes = ['data-poolstatis-label', 'data-poolsatis-label'] as con
 const labelSelector = labelAttributes.map((attribute) => `[${attribute}]`).join(', ');
 
 function labelFor(target: unknown): string | null {
-  const closest = target && typeof target === 'object' ? (target as { closest?: (selector: string) => unknown }).closest : undefined;
-  const element = closest?.(labelSelector) as { getAttribute?: (name: string) => string | null } | null | undefined;
+  const element = target && typeof target === 'object'
+    ? (target as { closest?: (selector: string) => unknown }).closest?.(labelSelector) as { getAttribute?: (name: string) => string | null } | null | undefined
+    : undefined;
   for (const attribute of labelAttributes) {
     const label = element?.getAttribute?.(attribute) ?? null;
     if (label && LABEL.test(label)) return label;

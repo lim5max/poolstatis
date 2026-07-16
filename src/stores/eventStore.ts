@@ -18,6 +18,7 @@ export interface StorableEvent {
 
 /** A transport batch whose idempotency must cover the event write itself. */
 export interface IdempotentAppend {
+  dedupe: 'ingest_24h' | 'experience';
   projectId: string;
   env: string;
   batchId: string;

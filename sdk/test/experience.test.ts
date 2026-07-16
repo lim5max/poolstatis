@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserExperience } from '../src/experience.js';
+import { ExperienceCaptureError } from '../src/index.js';
 
 type Listener = (event: any) => void;
 
@@ -29,6 +30,10 @@ class FakeWindow {
     return this.listeners.get(type)?.size ?? 0;
   }
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('BrowserExperience', () => {
   it('does nothing until consent is granted', async () => {
@@ -121,6 +126,30 @@ describe('BrowserExperience', () => {
       .map((event) => event.label)).toEqual(['pay_now', 'legacy_pay_now']);
   });
 
+  it('calls native-style Element.closest with the element as this', async () => {
+    const browser = new FakeWindow();
+    const batches: Array<{ events: Array<Record<string, unknown>> }> = [];
+    const experience = new BrowserExperience({
+      client: { captureExperience: async (batch) => { batches.push(batch); } },
+      surface: 'checkout', distinctId: 'actor-1', route: 'checkout', hasConsent: () => true, browser,
+      sessionId: 'session-1',
+    });
+    const target = {
+      closest(this: unknown) {
+        if (this !== target) throw new TypeError('Illegal invocation');
+        return { getAttribute: (name: string) => name === 'data-poolstatis-label' ? 'pay_now' : null };
+      },
+    };
+
+    await experience.start();
+    browser.dispatch('click', { target, clientX: 250, clientY: 250 });
+    await experience.flush();
+
+    expect(batches.flatMap((batch) => batch.events)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'element_clicked', label: 'pay_now' }),
+    ]));
+  });
+
   it('keeps the nearest labelled element when canonical and legacy attributes are nested', async () => {
     const browser = new FakeWindow();
     const batches: Array<{ events: Array<Record<string, unknown>> }> = [];
@@ -169,7 +198,7 @@ describe('BrowserExperience', () => {
     expect(calls).toBe(1);
   });
 
-  it('chunks a busy interaction burst into idempotent batches no larger than one hundred events', async () => {
+  it('chunks a busy interaction burst into keepalive-safe idempotent batches', async () => {
     const browser = new FakeWindow();
     const batches: Array<{ batch_id: string; events: Array<Record<string, unknown>> }> = [];
     const experience = new BrowserExperience({
@@ -184,7 +213,126 @@ describe('BrowserExperience', () => {
     await experience.flush();
 
     expect(batches.flatMap((batch) => batch.events)).toHaveLength(102);
-    expect(batches.every((batch) => batch.events.length <= 100)).toBe(true);
+    expect(batches.every((batch) => batch.events.length <= 25)).toBe(true);
     expect(new Set(batches.map((batch) => batch.batch_id)).size).toBe(batches.length);
+  });
+
+  it('resends navigation-time clicks with keepalive on pagehide', async () => {
+    const browser = new FakeWindow();
+    const sends: Array<{ keepalive: boolean; kinds: string[] }> = [];
+    const experience = new BrowserExperience({
+      client: {
+        captureExperience: async (batch, options?: { keepalive?: boolean }) => {
+          sends.push({
+            keepalive: options?.keepalive === true,
+            kinds: batch.events.map((event) => event.kind),
+          });
+        },
+      },
+      surface: 'checkout', distinctId: 'actor-1', route: 'checkout', hasConsent: () => true, browser,
+      sessionId: 'session-1',
+    });
+    await experience.start();
+    sends.splice(0);
+
+    browser.dispatch('click', {
+      target: { closest: () => ({ getAttribute: () => 'leave_checkout' }) },
+      clientX: 500,
+      clientY: 250,
+    });
+    browser.dispatch('pagehide');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sends).toContainEqual({ keepalive: true, kinds: ['element_clicked'] });
+  });
+
+  it('limits pagehide to one keepalive batch when a large queue is pending', async () => {
+    const browser = new FakeWindow();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let blockRegular = false;
+    const keepaliveSizes: number[] = [];
+    const experience = new BrowserExperience({
+      client: {
+        captureExperience: async (batch, options) => {
+          if (options?.keepalive) keepaliveSizes.push(batch.events.length);
+          else if (blockRegular) await gate;
+        },
+      },
+      surface: 'checkout', distinctId: 'actor-1', route: 'checkout', hasConsent: () => true, browser,
+      sessionId: 'session-1', maxQueue: 300,
+    });
+    await experience.start();
+    blockRegular = true;
+    browser.dispatch('click', { target: { closest: () => ({ getAttribute: () => 'leave_checkout' }) }, clientX: 1, clientY: 1 });
+    await Promise.resolve();
+    for (let index = 0; index < 120; index += 1) {
+      browser.dispatch('click', { target: { closest: () => ({ getAttribute: () => 'queued_click' }) }, clientX: index, clientY: 1 });
+    }
+
+    browser.dispatch('pagehide');
+    await Promise.resolve();
+
+    expect(keepaliveSizes).toHaveLength(1);
+    expect(keepaliveSizes[0]).toBeLessThanOrEqual(25);
+    release();
+    await experience.flush();
+  });
+
+  it('stops scheduled retry traffic until an explicit flush', async () => {
+    vi.useFakeTimers();
+    const browser = new FakeWindow();
+    let calls = 0;
+    const experience = new BrowserExperience({
+      client: {
+        captureExperience: async () => {
+          calls += 1;
+          throw new ExperienceCaptureError('temporary outage', true);
+        },
+      },
+      surface: 'checkout', distinctId: 'actor-1', route: 'checkout', hasConsent: () => true, browser,
+      sessionId: 'session-1',
+    });
+
+    await experience.start();
+    expect(calls).toBe(1);
+    experience.stop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toBe(1);
+
+    await experience.flush();
+    expect(calls).toBe(2);
+  });
+
+  it('stops an active automatic drain before it takes the next batch', async () => {
+    const browser = new FakeWindow();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let block = false;
+    let calls = 0;
+    const experience = new BrowserExperience({
+      client: {
+        captureExperience: async () => {
+          calls += 1;
+          if (block && calls === 2) await gate;
+        },
+      },
+      surface: 'checkout', distinctId: 'actor-1', route: 'checkout', hasConsent: () => true, browser,
+      sessionId: 'session-1', maxQueue: 100,
+    });
+    await experience.start();
+    block = true;
+    for (let index = 0; index < 30; index += 1) {
+      browser.dispatch('click', { target: { closest: () => ({ getAttribute: () => 'queued_click' }) }, clientX: index, clientY: 1 });
+    }
+    await Promise.resolve();
+    experience.stop();
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toBe(2);
+
+    await experience.flush();
+    expect(calls).toBe(3);
   });
 });

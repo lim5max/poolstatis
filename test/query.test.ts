@@ -206,3 +206,20 @@ describe('state metrics and entities', () => {
     expect(res.body.entities.map((e: any) => e.entity_id)).toEqual(['a3', 'a1', 'a2']);
   });
 });
+
+describe('query cache invalidation', () => {
+  it('makes a successful ingest visible to the next identical query', async () => {
+    const query = { kind: 'trend', metric: 'export', date_from: '-7d', interval: 'month' };
+    const before = await api(env, env.secretToken, 'POST', `${P()}/query`, query);
+    const beforeTotal = before.body.series.reduce((sum: number, point: { value: number }) => sum + point.value, 0);
+
+    const ingested = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{ event: 'doc.exported', distinct_id: 'cache-invalidation-user' }],
+    });
+    expect(ingested.body.accepted).toBe(1);
+
+    const after = await api(env, env.secretToken, 'POST', `${P()}/query`, query);
+    const afterTotal = after.body.series.reduce((sum: number, point: { value: number }) => sum + point.value, 0);
+    expect(afterTotal).toBe(beforeTotal + 1);
+  });
+});

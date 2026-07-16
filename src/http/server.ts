@@ -33,6 +33,9 @@ import {
 } from '../services/experience.js';
 import { parseDateInput } from '../dates.js';
 import {
+  RateLimitExceeded, TenantRateLimiter, type TenantRateLimitOptions,
+} from '../services/rateLimiter.js';
+import {
   deprecateMetricSchema,
   concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, updateMetricSchema, type PropertyFilter,
@@ -42,6 +45,7 @@ import {
 declare module 'fastify' {
   interface FastifyRequest {
     auth: AuthContext;
+    resolvedProject?: Project;
   }
 }
 
@@ -50,12 +54,38 @@ export interface ServerOptions {
   publicUrl?: string;
   mcpRunner?: McpRunnerConfig;
   ingestBuffer?: CreateContextOptions['ingestBuffer'];
+  queryCache?: CreateContextOptions['queryCache'];
+  rateLimit?: TenantRateLimitOptions | false;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
 
 function authOwner(auth: AuthContext): string {
   return auth.keyId ? `key:${auth.keyId}` : `user:${auth.userId}`;
+}
+
+function requirePlatformAccess(auth: AuthContext): void {
+  requireKind(auth, 'secret', 'personal', 'user');
+  if (auth.kind === 'user' && auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+    throw new ApiError(
+      403,
+      'insufficient_role',
+      'this hosted account role cannot manage platform resources',
+      'ask an owner or admin to upgrade your workspace role',
+    );
+  }
+}
+
+function requireTokenIssuanceAccess(auth: AuthContext): void {
+  requireKind(auth, 'user');
+  if (auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+    throw new ApiError(
+      403,
+      'insufficient_role',
+      'this hosted account role cannot issue MCP tokens',
+      'ask an owner or admin to issue a personal token',
+    );
+  }
 }
 
 function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number, name: string): number {
@@ -87,8 +117,15 @@ function parsePropFilter(token: string): PropertyFilter {
 export function buildServer(pool: pg.Pool, options: ServerOptions = {}): FastifyInstance {
   const contextOptions: CreateContextOptions = {};
   if (options.ingestBuffer !== undefined) contextOptions.ingestBuffer = options.ingestBuffer;
+  if (options.queryCache !== undefined) contextOptions.queryCache = options.queryCache;
   const ctx = createContext(pool, contextOptions);
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
+  const rateLimiter = options.rateLimit === false || options.rateLimit === undefined
+    ? null
+    : new TenantRateLimiter(options.rateLimit);
+  const credentialAttemptLimiter = options.rateLimit === false || options.rateLimit === undefined
+    ? null
+    : new TenantRateLimiter(credentialAttemptLimits(options.rateLimit));
   const publicUrl = (options.publicUrl ?? 'https://api.poolstatis.com').replace(/\/$/, '');
   const mcpRunner = options.mcpRunner ?? {
     command: 'pnpm',
@@ -140,10 +177,118 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
     req.auth = await authenticate(pool, req.headers.authorization, options.auth);
   });
 
+  if (rateLimiter) {
+    app.addHook('preHandler', async (req, reply) => {
+      if (req.method === 'OPTIONS' || req.url === '/health') return;
+      const lane = req.url.startsWith('/i/v1/') ? 'ingest' as const : 'api' as const;
+      const slug = (req.params as { slug?: string } | undefined)?.slug;
+      if (lane === 'api' && credentialAttemptLimiter) {
+        try {
+          credentialAttemptLimiter.consume({
+            lane: 'api',
+            tenantId: req.auth.orgId,
+            keyId: authOwner(req.auth),
+            projectId: 'credential-attempts',
+            cost: 1,
+          });
+        } catch (error) {
+          if (!(error instanceof RateLimitExceeded)) throw error;
+          void reply.header('retry-after', String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))));
+          throw new ApiError(
+            429,
+            'rate_limited',
+            'credential request-attempt limit exceeded',
+            `retry after approximately ${Math.max(1, Math.ceil(error.retryAfterMs / 1_000))} seconds`,
+          );
+        }
+      }
+      if (lane === 'ingest') {
+        requireKind(req.auth, 'ingest');
+      } else {
+        const route = req.routeOptions.url;
+        if (route === '/api/v1/me' || route === '/api/v1/onboarding') {
+          requireKind(req.auth, 'user');
+        } else if (route === '/api/v1/me/tokens') {
+          requireTokenIssuanceAccess(req.auth);
+        } else {
+          requirePlatformAccess(req.auth);
+        }
+      }
+
+      let projectScope = req.auth.projectId ?? `org:${req.auth.orgId}`;
+      if (lane === 'api' && slug) {
+        const project = await getProjectBySlug(pool, req.auth.orgId, slug);
+        if (req.auth.kind === 'secret' && req.auth.projectId !== project.id) {
+          throw new ApiError(403, 'project_scope', 'this secret key belongs to a different project');
+        }
+        req.resolvedProject = project;
+        projectScope = project.id;
+      }
+      try {
+        const decision = rateLimiter.consume({
+          lane,
+          tenantId: req.auth.orgId,
+          keyId: authOwner(req.auth),
+          projectId: projectScope,
+          cost: lane === 'ingest' ? ingestRequestCost(req.routeOptions.url, req.body) : 1,
+        });
+        void reply.header('x-ratelimit-limit', String(decision.limit));
+        void reply.header('x-ratelimit-remaining', String(decision.remaining));
+      } catch (error) {
+        if (!(error instanceof RateLimitExceeded)) throw error;
+        if (error.retryAfterMs === 0) {
+          throw new ApiError(
+            413,
+            'rate_limit_batch_too_large',
+            error.message,
+            'split this request into a smaller batch or raise the configured burst deliberately',
+          );
+        }
+        void reply.header('retry-after', String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))));
+        throw new ApiError(
+          429,
+          'rate_limited',
+          error.message,
+          `retry after approximately ${Math.max(1, Math.ceil(error.retryAfterMs / 1_000))} seconds`,
+        );
+      }
+    });
+  }
+
   registerIngestRoutes(app, ctx);
   registerAccountRoutes(app, ctx, publicUrl, mcpRunner);
   registerPlatformRoutes(app, ctx);
   return app;
+}
+
+function credentialAttemptLimits(options: TenantRateLimitOptions): TenantRateLimitOptions {
+  const key = {
+    ratePerSecond: options.api.key.ratePerSecond,
+    burst: Math.max(10, options.api.key.burst * 2),
+  };
+  const project = {
+    ratePerSecond: Math.max(key.ratePerSecond, options.api.project.ratePerSecond),
+    burst: Math.max(21, options.api.project.burst * 2),
+  };
+  return {
+    ingest: { key, project },
+    api: { key, project },
+    maxEntries: options.maxEntries,
+    maxEntriesPerTenant: options.maxEntriesPerTenant,
+    idleTtlMs: options.idleTtlMs,
+  };
+}
+
+function ingestRequestCost(route: string | undefined, body: unknown): number {
+  if (!body || typeof body !== 'object') return 1;
+  const candidate = body as { events?: unknown; entities?: unknown };
+  if ((route === '/i/v1/events' || route === '/i/v1/experience/events') && Array.isArray(candidate.events)) {
+    return Math.max(1, candidate.events.length);
+  }
+  if (route === '/i/v1/entities' && Array.isArray(candidate.entities)) {
+    return Math.max(1, candidate.entities.length);
+  }
+  return 1;
 }
 
 // ===== Ingest (/i/v1, pk_ keys) =====
@@ -154,6 +299,7 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await ingestProject(ctx, req.auth);
     const body = ingestEnvelopeSchema.parse(req.body);
     const result = await ctx.ingest.processBatch(project, req.auth.env, body);
+    if (result.accepted > 0) ctx.query.invalidateProject(project.id);
     return reply.status(result.errors ? 207 : 200).send(result);
   });
 
@@ -161,20 +307,26 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
     requireKind(req.auth, 'ingest');
     const project = await ingestProject(ctx, req.auth);
     const body = entityUpsertSchema.parse(req.body);
-    return upsertEntities(ctx.pool, project.id, req.auth.env, body);
+    const result = await upsertEntities(ctx.pool, project.id, req.auth.env, body);
+    ctx.query.invalidateProject(project.id);
+    return result;
   });
 
   app.post('/i/v1/flags/evaluate', async (req) => {
     requireKind(req.auth, 'ingest');
     const project = await ingestProject(ctx, req.auth);
     const body = flagEvaluationSchema.parse(req.body);
-    return evaluateFeatureFlag(ctx.pool, ctx.eventStore, project.id, req.auth.env, body);
+    const result = await evaluateFeatureFlag(ctx.pool, ctx.eventStore, project.id, req.auth.env, body);
+    ctx.query.invalidateProject(project.id);
+    return result;
   });
 
   app.post('/i/v1/experience/events', async (req) => {
     requireKind(req.auth, 'ingest');
     const project = await ingestProject(ctx, req.auth);
-    return captureExperienceEvents(ctx.pool, ctx.eventStore, project.id, req.auth.env, experienceCaptureSchema.parse(req.body));
+    const result = await captureExperienceEvents(ctx.pool, ctx.eventStore, project.id, req.auth.env, experienceCaptureSchema.parse(req.body));
+    ctx.query.invalidateProject(project.id);
+    return result;
   });
 }
 
@@ -247,15 +399,7 @@ function registerAccountRoutes(
   });
 
   app.post('/api/v1/me/tokens', async (req, reply) => {
-    requireKind(req.auth, 'user');
-    if (req.auth.userRole !== 'owner' && req.auth.userRole !== 'admin') {
-      throw new ApiError(
-        403,
-        'insufficient_role',
-        'this hosted account role cannot issue MCP tokens',
-        'ask an owner or admin to issue a personal token',
-      );
-    }
+    requireTokenIssuanceAccess(req.auth);
     const body = req.body as { label?: string } | null;
     const created = await createApiKey(ctx.pool, {
       orgId: req.auth.orgId,
@@ -271,24 +415,18 @@ function registerAccountRoutes(
 
 function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   const platform = (req: FastifyRequest) => {
-    requireKind(req.auth, 'secret', 'personal', 'user');
-    if (req.auth.kind === 'user' && req.auth.userRole !== 'owner' && req.auth.userRole !== 'admin') {
-      throw new ApiError(
-        403,
-        'insufficient_role',
-        'this hosted account role cannot manage platform resources',
-        'ask an owner or admin to upgrade your workspace role',
-      );
-    }
+    requirePlatformAccess(req.auth);
   };
 
   /** Resolve :slug within the caller's scope; secret keys are pinned to their project. */
   const resolveProject = async (req: FastifyRequest): Promise<Project> => {
+    if (req.resolvedProject) return req.resolvedProject;
     const { slug } = req.params as { slug: string };
     const project = await getProjectBySlug(ctx.pool, req.auth.orgId, slug);
     if (req.auth.kind === 'secret' && req.auth.projectId !== project.id) {
       throw new ApiError(403, 'project_scope', 'this secret key belongs to a different project');
     }
+    req.resolvedProject = project;
     return project;
   };
 
@@ -378,7 +516,9 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/api/v1/projects/:slug/experience/surfaces', async (req, reply) => {
     platform(req);
     const project = await resolveProject(req);
-    return reply.status(201).send(await createExperienceSurface(ctx.pool, project.id, experienceSurfaceSchema.parse(req.body)));
+    const surface = await createExperienceSurface(ctx.pool, project.id, experienceSurfaceSchema.parse(req.body));
+    ctx.query.invalidateProject(project.id);
+    return reply.status(201).send(surface);
   });
 
   app.get('/api/v1/projects/:slug/experience/surfaces', async (req) => {
@@ -391,7 +531,9 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const { key } = req.params as { key: string };
-    return archiveExperienceSurface(ctx.pool, project.id, key);
+    const surface = await archiveExperienceSurface(ctx.pool, project.id, key);
+    ctx.query.invalidateProject(project.id);
+    return surface;
   });
 
   // ----- feature delivery -----
@@ -481,6 +623,7 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const input = registerMetricSchema.parse(req.body);
     const metric = await registerMetric(ctx.pool, project.id, input, authOwner(req.auth));
     ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
     return reply.status(201).send(metric);
   });
 
@@ -498,6 +641,7 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const patch = updateMetricSchema.parse(req.body);
     const metric = await updateMetric(ctx.pool, project.id, key, patch);
     ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
     return metric;
   });
 
@@ -508,6 +652,7 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const input = deprecateMetricSchema.parse(req.body);
     const metric = await deprecateMetric(ctx.pool, project.id, key, input);
     ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
     return metric;
   });
 
@@ -539,6 +684,7 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const { key } = req.params as { key: string };
     const result = await deleteMetric(ctx.pool, project.id, key);
     ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
     return { deleted: true, ...result };
   });
 
@@ -553,7 +699,9 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const input = defineFunnelSchema.parse(req.body);
-    return reply.status(201).send(await defineFunnel(ctx.pool, project.id, input));
+    const funnel = await defineFunnel(ctx.pool, project.id, input);
+    ctx.query.invalidateProject(project.id);
+    return reply.status(201).send(funnel);
   });
 
   app.get('/api/v1/projects/:slug/funnels', async (req) => {
@@ -566,7 +714,9 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const { key } = req.params as { key: string };
-    return { deleted: true, ...(await deleteFunnel(ctx.pool, project.id, key)) };
+    const result = await deleteFunnel(ctx.pool, project.id, key);
+    ctx.query.invalidateProject(project.id);
+    return { deleted: true, ...result };
   });
 
   // Danger zone: hard-purge a project's data, scoped to one env (and optionally
@@ -594,6 +744,7 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
       entities_deleted = await deleteEntities(ctx.pool, project.id, body.env);
     }
     ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
     return { events_deleted, entities_deleted, env: body.env };
   });
 

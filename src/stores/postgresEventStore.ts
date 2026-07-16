@@ -26,6 +26,7 @@ import type {
   TrendQuery,
 } from './eventStore.js';
 import { andFilters, compileFilters, numericPropSql } from './filters.js';
+import { ApiError } from '../errors.js';
 
 export class PostgresEventStore implements EventStore {
   private readonly knownPartitions = new Set<string>();
@@ -45,23 +46,61 @@ export class PostgresEventStore implements EventStore {
    * batch, never append the same clicks twice on retry.
    */
   async appendIdempotent(batch: IdempotentAppend): Promise<boolean> {
-    if (batch.events.length === 0) return true;
-    await this.ensurePartitions(batch.events.map((event) => event.timestamp));
+    if (batch.events.length > 0) {
+      await this.ensurePartitions(batch.events.map((event) => event.timestamp));
+    }
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const claim = await client.query(
-        `INSERT INTO experience_batches (project_id, env, batch_id, status, completed_at, last_error)
-         VALUES ($1, $2, $3, 'completed', now(), NULL)
-         ON CONFLICT (project_id, env, batch_id) DO NOTHING
-         RETURNING batch_id`,
-        [batch.projectId, batch.env, batch.batchId],
+      const lockKey = `${batch.dedupe}:${batch.projectId}:${batch.env}:${batch.batchId}`;
+      const lock = await client.query<{ locked: boolean }>(
+        'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS locked',
+        [lockKey],
       );
+      if (!lock.rows[0]?.locked) {
+        throw new ApiError(
+          503,
+          'batch_processing',
+          'this batch_id is already being processed',
+          'retry the same batch_id shortly; Poolstatis will return duplicate once it is stored',
+        );
+      }
+      const claim = batch.dedupe === 'experience'
+        ? await client.query(
+          `INSERT INTO experience_batches (project_id, env, batch_id, status, completed_at, last_error)
+           VALUES ($1, $2, $3, 'completed', now(), NULL)
+           ON CONFLICT (project_id, env, batch_id) DO NOTHING
+           RETURNING batch_id`,
+          [batch.projectId, batch.env, batch.batchId],
+        )
+        : await client.query(
+          `INSERT INTO ingest_batches (project_id, env, batch_id, status, completed_at, last_error)
+           VALUES ($1, $2, $3, 'completed', now(), NULL)
+           ON CONFLICT (project_id, env, batch_id) DO UPDATE
+           SET received_at = now(), status = 'completed', completed_at = now(), last_error = NULL
+           WHERE ingest_batches.status = 'failed'
+              OR ingest_batches.received_at < now() - interval '24 hours'
+           RETURNING batch_id`,
+          [batch.projectId, batch.env, batch.batchId],
+        );
       if ((claim.rowCount ?? 0) === 0) {
+        const table = batch.dedupe === 'experience' ? 'experience_batches' : 'ingest_batches';
+        const existing = await client.query<{ status: string }>(
+          `SELECT status FROM ${table} WHERE project_id = $1 AND env = $2 AND batch_id = $3`,
+          [batch.projectId, batch.env, batch.batchId],
+        );
+        if (existing.rows[0]?.status === 'processing') {
+          throw new ApiError(
+            503,
+            'batch_processing',
+            'this batch_id is still marked as processing',
+            'retry the same batch_id shortly; only a completed batch is treated as duplicate',
+          );
+        }
         await client.query('COMMIT');
         return false;
       }
-      await this.insert(client, batch.events);
+      if (batch.events.length > 0) await this.insert(client, batch.events);
       await client.query('COMMIT');
       return true;
     } catch (err) {

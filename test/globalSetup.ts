@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { createPool, migrate } from '../src/db.js';
+import { ensureRetentionIndexes } from '../src/services/retentionIndexes.js';
 import { ADMIN_URL, TEST_DB, TEST_DB_URL } from './urls.js';
 
 export default async function setup(): Promise<void> {
@@ -15,6 +16,8 @@ export default async function setup(): Promise<void> {
   try {
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     await migrate(pool);
+    const indexes = await ensureRetentionIndexes(pool);
+    if (!indexes.ready) throw new Error('test operational indexes are not ready');
   } finally {
     await pool.end();
   }

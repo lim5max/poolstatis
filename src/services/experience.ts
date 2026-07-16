@@ -111,7 +111,7 @@ export async function captureExperienceEvents(
     }
   });
   const appended = await eventStore.appendIdempotent({
-    projectId, env, batchId: input.batch_id, events,
+    dedupe: 'experience', projectId, env, batchId: input.batch_id, events,
   });
   return appended ? { accepted: events.length } : { accepted: 0, duplicate: true };
 }

@@ -16,6 +16,7 @@
   "engines": { "node": ">=18" },
   "scripts": {
     "build": "tsc",
+    "prepack": "pnpm build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

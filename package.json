@@ -16,6 +16,8 @@
     "serve": "tsx src/cli/serve.ts",
     "mcp": "tsx src/mcp/server.ts",
     "mcp:smoke": "tsx src/cli/mcpSmoke.ts",
+    "load:smoke": "tsx src/cli/loadSmoke.ts",
+    "retention:run": "tsx src/cli/retention.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

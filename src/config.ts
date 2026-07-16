@@ -1,3 +1,5 @@
+import type { TenantRateLimitOptions } from './services/rateLimiter.js';
+
 export interface Config {
   databaseUrl: string;
   databasePoolMax: number;
@@ -8,6 +10,22 @@ export interface Config {
     maxEvents: number;
     maxDelayMs: number;
     maxPendingEvents: number;
+    maxConcurrentIdempotentAppends: number;
+  };
+  queryCache: {
+    ttlMs: number;
+    maxEntries: number;
+  };
+  rateLimit: TenantRateLimitOptions | false;
+  retentionWorker: {
+    enabled: boolean;
+    intervalMs: number;
+    continuationDelayMs: number;
+    maxConsecutiveContinuations: number;
+    batchSize: number;
+    maxBatchesPerRun: number;
+    maxRowsPerRun: number;
+    maxRunMs: number;
   };
   mcpRunner: {
     command: string;
@@ -35,7 +53,9 @@ function parseArgs(raw: string | undefined): string[] {
   return trimmed.split(/\s+/);
 }
 
-const POSTGRES_APPEND_MAX_EVENTS = 8000;
+// PostgreSQL's extended protocol accepts at most 65,535 bind parameters.
+// PostgresEventStore currently uses 10 parameters per event; keep headroom.
+const POSTGRES_APPEND_MAX_EVENTS = 6500;
 
 function positiveInt(raw: string | undefined, fallback: number, name: string, max?: number): number {
   if (raw === undefined) return fallback;
@@ -49,11 +69,19 @@ function positiveInt(raw: string | undefined, fallback: number, name: string, ma
   return value;
 }
 
+function booleanValue(raw: string | undefined, fallback: boolean, name: string): boolean {
+  if (raw === undefined) return fallback;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`${name} must be true or false`);
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const issuer = env.AUTH_JWT_ISSUER;
   const audience = env.AUTH_JWT_AUDIENCE;
   const jwksUri = env.AUTH_JWKS_URI ?? (issuer ? new URL('.well-known/jwks.json', issuer).toString() : undefined);
   const packageStatus = env.POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true' ? 'published' : 'publish_pending';
+  const databasePoolMax = positiveInt(env.DATABASE_POOL_MAX, 10, 'DATABASE_POOL_MAX');
   const ingestBuffer = {
     maxEvents: positiveInt(
       env.INGEST_BUFFER_MAX_EVENTS,
@@ -63,19 +91,96 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ),
     maxDelayMs: positiveInt(env.INGEST_BUFFER_MAX_DELAY_MS, 10, 'INGEST_BUFFER_MAX_DELAY_MS'),
     maxPendingEvents: positiveInt(env.INGEST_BUFFER_MAX_PENDING_EVENTS, 50_000, 'INGEST_BUFFER_MAX_PENDING_EVENTS'),
+    maxConcurrentIdempotentAppends: positiveInt(
+      env.INGEST_IDEMPOTENT_MAX_CONCURRENCY,
+      Math.max(1, databasePoolMax - 2),
+      'INGEST_IDEMPOTENT_MAX_CONCURRENCY',
+      databasePoolMax,
+    ),
   };
   if (ingestBuffer.maxEvents > ingestBuffer.maxPendingEvents) {
     throw new Error('INGEST_BUFFER_MAX_EVENTS must be less than or equal to INGEST_BUFFER_MAX_PENDING_EVENTS');
+  }
+  const rateLimit: TenantRateLimitOptions | false = booleanValue(
+    env.RATE_LIMIT_ENABLED,
+    true,
+    'RATE_LIMIT_ENABLED',
+  ) ? {
+      ingest: {
+        key: {
+          ratePerSecond: positiveInt(env.RATE_LIMIT_INGEST_KEY_PER_SECOND, 50_000, 'RATE_LIMIT_INGEST_KEY_PER_SECOND'),
+          burst: positiveInt(env.RATE_LIMIT_INGEST_KEY_BURST, 100_000, 'RATE_LIMIT_INGEST_KEY_BURST'),
+        },
+        project: {
+          ratePerSecond: positiveInt(env.RATE_LIMIT_INGEST_PROJECT_PER_SECOND, 200_000, 'RATE_LIMIT_INGEST_PROJECT_PER_SECOND'),
+          burst: positiveInt(env.RATE_LIMIT_INGEST_PROJECT_BURST, 400_000, 'RATE_LIMIT_INGEST_PROJECT_BURST'),
+        },
+      },
+      api: {
+        key: {
+          ratePerSecond: positiveInt(env.RATE_LIMIT_API_KEY_PER_SECOND, 3_000, 'RATE_LIMIT_API_KEY_PER_SECOND'),
+          burst: positiveInt(env.RATE_LIMIT_API_KEY_BURST, 6_000, 'RATE_LIMIT_API_KEY_BURST'),
+        },
+        project: {
+          ratePerSecond: positiveInt(env.RATE_LIMIT_API_PROJECT_PER_SECOND, 10_000, 'RATE_LIMIT_API_PROJECT_PER_SECOND'),
+          burst: positiveInt(env.RATE_LIMIT_API_PROJECT_BURST, 20_000, 'RATE_LIMIT_API_PROJECT_BURST'),
+        },
+      },
+      maxEntries: positiveInt(env.RATE_LIMIT_MAX_ENTRIES, 100_000, 'RATE_LIMIT_MAX_ENTRIES'),
+      maxEntriesPerTenant: positiveInt(
+        env.RATE_LIMIT_MAX_ENTRIES_PER_TENANT,
+        10_000,
+        'RATE_LIMIT_MAX_ENTRIES_PER_TENANT',
+      ),
+      idleTtlMs: positiveInt(env.RATE_LIMIT_IDLE_TTL_MS, 600_000, 'RATE_LIMIT_IDLE_TTL_MS'),
+    } : false;
+  const retentionMaxBatches = positiveInt(
+    env.RETENTION_MAX_BATCHES,
+    100,
+    'RETENTION_MAX_BATCHES',
+    1_000,
+  );
+  if (retentionMaxBatches < 4) {
+    throw new Error('RETENTION_MAX_BATCHES must be at least 4');
   }
   return {
     databaseUrl:
       env.DATABASE_URL ??
       'postgres://poolsatis:poolsatis@localhost:5444/poolsatis',
-    databasePoolMax: positiveInt(env.DATABASE_POOL_MAX, 10, 'DATABASE_POOL_MAX'),
+    databasePoolMax,
     port: env.PORT ? Number(env.PORT) : 3300,
     host: env.HOST ?? '127.0.0.1',
     publicUrl: (env.POOLSTATIS_PUBLIC_URL ?? 'https://api.poolstatis.com').replace(/\/$/, ''),
     ingestBuffer,
+    queryCache: {
+      ttlMs: positiveInt(env.QUERY_CACHE_TTL_MS, 1_000, 'QUERY_CACHE_TTL_MS'),
+      maxEntries: positiveInt(env.QUERY_CACHE_MAX_ENTRIES, 1_000, 'QUERY_CACHE_MAX_ENTRIES'),
+    },
+    rateLimit,
+    retentionWorker: {
+      enabled: booleanValue(env.RETENTION_WORKER_ENABLED, true, 'RETENTION_WORKER_ENABLED'),
+      intervalMs: positiveInt(env.RETENTION_INTERVAL_MS, 900_000, 'RETENTION_INTERVAL_MS'),
+      continuationDelayMs: positiveInt(
+        env.RETENTION_CONTINUATION_DELAY_MS,
+        1_000,
+        'RETENTION_CONTINUATION_DELAY_MS',
+      ),
+      maxConsecutiveContinuations: positiveInt(
+        env.RETENTION_MAX_CONSECUTIVE_CONTINUATIONS,
+        5,
+        'RETENTION_MAX_CONSECUTIVE_CONTINUATIONS',
+        100,
+      ),
+      batchSize: positiveInt(env.RETENTION_BATCH_SIZE, 5_000, 'RETENTION_BATCH_SIZE', 50_000),
+      maxBatchesPerRun: retentionMaxBatches,
+      maxRowsPerRun: positiveInt(
+        env.RETENTION_MAX_ROWS_PER_RUN,
+        100_000,
+        'RETENTION_MAX_ROWS_PER_RUN',
+        1_000_000,
+      ),
+      maxRunMs: positiveInt(env.RETENTION_MAX_RUN_MS, 5_000, 'RETENTION_MAX_RUN_MS', 60_000),
+    },
     mcpRunner: {
       command: env.POOLSTATIS_MCP_COMMAND ?? 'pnpm',
       args: parseArgs(env.POOLSTATIS_MCP_ARGS),

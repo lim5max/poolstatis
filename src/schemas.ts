@@ -289,7 +289,7 @@ export const ingestEventSchema = z.object({
 export const ingestEnvelopeSchema = z.object({
   batch_id: z.string().min(1).max(200).optional(),
   events: z.array(z.unknown()).min(1).max(500),
-});
+}).strict();
 
 export type IngestEnvelope = z.infer<typeof ingestEnvelopeSchema>;
 
@@ -300,11 +300,11 @@ export const entityUpsertSchema = z.object({
         entity_type: z.string().min(1),
         entity_id: z.string().min(1).max(200),
         properties: z.record(z.unknown()).default({}),
-      }),
+      }).strict(),
     )
     .min(1)
     .max(500),
-});
+}).strict();
 
 export type EntityUpsertInput = z.infer<typeof entityUpsertSchema>;
 

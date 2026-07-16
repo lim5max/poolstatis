@@ -278,5 +278,28 @@ GET /api/v1/projects/{slug}/data-quality?env=prod&limit=50&since_days=30
 
 ## Лимиты и ошибки
 
-- Rate limit: ингест 1000 событий/с на проект (burst 5000), Platform API 60 rps на ключ. Ответ `429` с `Retry-After`.
+- Каждый API-процесс применяет атомарные token buckets одновременно к ключу и
+  проекту. Ingest тарифицируется количеством элементов в `events`/`entities`,
+  Platform API (включая HTTP-вызовы MCP) — запросами. Запрос записывается только
+  если хватает обоих бюджетов; отказ одного ключа не расходует общий остаток
+  проекта. `sk_`, `pt_` и hosted user для одного `:slug` используют один
+  канонический project id; ротация ключей не сбрасывает проектную квоту.
+  Ingest/API имеют отдельные bounded stores, а admission дополнительно ограничен
+  на организацию. Idle bucket удаляется только после полного refill, поэтому
+  cache eviction не восстанавливает burst досрочно.
+- До разрешения `:slug` отдельный per-credential + shared-org attempt budget
+  ограничивает ошибочные/несуществующие project lookup. Такие попытки не
+  расходуют analytics budget реального проекта, но ротация ключей не умножает
+  нагрузку на Postgres.
+- Дефолты на процесс: ingest `50 000 events/s`, burst `100 000` на ключ и
+  `200 000 events/s`, burst `400 000` на проект; Platform API `3 000 rps`, burst
+  `6 000` на ключ и `10 000 rps`, burst `20 000` на проект. Это защитные
+  технические пределы, не тарифные квоты. Все значения настраиваются env.
+- Успешный ответ содержит `X-RateLimit-Limit` и `X-RateLimit-Remaining`. Отказ —
+  `429 rate_limited` с `Retry-After` и agent-facing `hint`. Батч, который больше
+  configured burst и потому никогда не сможет пройти, получает постоянную
+  `413 rate_limit_batch_too_large` без `Retry-After`.
+- В Cloud несколько API-инстансов дополнительно требуют общего edge/Redis
+  лимитера для глобальной квоты. Локальный слой остаётся обязательной защитой
+  каждого процесса при сбое shared limiter.
 - Формат ошибок единый: `{ "error": { "code": "metric_key_taken", "message": "…", "hint": "…" } }` — `hint` пишется для агента-читателя.

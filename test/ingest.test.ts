@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { ApiError } from '../src/errors.js';
 import { IngestService } from '../src/services/ingest.js';
+import { PostgresEventStore } from '../src/stores/postgresEventStore.js';
 import type { EventStore, StorableEvent } from '../src/stores/eventStore.js';
 import { activeMetric, api, createTestEnv, hoursAgo, type TestEnv } from './helpers.js';
 
@@ -105,6 +107,72 @@ describe('event ingest', () => {
     await expect(first).resolves.toEqual({ accepted: 1, unregistered: 1 });
   });
 
+  it('does not duplicate events when storage commits but the acknowledgement is lost', async () => {
+    const { rows } = await env.pool.query(
+      'SELECT id, retention_months FROM projects WHERE slug = $1',
+      [env.projectSlug],
+    );
+    const project = rows[0] as { id: string; retention_months: number };
+    const inner = new PostgresEventStore(env.pool);
+    let loseAcknowledgement = true;
+    const eventStore = new Proxy(inner, {
+      get(target, property, receiver) {
+        if (property === 'append' || property === 'appendIdempotent') {
+          return async (...args: unknown[]) => {
+            const result = await (target[property] as (...values: unknown[]) => Promise<unknown>).apply(target, args);
+            if (loseAcknowledgement) {
+              loseAcknowledgement = false;
+              throw new Error('connection lost after durable commit');
+            }
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as EventStore;
+    const ingest = new IngestService(env.pool, eventStore);
+    const payload = {
+      batch_id: `batch-lost-ack-${Date.now()}`,
+      events: [{ event: 'append.committed', distinct_id: 'u-lost-ack' }],
+    };
+
+    await expect(ingest.processBatch(project, 'prod', payload)).rejects.toThrow('connection lost after durable commit');
+    const retry = await ingest.processBatch(project, 'prod', payload);
+    const count = await env.pool.query(
+      `SELECT count(*)::int AS count FROM events
+       WHERE project_id = $1 AND env = 'prod' AND event = 'append.committed' AND distinct_id = 'u-lost-ack'`,
+      [project.id],
+    );
+
+    expect(retry).toEqual({ accepted: 0, unregistered: 0, duplicate: true });
+    expect(count.rows[0].count).toBe(1);
+  });
+
+  it('returns retryable batch_processing for a fresh legacy processing claim', async () => {
+    const project = (await env.pool.query('SELECT id FROM projects WHERE slug = $1', [env.projectSlug])).rows[0];
+    const batchId = `legacy-processing-${Date.now()}`;
+    await env.pool.query(
+      `INSERT INTO ingest_batches (project_id, env, batch_id, status)
+       VALUES ($1, 'prod', $2, 'processing')`,
+      [project.id, batchId],
+    );
+
+    const retry = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      batch_id: batchId,
+      events: [{ event: 'legacy.processing', distinct_id: 'u-legacy-processing' }],
+    });
+
+    expect(retry.status).toBe(503);
+    expect(retry.body.error.code).toBe('batch_processing');
+    const stored = await env.pool.query(
+      `SELECT count(*)::int AS count FROM events
+       WHERE project_id = $1 AND event = 'legacy.processing'`,
+      [project.id],
+    );
+    expect(stored.rows[0].count).toBe(0);
+  });
+
   it('returns 207 with per-element errors without sinking the batch', async () => {
     const res = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
       events: [
@@ -161,6 +229,11 @@ function failFirstAppendEventStore(): EventStore & { appends: StorableEvent[][] 
       appends.push(events);
       if (appends.length === 1) throw new Error('database down');
     },
+    appendIdempotent: async (batch) => {
+      appends.push(batch.events);
+      if (appends.length === 1) throw new Error('database down');
+      return true;
+    },
     trend: async () => [],
     funnel: async () => [],
     retention: async () => [],
@@ -194,6 +267,8 @@ function blockingAppendEventStore(): EventStore & {
   let started = () => {};
   const startedPromise = new Promise<void>((resolve) => { started = resolve; });
   const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+  let processing = false;
+  let completed = false;
   return {
     appends,
     started: startedPromise,
@@ -202,6 +277,24 @@ function blockingAppendEventStore(): EventStore & {
       appends.push(events);
       started();
       await releasePromise;
+    },
+    appendIdempotent: async (batch) => {
+      if (processing) {
+        throw new ApiError(
+          503,
+          'batch_processing',
+          'this batch_id is already being processed',
+          'retry shortly',
+        );
+      }
+      if (completed) return false;
+      processing = true;
+      appends.push(batch.events);
+      started();
+      await releasePromise;
+      processing = false;
+      completed = true;
+      return true;
     },
     trend: async () => [],
     funnel: async () => [],

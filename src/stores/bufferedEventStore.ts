@@ -30,6 +30,7 @@ export interface BufferedEventStoreOptions {
   maxEvents: number;
   maxDelayMs: number;
   maxPendingEvents: number;
+  maxConcurrentIdempotentAppends?: number;
 }
 
 interface PendingAppend {
@@ -38,10 +39,18 @@ interface PendingAppend {
   reject: (err: unknown) => void;
 }
 
+interface PendingIdempotentAppend {
+  batch: IdempotentAppend;
+  weight: number;
+  resolve: (appended: boolean) => void;
+  reject: (err: unknown) => void;
+}
+
 export const DEFAULT_BUFFERED_EVENT_STORE_OPTIONS: BufferedEventStoreOptions = {
   maxEvents: 1000,
   maxDelayMs: 10,
   maxPendingEvents: 50_000,
+  maxConcurrentIdempotentAppends: 10,
 };
 
 /**
@@ -53,8 +62,12 @@ export class BufferedEventStore implements EventStore {
   private readonly options: BufferedEventStoreOptions;
   private pending: PendingAppend[] = [];
   private pendingEvents = 0;
+  private inFlightEvents = 0;
   private timer: NodeJS.Timeout | null = null;
   private flushing = false;
+  private idempotentQueue: PendingIdempotentAppend[] = [];
+  private idempotentEvents = 0;
+  private idempotentInFlight = 0;
 
   constructor(private readonly inner: EventStore, options: BufferedEventStoreOptions) {
     this.options = validateOptions(options);
@@ -62,7 +75,15 @@ export class BufferedEventStore implements EventStore {
 
   async append(events: StorableEvent[]): Promise<void> {
     if (events.length === 0) return;
-    if (this.pendingEvents + events.length > this.options.maxPendingEvents) {
+    if (events.length > this.options.maxEvents) {
+      throw new ApiError(
+        413,
+        'ingest_batch_too_large',
+        `one append cannot exceed ${this.options.maxEvents} events`,
+        'split the request into smaller batches and reuse batch_id only for an exact retry',
+      );
+    }
+    if (this.queuedEvents() + events.length > this.options.maxPendingEvents) {
       throw new ApiError(
         503,
         'ingest_backpressure',
@@ -84,9 +105,28 @@ export class BufferedEventStore implements EventStore {
   }
 
   appendIdempotent(batch: IdempotentAppend): Promise<boolean> {
-    // Batch identity must cover the physical write; buffering would separate
-    // the idempotency record from the event commit, so delegate directly.
-    return this.inner.appendIdempotent(batch);
+    if (batch.events.length > this.options.maxEvents) {
+      return Promise.reject(new ApiError(
+        413,
+        'ingest_batch_too_large',
+        `one append cannot exceed ${this.options.maxEvents} events`,
+        'split the request into smaller batches and reuse batch_id only for an exact retry',
+      ));
+    }
+    const weight = Math.max(1, batch.events.length);
+    if (this.queuedEvents() + weight > this.options.maxPendingEvents) {
+      return Promise.reject(new ApiError(
+        503,
+        'ingest_backpressure',
+        'ingest queue is full; retry this batch shortly',
+        'retry with the same batch_id so Poolstatis can deduplicate a later replay',
+      ));
+    }
+    return new Promise((resolve, reject) => {
+      this.idempotentQueue.push({ batch, weight, resolve, reject });
+      this.idempotentEvents += weight;
+      this.pumpIdempotentQueue();
+    });
   }
 
   trend(q: TrendQuery): Promise<TrendPoint[]> {
@@ -153,6 +193,23 @@ export class BufferedEventStore implements EventStore {
     }, this.options.maxDelayMs);
   }
 
+  private pumpIdempotentQueue(): void {
+    const limit = this.options.maxConcurrentIdempotentAppends ?? 10;
+    while (this.idempotentInFlight < limit && this.idempotentQueue.length > 0) {
+      const item = this.idempotentQueue.shift()!;
+      this.idempotentInFlight += 1;
+      void this.inner.appendIdempotent(item.batch).then(item.resolve, item.reject).finally(() => {
+        this.idempotentInFlight -= 1;
+        this.idempotentEvents -= item.weight;
+        this.pumpIdempotentQueue();
+      });
+    }
+  }
+
+  private queuedEvents(): number {
+    return this.pendingEvents + this.inFlightEvents + this.idempotentEvents;
+  }
+
   private requestFlush(): void {
     if (this.timer) {
       clearTimeout(this.timer);
@@ -163,17 +220,30 @@ export class BufferedEventStore implements EventStore {
 
   private async flushPending(): Promise<void> {
     if (this.flushing || this.pending.length === 0) return;
-
-    const batch = this.pending;
-    this.pending = [];
-    this.pendingEvents = 0;
     this.flushing = true;
-
     try {
-      await this.inner.append(batch.flatMap((item) => item.events));
-      batch.forEach((item) => item.resolve());
-    } catch (err) {
-      batch.forEach((item) => item.reject(err));
+      while (this.pending.length > 0) {
+        const batch: PendingAppend[] = [];
+        let batchEvents = 0;
+        while (this.pending.length > 0) {
+          const next = this.pending[0]!;
+          if (batchEvents + next.events.length > this.options.maxEvents) break;
+          this.pending.shift();
+          this.pendingEvents -= next.events.length;
+          batchEvents += next.events.length;
+          batch.push(next);
+        }
+
+        this.inFlightEvents += batchEvents;
+        try {
+          await this.inner.append(batch.flatMap((item) => item.events));
+          batch.forEach((item) => item.resolve());
+        } catch (err) {
+          batch.forEach((item) => item.reject(err));
+        } finally {
+          this.inFlightEvents -= batchEvents;
+        }
+      }
     } finally {
       this.flushing = false;
       if (this.pending.length > 0) {
@@ -189,6 +259,10 @@ function validateOptions(options: BufferedEventStoreOptions): BufferedEventStore
     maxEvents: positiveInt(options.maxEvents, 'maxEvents'),
     maxDelayMs: positiveInt(options.maxDelayMs, 'maxDelayMs'),
     maxPendingEvents: positiveInt(options.maxPendingEvents, 'maxPendingEvents'),
+    maxConcurrentIdempotentAppends: positiveInt(
+      options.maxConcurrentIdempotentAppends ?? 10,
+      'maxConcurrentIdempotentAppends',
+    ),
   };
   if (parsed.maxEvents > parsed.maxPendingEvents) {
     throw new Error('maxEvents must be less than or equal to maxPendingEvents');

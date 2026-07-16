@@ -49,6 +49,11 @@ export interface ExperienceCaptureBatch {
   events: ExperienceCaptureEvent[];
 }
 
+export interface ExperienceCaptureOptions {
+  /** Use fetch keepalive so navigation does not cancel the interaction batch. */
+  keepalive?: boolean;
+}
+
 /** The optional BrowserExperience module uses this to decide whether to retry a whole stable batch. */
 export class ExperienceCaptureError extends Error {
   constructor(message: string, readonly retryable: boolean) {
@@ -186,8 +191,8 @@ export class Poolstatis {
    * so the optional `@poolstatis/sdk/experience` module can reuse the SDK's
    * configured endpoint, key, retry policy and error hook.
    */
-  async captureExperience(batch: ExperienceCaptureBatch): Promise<void> {
-    const result = await this.send('/i/v1/experience/events', batch);
+  async captureExperience(batch: ExperienceCaptureBatch, options: ExperienceCaptureOptions = {}): Promise<void> {
+    const result = await this.send('/i/v1/experience/events', batch, options.keepalive);
     if (result === 'ok') return;
     throw new ExperienceCaptureError(
       result === 'drop' ? 'browser experience capture rejected' : 'browser experience capture could not be delivered',

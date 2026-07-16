@@ -17,6 +17,7 @@ import { badRequest } from '../errors.js';
 import { getFunnel, getMetric, type Metric } from './registry.js';
 import { countEntities, queryEntities } from './entities.js';
 import { getExperienceSurface } from './experience.js';
+import { canonicalQueryKey, type QueryCache } from './queryCache.js';
 
 export interface QueryMeta {
   computed_at: string;
@@ -84,9 +85,21 @@ export class QueryService {
   constructor(
     private readonly pool: pg.Pool,
     private readonly eventStore: EventStore,
+    private readonly cache?: QueryCache,
   ) {}
 
   async run(projectId: string, q: QueryInput, now: Date = new Date()): Promise<QueryResult> {
+    if (this.cache) {
+      return this.cache.getOrLoad(projectId, canonicalQueryKey(q), () => this.runUncached(projectId, q, now));
+    }
+    return this.runUncached(projectId, q, now);
+  }
+
+  invalidateProject(projectId: string): void {
+    this.cache?.invalidateProject(projectId);
+  }
+
+  private async runUncached(projectId: string, q: QueryInput, now: Date): Promise<QueryResult> {
     switch (q.kind) {
       case 'trend':
         return this.trend(projectId, q, now);
