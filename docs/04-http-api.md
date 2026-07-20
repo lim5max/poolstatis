@@ -114,6 +114,52 @@ CRUD-слой 1:1 с тулами MCP (см. [03-mcp-server.md](03-mcp-server.md
 ```
 GET    /api/v1/projects
 GET    /api/v1/projects/{slug}/schema
+GET    /api/v1/projects/{slug}/onboarding/status?env=prod
+POST   /api/v1/projects/{slug}/onboarding/observe-agent
+POST   /api/v1/projects/{slug}/onboarding/acknowledgements
+POST   /api/v1/projects/{slug}/identity-links
+GET    /api/v1/projects/{slug}/identity-links?env=prod
+POST   /api/v1/projects/{slug}/identity-links/{id}/revoke
+POST   /api/v1/projects/{slug}/properties
+GET    /api/v1/projects/{slug}/properties
+PATCH  /api/v1/projects/{slug}/properties/{scope}/{key}
+POST   /api/v1/projects/{slug}/measurement/trust
+POST   /api/v1/projects/{slug}/sources/posthog
+GET    /api/v1/projects/{slug}/sources
+POST   /api/v1/projects/{slug}/sources/posthog/{id}/verify
+GET    /api/v1/projects/{slug}/sources/posthog/{id}/schema
+GET    /api/v1/projects/{slug}/sources/posthog/{id}/sample?event=…&limit=20
+POST   /api/v1/projects/{slug}/contracts/validate
+POST   /api/v1/projects/{slug}/contracts/diff
+POST   /api/v1/projects/{slug}/contracts/apply
+GET    /api/v1/projects/{slug}/contracts
+GET    /api/v1/projects/{slug}/contracts/export
+GET    /api/v1/projects/{slug}/contracts/{key}
+POST   /api/v1/projects/{slug}/releases
+GET    /api/v1/projects/{slug}/releases
+GET    /api/v1/projects/{slug}/releases/{id}
+POST   /api/v1/projects/{slug}/releases/{id}/transition
+POST   /api/v1/projects/{slug}/releases/{id}/evaluate
+GET    /api/v1/projects/{slug}/decisions
+GET    /api/v1/projects/{slug}/decisions/{id}
+POST   /api/v1/projects/{slug}/decisions/{id}/approve
+POST   /api/v1/projects/{slug}/decisions/{id}/reject
+POST   /api/v1/projects/{slug}/decisions/{id}/edit
+POST   /api/v1/projects/{slug}/decisions/{id}/explain
+GET    /api/v1/projects/{slug}/decisions/{id}/explanations
+GET    /api/v1/projects/{slug}/decisions/search
+POST   /api/v1/projects/{slug}/contracts/similar
+POST   /api/v1/projects/{slug}/decisions/{id}/actions
+GET    /api/v1/projects/{slug}/decisions/{id}/actions
+GET    /api/v1/projects/{slug}/actions/{id}
+POST   /api/v1/projects/{slug}/actions/{id}/approve
+POST   /api/v1/projects/{slug}/actions/{id}/reject
+POST   /api/v1/projects/{slug}/actions/{id}/retry
+GET    /api/v1/projects/{slug}/decision-inbox
+POST   /api/v1/projects/{slug}/webhooks
+GET    /api/v1/projects/{slug}/webhooks
+POST   /api/v1/projects/{slug}/webhooks/{id}/test
+GET    /api/v1/projects/{slug}/webhook-deliveries
 POST   /api/v1/projects/{slug}/metrics
 PATCH  /api/v1/projects/{slug}/metrics/{key}
 POST   /api/v1/projects/{slug}/metrics/{key}/deprecate
@@ -142,6 +188,25 @@ GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+Proof gates, actor-link semantics, property trust и точная capability matrix PostHog
+описаны в [09-product-decision-loop.md](09-product-decision-loop.md). `observe-agent`
+принимается только с внутренним MCP header; это не ручная кнопка завершения. PostHog key
+write-only, а Platform API не принимает caller-provided HogQL.
+
+Measurement contract endpoints принимают только versioned declaration. `diff` возвращает
+`expected_revision`; изменение существующего контракта требует и эту optimistic revision,
+и `confirm_existing_changes: true`. Release registration идемпотентна по
+project + env + `idempotency_key`, а сохранённый release содержит frozen contract snapshot.
+Evaluate создаёт immutable evidence set и proposal; approve/reject/edit добавляют revision,
+но не запускают внешний delivery action.
+
+`explain` сохраняет deterministic correlation hypotheses только по active registry metrics
+и trusted target properties; label всегда `hypothesis`, а supporting Query DSL можно
+повторить. Action сначала создаётся как `prepared` с exact payload, undo и
+`confirmation_fingerprint`. Только отдельный approve может исполнить поддерживаемый action.
+Generic webhook сначала попадает в outbox; HTTP не выполняется внутри approve request.
+Decision history project-scoped и отмечает stale metric/contract context.
 
 ## Feature delivery and experiments
 

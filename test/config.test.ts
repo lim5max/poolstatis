@@ -24,6 +24,25 @@ describe('production protection config', () => {
       maxRowsPerRun: 100_000,
       maxRunMs: 5_000,
     });
+    expect(config.releaseMonitor).toEqual({
+      enabled: true,
+      intervalMs: 60_000,
+      batchSize: 25,
+      maxAttempts: 8,
+      baseRetryMs: 60_000,
+      maxRetryMs: 3_600_000,
+      leaseMs: 300_000,
+    });
+    expect(config.webhookOutbox).toEqual({
+      enabled: true,
+      intervalMs: 5_000,
+      batchSize: 25,
+      maxAttempts: 8,
+      baseRetryMs: 5_000,
+      maxRetryMs: 3_600_000,
+      leaseMs: 300_000,
+      requestTimeoutMs: 10_000,
+    });
   });
 
   it('supports explicit operational overrides and strict booleans', () => {
@@ -37,6 +56,21 @@ describe('production protection config', () => {
       RETENTION_MAX_BATCHES: '8',
       RETENTION_MAX_ROWS_PER_RUN: '999',
       RETENTION_MAX_RUN_MS: '88',
+      RELEASE_MONITOR_ENABLED: 'false',
+      RELEASE_MONITOR_INTERVAL_MS: '2222',
+      RELEASE_MONITOR_BATCH_SIZE: '7',
+      RELEASE_MONITOR_MAX_ATTEMPTS: '4',
+      RELEASE_MONITOR_BASE_RETRY_MS: '333',
+      RELEASE_MONITOR_MAX_RETRY_MS: '4444',
+      RELEASE_MONITOR_LEASE_MS: '5555',
+      WEBHOOK_OUTBOX_ENABLED: 'false',
+      WEBHOOK_OUTBOX_INTERVAL_MS: '111',
+      WEBHOOK_OUTBOX_BATCH_SIZE: '6',
+      WEBHOOK_OUTBOX_MAX_ATTEMPTS: '3',
+      WEBHOOK_OUTBOX_BASE_RETRY_MS: '222',
+      WEBHOOK_OUTBOX_MAX_RETRY_MS: '3333',
+      WEBHOOK_OUTBOX_LEASE_MS: '4444',
+      WEBHOOK_REQUEST_TIMEOUT_MS: '555',
     });
     expect(config.rateLimit).toBe(false);
     expect(config.retentionWorker).toEqual({
@@ -48,6 +82,25 @@ describe('production protection config', () => {
       maxBatchesPerRun: 8,
       maxRowsPerRun: 999,
       maxRunMs: 88,
+    });
+    expect(config.releaseMonitor).toEqual({
+      enabled: false,
+      intervalMs: 2222,
+      batchSize: 7,
+      maxAttempts: 4,
+      baseRetryMs: 333,
+      maxRetryMs: 4444,
+      leaseMs: 5555,
+    });
+    expect(config.webhookOutbox).toEqual({
+      enabled: false,
+      intervalMs: 111,
+      batchSize: 6,
+      maxAttempts: 3,
+      baseRetryMs: 222,
+      maxRetryMs: 3333,
+      leaseMs: 4444,
+      requestTimeoutMs: 555,
     });
 
     expect(() => loadConfig({ RATE_LIMIT_ENABLED: 'yes' })).toThrow(

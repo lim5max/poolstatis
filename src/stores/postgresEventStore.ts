@@ -16,6 +16,10 @@ import type {
   InteractionMapQuery,
   InteractionMapResult,
   LifecyclePoint,
+  MeasurementCoverage,
+  MeasurementCoverageQuery,
+  MetricAggregate,
+  MetricAggregateQuery,
   RawEvent,
   RetentionCohort,
   RetentionQuery,
@@ -153,7 +157,7 @@ export class PostgresEventStore implements EventStore {
         aggExpr = 'count(*)';
         break;
       case 'unique_actors':
-        valueExpr = 'distinct_id';
+        valueExpr = 'poolstatis_resolve_actor(project_id, env, distinct_id)';
         aggExpr = 'count(DISTINCT val)';
         break;
       case 'value': {
@@ -214,24 +218,27 @@ export class PostgresEventStore implements EventStore {
         .join('');
       if (i === 0) {
         ctes.push(`s0 AS (
-          SELECT e.distinct_id, min(e."timestamp") AS t, min(e."timestamp") AS t0
+          SELECT poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id) AS distinct_id,
+                 min(e."timestamp") AS t, min(e."timestamp") AS t0
           FROM events e
           WHERE e.project_id = $1 AND e.env = $2 AND e.event = $${eventParam}
             AND e."timestamp" >= $3 AND e."timestamp" < $4${filterClauses}
-          GROUP BY e.distinct_id
+          GROUP BY poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id)
         )`);
       } else {
         // Each step must happen after the previous step, within the window
         // anchored at the *first* step (t0), matching how activation windows
         // are usually defined.
         ctes.push(`s${i} AS (
-          SELECT e.distinct_id, min(e."timestamp") AS t, s${i - 1}.t0
+          SELECT poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id) AS distinct_id,
+                 min(e."timestamp") AS t, s${i - 1}.t0
           FROM events e
-          JOIN s${i - 1} ON s${i - 1}.distinct_id = e.distinct_id
+          JOIN s${i - 1}
+            ON s${i - 1}.distinct_id = poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id)
           WHERE e.project_id = $1 AND e.env = $2 AND e.event = $${eventParam}
             AND e."timestamp" > s${i - 1}.t
             AND e."timestamp" <= s${i - 1}.t0 + make_interval(secs => $5)${filterClauses}
-          GROUP BY e.distinct_id, s${i - 1}.t0
+          GROUP BY poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id), s${i - 1}.t0
         )`);
       }
     });
@@ -251,7 +258,8 @@ export class PostgresEventStore implements EventStore {
     params.push(q.event);
     const eventParam = params.length;
     const filters = andFilters(q.filters, 'properties', params);
-    return `SELECT DISTINCT distinct_id, date_trunc('${q.interval}', "timestamp") AS b
+    return `SELECT DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id) AS distinct_id,
+                   date_trunc('${q.interval}', "timestamp") AS b
             FROM events
             WHERE project_id = $1 AND env = $2 AND event = $${eventParam}
               AND "timestamp" >= $3 AND "timestamp" < $4${filters}`;
@@ -280,15 +288,17 @@ export class PostgresEventStore implements EventStore {
 
     const sql = `
       WITH starts AS (
-        SELECT distinct_id, min(date_trunc('${iv}', "timestamp")) AS cohort
+        SELECT poolstatis_resolve_actor(project_id, env, distinct_id) AS distinct_id,
+               min(date_trunc('${iv}', "timestamp")) AS cohort
         FROM events
         WHERE project_id = $1 AND env = $2 AND event = $${startEventParam}
           AND "timestamp" >= $3 AND "timestamp" < $4${startFilters}
-        GROUP BY distinct_id
+        GROUP BY poolstatis_resolve_actor(project_id, env, distinct_id)
       ),
       sizes AS (SELECT cohort, count(*)::int AS size FROM starts GROUP BY cohort),
       returns AS (
-        SELECT DISTINCT distinct_id, date_trunc('${iv}', "timestamp") AS rbucket
+        SELECT DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id) AS distinct_id,
+                        date_trunc('${iv}', "timestamp") AS rbucket
         FROM events
         WHERE project_id = $1 AND env = $2 AND event = $${returnEventParam}
           AND "timestamp" >= $3 AND "timestamp" < $4${returnFilters}
@@ -406,8 +416,8 @@ export class PostgresEventStore implements EventStore {
       .join('');
     const { rows } = await this.pool.query<{ variant: string; exposed: string; converted: string }>(
       `WITH first_exposures AS (
-         SELECT DISTINCT ON (distinct_id)
-           distinct_id,
+         SELECT DISTINCT ON (poolstatis_resolve_actor(project_id, env, distinct_id))
+           poolstatis_resolve_actor(project_id, env, distinct_id) AS distinct_id,
            properties->>'variant' AS variant,
            "timestamp" AS exposed_at
          FROM events
@@ -418,7 +428,7 @@ export class PostgresEventStore implements EventStore {
            AND properties->>'flag_key' = $3
            AND "timestamp" >= $4
            AND "timestamp" < $5
-         ORDER BY distinct_id, "timestamp"
+         ORDER BY poolstatis_resolve_actor(project_id, env, distinct_id), "timestamp"
        ),
        outcomes AS (
          SELECT DISTINCT x.distinct_id
@@ -426,7 +436,7 @@ export class PostgresEventStore implements EventStore {
          JOIN events e ON e.project_id = $1
            AND e.env = $2
            AND e.event = $6
-           AND e.distinct_id = x.distinct_id
+           AND poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id) = x.distinct_id
            AND e."timestamp" >= x.exposed_at
            AND e."timestamp" < $5${outcomeFilters}
        )
@@ -454,7 +464,7 @@ export class PostgresEventStore implements EventStore {
            least($6 - 1, floor((properties->>'x')::double precision * $6)::int) AS x,
            least($6 - 1, floor((properties->>'y')::double precision * $6)::int) AS y,
            count(*)::int AS count,
-           count(DISTINCT distinct_id)::int AS actors
+           count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors
          FROM events
          WHERE project_id = $1 AND env = $2
            AND event = 'experience.element_clicked' AND event_source = 'experience'
@@ -465,7 +475,8 @@ export class PostgresEventStore implements EventStore {
         params,
       ),
       this.pool.query<{ label: string; count: string; actors: string }>(
-        `SELECT properties->>'label' AS label, count(*)::int AS count, count(DISTINCT distinct_id)::int AS actors
+        `SELECT properties->>'label' AS label, count(*)::int AS count,
+                count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors
          FROM events
          WHERE project_id = $1 AND env = $2
            AND event = 'experience.element_clicked' AND event_source = 'experience'
@@ -562,7 +573,9 @@ export class PostgresEventStore implements EventStore {
   }
 
   async actorSummary(projectId: string, env: string, distinctId: string): Promise<ActorSummary> {
-    const where = 'project_id = $1 AND env = $2 AND distinct_id = $3';
+    const where = `project_id = $1 AND env = $2
+      AND poolstatis_resolve_actor(project_id, env, distinct_id)
+        = poolstatis_resolve_actor($1::uuid, $2, $3)`;
     const args = [projectId, env, distinctId];
     const [agg, top] = await Promise.all([
       this.pool.query(
@@ -630,6 +643,107 @@ export class PostgresEventStore implements EventStore {
       registered_share: Number(r.registered_share),
       last_seen: toIso(r.last_seen),
     }));
+  }
+
+  async measurementCoverage(q: MeasurementCoverageQuery): Promise<MeasurementCoverage> {
+    const params: unknown[] = [q.projectId, q.env, q.event, q.sinceDays];
+    const filters = andFilters(q.filters, 'properties', params);
+    const where = `project_id = $1 AND env = $2 AND event = $3
+      AND "timestamp" >= now() - make_interval(days => $4)${filters}`;
+    const totals = await this.pool.query(
+      `SELECT
+         count(*)::int AS events,
+         count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors,
+         count(DISTINCT distinct_id)::int AS raw_actors,
+         COALESCE(avg(registered::int), 0)::float AS registered_coverage,
+         COALESCE(avg((length(distinct_id) > 0)::int), 0)::float AS distinct_id_coverage
+       FROM events WHERE ${where}`,
+      params,
+    );
+    const propertyCoverage: Record<string, number> = {};
+    if (q.properties.length > 0) {
+      params.push(q.properties);
+      const propertyParam = params.length;
+      const properties = await this.pool.query<{ key: string; coverage: number }>(
+        `SELECT keys.key,
+                COALESCE(
+                  count(*) FILTER (WHERE events.properties ? keys.key)::float
+                    / NULLIF(count(*), 0),
+                  0
+                ) AS coverage
+         FROM events
+         CROSS JOIN unnest($${propertyParam}::text[]) AS keys(key)
+         WHERE ${where}
+         GROUP BY keys.key`,
+        params,
+      );
+      for (const row of properties.rows) propertyCoverage[row.key] = Number(row.coverage);
+    }
+    const row = totals.rows[0]!;
+    return {
+      events: Number(row.events),
+      actors: Number(row.actors),
+      rawActors: Number(row.raw_actors),
+      registeredCoverage: Number(row.registered_coverage),
+      distinctIdCoverage: Number(row.distinct_id_coverage),
+      propertyCoverage,
+    };
+  }
+
+  async metricAggregate(q: MetricAggregateQuery): Promise<MetricAggregate> {
+    const params: unknown[] = [q.projectId, q.env, q.event, q.from, q.to];
+    const filters = andFilters(q.filters, 'properties', params);
+    const where = `project_id = $1 AND env = $2 AND event = $3
+      AND "timestamp" >= $4 AND "timestamp" < $5${filters}`;
+    let valueExpression: string;
+    if (q.agg.kind === 'count') {
+      valueExpression = 'count(*)';
+    } else if (q.agg.kind === 'unique_actors') {
+      valueExpression = 'count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))';
+    } else {
+      params.push(q.agg.property);
+      const numeric = numericPropSql('properties', params.length);
+      valueExpression = q.agg.fn === 'p90'
+        ? `percentile_cont(0.9) WITHIN GROUP (ORDER BY ${numeric})`
+        : `${q.agg.fn}(${numeric})`;
+    }
+    const totals = await this.pool.query(
+      `SELECT
+         COALESCE(${valueExpression}, 0)::float AS value,
+         count(*)::int AS events,
+         count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors,
+         count(DISTINCT distinct_id)::int AS raw_actors,
+         COALESCE(avg(registered::int), 0)::float AS registered_coverage,
+         COALESCE(avg((length(distinct_id) > 0)::int), 0)::float AS distinct_id_coverage
+       FROM events WHERE ${where}`,
+      params,
+    );
+    const propertyCoverage: Record<string, number> = {};
+    if (q.properties.length > 0) {
+      params.push(q.properties);
+      const propertyParam = params.length;
+      const properties = await this.pool.query<{ key: string; coverage: number }>(
+        `SELECT keys.key,
+                COALESCE(count(*) FILTER (WHERE events.properties ? keys.key)::float
+                  / NULLIF(count(*), 0), 0) AS coverage
+         FROM events
+         CROSS JOIN unnest($${propertyParam}::text[]) AS keys(key)
+         WHERE ${where}
+         GROUP BY keys.key`,
+        params,
+      );
+      for (const row of properties.rows) propertyCoverage[row.key] = Number(row.coverage);
+    }
+    const row = totals.rows[0]!;
+    return {
+      value: Number(row.value),
+      events: Number(row.events),
+      actors: Number(row.actors),
+      rawActors: Number(row.raw_actors),
+      registeredCoverage: Number(row.registered_coverage),
+      distinctIdCoverage: Number(row.distinct_id_coverage),
+      propertyCoverage,
+    };
   }
 
   async entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]> {

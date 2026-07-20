@@ -64,8 +64,44 @@ get_experiment_results(project, key, {env?})
   // exposure, conversion, uplift, credible interval, probability_best по variant
 ```
 
-Флаги используют stable `distinct_id`; до identity merge не пытайся ими
-склеивать anonymous и authenticated id. Продуктовый SDK автоматически пишет
+### Product decision loop
+
+```
+validate_measurement_contracts(project, declaration)
+diff_measurement_contracts(project, declaration)
+apply_measurement_contracts(project, declaration, {expected_revision?, confirm_existing_changes?})
+list_measurement_contracts(project)
+get_measurement_contract(project, key)
+export_measurement_contracts(project)
+
+register_release(project, release)
+list_releases(project, {env?, status?})
+get_release(project, id)
+evaluate_release(project, id)
+
+list_decisions(project, {status?, release_id?})
+get_decision(project, id)
+approve_decision(project, id, rationale)
+reject_decision(project, id, rationale)
+edit_decision(project, id, outcome, rationale)
+explain_outcome(project, id)
+prepare_action(project, decision_id, action)
+approve_action(project, id, confirmation_fingerprint)
+get_decision_inbox(project)
+search_decision_history(project, filters)
+find_similar_changes(project, declaration)
+
+configure_webhook(project, destination)
+verify_webhook(project, id)
+```
+
+Contract apply использует optimistic revision из diff. Release содержит frozen contract
+revision и факты deploy. Evaluate сохраняет facts и proposal, но только явный human review
+меняет accepted outcome. Action сначала создаётся как prepared exact payload с undo и
+fingerprint; исполнение требует отдельного human approval. Webhook идёт через durable outbox.
+
+Флаги оцениваются по переданному `distinct_id`; для аналитики anonymous→authenticated
+создай audited actor link, который Query DSL разрешает при чтении. Продуктовый SDK пишет
 `$feature_flag_called` при первом evaluation, MCP-tool намеренно этого не
 делает.
 

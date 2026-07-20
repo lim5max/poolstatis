@@ -1,6 +1,6 @@
 import type {
-  AccountMe, ApiKeyRow, DataQualityResponse, EntityRow, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, Metric, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, SampleEvent, SampleFilter, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse,
+  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricStatus, MetricUsage,
+  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse,
 } from './types';
 
 export class ApiError extends Error {
@@ -59,6 +59,167 @@ export class PoolstatisClient {
 
   schema(slug: string, env = 'prod') {
     return this.req<ProjectSchema>('GET', `/api/v1/projects/${slug}/schema?env=${encodeURIComponent(env)}`);
+  }
+
+  onboardingStatus(slug: string, env = 'prod') {
+    return this.req<DecisionLoopOnboardingStatus>('GET', `/api/v1/projects/${slug}/onboarding/status?env=${encodeURIComponent(env)}`);
+  }
+
+  actorLinks(slug: string, env = 'prod') {
+    return this.req<{ links: ActorLink[]; audit: ActorLinkAudit[] }>(
+      'GET', `/api/v1/projects/${slug}/identity-links?env=${encodeURIComponent(env)}`,
+    );
+  }
+
+  properties(slug: string, filter: { scope?: PropertyDefinition['scope']; status?: PropertyDefinition['status'] } = {}) {
+    const qs = new URLSearchParams();
+    if (filter.scope) qs.set('scope', filter.scope);
+    if (filter.status) qs.set('status', filter.status);
+    return this.req<{ properties: PropertyDefinition[] }>(
+      'GET', `/api/v1/projects/${slug}/properties${qs.size ? `?${qs}` : ''}`,
+    ).then((response) => response.properties);
+  }
+
+  updateProperty(slug: string, scope: PropertyDefinition['scope'], key: string, patch: Partial<{
+    value_type: PropertyDefinition['value_type']; purpose: string;
+    status: PropertyDefinition['status']; enum_values: string[] | null;
+  }>) {
+    return this.req<PropertyDefinition>(
+      'PATCH', `/api/v1/projects/${slug}/properties/${scope}/${encodeURIComponent(key)}`, patch,
+    );
+  }
+
+  sources(slug: string) {
+    return this.req<{ sources: SourceConnection[] }>('GET', `/api/v1/projects/${slug}/sources`)
+      .then((response) => response.sources);
+  }
+
+  measurementTrust(slug: string, body: {
+    metric_key: string; env: string; since_days?: number;
+    target_filters?: SampleFilter[];
+  }) {
+    return this.req<MeasurementTrust>('POST', `/api/v1/projects/${slug}/measurement/trust`, body);
+  }
+
+  contracts(slug: string) {
+    return this.req<{ contracts: MeasurementContract[] }>('GET', `/api/v1/projects/${slug}/contracts`)
+      .then((response) => response.contracts);
+  }
+
+  contract(slug: string, key: string) {
+    return this.req<{ contract: MeasurementContract; revisions: Array<Record<string, unknown>> }>(
+      'GET', `/api/v1/projects/${slug}/contracts/${encodeURIComponent(key)}`,
+    );
+  }
+
+  exportContracts(slug: string) {
+    return this.req<{ filename: string; yaml: string }>('GET', `/api/v1/projects/${slug}/contracts/export`);
+  }
+
+  releases(slug: string, filter: { env?: string; status?: ReleaseStatus } = {}) {
+    const qs = new URLSearchParams();
+    if (filter.env) qs.set('env', filter.env);
+    if (filter.status) qs.set('status', filter.status);
+    return this.req<{ releases: Release[] }>('GET', `/api/v1/projects/${slug}/releases${qs.size ? `?${qs}` : ''}`)
+      .then((response) => response.releases);
+  }
+
+  release(slug: string, id: string) {
+    return this.req<{ release: Release; revisions: Array<Record<string, unknown>> }>(
+      'GET', `/api/v1/projects/${slug}/releases/${id}`,
+    );
+  }
+
+  evaluateRelease(slug: string, id: string) {
+    return this.req<{ evidence: EvidenceSet; decision: Decision; idempotent: boolean }>(
+      'POST', `/api/v1/projects/${slug}/releases/${id}/evaluate`, {},
+    );
+  }
+
+  decisions(slug: string, filter: { status?: Decision['status']; release_id?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (filter.status) qs.set('status', filter.status);
+    if (filter.release_id) qs.set('release_id', filter.release_id);
+    return this.req<{ decisions: Decision[] }>('GET', `/api/v1/projects/${slug}/decisions${qs.size ? `?${qs}` : ''}`)
+      .then((response) => response.decisions);
+  }
+
+  decision(slug: string, id: string) {
+    return this.req<DecisionDetail>('GET', `/api/v1/projects/${slug}/decisions/${id}`);
+  }
+
+  approveDecision(slug: string, id: string, rationale: string) {
+    return this.req<DecisionDetail>('POST', `/api/v1/projects/${slug}/decisions/${id}/approve`, { rationale });
+  }
+
+  rejectDecision(slug: string, id: string, rationale: string) {
+    return this.req<DecisionDetail>('POST', `/api/v1/projects/${slug}/decisions/${id}/reject`, { rationale });
+  }
+
+  editDecision(slug: string, id: string, outcome: DecisionOutcome, rationale: string) {
+    return this.req<DecisionDetail>('POST', `/api/v1/projects/${slug}/decisions/${id}/edit`, { outcome, rationale });
+  }
+
+  explainDecision(slug: string, id: string) {
+    return this.req<DecisionExplanation>('POST', `/api/v1/projects/${slug}/decisions/${id}/explain`, {});
+  }
+
+  decisionExplanations(slug: string, id: string) {
+    return this.req<{ explanations: DecisionExplanation[] }>('GET', `/api/v1/projects/${slug}/decisions/${id}/explanations`)
+      .then((response) => response.explanations);
+  }
+
+  prepareDecisionAction(slug: string, decisionId: string, body: {
+    action_type: DecisionActionType; idempotency_key: string;
+    target: Record<string, unknown>; payload: Record<string, unknown>; expected_effect: string;
+  }) {
+    return this.req<DecisionActionDetail>('POST', `/api/v1/projects/${slug}/decisions/${decisionId}/actions`, body);
+  }
+
+  decisionActions(slug: string, decisionId: string) {
+    return this.req<{ actions: DecisionActionDetail['action'][] }>('GET', `/api/v1/projects/${slug}/decisions/${decisionId}/actions`)
+      .then((response) => response.actions);
+  }
+
+  approveDecisionAction(slug: string, id: string, confirmationFingerprint: string) {
+    return this.req<DecisionActionDetail>('POST', `/api/v1/projects/${slug}/actions/${id}/approve`, { confirmation_fingerprint: confirmationFingerprint });
+  }
+
+  rejectDecisionAction(slug: string, id: string, rationale: string) {
+    return this.req<DecisionActionDetail>('POST', `/api/v1/projects/${slug}/actions/${id}/reject`, { rationale });
+  }
+
+  retryDecisionAction(slug: string, id: string) {
+    return this.req<DecisionActionDetail>('POST', `/api/v1/projects/${slug}/actions/${id}/retry`, {});
+  }
+
+  decisionInbox(slug: string) {
+    return this.req<{ decisions: DecisionInboxItem[] }>('GET', `/api/v1/projects/${slug}/decision-inbox`)
+      .then((response) => response.decisions);
+  }
+
+  decisionHistory(slug: string, filter: { metric?: string; tag?: string; owner?: string; status?: Decision['status']; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    Object.entries(filter).forEach(([key, value]) => { if (value !== undefined) qs.set(key, String(value)); });
+    return this.req<{ items: DecisionHistoryItem[]; next_cursor: string | null }>('GET', `/api/v1/projects/${slug}/decisions/search${qs.size ? `?${qs}` : ''}`);
+  }
+
+  webhookDestinations(slug: string) {
+    return this.req<{ destinations: WebhookDestination[] }>('GET', `/api/v1/projects/${slug}/webhooks`)
+      .then((response) => response.destinations);
+  }
+
+  configureWebhook(slug: string, body: { name: string; url: string; authorization?: string }) {
+    return this.req<WebhookDestination>('POST', `/api/v1/projects/${slug}/webhooks`, body);
+  }
+
+  testWebhook(slug: string, id: string) {
+    return this.req<WebhookDelivery>('POST', `/api/v1/projects/${slug}/webhooks/${id}/test`, {});
+  }
+
+  webhookDeliveries(slug: string) {
+    return this.req<{ deliveries: WebhookDelivery[] }>('GET', `/api/v1/projects/${slug}/webhook-deliveries`)
+      .then((response) => response.deliveries);
   }
 
   // ---- registry ----

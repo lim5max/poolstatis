@@ -1,0 +1,153 @@
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
+
+describe('property registry and measurement trust', () => {
+  let env: TestEnv;
+  let other: TestEnv;
+
+  beforeAll(async () => {
+    env = await createTestEnv();
+    other = await createTestEnv();
+    await activeMetric(env, {
+      key: 'signup_completed',
+      type: 'unique_actors',
+      source: { event: 'signup.completed', filters: [] },
+    });
+  });
+
+  afterAll(async () => {
+    await env.close();
+    await other.close();
+  });
+
+  test('requires explicit property meaning and reports evidence-backed metric trust', async () => {
+    const initialTrust = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/measurement/trust',
+      { metric_key: 'signup_completed', env: 'prod', target_filters: [] },
+    );
+    expect(initialTrust.status).toBe(200);
+    expect(initialTrust.body.status).toBe('untrusted');
+    expect(initialTrust.body.blockers.map((item: { code: string }) => item.code))
+      .toContain('primary_metric_no_observations');
+
+    const invalid = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/properties',
+      { key: 'plan', scope: 'event', value_type: 'string', purpose: 'too short' },
+    );
+    expect(invalid.status).toBe(400);
+
+    const created = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/properties',
+      {
+        key: 'plan',
+        scope: 'event',
+        value_type: 'string',
+        purpose: 'Segments signup outcomes by the commercial plan selected.',
+      },
+    );
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ key: 'plan', status: 'proposed', source: 'native' });
+
+    const untrustedProperty = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/measurement/trust',
+      {
+        metric_key: 'signup_completed',
+        env: 'prod',
+        target_filters: [{ property: 'plan', op: 'eq', value: 'pro' }],
+      },
+    );
+    expect(untrustedProperty.body.blockers.map((item: { code: string }) => item.code))
+      .toContain('target_property_untrusted');
+
+    const trusted = await api(
+      env,
+      env.secretToken,
+      'PATCH',
+      '/api/v1/projects/' + env.projectSlug + '/properties/event/plan',
+      { status: 'trusted' },
+    );
+    expect(trusted.status).toBe(200);
+    expect(trusted.body.status).toBe('trusted');
+
+    const ingested = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      batch_id: 'property-coverage',
+      events: [
+        { event: 'signup.completed', distinct_id: 'u1', properties: { plan: 'pro' } },
+        { event: 'signup.completed', distinct_id: 'u2', properties: {} },
+      ],
+    });
+    expect(ingested.status).toBe(200);
+
+    const assessed = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/measurement/trust',
+      {
+        metric_key: 'signup_completed',
+        env: 'prod',
+        target_filters: [{ property: 'plan', op: 'eq', value: 'pro' }],
+      },
+    );
+    expect(assessed.status).toBe(200);
+    expect(assessed.body).toMatchObject({
+      status: 'trusted',
+      primary_metric: {
+        key: 'signup_completed',
+        observed_events: 2,
+        observed_actors: 2,
+        registered_coverage: 1,
+      },
+      identity: { distinct_id_coverage: 1 },
+    });
+    expect(assessed.body.properties[0]).toMatchObject({
+      key: 'plan',
+      status: 'trusted',
+      coverage: 0.5,
+    });
+    expect(assessed.body.warnings.map((item: { code: string }) => item.code))
+      .toContain('target_property_low_coverage');
+
+    const listed = await api(
+      env,
+      env.secretToken,
+      'GET',
+      '/api/v1/projects/' + env.projectSlug + '/properties',
+    );
+    expect(listed.status).toBe(200);
+    expect(listed.body.properties).toHaveLength(1);
+
+    const projectSchema = await api(
+      env,
+      env.secretToken,
+      'GET',
+      '/api/v1/projects/' + env.projectSlug + '/schema?env=prod',
+    );
+    expect(projectSchema.status).toBe(200);
+    expect(projectSchema.body).toMatchObject({
+      properties: [expect.objectContaining({ key: 'plan', status: 'trusted' })],
+      identity: { active_links: 0, linked_sources: 0, audit_entries: 0 },
+      sources: [],
+    });
+
+    const crossOrg = await api(
+      env,
+      env.secretToken,
+      'GET',
+      '/api/v1/projects/' + other.projectSlug + '/properties',
+    );
+    expect(crossOrg.status).toBe(404);
+  });
+});

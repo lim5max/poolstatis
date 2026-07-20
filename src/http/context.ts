@@ -9,6 +9,8 @@ import {
 import { IngestService } from '../services/ingest.js';
 import { QueryService } from '../services/query.js';
 import { QueryCache, type QueryCacheOptions } from '../services/queryCache.js';
+import { PostHogAdapter } from '../services/posthog.js';
+import { WebhookService } from '../services/webhooks.js';
 
 /** Shared service wiring for the HTTP server, CLI, and tests. */
 export interface AppContext {
@@ -16,11 +18,14 @@ export interface AppContext {
   eventStore: EventStore;
   ingest: IngestService;
   query: QueryService;
+  posthog: PostHogAdapter;
+  webhooks: WebhookService;
 }
 
 export interface CreateContextOptions {
   ingestBuffer?: BufferedEventStoreOptions | false;
   queryCache?: QueryCacheOptions | false;
+  connectorEncryptionKey?: string;
 }
 
 export function createContext(pool: pg.Pool, options: CreateContextOptions = {}): AppContext {
@@ -31,10 +36,13 @@ export function createContext(pool: pg.Pool, options: CreateContextOptions = {})
   const queryCache = options.queryCache === false
     ? undefined
     : new QueryCache(options.queryCache ?? { ttlMs: 1_000, maxEntries: 1_000 });
+  const posthog = new PostHogAdapter(pool, options.connectorEncryptionKey);
   return {
     pool,
     eventStore,
     ingest: new IngestService(pool, eventStore),
-    query: new QueryService(pool, eventStore, queryCache),
+    query: new QueryService(pool, eventStore, queryCache, posthog),
+    posthog,
+    webhooks: new WebhookService(pool, options.connectorEncryptionKey),
   };
 }

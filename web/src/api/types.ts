@@ -169,6 +169,323 @@ export interface ProjectSchema {
   funnels: Funnel[];
   entity_types: EntityType[];
   observed_events_30d: ObservedEvent[];
+  properties: PropertyDefinition[];
+  identity: { active_links: number; linked_sources: number; audit_entries: number };
+  sources: SourceConnection[];
+}
+
+export interface ActorLink {
+  id: string;
+  env: string;
+  source_distinct_id: string;
+  target_distinct_id: string;
+  status: 'active' | 'revoked';
+  created_by: string;
+  created_at: string;
+  revoked_by: string | null;
+  revoked_at: string | null;
+}
+
+export interface ActorLinkAudit {
+  id: string;
+  actor_link_id: string;
+  action: 'created' | 'revoked';
+  actor: string;
+  snapshot: ActorLink;
+  created_at: string;
+}
+
+export interface PropertyDefinition {
+  id: string;
+  key: string;
+  scope: 'event' | 'actor' | 'entity';
+  value_type: 'string' | 'number' | 'boolean' | 'datetime' | 'enum';
+  purpose: string;
+  status: 'proposed' | 'trusted' | 'untrusted';
+  source: 'native' | 'posthog';
+  source_connection_id: string | null;
+  enum_values: string[] | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SourceConnection {
+  id: string;
+  provider: 'posthog';
+  name: string;
+  host: string;
+  external_project_id: string;
+  status: 'configured' | 'verified' | 'error' | 'disabled';
+  capabilities: Record<string, boolean>;
+  last_error: string | null;
+  verified_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrustFinding {
+  code: string;
+  message: string;
+  next_action: string;
+}
+
+export interface MeasurementTrust {
+  status: 'trusted' | 'untrusted';
+  primary_metric: {
+    key: string;
+    purpose: string;
+    category: string | null;
+    observed_events: number;
+    observed_actors: number;
+    registered_coverage: number;
+  };
+  identity: { distinct_id_coverage: number; raw_actors: number; resolved_actors: number };
+  properties: Array<{
+    key: string;
+    status: 'missing' | PropertyDefinition['status'];
+    purpose: string | null;
+    coverage: number;
+  }>;
+  blockers: TrustFinding[];
+  warnings: TrustFinding[];
+}
+
+export type OnboardingGateKey =
+  | 'workspace_created' | 'agent_connected' | 'data_source_connected'
+  | 'first_event_observed' | 'metrics_activated' | 'data_quality_accepted'
+  | 'first_query_produced' | 'first_decision_saved';
+
+export interface OnboardingGate {
+  key: OnboardingGateKey;
+  complete: boolean;
+  evidence: Record<string, unknown>;
+  blocker: string | null;
+  next_action: string | null;
+}
+
+export interface DecisionLoopOnboardingStatus {
+  complete: boolean;
+  gates: OnboardingGate[];
+  next_blocker: OnboardingGate | null;
+  final_result: {
+    metric_key: string;
+    metric_purpose: string;
+    query_window: { from: string; to: string };
+    source: 'native' | 'posthog';
+    next_action: string;
+  } | null;
+}
+
+export type ContractDirection = 'increase' | 'decrease' | 'stay_within_range';
+export interface MeasurementContract {
+  id: string;
+  key: string;
+  name: string;
+  business_hypothesis: string;
+  decision_owner: string;
+  primary_metric_key: string;
+  guardrail_metric_keys: string[];
+  target_filters: SampleFilter[];
+  baseline_window_days: number;
+  observation_window_days: number;
+  minimum_sample_size: number;
+  expected_direction: ContractDirection;
+  minimum_meaningful_effect?: number;
+  flag_key?: string;
+  experiment_key?: string;
+  references: Record<string, string>;
+  status: 'draft' | 'active' | 'archived';
+  revision: number;
+  declaration_hash: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ReleaseStatus = 'planned' | 'deployed' | 'observing' | 'decided' | 'cancelled';
+export interface Release {
+  id: string;
+  contract_id: string;
+  contract_key: string;
+  contract_revision: number;
+  contract_snapshot: Omit<MeasurementContract, 'id' | 'revision' | 'declaration_hash' | 'created_by' | 'created_at' | 'updated_at'>;
+  env: string;
+  repository: string;
+  branch: string | null;
+  commit_sha: string;
+  pr_url: string | null;
+  deployed_at: string | null;
+  flag_key: string | null;
+  experiment_key: string | null;
+  variant: string | null;
+  originating_decision_id: string | null;
+  status: ReleaseStatus;
+  idempotency_key: string;
+  evaluation_attempts: number;
+  next_evaluation_at: string | null;
+  retry_state: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DecisionOutcome = 'keep' | 'fix' | 'rollback' | 'inconclusive';
+export interface Decision {
+  id: string;
+  release_id: string;
+  contract_id: string;
+  evidence_id: string;
+  status: 'proposed' | 'approved' | 'rejected';
+  proposed_outcome: DecisionOutcome;
+  proposed_rationale: string;
+  accepted_outcome: DecisionOutcome | null;
+  accepted_rationale: string | null;
+  current_revision: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvidenceMetricWindow {
+  metric: { key: string; name: string; purpose: string; category: string | null; type: string };
+  source: 'native' | 'posthog';
+  baseline: { value: number; events: number; actors: number; registeredCoverage: number; distinctIdCoverage: number; propertyCoverage: Record<string, number> };
+  observed: { value: number; events: number; actors: number; registeredCoverage: number; distinctIdCoverage: number; propertyCoverage: Record<string, number> };
+  change: { absolute: number; relative: number | null };
+}
+
+export interface EvidenceSet {
+  id: string;
+  release_id: string;
+  contract_id: string;
+  evaluated_at: string;
+  source: 'native' | 'posthog';
+  baseline_window: { from: string; to: string };
+  observed_window: { from: string; to: string };
+  primary_evidence: EvidenceMetricWindow;
+  guardrail_evidence: EvidenceMetricWindow[];
+  trust: { status: 'trusted' | 'untrusted'; registered_coverage: number; distinct_id_coverage: number; property_coverage: Record<string, number>; warnings: TrustFinding[] };
+  query_specs: Record<string, unknown>;
+  facts: Record<string, unknown>;
+  sample_size: number;
+  ready: boolean;
+  blockers: TrustFinding[];
+  evidence_key: string;
+  created_at: string;
+}
+
+export interface DecisionRevision {
+  id: string;
+  revision: number;
+  action: 'proposed' | 'approved' | 'edited' | 'rejected';
+  actor: string;
+  previous_snapshot: Decision | null;
+  snapshot: Decision;
+  rationale: string;
+  created_at: string;
+}
+
+export interface DecisionDetail {
+  decision: Decision;
+  evidence: EvidenceSet;
+  revisions: DecisionRevision[];
+  release: Release;
+  contract: Release['contract_snapshot'] & { revision: number };
+}
+
+export interface ExplanationCandidate {
+  kind: 'metric' | 'property';
+  key: string;
+  purpose: string;
+  measured_movement: number | null;
+  score: number;
+  strength: 'strong' | 'medium' | 'weak';
+  why_considered: string;
+  supporting_query: { baseline: Record<string, unknown>; observed: Record<string, unknown> };
+  interpretation: 'hypothesis';
+}
+
+export interface DecisionExplanation {
+  id: string;
+  decision_id: string;
+  evidence_id: string;
+  algorithm_version: string;
+  explanation_key: string;
+  label: 'hypothesis';
+  candidates: ExplanationCandidate[];
+  omitted: Array<{ key: string; reason: string }>;
+  created_by: string;
+  created_at: string;
+}
+
+export type DecisionActionType = 'draft_implementation_prompt' | 'prepare_flag_rollback' | 'schedule_observation' | 'request_more_data' | 'generic_webhook' | 'create_issue' | 'open_draft_pr';
+export interface DecisionAction {
+  id: string;
+  decision_id: string;
+  release_id: string;
+  evidence_id: string;
+  decision_revision: number;
+  action_type: DecisionActionType;
+  status: 'prepared' | 'approved' | 'executed' | 'rejected' | 'failed';
+  target: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  expected_effect: string;
+  undo: Record<string, unknown>;
+  confirmation_fingerprint: string;
+  idempotency_key: string;
+  prepared_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  executed_at: string | null;
+  result: Record<string, unknown> | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+export interface DecisionActionDetail {
+  action: DecisionAction;
+  audit: Array<{ id: string; event: string; actor: string; snapshot: DecisionAction; created_at: string }>;
+}
+
+export interface DecisionInboxItem {
+  decision_id: string;
+  release_id: string;
+  state: 'needs_attention' | 'waiting_for_data' | 'approved' | 'rejected' | 'resolved';
+  impact: { outcome: DecisionOutcome; metric_key: string; metric_purpose: string; relative_change: number | null; trust: 'trusted' | 'untrusted' };
+  blocker: TrustFinding | null;
+  requested_choice: string | null;
+  contract_key: string;
+  commit_sha: string;
+  env: string;
+  updated_at: string;
+}
+
+export interface WebhookDestination {
+  id: string; name: string; masked_url: string;
+  status: 'configured' | 'verified' | 'error' | 'disabled';
+  last_error: string | null; verified_at: string | null;
+  created_by: string; created_at: string; updated_at: string;
+}
+export interface WebhookDelivery {
+  id: string; destination_id: string; action_id: string | null; event_type: string;
+  payload: Record<string, unknown>; idempotency_key: string;
+  status: 'pending' | 'delivering' | 'delivered' | 'failed' | 'dead';
+  attempt_count: number; next_attempt_at: string; delivered_at: string | null;
+  last_error: string | null; created_at: string; updated_at: string;
+  attempts: Array<{ attempt: number; status: 'delivered' | 'failed'; response_status: number | null; error_code: string | null; error_message: string | null; created_at: string }>;
+}
+
+export interface DecisionHistoryItem {
+  decision_id: string; release_id: string; contract_key: string; contract_revision: number;
+  primary_metric_key: string; guardrail_metric_keys: string[]; decision_owner: string;
+  hypothesis: string; proposed_outcome: DecisionOutcome; proposed_rationale: string;
+  accepted_outcome: DecisionOutcome | null; accepted_rationale: string | null;
+  status: Decision['status']; proposal_disagreed: boolean;
+  evidence_quality: { ready: boolean; trust: string; sample_size: number; blockers: number };
+  stale: boolean; stale_reasons: string[]; created_at: string;
 }
 
 export interface SampleEvent {

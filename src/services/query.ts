@@ -1,5 +1,5 @@
 import type pg from 'pg';
-import type { EventStore } from '../stores/eventStore.js';
+import type { EventStore, MetricAggregate, RetentionCohort } from '../stores/eventStore.js';
 import type {
   EntitiesQueryInput,
   ExperienceSessionQueryInput,
@@ -18,12 +18,14 @@ import { getFunnel, getMetric, type Metric } from './registry.js';
 import { countEntities, queryEntities } from './entities.js';
 import { getExperienceSurface } from './experience.js';
 import { canonicalQueryKey, type QueryCache } from './queryCache.js';
+import type { PostHogAdapter } from './posthog.js';
 
 export interface QueryMeta {
   computed_at: string;
   date_range?: { from: string; to: string };
   sampling: null;
   note?: string;
+  source?: 'native' | 'posthog';
 }
 
 export type QueryResult =
@@ -86,6 +88,7 @@ export class QueryService {
     private readonly pool: pg.Pool,
     private readonly eventStore: EventStore,
     private readonly cache?: QueryCache,
+    private readonly posthog?: PostHogAdapter,
   ) {}
 
   async run(projectId: string, q: QueryInput, now: Date = new Date()): Promise<QueryResult> {
@@ -97,6 +100,98 @@ export class QueryService {
 
   invalidateProject(projectId: string): void {
     this.cache?.invalidateProject(projectId);
+  }
+
+  async aggregateMetricWindow(
+    projectId: string,
+    input: {
+      metricKey: string;
+      env: string;
+      filters: PropertyFilter[];
+      properties: string[];
+      from: Date;
+      to: Date;
+      windowName: 'baseline' | 'observed';
+    },
+  ): Promise<{
+    metric: Pick<Metric, 'key' | 'name' | 'purpose' | 'category' | 'type'>;
+    source: 'native' | 'posthog';
+    query: TrendQueryInput;
+    aggregation: 'window_total';
+    result: MetricAggregate;
+  }> {
+    const metric = await getMetric(this.pool, projectId, input.metricKey);
+    if (metric.status !== 'active' || !['count', 'unique_actors', 'value'].includes(metric.type)) {
+      throw badRequest(
+        'contract_metric_incompatible',
+        `metric "${metric.key}" must be active count, unique_actors or value`,
+      );
+    }
+    const source = metric.source as {
+      event: string;
+      filters?: PropertyFilter[];
+      value_property?: string;
+      agg?: 'sum' | 'avg' | 'min' | 'max' | 'p90';
+      data_source?: 'native' | 'posthog';
+      source_connection_id?: string;
+    };
+    const filters = [...(source.filters ?? []), ...input.filters];
+    const agg = metric.type === 'count'
+      ? ({ kind: 'count' } as const)
+      : metric.type === 'unique_actors'
+        ? ({ kind: 'unique_actors' } as const)
+        : ({ kind: 'value', property: source.value_property!, fn: source.agg ?? 'sum' } as const);
+    const dataSource = source.data_source ?? 'native';
+    let result: MetricAggregate;
+    if (dataSource === 'posthog') {
+      if (!this.posthog || !source.source_connection_id) {
+        throw badRequest('posthog_source_unavailable', 'the contract metric PostHog source is unavailable');
+      }
+      result = await this.posthog.aggregate({
+        projectId,
+        connectionId: source.source_connection_id,
+        metricKey: metric.key,
+        windowName: input.windowName,
+        event: source.event,
+        filters,
+        properties: input.properties,
+        agg: metric.type === 'unique_actors' ? 'unique_actors' : metric.type === 'count' ? 'count' : 'value',
+        from: input.from,
+        to: input.to,
+      });
+    } else {
+      result = await this.eventStore.metricAggregate({
+        projectId,
+        env: input.env,
+        event: source.event,
+        filters,
+        properties: input.properties,
+        agg,
+        from: input.from,
+        to: input.to,
+      });
+    }
+    return {
+      metric: {
+        key: metric.key,
+        name: metric.name,
+        purpose: metric.purpose,
+        category: metric.category,
+        type: metric.type,
+      },
+      source: dataSource,
+      query: {
+        kind: 'trend',
+        metric: metric.key,
+        date_from: input.from.toISOString(),
+        date_to: input.to.toISOString(),
+        interval: 'day',
+        filters: input.filters,
+        env: input.env,
+      },
+      aggregation: 'window_total',
+      result,
+    };
   }
 
   private async runUncached(projectId: string, q: QueryInput, now: Date): Promise<QueryResult> {
@@ -124,7 +219,13 @@ export class QueryService {
   private async eventSource(
     projectId: string,
     key: string,
-  ): Promise<{ event: string; filters: PropertyFilter[] }> {
+  ): Promise<{
+    event: string;
+    filters: PropertyFilter[];
+    dataSource: 'native' | 'posthog';
+    connectionId?: string;
+    metricKey: string;
+  }> {
     const metric = await getMetric(this.pool, projectId, key);
     if (metric.type === 'conversion' || metric.type === 'state') {
       throw badRequest(
@@ -133,8 +234,19 @@ export class QueryService {
         'use a count / unique_actors / value metric',
       );
     }
-    const source = metric.source as { event: string; filters?: PropertyFilter[] };
-    return { event: source.event, filters: source.filters ?? [] };
+    const source = metric.source as {
+      event: string;
+      filters?: PropertyFilter[];
+      data_source?: 'native' | 'posthog';
+      source_connection_id?: string;
+    };
+    return {
+      event: source.event,
+      filters: source.filters ?? [],
+      dataSource: source.data_source ?? 'native',
+      ...(source.source_connection_id ? { connectionId: source.source_connection_id } : {}),
+      metricKey: metric.key,
+    };
   }
 
   private async trend(projectId: string, q: TrendQueryInput, now: Date): Promise<QueryResult> {
@@ -164,7 +276,7 @@ export class QueryService {
       return {
         kind: 'trend',
         series: [{ bucket: now.toISOString(), value: count }],
-        meta: meta({ note: 'state metrics are snapshots of current entity state, not time series' }),
+        meta: meta({ source: 'native', note: 'state metrics are snapshots of current entity state, not time series' }),
       };
     }
 
@@ -173,7 +285,35 @@ export class QueryService {
       filters?: PropertyFilter[];
       value_property?: string;
       agg?: 'sum' | 'avg' | 'min' | 'max' | 'p90';
+      data_source?: 'native' | 'posthog';
+      source_connection_id?: string;
     };
+    if (source.data_source === 'posthog') {
+      if (!source.source_connection_id || !this.posthog) {
+        throw badRequest(
+          'posthog_source_unavailable',
+          'this metric references a PostHog source that is not available',
+          'configure the source connection and server encryption key',
+        );
+      }
+      const series = await this.posthog.trend({
+        projectId,
+        connectionId: source.source_connection_id,
+        metricKey: metric.key,
+        event: source.event,
+        filters: [...(source.filters ?? []), ...q.filters],
+        agg: metric.type === 'unique_actors'
+          ? 'unique_actors'
+          : metric.type === 'count'
+            ? 'count'
+            : 'value',
+        from,
+        to,
+        interval: q.interval,
+        ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
+      });
+      return { kind: 'trend', series, meta: meta({ source: 'posthog' }) };
+    }
     const agg =
       metric.type === 'count'
         ? ({ kind: 'count' } as const)
@@ -185,14 +325,14 @@ export class QueryService {
       projectId,
       env: q.env,
       event: source.event,
-      filters: source.filters ?? [],
+      filters: [...(source.filters ?? []), ...q.filters],
       agg,
       from,
       to,
       interval: q.interval,
       ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
     });
-    return { kind: 'trend', series, meta: meta() };
+    return { kind: 'trend', series, meta: meta({ source: 'native' }) };
   }
 
   private async funnel(projectId: string, q: FunnelQueryInput, now: Date): Promise<QueryResult> {
@@ -237,17 +377,59 @@ export class QueryService {
       }
     }
 
-    const counts = await this.eventStore.funnel({
-      projectId,
-      env: q.env,
-      windowSeconds,
-      from,
-      to,
-      steps: stepDefs.map(({ metric }) => {
-        const source = metric.source as { event: string; filters?: PropertyFilter[] };
-        return { event: source.event, filters: source.filters ?? [] };
-      }),
+    const sources = stepDefs.map(({ metric }) => {
+      const source = metric.source as {
+        event: string;
+        filters?: PropertyFilter[];
+        data_source?: 'native' | 'posthog';
+        source_connection_id?: string;
+      };
+      return {
+        event: source.event,
+        filters: source.filters ?? [],
+        dataSource: source.data_source ?? 'native',
+        connectionId: source.source_connection_id,
+      };
     });
+    const sourceKinds = new Set(sources.map((source) => source.dataSource));
+    if (sourceKinds.size > 1) {
+      throw badRequest(
+        'mixed_funnel_sources',
+        'a funnel cannot mix native and PostHog event stores',
+        'map every step to the same source before comparing actors',
+      );
+    }
+    let counts: number[];
+    let resultSource: 'native' | 'posthog' = 'native';
+    if (sources[0]?.dataSource === 'posthog') {
+      const connectionIds = new Set(sources.map((source) => source.connectionId));
+      const connectionId = sources[0].connectionId;
+      if (!this.posthog || !connectionId || connectionIds.size !== 1) {
+        throw badRequest(
+          'posthog_source_unavailable',
+          'all PostHog funnel metrics must use one available connection',
+        );
+      }
+      counts = await this.posthog.funnel({
+        projectId,
+        connectionId,
+        metricKeys: stepDefs.map(({ metric }) => metric.key),
+        steps: sources.map(({ event, filters }) => ({ event, filters })),
+        windowSeconds,
+        from,
+        to,
+      });
+      resultSource = 'posthog';
+    } else {
+      counts = await this.eventStore.funnel({
+        projectId,
+        env: q.env,
+        windowSeconds,
+        from,
+        to,
+        steps: sources.map(({ event, filters }) => ({ event, filters })),
+      });
+    }
 
     const first = counts[0] ?? 0;
     return {
@@ -265,6 +447,7 @@ export class QueryService {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },
         sampling: null,
+        source: resultSource,
       },
     };
   }
@@ -274,7 +457,7 @@ export class QueryService {
     return {
       kind: 'entities',
       entities,
-      meta: { computed_at: now.toISOString(), sampling: null },
+      meta: { computed_at: now.toISOString(), sampling: null, source: 'native' },
     };
   }
 
@@ -288,12 +471,42 @@ export class QueryService {
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
 
-    const cohorts = await this.eventStore.retention({
-      projectId, env: q.env,
-      startEvent: start.event, startFilters: start.filters,
-      returnEvent: returnSource.event, returnFilters: returnSource.filters,
-      interval: q.interval, periods: q.periods, from, to,
-    });
+    if (start.dataSource !== returnSource.dataSource) {
+      throw badRequest(
+        'mixed_retention_sources',
+        'retention start and return metrics must use the same event store',
+      );
+    }
+    let cohorts: RetentionCohort[];
+    let resultSource: 'native' | 'posthog' = 'native';
+    if (start.dataSource === 'posthog') {
+      if (!this.posthog || !start.connectionId || start.connectionId !== returnSource.connectionId) {
+        throw badRequest(
+          'posthog_source_unavailable',
+          'PostHog retention metrics must use one available connection',
+        );
+      }
+      cohorts = await this.posthog.retention({
+        projectId,
+        connectionId: start.connectionId,
+        startMetricKey: start.metricKey,
+        returnMetricKey: returnSource.metricKey,
+        start: { event: start.event, filters: start.filters },
+        returning: { event: returnSource.event, filters: returnSource.filters },
+        interval: q.interval,
+        periods: q.periods,
+        from,
+        to,
+      });
+      resultSource = 'posthog';
+    } else {
+      cohorts = await this.eventStore.retention({
+        projectId, env: q.env,
+        startEvent: start.event, startFilters: start.filters,
+        returnEvent: returnSource.event, returnFilters: returnSource.filters,
+        interval: q.interval, periods: q.periods, from, to,
+      });
+    }
 
     const censored = cohorts.some((c) => c.mature_periods < q.periods);
     const baseNote = q.return_metric && q.return_metric !== q.start_metric
@@ -310,6 +523,7 @@ export class QueryService {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },
         sampling: null,
+        source: resultSource,
         note: censored
           ? `${baseNote}. Recent cohorts are right-censored: only the first \`mature_periods\` of each are fully observed — later periods read 0 because that time hasn't elapsed yet, not because actors churned.`
           : baseNote,
@@ -319,6 +533,13 @@ export class QueryService {
 
   private async lifecycle(projectId: string, q: LifecycleQueryInput, now: Date): Promise<QueryResult> {
     const src = await this.eventSource(projectId, q.metric);
+    if (src.dataSource === 'posthog') {
+      throw badRequest(
+        'posthog_capability_unsupported',
+        'the P0 PostHog adapter does not support lifecycle queries',
+        'use trend, funnel or basic retention',
+      );
+    }
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
     const series = await this.eventStore.lifecycle({
@@ -332,6 +553,7 @@ export class QueryService {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },
         sampling: null,
+        source: 'native',
         note: 'actors first seen inside the window count as "new" (no pre-window lookback)',
       },
     };
@@ -339,6 +561,13 @@ export class QueryService {
 
   private async stickiness(projectId: string, q: StickinessQueryInput, now: Date): Promise<QueryResult> {
     const src = await this.eventSource(projectId, q.metric);
+    if (src.dataSource === 'posthog') {
+      throw badRequest(
+        'posthog_capability_unsupported',
+        'the P0 PostHog adapter does not support stickiness queries',
+        'use trend, funnel or basic retention',
+      );
+    }
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
     const bins = await this.eventStore.stickiness({
@@ -352,6 +581,7 @@ export class QueryService {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },
         sampling: null,
+        source: 'native',
       },
     };
   }
@@ -368,7 +598,7 @@ export class QueryService {
       surface: { key: surface.key, name: surface.name, purpose: surface.purpose, status: surface.status },
       grid: q.grid,
       ...result,
-      meta: { computed_at: now.toISOString(), date_range: { from: from.toISOString(), to: to.toISOString() }, sampling: null },
+      meta: { computed_at: now.toISOString(), date_range: { from: from.toISOString(), to: to.toISOString() }, sampling: null, source: 'native' },
     };
   }
 
@@ -390,7 +620,7 @@ export class QueryService {
         max_scroll_depth: events.reduce((max, event) => event.kind === 'scroll_depth' ? Math.max(max, event.depth ?? 0) : max, 0),
         client_errors: events.filter((event) => event.kind === 'client_error').length,
       },
-      meta: { computed_at: now.toISOString(), date_range: { from: from.toISOString(), to: to.toISOString() }, sampling: null },
+      meta: { computed_at: now.toISOString(), date_range: { from: from.toISOString(), to: to.toISOString() }, sampling: null, source: 'native' },
     };
   }
 }
