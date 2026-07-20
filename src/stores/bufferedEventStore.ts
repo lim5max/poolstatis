@@ -16,6 +16,10 @@ import type {
   InteractionMapQuery,
   InteractionMapResult,
   LifecyclePoint,
+  MeasurementCoverage,
+  MeasurementCoverageQuery,
+  MetricAggregate,
+  MetricAggregateQuery,
   RawEvent,
   RetentionCohort,
   RetentionQuery,
@@ -171,6 +175,14 @@ export class BufferedEventStore implements EventStore {
 
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]> {
     return this.inner.eventStats(q);
+  }
+
+  measurementCoverage(q: MeasurementCoverageQuery): Promise<MeasurementCoverage> {
+    return this.inner.measurementCoverage(q);
+  }
+
+  metricAggregate(q: MetricAggregateQuery): Promise<MetricAggregate> {
+    return this.inner.metricAggregate(q);
   }
 
   entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]> {

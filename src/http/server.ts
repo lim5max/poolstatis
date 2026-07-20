@@ -31,15 +31,37 @@ import {
 import {
   archiveExperienceSurface, captureExperienceEvents, createExperienceSurface, listExperienceSurfaces,
 } from '../services/experience.js';
+import { createActorLink, listActorLinks, revokeActorLink } from '../services/identity.js';
+import {
+  createPropertyDefinition, listPropertyDefinitions, updatePropertyDefinition,
+  type PropertyDefinition,
+} from '../services/properties.js';
+import { assessMeasurementTrust } from '../services/measurementTrust.js';
+import {
+  applyDeclaration, diffDeclaration, exportDeclaration, getContract, listContracts,
+  validateDeclaration,
+} from '../services/contracts.js';
+import { getRelease, listReleases, registerRelease, transitionRelease } from '../services/releases.js';
+import { evaluateRelease } from '../services/evaluation.js';
+import { getDecision, listDecisions, reviseDecision } from '../services/decisions.js';
+import { explainDecision, listDecisionExplanations } from '../services/explanations.js';
+import {
+  approveAction, getAction, listActions, prepareAction, rejectAction, retryAction,
+} from '../services/actions.js';
+import { getDecisionInbox } from '../services/webhooks.js';
+import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
+import {
+  acknowledgeOnboardingGate, getOnboardingStatus, recordAgentObservation, recordQueryRun,
+} from '../services/onboarding.js';
 import { parseDateInput } from '../dates.js';
 import {
   RateLimitExceeded, TenantRateLimiter, type TenantRateLimitOptions,
 } from '../services/rateLimiter.js';
 import {
-  deprecateMetricSchema,
-  concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
-  querySchema, registerEntityTypeSchema, registerMetricSchema, updateMetricSchema, type PropertyFilter,
-  updateExperimentSchema, updateFeatureFlagSchema,
+  deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
+  actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
+  querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
+  updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -56,6 +78,7 @@ export interface ServerOptions {
   ingestBuffer?: CreateContextOptions['ingestBuffer'];
   queryCache?: CreateContextOptions['queryCache'];
   rateLimit?: TenantRateLimitOptions | false;
+  connectorEncryptionKey?: string;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -97,6 +120,15 @@ function parseBoundedInt(raw: string | undefined, fallback: number, min: number,
   return n;
 }
 
+function parseOptionalDate(raw: string | undefined, name: string): string | undefined {
+  if (raw === undefined) return undefined;
+  const value = new Date(raw);
+  if (Number.isNaN(value.getTime())) {
+    throw badRequest('invalid_query_param', `${name} must be an ISO date-time`);
+  }
+  return value.toISOString();
+}
+
 /** Parse a `key:op:value` query token into a validated PropertyFilter. */
 function parsePropFilter(token: string): PropertyFilter {
   const m = /^([^:]+):([^:]+):?([\s\S]*)$/.exec(token);
@@ -118,6 +150,9 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   const contextOptions: CreateContextOptions = {};
   if (options.ingestBuffer !== undefined) contextOptions.ingestBuffer = options.ingestBuffer;
   if (options.queryCache !== undefined) contextOptions.queryCache = options.queryCache;
+  if (options.connectorEncryptionKey !== undefined) {
+    contextOptions.connectorEncryptionKey = options.connectorEncryptionKey;
+  }
   const ctx = createContext(pool, contextOptions);
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
   const rateLimiter = options.rateLimit === false || options.rateLimit === undefined
@@ -140,7 +175,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   void app.register(import('@fastify/cors'), {
     origin: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['authorization', 'content-type'],
+    allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
   });
 
   // Unauthenticated liveness probe the dashboard uses to check the base URL
@@ -752,7 +787,476 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const q = querySchema.parse(req.body);
-    return ctx.query.run(project.id, q);
+    const result = await ctx.query.run(project.id, q);
+    await recordQueryRun(ctx.pool, project.id, q.env, q, result, authOwner(req.auth));
+    return result;
+  });
+
+  app.post('/api/v1/projects/:slug/identity-links', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const link = await createActorLink(
+      ctx.pool,
+      project.id,
+      actorLinkSchema.parse(req.body),
+      authOwner(req.auth),
+    );
+    ctx.query.invalidateProject(project.id);
+    return reply.status(201).send(link);
+  });
+
+  app.get('/api/v1/projects/:slug/identity-links', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env = req.auth.env } = req.query as { env?: string };
+    return listActorLinks(ctx.pool, project.id, env);
+  });
+
+  app.post('/api/v1/projects/:slug/identity-links/:id/revoke', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const link = await revokeActorLink(ctx.pool, project.id, id, authOwner(req.auth));
+    ctx.query.invalidateProject(project.id);
+    return link;
+  });
+
+  app.post('/api/v1/projects/:slug/onboarding/observe-agent', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    if (req.headers['x-poolstatis-client'] !== 'mcp') {
+      throw badRequest(
+        'mcp_observation_required',
+        'agent connection is recorded only from a real MCP-originated call',
+        'call get_onboarding_status through the configured MCP client',
+      );
+    }
+    const body = req.body as { client?: string; env?: string };
+    const client = body?.client?.trim();
+    const env = body?.env?.trim() || req.auth.env;
+    if (!client || client.length > 100) {
+      throw badRequest('validation_error', 'client must be a non-empty identifier up to 100 characters');
+    }
+    await recordAgentObservation(ctx.pool, project.id, env, client, authOwner(req.auth));
+    return { observed: true, client, env };
+  });
+
+  app.get('/api/v1/projects/:slug/onboarding/status', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env = req.auth.env } = req.query as { env?: string };
+    return getOnboardingStatus(ctx.pool, ctx.eventStore, project.id, env);
+  });
+
+  app.post('/api/v1/projects/:slug/onboarding/acknowledgements', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const body = req.body as { gate_key?: string; reason?: string; env?: string };
+    const gateKey = body?.gate_key?.trim();
+    const reason = body?.reason?.trim();
+    const env = body?.env?.trim() || req.auth.env;
+    if (!gateKey || !reason || reason.length < 10) {
+      throw badRequest(
+        'validation_error',
+        'gate_key and a reason of at least 10 characters are required',
+      );
+    }
+    await acknowledgeOnboardingGate(
+      ctx.pool,
+      project.id,
+      env,
+      gateKey,
+      reason,
+      authOwner(req.auth),
+    );
+    return { acknowledged: true, gate_key: gateKey, env };
+  });
+
+  app.post('/api/v1/projects/:slug/sources/posthog', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const connection = await ctx.posthog.configure(
+      project.id,
+      posthogConnectionSchema.parse(req.body),
+      authOwner(req.auth),
+    );
+    return reply.status(201).send(connection);
+  });
+
+  app.get('/api/v1/projects/:slug/sources', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { sources: await ctx.posthog.list(project.id) };
+  });
+
+  app.post('/api/v1/projects/:slug/sources/posthog/:id/verify', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return ctx.posthog.verify(project.id, id);
+  });
+
+  app.get('/api/v1/projects/:slug/sources/posthog/:id/schema', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return ctx.posthog.discoverSchema(project.id, id);
+  });
+
+  app.get('/api/v1/projects/:slug/sources/posthog/:id/sample', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const { event, limit } = req.query as { event?: string; limit?: string };
+    if (!event?.trim()) {
+      throw badRequest('validation_error', 'event is required for a bounded PostHog sample');
+    }
+    const parsedLimit = parseBoundedInt(limit, 20, 1, 100, 'limit');
+    return { events: await ctx.posthog.sample(project.id, id, event, parsedLimit) };
+  });
+
+  app.post('/api/v1/projects/:slug/properties', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const property = await createPropertyDefinition(
+      ctx.pool,
+      project.id,
+      propertyDefinitionSchema.parse(req.body),
+      authOwner(req.auth),
+    );
+    return reply.status(201).send(property);
+  });
+
+  app.get('/api/v1/projects/:slug/properties', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { scope, status } = req.query as { scope?: string; status?: string };
+    return {
+      properties: await listPropertyDefinitions(ctx.pool, project.id, {
+        ...(scope ? { scope } : {}),
+        ...(status ? { status } : {}),
+      }),
+    };
+  });
+
+  app.patch('/api/v1/projects/:slug/properties/:scope/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { scope, key } = req.params as { scope: string; key: string };
+    if (scope !== 'event' && scope !== 'actor' && scope !== 'entity') {
+      throw badRequest('invalid_property_scope', 'scope must be event, actor or entity');
+    }
+    return updatePropertyDefinition(
+      ctx.pool,
+      project.id,
+      scope as PropertyDefinition['scope'],
+      key,
+      updatePropertyDefinitionSchema.parse(req.body),
+    );
+  });
+
+  app.post('/api/v1/projects/:slug/measurement/trust', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return assessMeasurementTrust(
+      ctx.pool,
+      ctx.eventStore,
+      project.id,
+      measurementTrustSchema.parse(req.body),
+      ctx.posthog,
+    );
+  });
+
+  app.post('/api/v1/projects/:slug/contracts/validate', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return validateDeclaration(
+      ctx.pool,
+      project.id,
+      measurementDeclarationSchema.parse(req.body),
+    );
+  });
+
+  app.post('/api/v1/projects/:slug/contracts/diff', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return diffDeclaration(
+      ctx.pool,
+      project.id,
+      measurementDeclarationSchema.parse(req.body),
+    );
+  });
+
+  app.post('/api/v1/projects/:slug/contracts/apply', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const body = applyMeasurementDeclarationSchema.parse(req.body);
+    return applyDeclaration(ctx.pool, project.id, body.declaration, {
+      confirmExistingChanges: body.confirm_existing_changes,
+      ...(body.expected_revision ? { expectedRevision: body.expected_revision } : {}),
+      actor: authOwner(req.auth),
+    });
+  });
+
+  app.get('/api/v1/projects/:slug/contracts', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { contracts: await listContracts(ctx.pool, project.id) };
+  });
+
+  app.get('/api/v1/projects/:slug/contracts/export', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return {
+      filename: 'poolstatis.yml',
+      yaml: await exportDeclaration(ctx.pool, project.id),
+    };
+  });
+
+  app.post('/api/v1/projects/:slug/contracts/similar', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { changes: await similarPastChanges(ctx.pool, project.id, measurementDeclarationSchema.parse(req.body)) };
+  });
+
+  app.get('/api/v1/projects/:slug/contracts/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return getContract(ctx.pool, project.id, key);
+  });
+
+  app.post('/api/v1/projects/:slug/releases', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const release = await registerRelease(
+      ctx.pool,
+      project.id,
+      registerReleaseSchema.parse(req.body),
+      authOwner(req.auth),
+    );
+    return reply.status(release.idempotent ? 200 : 201).send(release);
+  });
+
+  app.get('/api/v1/projects/:slug/releases', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env, status, contract_key, experiment_key, originating_decision_id } = req.query as {
+      env?: string; status?: string; contract_key?: string; experiment_key?: string; originating_decision_id?: string;
+    };
+    return {
+      releases: await listReleases(ctx.pool, project.id, {
+        ...(env ? { env } : {}),
+        ...(status ? { status } : {}),
+        ...(contract_key ? { contractKey: contract_key } : {}),
+        ...(experiment_key ? { experimentKey: experiment_key } : {}),
+        ...(originating_decision_id ? { originatingDecisionId: originating_decision_id } : {}),
+      }),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/releases/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return getRelease(ctx.pool, project.id, id);
+  });
+
+  app.post('/api/v1/projects/:slug/releases/:id/transition', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return transitionRelease(
+      ctx.pool,
+      project.id,
+      id,
+      transitionReleaseSchema.parse(req.body),
+      authOwner(req.auth),
+    );
+  });
+
+  app.post('/api/v1/projects/:slug/releases/:id/evaluate', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const result = await evaluateRelease(
+      ctx.pool,
+      ctx.query,
+      project.id,
+      id,
+      authOwner(req.auth),
+    );
+    return reply.status(result.idempotent ? 200 : 201).send(result);
+  });
+
+  app.get('/api/v1/projects/:slug/decisions', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { status, release_id } = req.query as { status?: string; release_id?: string };
+    return {
+      decisions: await listDecisions(ctx.pool, project.id, {
+        ...(status ? { status } : {}),
+        ...(release_id ? { releaseId: release_id } : {}),
+      }),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/decisions/search', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const query = req.query as Record<string, string | undefined>;
+    return searchDecisionHistory(ctx.pool, project.id, {
+      ...(query.metric ? { metric: query.metric } : {}),
+      ...(query.tag ? { tag: query.tag } : {}),
+      ...(query.owner ? { owner: query.owner } : {}),
+      ...(query.contract ? { contract: query.contract } : {}),
+      ...(query.experiment ? { experiment: query.experiment } : {}),
+      ...(query.status && ['proposed', 'approved', 'rejected'].includes(query.status)
+        ? { status: query.status as 'proposed' | 'approved' | 'rejected' }
+        : {}),
+      ...(query.from ? { from: parseOptionalDate(query.from, 'from')! } : {}),
+      ...(query.to ? { to: parseOptionalDate(query.to, 'to')! } : {}),
+      ...(query.limit ? { limit: parseBoundedInt(query.limit, 50, 1, 100, 'limit') } : {}),
+      ...(query.cursor ? { cursor: query.cursor } : {}),
+    });
+  });
+
+  app.get('/api/v1/projects/:slug/decisions/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return getDecision(ctx.pool, project.id, id);
+  });
+
+  app.post('/api/v1/projects/:slug/decisions/:id/approve', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const { rationale } = reviewDecisionSchema.parse(req.body);
+    return reviseDecision(ctx.pool, project.id, id, { action: 'approve', rationale }, authOwner(req.auth));
+  });
+
+  app.post('/api/v1/projects/:slug/decisions/:id/reject', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const { rationale } = reviewDecisionSchema.parse(req.body);
+    return reviseDecision(ctx.pool, project.id, id, { action: 'reject', rationale }, authOwner(req.auth));
+  });
+
+  app.post('/api/v1/projects/:slug/decisions/:id/edit', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const { outcome, rationale } = editDecisionSchema.parse(req.body);
+    return reviseDecision(
+      ctx.pool,
+      project.id,
+      id,
+      { action: 'edit', outcome, rationale },
+      authOwner(req.auth),
+    );
+  });
+
+  app.post('/api/v1/projects/:slug/decisions/:id/explain', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const result = await explainDecision(ctx.pool, ctx.query, project.id, id, authOwner(req.auth));
+    return reply.status(result.idempotent ? 200 : 201).send(result.explanation);
+  });
+
+  app.get('/api/v1/projects/:slug/decisions/:id/explanations', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return { explanations: await listDecisionExplanations(ctx.pool, project.id, id) };
+  });
+
+  app.post('/api/v1/projects/:slug/decisions/:id/actions', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const result = await prepareAction(
+      ctx.pool, project.id, id, prepareDecisionActionSchema.parse(req.body), authOwner(req.auth),
+    );
+    return reply.status(result.idempotent ? 200 : 201).send(result.detail);
+  });
+
+  app.get('/api/v1/projects/:slug/decisions/:id/actions', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return { actions: await listActions(ctx.pool, project.id, { decisionId: id }) };
+  });
+
+  app.get('/api/v1/projects/:slug/actions/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return getAction(ctx.pool, project.id, id);
+  });
+
+  app.post('/api/v1/projects/:slug/actions/:id/approve', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const body = approveDecisionActionSchema.parse(req.body);
+    return approveAction(ctx.pool, project.id, id, body.confirmation_fingerprint, authOwner(req.auth), {
+      enqueueWebhook: (input) => ctx.webhooks.enqueueAction(input),
+    });
+  });
+
+  app.post('/api/v1/projects/:slug/actions/:id/reject', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const body = rejectDecisionActionSchema.parse(req.body);
+    return rejectAction(ctx.pool, project.id, id, body.rationale, authOwner(req.auth));
+  });
+
+  app.post('/api/v1/projects/:slug/actions/:id/retry', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return retryAction(ctx.pool, project.id, id, authOwner(req.auth), {
+      enqueueWebhook: (input) => ctx.webhooks.enqueueAction(input),
+    });
+  });
+
+  app.post('/api/v1/projects/:slug/webhooks', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const destination = await ctx.webhooks.configure(
+      project.id, webhookDestinationSchema.parse(req.body), authOwner(req.auth),
+    );
+    return reply.status(201).send(destination);
+  });
+
+  app.get('/api/v1/projects/:slug/webhooks', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { destinations: await ctx.webhooks.list(project.id) };
+  });
+
+  app.post('/api/v1/projects/:slug/webhooks/:id/test', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return reply.status(202).send(await ctx.webhooks.enqueueTest(project.id, id, authOwner(req.auth)));
+  });
+
+  app.get('/api/v1/projects/:slug/webhook-deliveries', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { limit } = req.query as { limit?: string };
+    return { deliveries: await ctx.webhooks.listDeliveries(project.id, parseBoundedInt(limit, 100, 1, 100, 'limit')) };
+  });
+
+  app.get('/api/v1/projects/:slug/decision-inbox', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { decisions: await getDecisionInbox(ctx.pool, project.id) };
   });
 
   app.get('/api/v1/projects/:slug/events/sample', async (req) => {

@@ -10,12 +10,17 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
+  actorLinkSchema,
+  applyMeasurementDeclarationSchema,
   concludeExperimentSchema, createExperimentSchema,
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
   experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
+  editDecisionSchema, measurementDeclarationSchema, posthogConnectionSchema, propertyDefinitionSchema,
+  approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
+  registerReleaseSchema, reviewDecisionSchema,
   retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
-  updateMetricSchema,
+  updateMetricSchema, updatePropertyDefinitionSchema,
 } from '../schemas.js';
 import { INSTRUMENTATION_STANDARD } from './standard.js';
 
@@ -32,6 +37,7 @@ async function api(method: string, path: string, body?: unknown): Promise<unknow
     method,
     headers: {
       authorization: `Bearer ${TOKEN}`,
+      'x-poolstatis-client': 'mcp',
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -106,6 +112,310 @@ jsonTool(
   'Everything about a project in one read: registered metrics, funnels, entity types, and actual event names seen in the last 30 days with their registered share. Read this before registering anything.',
   { project, env: z.string().default('prod') },
   wrap(({ project: slug, env }) => api('GET', `/api/v1/projects/${slug}/schema?env=${encodeURIComponent(env)}`)),
+);
+
+jsonTool(
+  'get_onboarding_status',
+  'Read evidence-backed setup gates and the first real decision result. This call also proves that the configured MCP client reached the project; copied configuration alone does not complete the agent gate.',
+  { project, env: z.string().default('prod') },
+  wrap(async ({ project: slug, env }) => {
+    await api('POST', `/api/v1/projects/${slug}/onboarding/observe-agent`, {
+      client: 'poolstatis-mcp',
+      env,
+    });
+    return api('GET', `/api/v1/projects/${slug}/onboarding/status?env=${encodeURIComponent(env)}`);
+  }),
+);
+
+// ===== Measurement trust =====
+
+jsonTool(
+  'create_actor_link',
+  'Link an anonymous or superseded distinct_id to one stable actor. Links are environment-scoped, cycle-checked and audited; use the target as the durable identity.',
+  { project, link: actorLinkSchema },
+  wrap(({ project: slug, link }) => api('POST', `/api/v1/projects/${slug}/identity-links`, link)),
+);
+
+jsonTool(
+  'list_actor_links',
+  'List identity links and their append-only audit history for one environment.',
+  { project, env: z.string().default('prod') },
+  wrap(({ project: slug, env }) => api('GET', `/api/v1/projects/${slug}/identity-links?env=${encodeURIComponent(env)}`)),
+);
+
+jsonTool(
+  'revoke_actor_link',
+  'Revoke an incorrect identity link without deleting its audit history.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('POST', `/api/v1/projects/${slug}/identity-links/${id}/revoke`)),
+);
+
+jsonTool(
+  'register_property',
+  'Register the meaning, type and decision purpose of an event, actor or entity property. New definitions start proposed until reviewed.',
+  { project, property: propertyDefinitionSchema },
+  wrap(({ project: slug, property }) => api('POST', `/api/v1/projects/${slug}/properties`, property)),
+);
+
+jsonTool(
+  'list_properties',
+  'List semantic property definitions, optionally filtered by scope or trust status.',
+  {
+    project,
+    scope: z.enum(['event', 'actor', 'entity']).optional(),
+    status: z.enum(['proposed', 'trusted', 'untrusted']).optional(),
+  },
+  wrap(({ project: slug, scope, status }) => {
+    const qs = new URLSearchParams();
+    if (scope) qs.set('scope', scope);
+    if (status) qs.set('status', status);
+    return api('GET', `/api/v1/projects/${slug}/properties${qs.size ? `?${qs}` : ''}`);
+  }),
+);
+
+jsonTool(
+  'update_property',
+  'Refine a property definition or mark it trusted/untrusted after checking real evidence.',
+  {
+    project,
+    scope: z.enum(['event', 'actor', 'entity']),
+    key: z.string().min(1),
+    patch: updatePropertyDefinitionSchema,
+  },
+  wrap(({ project: slug, scope, key, patch }) => api(
+    'PATCH',
+    `/api/v1/projects/${slug}/properties/${scope}/${encodeURIComponent(key)}`,
+    patch,
+  )),
+);
+
+jsonTool(
+  'configure_posthog',
+  'Configure a bounded read-only PostHog source. The personal API key is write-only, encrypted at rest and never returned.',
+  { project, connection: posthogConnectionSchema },
+  wrap(({ project: slug, connection }) => api('POST', `/api/v1/projects/${slug}/sources/posthog`, connection)),
+);
+
+jsonTool(
+  'verify_posthog',
+  'Verify PostHog credentials and persist supported read-only capabilities.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('POST', `/api/v1/projects/${slug}/sources/posthog/${id}/verify`, {})),
+);
+
+jsonTool(
+  'get_posthog_schema',
+  'Discover the bounded event and property schema visible through a configured PostHog connection.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/sources/posthog/${id}/schema`)),
+);
+
+// ===== Product decision loop =====
+
+jsonTool(
+  'validate_measurement_contracts',
+  'Validate a repository-owned poolstatis.yml declaration against live metric, property, flag and experiment semantics without mutating the project.',
+  { project, declaration: measurementDeclarationSchema },
+  wrap(({ project: slug, declaration }) => api('POST', `/api/v1/projects/${slug}/contracts/validate`, declaration)),
+);
+
+jsonTool(
+  'diff_measurement_contracts',
+  'Compute a deterministic contract diff and expected_revision without mutating runtime state. Review this before apply.',
+  { project, declaration: measurementDeclarationSchema },
+  wrap(({ project: slug, declaration }) => api('POST', `/api/v1/projects/${slug}/contracts/diff`, declaration)),
+);
+
+jsonTool(
+  'apply_measurement_contracts',
+  'Apply a validated poolstatis.yml declaration. Existing active contract changes require confirm_existing_changes=true and the exact expected_revision from diff.',
+  {
+    project,
+    declaration: measurementDeclarationSchema,
+    confirm_existing_changes: applyMeasurementDeclarationSchema.shape.confirm_existing_changes,
+    expected_revision: applyMeasurementDeclarationSchema.shape.expected_revision,
+  },
+  wrap(({ project: slug, ...body }) => api('POST', `/api/v1/projects/${slug}/contracts/apply`, body)),
+);
+
+jsonTool(
+  'list_measurement_contracts',
+  'List the current runtime measurement contracts. Postgres is runtime truth; poolstatis.yml is the versioned declaration.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/contracts`)),
+);
+
+jsonTool(
+  'get_measurement_contract',
+  'Read one measurement contract and its immutable revision history.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api('GET', `/api/v1/projects/${slug}/contracts/${encodeURIComponent(key)}`)),
+);
+
+jsonTool(
+  'export_measurement_contracts',
+  'Export the byte-stable repository declaration as poolstatis.yml. Secrets and evaluated results are never included.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/contracts/export`)),
+);
+
+jsonTool(
+  'register_release',
+  'Register immutable change provenance in one CI/MCP call. Exact retries return the same fact; a redeploy or rollback must use a new idempotency_key.',
+  { project, release: registerReleaseSchema },
+  wrap(({ project: slug, release }) => api('POST', `/api/v1/projects/${slug}/releases`, release)),
+);
+
+jsonTool(
+  'list_releases',
+  'List project releases and their current observation state.',
+  {
+    project,
+    env: z.string().optional(),
+    status: z.enum(['planned', 'deployed', 'observing', 'decided', 'cancelled']).optional(),
+    contract_key: z.string().optional(),
+    experiment_key: z.string().optional(),
+    originating_decision_id: z.string().uuid().optional(),
+  },
+  wrap(({ project: slug, env, status, contract_key, experiment_key, originating_decision_id }) => {
+    const qs = new URLSearchParams();
+    if (env) qs.set('env', env);
+    if (status) qs.set('status', status);
+    if (contract_key) qs.set('contract_key', contract_key);
+    if (experiment_key) qs.set('experiment_key', experiment_key);
+    if (originating_decision_id) qs.set('originating_decision_id', originating_decision_id);
+    return api('GET', `/api/v1/projects/${slug}/releases${qs.size ? `?${qs}` : ''}`);
+  }),
+);
+
+jsonTool(
+  'get_release',
+  'Read one release plus its append-only transition history and frozen contract revision.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/releases/${id}`)),
+);
+
+jsonTool(
+  'evaluate_release',
+  'Evaluate baseline versus observed windows, persist immutable facts and trust, and propose keep/fix/rollback/inconclusive. This never approves the action.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('POST', `/api/v1/projects/${slug}/releases/${id}/evaluate`, {})),
+);
+
+jsonTool(
+  'list_decisions',
+  'List evidence-backed decision proposals and human review status.',
+  {
+    project,
+    status: z.enum(['proposed', 'approved', 'rejected']).optional(),
+    release_id: z.string().uuid().optional(),
+  },
+  wrap(({ project: slug, status, release_id }) => {
+    const qs = new URLSearchParams();
+    if (status) qs.set('status', status);
+    if (release_id) qs.set('release_id', release_id);
+    return api('GET', `/api/v1/projects/${slug}/decisions${qs.size ? `?${qs}` : ''}`);
+  }),
+);
+
+jsonTool(
+  'get_decision',
+  'Read facts, interpretation, reproducible queries, frozen release/contract context and every review revision for one decision.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/decisions/${id}`)),
+);
+
+jsonTool(
+  'approve_decision',
+  'Approve the agent proposal with an explicit human rationale. Approval records an immutable revision; it does not execute an external action.',
+  { project, id: z.string().uuid(), rationale: reviewDecisionSchema.shape.rationale },
+  wrap(({ project: slug, id, rationale }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/approve`, { rationale })),
+);
+
+jsonTool(
+  'reject_decision',
+  'Reject the agent proposal with an explicit rationale while preserving the original proposal in audit history.',
+  { project, id: z.string().uuid(), rationale: reviewDecisionSchema.shape.rationale },
+  wrap(({ project: slug, id, rationale }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/reject`, { rationale })),
+);
+
+jsonTool(
+  'edit_decision',
+  'Approve a human-corrected outcome/rationale while preserving the prior agent proposal and rejection history.',
+  {
+    project,
+    id: z.string().uuid(),
+    outcome: editDecisionSchema.shape.outcome,
+    rationale: editDecisionSchema.shape.rationale,
+  },
+  wrap(({ project: slug, id, outcome, rationale }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/edit`, { outcome, rationale })),
+);
+
+jsonTool(
+  'explain_outcome',
+  'Rank bounded correlation hypotheses for an evidence-backed outcome. Measured facts remain separate, every candidate is labelled hypothesis, and this read creates no action.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/explain`, {})),
+);
+
+jsonTool(
+  'prepare_action',
+  'Prepare an exact, reversible follow-up action from a decision. Preparation never executes delivery, code, flag, deploy, or rollback work; it returns a confirmation fingerprint for human approval.',
+  { project, decision_id: z.string().uuid(), action: prepareDecisionActionSchema },
+  wrap(({ project: slug, decision_id, action }) => api('POST', `/api/v1/projects/${slug}/decisions/${decision_id}/actions`, action)),
+);
+
+jsonTool(
+  'approve_action',
+  'Execute only the exact previously prepared payload after human approval. The approval actor and fingerprint are audited; unsupported integrations stay inert.',
+  { project, id: z.string().uuid(), confirmation_fingerprint: approveDecisionActionSchema.shape.confirmation_fingerprint },
+  wrap(({ project: slug, id, confirmation_fingerprint }) => api('POST', `/api/v1/projects/${slug}/actions/${id}/approve`, { confirmation_fingerprint })),
+);
+
+jsonTool(
+  'get_decision_inbox',
+  'List product impact first: decisions needing a choice, waiting for trustworthy data, approved/rejected work, and resolved follow-ups.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/decision-inbox`)),
+);
+
+jsonTool(
+  'configure_webhook',
+  'Configure an encrypted generic webhook destination. The URL and optional authorization value are write-only and no delivery occurs until an explicit test.',
+  { project, destination: webhookDestinationSchema },
+  wrap(({ project: slug, destination }) => api('POST', `/api/v1/projects/${slug}/webhooks`, destination)),
+);
+
+jsonTool(
+  'verify_webhook',
+  'Queue an explicit idempotent test delivery. The destination becomes verified only after the durable outbox receives a successful response.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('POST', `/api/v1/projects/${slug}/webhooks/${id}/test`, {})),
+);
+
+jsonTool(
+  'search_decision_history',
+  'Search only this project decision memory by metric, feature tag, owner, review status, and time. Results preserve proposal-versus-human disagreement and label stale semantics.',
+  {
+    project,
+    metric: z.string().optional(), tag: z.string().optional(), owner: z.string().optional(),
+    contract: z.string().optional(), experiment: z.string().optional(),
+    status: z.enum(['proposed', 'approved', 'rejected']).optional(),
+    from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional(),
+    limit: z.number().int().min(1).max(100).default(50), cursor: z.string().optional(),
+  },
+  wrap(({ project: slug, ...filters }) => {
+    const qs = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value !== undefined) qs.set(key, String(value)); });
+    return api('GET', `/api/v1/projects/${slug}/decisions/search?${qs}`);
+  }),
+);
+
+jsonTool(
+  'find_similar_changes',
+  'Rank metadata-similar past changes inside this project only. Similarity is deterministic and is not cross-customer inference or causal evidence.',
+  { project, declaration: measurementDeclarationSchema },
+  wrap(({ project: slug, declaration }) => api('POST', `/api/v1/projects/${slug}/contracts/similar`, declaration)),
 );
 
 // ===== Registry (design-time) =====

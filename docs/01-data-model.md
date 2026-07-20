@@ -60,7 +60,10 @@ CREATE TABLE api_keys (
 
 ### Идентификация акторов
 
-`distinct_id` — внешний id из продукта. MVP-допущение: продукт присылает стабильный id (агент при инструментации это обеспечивает — это часть стандарта). Склейка anonymous→identified (alias-таблица, как в PostHog) сознательно отложена на этап 3: она сильно усложняет query-слой, а agent-инструментация позволяет требовать стабильный id с первого дня.
+`distinct_id` — внешний id из продукта. Стабильный id остаётся лучшим вариантом, но
+anonymous→identified flow поддерживается через `actor_links`. Связь ограничена project + env,
+проверяется на циклы/конфликты и может быть отозвана. События не переписываются: canonical
+actor вычисляется при чтении, а создание/отзыв попадают в append-only `actor_link_audit`.
 
 ## 3. Entities — «статичные» данные с состоянием
 
@@ -177,4 +180,25 @@ CREATE TABLE insights (
 );
 ```
 
-`manual` — сохранённые запросы/заметки через MCP; `auto` — продукция Insights Worker (этап 2). Дашборд в Poolstatis — это не отдельная сущность, а набор сохранённых запросов: агент пользователя строит дашборды на своей стороне из Query DSL, платформа хранит только определения.
+`manual` — сохранённые запросы/заметки через MCP; `auto` зарезервирован для автоматически
+сгенерированных insights. Evidence и decision proposals Product Decision Loop хранятся в
+отдельных audit-таблицах ниже, а не маскируются под insight. Дашборд в Poolstatis — не
+отдельная сущность: клиент или агент строит его на своей стороне из Query DSL.
+
+## 6. Product Decision Loop
+
+Decision Loop накладывает versioned product intent на аналитические примитивы:
+
+- `property_definitions` — тип, purpose и trust свойств, которыми фильтруется evidence;
+- `measurement_contracts` + revisions — runtime-копия `poolstatis.yml`, гипотеза, owner,
+  primary/guardrails, окна, sample threshold и expected effect;
+- `releases` + revisions — commit/deploy provenance и frozen contract snapshot;
+- `evidence_sets` — append-only baseline/observed facts, trust, blockers и exact Query DSL;
+- `decisions` + revisions — proposal отдельно от accepted human outcome;
+- `decision_explanations` — bounded correlation hypotheses, не causal claims;
+- `decision_actions` + audit — exact prepared payload, undo, fingerprint и approval state;
+- `evaluation_attempts` и `webhook_outbox` — restart-safe bounded workers и delivery history.
+
+Mutable current rows (`contracts`, `releases`, `decisions`, `actions`) имеют append-only
+revision/audit рядом. Evidence, audit и delivery attempts защищены от update/delete
+trigger-ами. Подробный lifecycle: [09-product-decision-loop.md](09-product-decision-loop.md).

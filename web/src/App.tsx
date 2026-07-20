@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { motion } from 'motion/react';
-import { LayoutGrid, List, Database, GridView, KeyRound, Settings, Target, ChevronsUpDown, Menu, X, type PoolstatisIcon } from '@/components/icons';
+import { LayoutGrid, List, Database, GridView, KeyRound, Settings, SystemSettings, Target, PackageBox, Check, ChevronsUpDown, Menu, X, type PoolstatisIcon } from '@/components/icons';
 import { auth0Enabled } from './auth0';
 import { useStore } from './store';
 import { Button } from '@/components/ui/button';
@@ -19,22 +19,30 @@ import { Person } from './screens/Person';
 import { Onboarding } from './screens/Onboarding';
 import { Experiments } from './screens/Experiments';
 import { Experience } from './screens/Experience';
+import { Measurement } from './screens/Measurement';
+import { Changes } from './screens/Changes';
+import { Decisions } from './screens/Decisions';
 
 type NavItem = { to: string; Icon: PoolstatisIcon; label: string; end?: boolean };
 const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   { label: 'Workspace', items: [{ to: '/', Icon: LayoutGrid, label: 'Projects', end: true }] },
   { label: 'Instrument', items: [
     { to: '/registry', Icon: List, label: 'Registry' },
+    { to: '/measurement', Icon: SystemSettings, label: 'Measurement' },
     { to: '/data', Icon: Database, label: 'Data' },
     { to: '/keys', Icon: KeyRound, label: 'Keys' },
     { to: '/experiments', Icon: Target, label: 'Experiments' },
     { to: '/experience', Icon: GridView, label: 'Experience' },
   ] },
+  { label: 'Decide', items: [
+    { to: '/changes', Icon: PackageBox, label: 'Changes' },
+    { to: '/decisions', Icon: Check, label: 'Decisions' },
+  ] },
   { label: 'System', items: [{ to: '/setup', Icon: Settings, label: 'Setup & MCP' }] },
 ];
-const TITLES: Record<string, string> = { '/': 'Projects', '/registry': 'Registry', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/setup': 'Setup & MCP' };
+const TITLES: Record<string, string> = { '/': 'Projects', '/registry': 'Registry', '/measurement': 'Measurement', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/changes': 'Changes', '/decisions': 'Decisions', '/setup': 'Setup & MCP' };
 const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' : TITLES[path] ?? 'Poolstatis');
-const isProjectScoped = (path: string) => path === '/' || path.startsWith('/registry') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience');
+const isProjectScoped = (path: string) => path === '/' || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
 
 export function App() {
   const { client } = useStore();
@@ -224,11 +232,14 @@ function Main() {
           <Route path="/" element={<Projects />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/registry" element={<Guarded><Registry /></Guarded>} />
+          <Route path="/measurement" element={<Guarded><Measurement /></Guarded>} />
           <Route path="/data" element={<Guarded><Data /></Guarded>} />
           <Route path="/data/person/:distinctId" element={<Guarded><Person /></Guarded>} />
           <Route path="/keys" element={<Guarded><Keys /></Guarded>} />
           <Route path="/experiments" element={<Guarded><Experiments /></Guarded>} />
           <Route path="/experience" element={<Guarded><Experience /></Guarded>} />
+          <Route path="/changes" element={<Guarded><Changes /></Guarded>} />
+          <Route path="/decisions" element={<Guarded><Decisions /></Guarded>} />
           <Route path="/setup" element={<Setup />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

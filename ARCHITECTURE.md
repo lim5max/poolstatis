@@ -2,81 +2,85 @@
 
 ## Принципы
 
-1. **Agent-native.** Основной интерфейс платформы — MCP и HTTP API. UI вторичен и появляется позже. Всё, что можно сделать в платформе, можно сделать тулом MCP.
-2. **Семантика обязательна.** Метрика не может существовать без поля `purpose` («зачем собирается»). Воронка не может существовать без поля `goal`. Это не документация «для галочки» — это вход для слоя инсайтов.
-3. **Schema-on-write с мягкой валидацией.** Ингест принимает любые события, но помечает каждое: соответствует реестру метрик или нет. Незарегистрированные события не теряются, а становятся сигналом «инструментация разъехалась со стандартом».
-4. **Хранилище за интерфейсом.** Код платформы не знает, лежат события в Postgres или ClickHouse. MVP стартует на одном Postgres; миграция data plane в ClickHouse — замена адаптера, не переписывание.
-5. **Никакого raw SQL наружу (пока).** Запросы — через структурированный Query DSL (trend / funnel / breakdown). Это безопасно в мультитенантной среде и не привязывает клиентов к диалекту БД.
+1. **Agent-native.** Основной интерфейс платформы — MCP и HTTP API. Headless admin нужен
+   для настройки, trust-аудита и human approval; аналитическое потребление остаётся у
+   агента и клиента.
+2. **Семантика обязательна.** Метрика не может существовать без `purpose`, воронка — без
+   `goal`, measurement contract — без бизнес-гипотезы и владельца решения.
+3. **Schema-on-write с мягкой валидацией.** Ингест принимает любые события, но помечает,
+   соответствуют ли они активному реестру. Незарегистрированные события сохраняются как
+   сигнал drift, а не теряются.
+4. **Хранилище за интерфейсом.** Все event reads/writes идут через `EventStore`. MVP
+   использует Postgres; будущий ClickHouse adapter не меняет внешний Query DSL.
+5. **Никакого raw SQL наружу.** Typed Query DSL сохраняет registry semantics, изоляцию
+   тенантов и независимость клиентов от диалекта БД.
+6. **Факты отдельно от интерпретации.** Release provenance и evidence append-only;
+   proposal, human decision и approval-gated action имеют отдельную audit history.
 
 ## Компоненты
 
-```
-┌──────────────┐   HTTP /i/v1/*    ┌─────────────┐
-│ Продукт      │ ────────────────► │  Ingest API │──┐
-│ (SDK/fetch)  │   ingest key      └─────────────┘  │ append
-└──────────────┘                                    ▼
-                                            ┌──────────────┐
-┌──────────────┐                            │ Event Store  │
-│ Агент Claude │   MCP (stdio/HTTP)         │ (PG → CH)    │
-│ в IDE юзера  │ ───────┐                   └──────────────┘
-└──────────────┘        ▼                           ▲ read
-                 ┌─────────────┐   internal   ┌─────┴────────┐
-                 │ MCP Server  │ ───────────► │ Platform API │
-                 └─────────────┘              └─────┬────────┘
-                                                    │ CRUD
-                                              ┌─────▼────────┐
-                                              │ Metadata DB  │
-                                              │ (Postgres)   │
-                                              │ projects,    │
-                                              │ metrics,     │
-                                              │ funnels,     │
-                                              │ entities     │
-                                              └──────────────┘
-                 ┌──────────────┐  cron: читает воронки+события,
-                 │ Insights     │  пишет находки в insights
-                 │ Worker       │ ◄── (этап 2)
-                 └──────────────┘
+```text
+Product SDK ── /i/v1/* ──► Ingest API ──► EventStore (Postgres adapter)
+                                              ▲
+Agent ── MCP ──► MCP Server ──► Platform API ──┤
+Headless admin ── HTTP ────────────────────────┘
+                                      │
+                                      ├──► Metadata + audit (Postgres)
+                                      ├──► Release monitor (bounded, restart-safe)
+                                      └──► Webhook outbox (encrypted destinations + retries)
 ```
 
-- **Ingest API** — приём событий и upsert сущностей. Авторизация по ingest-ключу (write-only, можно светить в клиентском коде). Валидирует против реестра метрик, ставит флаг `registered`.
-- **Platform API** — внутренний REST: CRUD метаданных + выполнение Query DSL. Авторизация по secret-ключу / personal token.
-- **MCP Server** — тонкая обёртка над Platform API + ресурсы (стандарт инструментации, живая схема проекта). Это то, что подключает к себе агент.
-- **Event Store** — append-only события. Адаптер: `PostgresEventStore` (MVP) → `ClickHouseEventStore`.
-- **Metadata DB** — Postgres: организации, проекты, ключи, типы сущностей, сущности, реестр метрик, воронки, инсайты.
-- **Insights Worker** — этап 2: фоновый процесс, который по семантике (purpose + goal воронок) считает конверсии, ищет аномалии и пишет находки.
+- **Ingest API** — приём событий и upsert сущностей по write-only `pk_`; сверяет события с
+  реестром, записывает `registered` и ingest warnings.
+- **Platform API** — registry/data CRUD, Query DSL, onboarding proof, measurement trust,
+  contracts, releases, evidence, decisions, actions и delivery audit.
+- **MCP Server** — typed agent surface над Platform API и нормативные instrumentation
+  resources. Реальный MCP-вызов также является server-derived onboarding evidence.
+- **EventStore** — узкий storage seam для append-only событий и typed аналитических reads.
+- **Metadata + audit DB** — проекты, ключи, entities, registry, actor links, contracts,
+  releases, evidence, decisions, actions, attempts и delivery history.
+- **Release monitor** — обрабатывает due releases по фиксированным окнам, сохраняет
+  immutable evidence и proposal, повторяет сбои с bounded backoff.
+- **Webhook outbox** — доставляет только явно одобренные sanitized payloads;
+  URL/Authorization зашифрованы, все попытки аудируются.
 
-## Тенантность
+## Тенантность и ключи
 
+```text
+Organization ──► Project ──► env (prod | dev | staging)
 ```
-Organization ─► Project ─► (env: prod | dev | staging)
-```
 
-- **Organization** — биллинг и команда.
-- **Project** — единица изоляции данных. Все таблицы data plane и реестр скоупятся по `project_id`.
-- **Environment** — не отдельная сущность, а атрибут ключа и события: ingest-ключ выпускается на env, события им помеченные получают этот env. Реестр метрик общий на проект (стандарт один, среды разные).
-
-Ключи:
+Project — единица изоляции data plane, metadata, decision memory и workers. `env` — атрибут
+ключа, события и audit-объекта, а не отдельная сущность. Реестр метрик общий для проекта.
 
 | Ключ | Префикс | Права | Где живёт |
 |------|---------|-------|-----------|
 | Ingest key | `pk_` | только запись событий/сущностей | клиентский код продукта |
-| Secret key | `sk_` | чтение + запись + CRUD метаданных | сервер продукта, CI |
-| Personal token | `pt_` | как secret, скоуп на несколько проектов | MCP-конфиг агента |
+| Secret key | `sk_` | read/manage одного проекта | сервер продукта, CI |
+| Personal token | `pt_` | read/manage проектов организации | MCP-конфиг агента |
 
-## Типы данных (4 примитива)
+## Данные и семантика
 
 | Примитив | Природа | Хранилище |
 |----------|---------|-----------|
-| **Event** | неизменяемый факт «что-то произошло» | Event Store |
-| **Entity** | изменяемый объект с текущим состоянием (user, account, …) | Metadata DB |
-| **Metric** | декларация в реестре: что считаем и **зачем** | Metadata DB |
-| **Funnel / Insight** | семантика верхнего уровня: последовательность метрик с целью; находки | Metadata DB |
+| **Event** | неизменяемый факт «что произошло» | EventStore |
+| **Entity** | изменяемое текущее состояние user/account/… | Metadata DB |
+| **Metric** | registry declaration: что считаем и зачем | Metadata DB |
+| **Funnel / Insight** | цель, последовательность метрик и воспроизводимая находка | Metadata DB |
 
-Подробные схемы — в [docs/01-data-model.md](docs/01-data-model.md).
+Product Decision Loop добавляет составные audit-объекты: measurement contract, release,
+evidence set, decision revision, explanation hypothesis и prepared action. Они не заменяют
+четыре аналитических примитива, а связывают их с конкретным изменением продукта.
 
-## Дорожная карта
+Подробные схемы: [docs/01-data-model.md](docs/01-data-model.md). Полный workflow:
+[docs/09-product-decision-loop.md](docs/09-product-decision-loop.md).
 
-1. **Этап 0 (этот документ):** архитектура и схемы.
-2. **Этап 1 — ядро:** Metadata DB + Ingest API + Platform API + MCP-сервер с реестром и базовым Query DSL (trend, funnel). Всё на одном Postgres.
-3. **Этап 2 — семантика в работе:** Insights Worker, стандарт инструментации как MCP-ресурс, скилы для агентов («как расставлять метрики»).
-4. **Этап 3 — масштаб:** ClickHouseEventStore, очередь перед ингестом, ретеншн-политики, дашборды как разделяемые артефакты.
+## Текущие границы
+
+- Runtime остаётся single-Postgres; process-local quota и workers не дают глобальной
+  координации между несколькими API replicas.
+- PostHog adapter read-only и bounded; raw import и caller-provided HogQL запрещены.
+- Static/dynamic cohorts и semantic materialized rollups ещё не реализованы.
+- ClickHouse/очередь вводятся только после измеренного превышения Postgres ceiling.
+
+Актуальные приоритеты: [docs/05-gap-analysis.md](docs/05-gap-analysis.md).

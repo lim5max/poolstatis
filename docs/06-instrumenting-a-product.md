@@ -157,6 +157,25 @@ first `$feature_flag_called` exposure itself and only counts outcomes that occur
 after it. Use the experiment result before concluding it; conclusion freezes the
 measurement window and records the decision rationale.
 
+### 2.2 Connect the change to a decision
+
+For a repository-owned change, keep the hypothesis in `poolstatis.yml`: contract key,
+decision owner, primary/guardrail metrics, target filters, baseline/observation windows and
+minimum meaningful effect. The safe flow is:
+
+1. run `validate_measurement_contracts` and `diff_measurement_contracts` in the product repo;
+2. review the diff, then apply with its `expected_revision`;
+3. after the real deploy, let CI call `register_release` with repository, commit SHA,
+   deploy time and an idempotency key;
+4. wait for the fixed window or call `evaluate_release`; inspect facts, trust and blockers;
+5. approve, reject or edit the proposal with a human rationale;
+6. prepare a follow-up action and approve its exact fingerprint separately if delivery is
+   actually desired.
+
+No onboarding checkbox, evaluation call or decision approval deploys code implicitly.
+The full lifecycle is documented in
+[09-product-decision-loop.md](09-product-decision-loop.md).
+
 **Other languages / no SDK** — POST directly (the same shape the SDK sends). Batch up to 500
 events and send a `batch_id` for idempotent retries:
 

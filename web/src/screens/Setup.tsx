@@ -2,20 +2,41 @@ import { useState } from 'react';
 import { Check, Copy } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import { MCP_CLIENTS, MCP_RUNNER, mcpClientById, mcpServerConfig, type McpClientId, type McpClientLogo } from '../mcpClients';
-import { Panel, Loading, DangerConfirm } from '../components/ui';
+import { Panel, Loading, DangerConfirm, ErrorNote } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import type { OnboardingGateKey } from '../api/types';
 
 const TOOLS = [
-  ['Context', ['list_projects', 'get_project_schema']],
+  ['Context', ['list_projects', 'get_project_schema', 'get_onboarding_status']],
+  ['Measurement trust', ['create_actor_link', 'list_actor_links', 'revoke_actor_link', 'register_property', 'list_properties', 'update_property']],
+  ['External sources', ['configure_posthog', 'verify_posthog', 'get_posthog_schema']],
+  ['Decision loop', ['validate_measurement_contracts', 'diff_measurement_contracts', 'apply_measurement_contracts', 'export_measurement_contracts', 'register_release', 'list_releases', 'get_release', 'evaluate_release', 'list_decisions', 'get_decision', 'approve_decision', 'reject_decision', 'edit_decision', 'explain_outcome', 'prepare_action', 'approve_action', 'get_decision_inbox', 'search_decision_history', 'find_similar_changes']],
+  ['Delivery', ['configure_webhook', 'verify_webhook']],
   ['Registry', ['register_metric', 'update_metric', 'deprecate_metric', 'explain_metric_usage', 'list_metrics', 'delete_metric', 'register_entity_type', 'define_funnel', 'list_funnels', 'delete_funnel']],
   ['Feature delivery', ['create_feature_flag', 'list_feature_flags', 'update_feature_flag', 'archive_feature_flag', 'evaluate_feature_flag', 'create_experiment', 'list_experiments', 'update_experiment', 'start_experiment', 'conclude_experiment', 'get_experiment_results']],
   ['Queries', ['query_trend', 'query_funnel', 'query_entities', 'query_retention', 'query_lifecycle', 'query_stickiness', 'sample_events']],
   ['Diagnostics', ['list_ingest_warnings', 'list_data_quality_issues']],
   ['Insights', ['list_insights', 'create_insight', 'resolve_insight']],
 ];
+
+const GATE_LABELS: Record<OnboardingGateKey, string> = {
+  workspace_created: 'Workspace created',
+  agent_connected: 'Agent connected',
+  data_source_connected: 'Data source connected',
+  first_event_observed: 'First real observation',
+  metrics_activated: 'Metrics reviewed and active',
+  data_quality_accepted: 'Data quality accepted',
+  first_query_produced: 'First query produced',
+  first_decision_saved: 'First decision saved',
+};
+
+function gateLabel(key: OnboardingGateKey) {
+  return GATE_LABELS[key];
+}
 
 export function Setup() {
   const { client, baseUrl, token, tokenKind, project, env } = useStore();
@@ -27,6 +48,10 @@ export function Setup() {
   const serverUrl = baseUrl || publicUrl;
   const slug = project ?? 'your-project';
   const std = useAsync(() => client!.standard(), []);
+  const proof = useAsync(
+    () => project ? client!.onboardingStatus(project, env) : Promise.resolve(null),
+    [project, env],
+  );
   const selectedClient = mcpClientById(clientId);
 
   const mcpToken = tokenKind === 'user' ? '<replace-with-pt-or-sk>' : token;
@@ -41,6 +66,16 @@ export function Setup() {
 
   return (
     <div className="space-y-4 max-w-4xl">
+      <SectionLabel>Proof of connection</SectionLabel>
+      <Panel title="Setup gates" right={proof.data ? <Badge variant={proof.data.complete ? 'default' : 'outline'}>{proof.data.complete ? 'complete' : 'in progress'}</Badge> : undefined}>
+        {!project ? <p className="text-sm text-muted-foreground">Select a project to inspect server-verified setup evidence.</p> : proof.loading ? <Loading what="checking setup evidence…" /> : proof.error ? <ErrorNote>{proof.error}</ErrorNote> : proof.data ? <div className="space-y-2">
+          {proof.data.gates.map((gate) => <div key={gate.key} className="flex flex-col gap-2 rounded-md border bg-muted/20 p-3 sm:flex-row sm:items-start">
+            <span className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border text-xs ${gate.complete ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600' : 'border-amber-500/40 bg-amber-500/10 text-amber-600'}`}>{gate.complete ? '✓' : '·'}</span>
+            <div className="min-w-0 flex-1"><div className="text-sm font-medium">{gateLabel(gate.key)}</div>{gate.blocker && <div className="mt-1 text-xs text-muted-foreground">{gate.blocker}</div>}{gate.next_action && <div className="mt-1 text-xs">Next: {gate.next_action}</div>}</div>
+          </div>)}
+          {proof.data.final_result && <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-4"><div className="text-sm font-medium">First real result · <code>{proof.data.final_result.metric_key}</code></div><div className="mt-1 text-xs text-muted-foreground">{proof.data.final_result.metric_purpose} · {proof.data.final_result.source} · {proof.data.final_result.query_window.from} → {proof.data.final_result.query_window.to}</div><div className="mt-2 text-sm">Next: {proof.data.final_result.next_action}</div></div>}
+        </div> : null}
+      </Panel>
       <SectionLabel>Connection</SectionLabel>
       <Panel title="Key map">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
@@ -126,6 +161,7 @@ export function Setup() {
         <p className="text-muted-foreground text-sm mb-3.5">Issue an ingest key (<code>pk_</code>) on the Keys tab — write-only, safe in client code. It encodes the project and env.</p>
         <CodeBlock code={ingestCurl} />
       </Panel>
+      {project && <WebhookSetup project={project} />}
 
       <SectionLabel>MCP tools the agent gets</SectionLabel>
       <Panel>
@@ -149,6 +185,36 @@ export function Setup() {
       <DangerZone slug={slug} env={env} />
     </div>
   );
+}
+
+function WebhookSetup({ project }: { project: string }) {
+  const { client } = useStore();
+  const destinations = useAsync(() => client!.webhookDestinations(project), [project]);
+  const [name, setName] = useState('product_ops');
+  const [url, setUrl] = useState('');
+  const [authorization, setAuthorization] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const configure = async () => {
+    setBusy('configure'); setError(null);
+    try {
+      await client!.configureWebhook(project, { name, url, ...(authorization ? { authorization } : {}) });
+      setUrl(''); setAuthorization(''); destinations.reload();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'could not configure webhook'); }
+    finally { setBusy(null); }
+  };
+  const verify = async (id: string) => {
+    setBusy(id); setError(null);
+    try { await client!.testWebhook(project, id); destinations.reload(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'could not queue test delivery'); }
+    finally { setBusy(null); }
+  };
+  return <Panel title="Decision webhook" right={<span className="text-xs text-muted-foreground">encrypted · outbox delivery · approval-gated</span>}>
+    <p className="mb-3 text-sm text-muted-foreground">Send sanitized product impact to one generic destination. URL and authorization are write-only; an explicit test must succeed before decision actions can queue delivery.</p>
+    <div className="grid gap-2 md:grid-cols-[12rem_1fr_1fr_auto]"><Input aria-label="Webhook name" value={name} onChange={(event) => setName(event.target.value)} placeholder="product_ops" /><Input aria-label="Webhook URL" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://hooks.example.com/…" /><Input aria-label="Webhook authorization" type="password" value={authorization} onChange={(event) => setAuthorization(event.target.value)} placeholder="Authorization (optional)" /><Button onClick={configure} disabled={busy === 'configure' || !url || !name}>{busy === 'configure' ? 'Saving…' : 'Configure'}</Button></div>
+    <div className="mt-4 space-y-2">{destinations.loading ? <Loading what="reading webhook status…" /> : destinations.data?.map((destination) => <div key={destination.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"><div><div className="text-sm font-medium">{destination.name}</div><code className="text-xs text-muted-foreground">{destination.masked_url}</code>{destination.last_error && <div className="mt-1 text-xs text-destructive">{destination.last_error}</div>}</div><div className="flex items-center gap-2"><Badge variant={destination.status === 'verified' ? 'default' : destination.status === 'error' ? 'destructive' : 'outline'}>{destination.status}</Badge><Button size="sm" variant="outline" onClick={() => verify(destination.id)} disabled={busy === destination.id}>{busy === destination.id ? 'Queued…' : 'Queue test'}</Button></div></div>)}</div>
+    {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
+  </Panel>;
 }
 
 const MCP_LOGO_META: Record<McpClientLogo, { color: string; label: string }> = {

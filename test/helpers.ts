@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { createPool } from '../src/db.js';
-import { buildServer } from '../src/http/server.js';
+import { buildServer, type ServerOptions } from '../src/http/server.js';
 import { createApiKey, createOrganization, createProject } from '../src/services/projects.js';
 import { TEST_DB_URL } from './urls.js';
 
 export interface TestEnv {
   pool: pg.Pool;
   app: FastifyInstance;
+  projectId: string;
   projectSlug: string;
   ingestToken: string;
   ingestDevToken: string;
@@ -19,9 +20,9 @@ export interface TestEnv {
 let counter = 0;
 
 /** Fresh org + project + keys on the shared test database. */
-export async function createTestEnv(): Promise<TestEnv> {
+export async function createTestEnv(serverOptions: ServerOptions = {}): Promise<TestEnv> {
   const pool = createPool(TEST_DB_URL);
-  const app = buildServer(pool);
+  const app = buildServer(pool, serverOptions);
   const slug = `proj-${Date.now()}-${counter++}`;
 
   const org = await createOrganization(pool, `org-${slug}`);
@@ -34,6 +35,7 @@ export async function createTestEnv(): Promise<TestEnv> {
   return {
     pool,
     app,
+    projectId: project.id,
     projectSlug: slug,
     ingestToken: ingest.token,
     ingestDevToken: ingestDev.token,

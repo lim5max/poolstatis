@@ -30,8 +30,10 @@ separate repositories.
 1. A coding agent instruments a product and registers metrics in Poolstatis
    through MCP.
 2. The product sends events and entities to the HTTP ingest API.
-3. Poolstatis stores the data and exposes typed query tools, so the customer can
-   build dashboards, checks, and insights in their own environment.
+3. A versioned `poolstatis.yml` connects a product hypothesis to registered metrics.
+4. CI registers the deployed commit; Poolstatis monitors the fixed evidence window and
+   proposes `keep`, `fix`, `rollback`, or `inconclusive` from trusted facts.
+5. A human approves or corrects the decision before any prepared action can execute.
 
 ## Documentation
 
@@ -46,6 +48,7 @@ separate repositories.
 | [docs/06-instrumenting-a-product.md](docs/06-instrumenting-a-product.md) | Agent and manual instrumentation workflow |
 | [docs/07-vps-deployment.md](docs/07-vps-deployment.md) | Deploying the Platform API, MCP, SDK, and skills |
 | [docs/09-source-available-release.md](docs/09-source-available-release.md) | Source-available release and GitHub hygiene |
+| [docs/09-product-decision-loop.md](docs/09-product-decision-loop.md) | Contracts, releases, evidence, approvals, workers, actions, outbox, and decision memory |
 | [docs/10-self-host.md](docs/10-self-host.md) | Short Docker Compose self-hosting path |
 | [docs/11-repository-split.md](docs/11-repository-split.md) | System, site, and Cloud repository boundaries |
 | [sdk/README.md](sdk/README.md) | `@poolstatis/sdk` client usage |
@@ -132,7 +135,8 @@ dashboard; customers consume analytics through MCP, SDK integrations, or their
 own dashboards.
 
 The admin includes tables for projects, metric registry management, data health,
-events, entities, API keys, onboarding, and Setup & MCP presets. In hosted mode,
+events, entities, measurement trust, release changes, decision inbox/review/action history,
+API keys, onboarding, webhook delivery, and Setup & MCP presets. In hosted mode,
 human login is handled through Auth0/OIDC, while scoped Poolstatis keys remain
 the runtime access model:
 
@@ -152,12 +156,13 @@ Implemented:
   `stickiness`
 - Deterministic feature flags, automatic exposure events, and Bayesian A/B
   experiment results over registered metrics
+- Repository-owned measurement contracts, immutable release provenance, evidence snapshots,
+  human decision revisions, bounded release monitoring, correlation hypotheses,
+  approval-gated actions, encrypted webhook outbox, and project-scoped decision memory
 - MCP server with typed tools and resources
 - Headless admin SPA
 - Instrumentation standard
 - Agent instrumentation skill
 - Docker Compose self-hosting path
 
-Next priorities are tracked in [docs/05-gap-analysis.md](docs/05-gap-analysis.md):
-actor merge and identity, static cohorts, funnel correlation, Browser Experience
-signals/interaction maps, and a privacy-gated Session Replay add-on.
+Next priorities are tracked in [docs/05-gap-analysis.md](docs/05-gap-analysis.md).

@@ -6,6 +6,7 @@ export interface Config {
   port: number;
   host: string;
   publicUrl: string;
+  connectorEncryptionKey: string | null;
   ingestBuffer: {
     maxEvents: number;
     maxDelayMs: number;
@@ -26,6 +27,25 @@ export interface Config {
     maxBatchesPerRun: number;
     maxRowsPerRun: number;
     maxRunMs: number;
+  };
+  releaseMonitor: {
+    enabled: boolean;
+    intervalMs: number;
+    batchSize: number;
+    maxAttempts: number;
+    baseRetryMs: number;
+    maxRetryMs: number;
+    leaseMs: number;
+  };
+  webhookOutbox: {
+    enabled: boolean;
+    intervalMs: number;
+    batchSize: number;
+    maxAttempts: number;
+    baseRetryMs: number;
+    maxRetryMs: number;
+    leaseMs: number;
+    requestTimeoutMs: number;
   };
   mcpRunner: {
     command: string;
@@ -151,6 +171,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: env.PORT ? Number(env.PORT) : 3300,
     host: env.HOST ?? '127.0.0.1',
     publicUrl: (env.POOLSTATIS_PUBLIC_URL ?? 'https://api.poolstatis.com').replace(/\/$/, ''),
+    connectorEncryptionKey: env.POOLSTATIS_CONNECTOR_ENCRYPTION_KEY?.trim() || null,
     ingestBuffer,
     queryCache: {
       ttlMs: positiveInt(env.QUERY_CACHE_TTL_MS, 1_000, 'QUERY_CACHE_TTL_MS'),
@@ -180,6 +201,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         1_000_000,
       ),
       maxRunMs: positiveInt(env.RETENTION_MAX_RUN_MS, 5_000, 'RETENTION_MAX_RUN_MS', 60_000),
+    },
+    releaseMonitor: {
+      enabled: booleanValue(env.RELEASE_MONITOR_ENABLED, true, 'RELEASE_MONITOR_ENABLED'),
+      intervalMs: positiveInt(env.RELEASE_MONITOR_INTERVAL_MS, 60_000, 'RELEASE_MONITOR_INTERVAL_MS'),
+      batchSize: positiveInt(env.RELEASE_MONITOR_BATCH_SIZE, 25, 'RELEASE_MONITOR_BATCH_SIZE', 500),
+      maxAttempts: positiveInt(env.RELEASE_MONITOR_MAX_ATTEMPTS, 8, 'RELEASE_MONITOR_MAX_ATTEMPTS', 100),
+      baseRetryMs: positiveInt(env.RELEASE_MONITOR_BASE_RETRY_MS, 60_000, 'RELEASE_MONITOR_BASE_RETRY_MS'),
+      maxRetryMs: positiveInt(env.RELEASE_MONITOR_MAX_RETRY_MS, 3_600_000, 'RELEASE_MONITOR_MAX_RETRY_MS'),
+      leaseMs: positiveInt(env.RELEASE_MONITOR_LEASE_MS, 300_000, 'RELEASE_MONITOR_LEASE_MS'),
+    },
+    webhookOutbox: {
+      enabled: booleanValue(env.WEBHOOK_OUTBOX_ENABLED, true, 'WEBHOOK_OUTBOX_ENABLED'),
+      intervalMs: positiveInt(env.WEBHOOK_OUTBOX_INTERVAL_MS, 5_000, 'WEBHOOK_OUTBOX_INTERVAL_MS'),
+      batchSize: positiveInt(env.WEBHOOK_OUTBOX_BATCH_SIZE, 25, 'WEBHOOK_OUTBOX_BATCH_SIZE', 500),
+      maxAttempts: positiveInt(env.WEBHOOK_OUTBOX_MAX_ATTEMPTS, 8, 'WEBHOOK_OUTBOX_MAX_ATTEMPTS', 100),
+      baseRetryMs: positiveInt(env.WEBHOOK_OUTBOX_BASE_RETRY_MS, 5_000, 'WEBHOOK_OUTBOX_BASE_RETRY_MS'),
+      maxRetryMs: positiveInt(env.WEBHOOK_OUTBOX_MAX_RETRY_MS, 3_600_000, 'WEBHOOK_OUTBOX_MAX_RETRY_MS'),
+      leaseMs: positiveInt(env.WEBHOOK_OUTBOX_LEASE_MS, 300_000, 'WEBHOOK_OUTBOX_LEASE_MS'),
+      requestTimeoutMs: positiveInt(env.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000, 'WEBHOOK_REQUEST_TIMEOUT_MS', 60_000),
     },
     mcpRunner: {
       command: env.POOLSTATIS_MCP_COMMAND ?? 'pnpm',

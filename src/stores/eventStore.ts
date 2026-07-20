@@ -108,6 +108,39 @@ export interface EventStatsQuery {
   sinceDays: number;
 }
 
+export interface MeasurementCoverageQuery {
+  projectId: string;
+  env: string;
+  event: string;
+  filters: PropertyFilter[];
+  properties: string[];
+  sinceDays: number;
+}
+
+export interface MeasurementCoverage {
+  events: number;
+  actors: number;
+  rawActors: number;
+  registeredCoverage: number;
+  distinctIdCoverage: number;
+  propertyCoverage: Record<string, number>;
+}
+
+export interface MetricAggregateQuery {
+  projectId: string;
+  env: string;
+  event: string;
+  filters: PropertyFilter[];
+  properties: string[];
+  agg: TrendQuery['agg'];
+  from: Date;
+  to: Date;
+}
+
+export interface MetricAggregate extends MeasurementCoverage {
+  value: number;
+}
+
 export interface EntityStatusEvidenceSpec {
   event: string;
   entity_type: string;
@@ -267,6 +300,8 @@ export interface EventStore {
   sample(q: SampleQuery): Promise<RawEvent[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;
+  measurementCoverage(q: MeasurementCoverageQuery): Promise<MeasurementCoverage>;
+  metricAggregate(q: MetricAggregateQuery): Promise<MetricAggregate>;
   entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]>;
   /**
    * Hard-delete events for a project. Optionally scope to one env and/or a

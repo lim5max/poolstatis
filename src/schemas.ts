@@ -33,6 +33,282 @@ const keySchema = z
   .max(100)
   .regex(/^[a-z][a-z0-9_]*$/, 'keys are snake_case identifiers, e.g. checkout_conversion');
 
+// ===== Product decision loop trust foundation =====
+
+export const actorLinkSchema = z.object({
+  source_distinct_id: z.string().trim().min(1).max(200),
+  target_distinct_id: z.string().trim().min(1).max(200),
+  env: z.string().trim().min(1).max(100).default('prod'),
+}).refine(
+  (link) => link.source_distinct_id !== link.target_distinct_id,
+  { path: ['target_distinct_id'], message: 'source and target actors must be different' },
+);
+
+export type ActorLinkInput = z.infer<typeof actorLinkSchema>;
+
+export const propertyDefinitionSchema = z.object({
+  key: z.string().trim().min(1).max(200),
+  scope: z.enum(['event', 'actor', 'entity']),
+  value_type: z.enum(['string', 'number', 'boolean', 'datetime', 'enum']),
+  purpose: semanticText,
+  status: z.enum(['proposed', 'trusted', 'untrusted']).default('proposed'),
+  source: z.enum(['native', 'posthog']).default('native'),
+  source_connection_id: z.string().uuid().optional(),
+  enum_values: z.array(z.string().trim().min(1).max(200)).min(1).max(100).optional(),
+}).superRefine((property, ctx) => {
+  if (property.value_type === 'enum' && !property.enum_values) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['enum_values'],
+      message: 'enum properties require enum_values',
+    });
+  }
+  if (property.value_type !== 'enum' && property.enum_values) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['enum_values'],
+      message: 'enum_values are only valid for enum properties',
+    });
+  }
+  if (property.source === 'posthog' && !property.source_connection_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['source_connection_id'],
+      message: 'PostHog properties require source_connection_id',
+    });
+  }
+  if (property.source === 'native' && property.source_connection_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['source_connection_id'],
+      message: 'native properties cannot reference an external source connection',
+    });
+  }
+});
+
+export type PropertyDefinitionInput = z.infer<typeof propertyDefinitionSchema>;
+
+// Keep the patch schema as a plain object: propertyDefinitionSchema is a
+// ZodEffects after cross-field validation and therefore intentionally has no
+// object-only omit/partial helpers. The service merges a patch with the stored
+// row and re-validates the complete propertyDefinitionSchema.
+export const updatePropertyDefinitionSchema = z.object({
+  value_type: z.enum(['string', 'number', 'boolean', 'datetime', 'enum']).optional(),
+  purpose: semanticText.optional(),
+  status: z.enum(['proposed', 'trusted', 'untrusted']).optional(),
+  enum_values: z.array(z.string().trim().min(1).max(200)).min(1).max(100).nullable().optional(),
+});
+
+export type UpdatePropertyDefinitionInput = z.infer<typeof updatePropertyDefinitionSchema>;
+
+export const measurementTrustSchema = z.object({
+  metric_key: keySchema,
+  env: z.string().trim().min(1).max(100).default('prod'),
+  target_filters: z.array(propertyFilterSchema).max(20).default([]),
+  since_days: z.number().int().min(1).max(365).default(30),
+});
+
+export type MeasurementTrustInput = z.infer<typeof measurementTrustSchema>;
+
+function safePostHogHost(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password || url.search || url.hash) return false;
+    if (url.pathname !== '/' && url.pathname !== '') return false;
+    if (url.protocol === 'https:') return true;
+    const loopback = url.hostname === '127.0.0.1'
+      || url.hostname === 'localhost'
+      || url.hostname === '[::1]';
+    return url.protocol === 'http:' && loopback;
+  } catch {
+    return false;
+  }
+}
+
+export const posthogConnectionSchema = z.object({
+  name: keySchema,
+  host: z.string().trim().refine(
+    safePostHogHost,
+    'host must be an HTTPS origin, or loopback HTTP for controlled local testing',
+  ).transform((host) => host.replace(/\/$/, '')),
+  project_id: z.union([z.string().trim().min(1).max(100), z.number().int().nonnegative()])
+    .transform(String),
+  personal_api_key: z.string().trim().min(8).max(500).regex(
+    /^phx_/,
+    'use a PostHog personal API key (phx_) with Query Read permission',
+  ),
+});
+
+export type PostHogConnectionInput = z.infer<typeof posthogConnectionSchema>;
+
+// ===== Measurement contracts and release provenance =====
+
+const externalReferencesSchema = z.object({
+  issue_url: z.string().url().optional(),
+  pr_url: z.string().url().optional(),
+  commit_sha: z.string().regex(/^[a-f0-9]{7,64}$/i, 'commit_sha must be a 7-64 character hex SHA').optional(),
+  deploy_url: z.string().url().optional(),
+}).strict();
+
+export const measurementContractSchema = z.object({
+  key: keySchema,
+  name: z.string().trim().min(1).max(200),
+  business_hypothesis: semanticText,
+  decision_owner: z.string().trim().min(1).max(200),
+  primary_metric_key: keySchema,
+  guardrail_metric_keys: z.array(keySchema).max(20).default([]),
+  target_filters: z.array(propertyFilterSchema).max(20).default([]),
+  baseline_window_days: z.number().int().min(1).max(365),
+  observation_window_days: z.number().int().min(1).max(365).default(14),
+  minimum_sample_size: z.number().int().min(1).max(10_000_000).default(100),
+  expected_direction: z.enum(['increase', 'decrease', 'stay_within_range']),
+  minimum_meaningful_effect: z.number().finite().nonnegative().optional(),
+  flag_key: keySchema.optional(),
+  experiment_key: keySchema.optional(),
+  references: externalReferencesSchema.default({}),
+  status: z.enum(['draft', 'active', 'archived']).default('active'),
+}).superRefine((contract, ctx) => {
+  const guardrails = new Set<string>();
+  contract.guardrail_metric_keys.forEach((key, index) => {
+    if (guardrails.has(key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['guardrail_metric_keys', index],
+        message: `duplicate guardrail metric "${key}"`,
+      });
+    }
+    if (key === contract.primary_metric_key) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['guardrail_metric_keys', index],
+        message: 'the primary metric cannot also be a guardrail',
+      });
+    }
+    guardrails.add(key);
+  });
+});
+
+export type MeasurementContractInput = z.infer<typeof measurementContractSchema>;
+
+export const measurementDeclarationSchema = z.object({
+  version: z.literal(1),
+  contracts: z.array(measurementContractSchema).max(100),
+}).superRefine((declaration, ctx) => {
+  const keys = new Set<string>();
+  declaration.contracts.forEach((contract, index) => {
+    if (keys.has(contract.key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['contracts', index, 'key'],
+        message: `duplicate contract key "${contract.key}"`,
+      });
+    }
+    keys.add(contract.key);
+  });
+});
+
+export type MeasurementDeclaration = z.infer<typeof measurementDeclarationSchema>;
+
+export const applyMeasurementDeclarationSchema = z.object({
+  declaration: measurementDeclarationSchema,
+  confirm_existing_changes: z.boolean().default(false),
+  expected_revision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+});
+
+export type ApplyMeasurementDeclarationInput = z.infer<typeof applyMeasurementDeclarationSchema>;
+
+export const registerReleaseSchema = z.object({
+  idempotency_key: z.string().trim().min(1).max(200),
+  contract_key: keySchema,
+  env: z.string().trim().min(1).max(100).default('prod'),
+  repository: z.string().trim().min(1).max(500),
+  branch: z.string().trim().min(1).max(500).optional(),
+  commit_sha: z.string().trim().regex(/^[a-f0-9]{7,64}$/i, 'commit_sha must be a 7-64 character hex SHA'),
+  pr_url: z.string().url().optional(),
+  deployed_at: z.string().datetime({ offset: true }).optional(),
+  flag_key: keySchema.optional(),
+  experiment_key: keySchema.optional(),
+  variant: keySchema.optional(),
+  originating_decision_id: z.string().uuid().optional(),
+  status: z.enum(['planned', 'deployed']).default('deployed'),
+}).superRefine((release, ctx) => {
+  if (release.status === 'planned' && release.deployed_at) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['deployed_at'], message: 'planned releases cannot have deployed_at' });
+  }
+});
+
+export type RegisterReleaseInput = z.infer<typeof registerReleaseSchema>;
+
+export const transitionReleaseSchema = z.object({
+  status: z.enum(['deployed', 'observing', 'decided', 'cancelled']),
+  deployed_at: z.string().datetime({ offset: true }).optional(),
+}).superRefine((transition, ctx) => {
+  if (transition.status !== 'deployed' && transition.deployed_at) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['deployed_at'],
+      message: 'deployed_at is only valid for the deployed transition',
+    });
+  }
+});
+
+export type TransitionReleaseInput = z.infer<typeof transitionReleaseSchema>;
+
+export const reviewDecisionSchema = z.object({
+  rationale: semanticText,
+});
+
+export const editDecisionSchema = z.object({
+  outcome: z.enum(['keep', 'fix', 'rollback', 'inconclusive']),
+  rationale: semanticText,
+});
+
+const actionTypeSchema = z.enum([
+  'draft_implementation_prompt', 'prepare_flag_rollback',
+  'schedule_observation', 'request_more_data', 'generic_webhook',
+  'create_issue', 'open_draft_pr',
+]);
+
+export const prepareDecisionActionSchema = z.object({
+  action_type: actionTypeSchema,
+  idempotency_key: z.string().trim().min(1).max(200),
+  target: z.record(z.unknown()),
+  payload: z.record(z.unknown()),
+  expected_effect: semanticText,
+}).superRefine((action, ctx) => {
+  if (action.action_type === 'prepare_flag_rollback') {
+    const parsed = z.object({ flag_key: keySchema, variants: z.array(featureFlagVariantSchema).min(1) }).safeParse(action.payload);
+    if (!parsed.success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['payload'], message: 'flag rollback requires flag_key and valid variants' });
+  }
+  if (action.action_type === 'schedule_observation') {
+    const parsed = z.object({ at: z.string().datetime({ offset: true }) }).safeParse(action.payload);
+    if (!parsed.success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['payload'], message: 'schedule observation requires an ISO at timestamp' });
+  }
+  if (action.action_type === 'draft_implementation_prompt' && typeof action.payload.prompt !== 'string') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['payload', 'prompt'], message: 'draft prompt requires prompt text' });
+  }
+});
+
+export type PrepareDecisionActionInput = z.infer<typeof prepareDecisionActionSchema>;
+
+export const approveDecisionActionSchema = z.object({
+  confirmation_fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export const rejectDecisionActionSchema = z.object({ rationale: semanticText });
+
+export const webhookDestinationSchema = z.object({
+  name: keySchema,
+  url: z.string().url().refine((value) => {
+    const url = new URL(value);
+    return url.protocol === 'https:'
+      || (url.protocol === 'http:' && ['127.0.0.1', 'localhost', '::1'].includes(url.hostname));
+  }, 'webhook URL must use HTTPS (HTTP is allowed only for loopback tests)'),
+  authorization: z.string().trim().min(1).max(1000).optional(),
+});
+
+export type WebhookDestinationInput = z.infer<typeof webhookDestinationSchema>;
+
 // ===== Feature delivery: flags and experiments =====
 
 const rolloutPercentageSchema = z.number().min(0).max(100).finite()
@@ -185,6 +461,8 @@ export const metricCategorySchema = z.enum([
 const eventSourceBase = z.object({
   event: eventName,
   filters: z.array(propertyFilterSchema).default([]),
+  data_source: z.enum(['native', 'posthog']).default('native'),
+  source_connection_id: z.string().uuid().optional(),
 });
 
 export const metricSourceSchemas = {
@@ -229,6 +507,42 @@ export const registerMetricSchema = z
           code: z.ZodIssueCode.custom,
           path: ['source', ...issue.path],
           message: `source for type=${m.type}: ${issue.message}`,
+        });
+      }
+      return;
+    }
+    const sources = m.type === 'conversion'
+      ? [
+          (parsed.data as { from: unknown }).from,
+          (parsed.data as { to: unknown }).to,
+        ]
+      : m.type === 'state'
+        ? []
+        : [parsed.data];
+    for (const [index, rawSource] of sources.entries()) {
+      const source = rawSource as {
+        data_source?: 'native' | 'posthog';
+        source_connection_id?: string;
+      };
+      if (source.data_source === 'posthog' && !source.source_connection_id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['source', ...(m.type === 'conversion' ? [index === 0 ? 'from' : 'to'] : []), 'source_connection_id'],
+          message: 'PostHog metric sources require source_connection_id',
+        });
+      }
+      if (source.data_source !== 'posthog' && source.source_connection_id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['source', ...(m.type === 'conversion' ? [index === 0 ? 'from' : 'to'] : []), 'source_connection_id'],
+          message: 'native metric sources cannot reference an external connection',
+        });
+      }
+      if (m.type === 'conversion' && source.data_source === 'posthog') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['source'],
+          message: 'PostHog conversion metrics are unsupported; define event metrics and query a funnel',
         });
       }
     }
@@ -318,6 +632,7 @@ export const trendQuerySchema = z.object({
   date_from: dateStr,
   date_to: dateStr.nullable().optional(),
   interval: z.enum(['hour', 'day', 'week', 'month']).default('day'),
+  filters: z.array(propertyFilterSchema).max(20).default([]),
   breakdown: z.object({ property: z.string().min(1) }).optional(),
   env: z.string().default('prod'),
 });

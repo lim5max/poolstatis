@@ -46,6 +46,7 @@ export async function registerMetric(
   owner: string | null,
 ): Promise<Metric> {
   const source = metricSourceSchemas[input.type].parse(input.source);
+  await assertMetricSourceConnection(pool, projectId, input.type, source);
   if (input.type === 'state') {
     const { entity_type } = source as { entity_type: string };
     const { rowCount } = await pool.query(
@@ -96,8 +97,11 @@ export async function updateMetric(
       'call deprecate_metric or POST /metrics/{key}/deprecate with a reason so future agents understand why it was retired',
     );
   }
-  if (patch.source !== undefined) {
-    metricSourceSchemas[existing.type].parse(patch.source);
+  const validatedSource = patch.source !== undefined
+    ? metricSourceSchemas[existing.type].parse(patch.source)
+    : undefined;
+  if (validatedSource !== undefined) {
+    await assertMetricSourceConnection(pool, projectId, existing.type, validatedSource);
   }
   const { rows } = await pool.query(
     `UPDATE metrics SET
@@ -115,12 +119,46 @@ export async function updateMetric(
     [projectId, key, patch.name ?? null, patch.purpose ?? null,
      patch.category !== undefined, patch.category ?? null,
      patch.status ?? null,
-     patch.source !== undefined ? JSON.stringify(patch.source) : null,
+     validatedSource !== undefined ? JSON.stringify(validatedSource) : null,
      patch.tags !== undefined ? normalizeTags(patch.tags) : null],
   );
   // The metric can disappear between getMetric and the UPDATE.
   if (!rows[0]) throw notFound('metric');
   return rows[0];
+}
+
+async function assertMetricSourceConnection(
+  pool: pg.Pool,
+  projectId: string,
+  type: Metric['type'],
+  source: unknown,
+): Promise<void> {
+  if (type === 'state') return;
+  const sources = type === 'conversion'
+    ? [
+        (source as { from: unknown }).from,
+        (source as { to: unknown }).to,
+      ]
+    : [source];
+  for (const item of sources) {
+    const eventSource = item as {
+      data_source?: 'native' | 'posthog';
+      source_connection_id?: string;
+    };
+    if (eventSource.data_source !== 'posthog') continue;
+    const { rowCount } = await pool.query(
+      `SELECT 1 FROM source_connections
+       WHERE project_id = $1 AND id = $2 AND provider = 'posthog'
+         AND status = 'verified'`,
+      [projectId, eventSource.source_connection_id],
+    );
+    if (!rowCount) {
+      throw notFound(
+        'source_connection',
+        'configure and verify this PostHog connection in the same project first',
+      );
+    }
+  }
 }
 
 export async function deprecateMetric(

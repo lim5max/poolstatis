@@ -4,6 +4,9 @@ import { loadConfig } from '../config.js';
 import { buildServer } from '../http/server.js';
 import { startRetentionWorker } from '../services/retention.js';
 import { ensureRetentionIndexes } from '../services/retentionIndexes.js';
+import { createContext } from '../http/context.js';
+import { ReleaseMonitor, startReleaseMonitor } from '../services/releaseMonitor.js';
+import { WebhookOutbox, startWebhookOutbox } from '../services/webhooks.js';
 
 const config = loadConfig();
 const pool = createPool(config.databaseUrl, { max: config.databasePoolMax });
@@ -22,12 +25,17 @@ const app = buildServer(pool, {
   ingestBuffer: config.ingestBuffer,
   queryCache: config.queryCache,
   rateLimit: config.rateLimit,
+  ...(config.connectorEncryptionKey
+    ? { connectorEncryptionKey: config.connectorEncryptionKey }
+    : {}),
 });
 await app.listen({ port: config.port, host: config.host });
 console.log(`poolstatis listening on http://${config.host}:${config.port}`);
 
 let stopping = false;
 let retentionWorker: ReturnType<typeof startRetentionWorker> | null = null;
+let releaseMonitorWorker: ReturnType<typeof startReleaseMonitor> | null = null;
+let webhookOutboxWorker: ReturnType<typeof startWebhookOutbox> | null = null;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let maintenanceTask: Promise<void> | null = null;
 
@@ -61,6 +69,45 @@ const prepareMaintenance = async (): Promise<void> => {
       onError: (error) => console.error('retention worker failed', error),
       });
     }
+    if (config.releaseMonitor.enabled && !releaseMonitorWorker && !stopping) {
+      const monitorContext = createContext(maintenancePool, {
+        ingestBuffer: false,
+        queryCache: false,
+        ...(config.connectorEncryptionKey ? { connectorEncryptionKey: config.connectorEncryptionKey } : {}),
+      });
+      const monitor = new ReleaseMonitor(maintenancePool, monitorContext.query, {
+        batchSize: config.releaseMonitor.batchSize,
+        maxAttempts: config.releaseMonitor.maxAttempts,
+        baseRetryMs: config.releaseMonitor.baseRetryMs,
+        maxRetryMs: config.releaseMonitor.maxRetryMs,
+        leaseMs: config.releaseMonitor.leaseMs,
+        actor: 'worker:release-monitor',
+      });
+      releaseMonitorWorker = startReleaseMonitor(monitor, {
+        intervalMs: config.releaseMonitor.intervalMs,
+        onResult: (result) => {
+          if (result.claimed > 0) console.log(JSON.stringify({ maintenance: 'release-monitor', ...result }));
+        },
+        onError: (error) => console.error('release monitor failed', error),
+      });
+    }
+    if (config.webhookOutbox.enabled && config.connectorEncryptionKey && !webhookOutboxWorker && !stopping) {
+      const outbox = new WebhookOutbox(maintenancePool, config.connectorEncryptionKey, {
+        batchSize: config.webhookOutbox.batchSize,
+        maxAttempts: config.webhookOutbox.maxAttempts,
+        baseRetryMs: config.webhookOutbox.baseRetryMs,
+        maxRetryMs: config.webhookOutbox.maxRetryMs,
+        leaseMs: config.webhookOutbox.leaseMs,
+        requestTimeoutMs: config.webhookOutbox.requestTimeoutMs,
+      });
+      webhookOutboxWorker = startWebhookOutbox(outbox, {
+        intervalMs: config.webhookOutbox.intervalMs,
+        onResult: (result) => {
+          if (result.claimed > 0) console.log(JSON.stringify({ maintenance: 'webhook-outbox', ...result }));
+        },
+        onError: (error) => console.error('webhook outbox failed', error),
+      });
+    }
   } catch (error) {
     console.error('operational index preparation failed', error);
     if (!stopping) {
@@ -88,6 +135,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     ).catch((error) => console.error('failed to cancel maintenance backend', error));
     await maintenanceTask;
     await retentionWorker?.stop();
+    await releaseMonitorWorker?.stop();
+    await webhookOutboxWorker?.stop();
     await maintenancePool.end();
     await pool.end();
     process.exit(0);
