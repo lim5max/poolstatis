@@ -15,7 +15,7 @@ const issuer = 'https://auth.poolstatis.test/';
 const audience = 'https://api.poolstatis.test/';
 
 async function authToken(sub: string, email: string, name: string): Promise<string> {
-  return new SignJWT({ email, name })
+  return new SignJWT({ email, email_verified: true, name })
     .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
     .setIssuer(issuer)
     .setAudience(audience)
@@ -132,10 +132,11 @@ describe('hosted auth onboarding', () => {
   it('does not allow read-only members to manage platform routes', async () => {
     const owner = await authApi('GET', '/api/v1/me');
     const { rows } = await pool.query(
-      `INSERT INTO auth_users (subject, email, name)
-       VALUES ($1, $2, $3)
+      `INSERT INTO auth_users (
+         identity_issuer, subject, email, email_verified, display_name, name
+       ) VALUES ($1, $2, $3, true, $4, $4)
        RETURNING id`,
-      ['auth0|member-1', 'member@example.com', 'Member User'],
+      [issuer, 'auth0|member-1', 'member@example.com', 'Member User'],
     );
     await pool.query(
       'INSERT INTO organization_members (org_id, user_id, role) VALUES ($1, $2, $3)',

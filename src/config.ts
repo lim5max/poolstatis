@@ -57,7 +57,15 @@ export interface Config {
     issuer: string;
     audience: string;
     jwksUri: string;
+    claims: {
+      email: string;
+      emailVerified: string;
+      displayName: string;
+      picture: string;
+    };
+    connectionStrategy: string;
   } | null;
+  corsOrigins: string[];
 }
 
 function parseArgs(raw: string | undefined): string[] {
@@ -96,12 +104,39 @@ function booleanValue(raw: string | undefined, fallback: boolean, name: string):
   throw new Error(`${name} must be true or false`);
 }
 
+function requiredText(raw: string | undefined, fallback: string, name: string): string {
+  const value = raw === undefined ? fallback : raw.trim();
+  if (!value) throw new Error(`${name} must not be empty`);
+  return value;
+}
+
+function parseCorsOrigins(raw: string | undefined, production: boolean): string[] {
+  const values = raw === undefined
+    ? (production ? [] : ['http://localhost:5273', 'http://127.0.0.1:5273', 'http://[::1]:5273'])
+    : raw.split(',').map((value) => value.trim()).filter(Boolean);
+  return [...new Set(values.map((value) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error('POOLSTATIS_CORS_ORIGINS must contain comma-separated HTTP(S) origins');
+    }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:')
+      || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+      throw new Error('POOLSTATIS_CORS_ORIGINS must contain origins without paths, credentials, queries, or fragments');
+    }
+    return url.origin;
+  }))];
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const issuer = env.AUTH_JWT_ISSUER;
   const audience = env.AUTH_JWT_AUDIENCE;
   const jwksUri = env.AUTH_JWKS_URI ?? (issuer ? new URL('.well-known/jwks.json', issuer).toString() : undefined);
   const packageStatus = env.POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true' ? 'published' : 'publish_pending';
   const databasePoolMax = positiveInt(env.DATABASE_POOL_MAX, 10, 'DATABASE_POOL_MAX');
+  const production = env.NODE_ENV === 'production';
+  const corsOrigins = parseCorsOrigins(env.POOLSTATIS_CORS_ORIGINS, production);
   const ingestBuffer = {
     maxEvents: positiveInt(
       env.INGEST_BUFFER_MAX_EVENTS,
@@ -229,6 +264,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         ? 'The configured MCP runner is marked published for this hosted deployment.'
         : 'Publish or configure the MCP runner before treating this template as copy-paste ready.',
     },
-    auth: issuer && audience && jwksUri ? { issuer, audience, jwksUri } : null,
+    auth: issuer && audience && jwksUri ? {
+      issuer,
+      audience,
+      jwksUri,
+      claims: {
+        email: requiredText(env.AUTH_JWT_EMAIL_CLAIM, 'https://poolstatis.com/email', 'AUTH_JWT_EMAIL_CLAIM'),
+        emailVerified: requiredText(env.AUTH_JWT_EMAIL_VERIFIED_CLAIM, 'https://poolstatis.com/email_verified', 'AUTH_JWT_EMAIL_VERIFIED_CLAIM'),
+        displayName: requiredText(env.AUTH_JWT_DISPLAY_NAME_CLAIM, 'https://poolstatis.com/display_name', 'AUTH_JWT_DISPLAY_NAME_CLAIM'),
+        picture: requiredText(env.AUTH_JWT_PICTURE_CLAIM, 'https://poolstatis.com/picture', 'AUTH_JWT_PICTURE_CLAIM'),
+      },
+      connectionStrategy: requiredText(env.AUTH_CONNECTION_STRATEGY, 'oidc', 'AUTH_CONNECTION_STRATEGY'),
+    } : null,
+    corsOrigins,
   };
 }

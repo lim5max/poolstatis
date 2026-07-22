@@ -11,6 +11,13 @@ export interface JwtAuthOptions {
   audience: string;
   jwksUri?: string;
   jwks?: () => Promise<JSONWebKeySet> | JSONWebKeySet;
+  claims?: {
+    email: string;
+    emailVerified: string;
+    displayName: string;
+    picture: string;
+  };
+  connectionStrategy?: string;
 }
 
 export interface AuthContext {
@@ -23,6 +30,26 @@ export interface AuthContext {
   userId?: string;
   userEmail?: string | null;
   userRole?: 'owner' | 'admin' | 'member';
+  user?: {
+    id: string;
+    email: string | null;
+    emailVerified: boolean;
+    displayName: string | null;
+    picture: string | null;
+    connectionStrategy: string;
+  };
+}
+
+const standardClaimNames = {
+  email: 'email',
+  emailVerified: 'email_verified',
+  displayName: 'name',
+  picture: 'picture',
+};
+
+function stringClaim(payload: Record<string, unknown>, name: string): string | null {
+  const value = payload[name];
+  return typeof value === 'string' ? value : null;
 }
 
 function bearer(header: string | undefined): string {
@@ -62,11 +89,23 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
     throw unauthorized('invalid hosted auth token');
   }
   if (!payload.sub) throw unauthorized('hosted auth token is missing subject');
+  const claims = options.claims ?? standardClaimNames;
+  if (payload[claims.emailVerified] !== true) {
+    throw new ApiError(
+      403,
+      'email_verification_required',
+      'email verification is required',
+      'verify the email address with your identity provider before signing in',
+    );
+  }
   const account = await getOrCreateAuthenticatedAccount(pool, {
+    issuer: options.issuer,
     subject: payload.sub,
-    email: typeof payload.email === 'string' ? payload.email : null,
-    name: typeof payload.name === 'string' ? payload.name : null,
-    pictureUrl: typeof payload.picture === 'string' ? payload.picture : null,
+    email: stringClaim(payload, claims.email),
+    emailVerified: true,
+    displayName: stringClaim(payload, claims.displayName),
+    pictureUrl: stringClaim(payload, claims.picture),
+    connectionStrategy: options.connectionStrategy ?? 'oidc',
   });
   return {
     keyId: null,
@@ -77,6 +116,14 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
     userId: account.user.id,
     userEmail: account.user.email,
     userRole: account.organization.role,
+    user: {
+      id: account.user.id,
+      email: account.user.email,
+      emailVerified: account.user.email_verified,
+      displayName: account.user.display_name,
+      picture: account.user.picture_url,
+      connectionStrategy: account.user.connection_strategy,
+    },
   };
 }
 

@@ -19,6 +19,12 @@ export const propertyFilterSchema = z
 
 export type PropertyFilter = z.infer<typeof propertyFilterSchema>;
 
+export const updateProfileSchema = z.object({
+  display_name: z.string().trim().min(1).max(200),
+});
+
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
 const eventName = z
   .string()
   .min(1)

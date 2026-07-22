@@ -5,7 +5,8 @@ import { ApiError, badRequest, notFound } from '../errors.js';
 import { authenticate, requireKind, type AuthContext, type JwtAuthOptions } from './auth.js';
 import { createContext, type AppContext, type CreateContextOptions } from './context.js';
 import {
-  completeHostedOnboarding, getBillingSummary, organizationHasProjects, type McpRunnerConfig,
+  completeHostedOnboarding, getAuthenticatedProfile, getBillingSummary, organizationHasProjects,
+  updateAuthenticatedProfile, type McpRunnerConfig,
 } from '../services/accounts.js';
 import {
   createApiKey, createProject, getProjectBySlug, listApiKeys,
@@ -62,6 +63,7 @@ import {
   actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
+  updateProfileSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -79,6 +81,7 @@ export interface ServerOptions {
   queryCache?: CreateContextOptions['queryCache'];
   rateLimit?: TenantRateLimitOptions | false;
   connectorEncryptionKey?: string;
+  corsOrigins?: string[];
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -168,12 +171,12 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
     packageStatus: 'publish_pending' as const,
     note: 'Publish or configure the MCP runner before treating this template as copy-paste ready.',
   };
+  const corsOrigins = new Set(options.corsOrigins ?? []);
 
-  // The dashboard SPA is served from a different origin (vite dev or static
-  // host). Bearer tokens, not cookies, carry auth — so reflecting the origin
-  // is safe here. Preflight OPTIONS is exempted from the auth hook below.
   void app.register(import('@fastify/cors'), {
-    origin: true,
+    origin(origin, callback) {
+      callback(null, !origin || corsOrigins.has(origin));
+    },
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
   });
@@ -181,6 +184,16 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   // Unauthenticated liveness probe the dashboard uses to check the base URL
   // before a token is entered.
   app.get('/health', async () => ({ status: 'ok', service: 'poolstatis' }));
+  app.get('/ready', async (_req, reply) => {
+    try {
+      await pool.query('SELECT 1');
+      return { status: 'ready', service: 'poolstatis' };
+    } catch {
+      return reply.status(503).send({
+        error: { code: 'dependencies_not_ready', message: 'dependencies are not ready' },
+      });
+    }
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ApiError) {
@@ -207,14 +220,14 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   });
 
   app.addHook('onRequest', async (req) => {
-    // CORS preflight and the public health probe carry no token.
-    if (req.method === 'OPTIONS' || req.url === '/health') return;
+    // CORS preflight and public probes carry no token.
+    if (req.method === 'OPTIONS' || req.url === '/health' || req.url === '/ready') return;
     req.auth = await authenticate(pool, req.headers.authorization, options.auth);
   });
 
   if (rateLimiter) {
     app.addHook('preHandler', async (req, reply) => {
-      if (req.method === 'OPTIONS' || req.url === '/health') return;
+      if (req.method === 'OPTIONS' || req.url === '/health' || req.url === '/ready') return;
       const lane = req.url.startsWith('/i/v1/') ? 'ingest' as const : 'api' as const;
       const slug = (req.params as { slug?: string } | undefined)?.slug;
       if (lane === 'api' && credentialAttemptLimiter) {
@@ -387,36 +400,14 @@ function registerAccountRoutes(
 ): void {
   app.get('/api/v1/me', async (req) => {
     requireKind(req.auth, 'user');
-    const { rows } = await ctx.pool.query(
-      `SELECT au.id, au.subject, au.email, au.name, au.picture_url,
-         o.id AS org_id, o.name AS org_name, om.role
-       FROM auth_users au
-       JOIN organization_members om ON om.user_id = au.id
-       JOIN organizations o ON o.id = om.org_id
-       WHERE au.id = $1 AND o.id = $2
-       LIMIT 1`,
-      [req.auth.userId, req.auth.orgId],
-    );
-    const row = rows[0];
-    if (!row) throw notFound('auth_user');
-    return {
-      user: {
-        id: row.id,
-        subject: row.subject,
-        email: row.email,
-        name: row.name,
-        picture_url: row.picture_url,
-      },
-      organization: {
-        id: row.org_id,
-        name: row.org_name,
-        role: row.role,
-      },
-      billing: await getBillingSummary(ctx.pool, req.auth.orgId),
-      onboarding: {
-        completed: await organizationHasProjects(ctx.pool, req.auth.orgId),
-      },
-    };
+    return hostedAccountResponse(ctx, req.auth);
+  });
+
+  app.patch('/api/v1/me', async (req) => {
+    requireKind(req.auth, 'user');
+    const input = updateProfileSchema.parse(req.body);
+    await updateAuthenticatedProfile(ctx.pool, req.auth.userId!, input.display_name);
+    return hostedAccountResponse(ctx, req.auth);
   });
 
   app.post('/api/v1/onboarding', async (req, reply) => {
@@ -444,6 +435,40 @@ function registerAccountRoutes(
     });
     return reply.status(201).send(created);
   });
+}
+
+async function hostedAccountResponse(ctx: AppContext, auth: AuthContext) {
+  const account = await getAuthenticatedProfile(ctx.pool, auth.userId!, auth.orgId);
+  if (!account) throw notFound('auth_user');
+  return {
+    user: {
+      id: account.user.id,
+      subject: account.user.subject,
+      email: account.user.email,
+      email_verified: account.user.email_verified,
+      display_name: account.user.display_name,
+      name: account.user.name,
+      picture_url: account.user.picture_url,
+      connection_strategy: account.user.connection_strategy,
+    },
+    identity: {
+      issuer: account.user.identity_issuer,
+      subject: account.user.subject,
+    },
+    organization: {
+      id: account.organization.id,
+      name: account.organization.name,
+      role: account.organization.role,
+    },
+    membership: {
+      organization_id: account.organization.id,
+      role: account.organization.role,
+    },
+    billing: await getBillingSummary(ctx.pool, auth.orgId),
+    onboarding: {
+      completed: await organizationHasProjects(ctx.pool, auth.orgId),
+    },
+  };
 }
 
 // ===== Platform (/api/v1, sk_/pt_ keys) =====

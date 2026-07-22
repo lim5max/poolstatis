@@ -3,19 +3,26 @@ import { ApiError, badRequest } from '../errors.js';
 import { createApiKey, createProject, type Project } from './projects.js';
 
 export interface AuthUserInput {
+  issuer: string;
   subject: string;
   email?: string | null;
-  name?: string | null;
+  emailVerified: boolean;
+  displayName?: string | null;
   pictureUrl?: string | null;
+  connectionStrategy: string;
 }
 
 export interface AuthenticatedAccount {
   user: {
     id: string;
+    identity_issuer: string;
     subject: string;
     email: string | null;
+    email_verified: boolean;
+    display_name: string | null;
     name: string | null;
     picture_url: string | null;
+    connection_strategy: string;
   };
   organization: {
     id: string;
@@ -94,7 +101,7 @@ function cleanText(value: string | null | undefined, fallback: string): string {
 }
 
 function defaultOrgName(user: AuthUserInput): string {
-  const display = cleanText(user.name, cleanText(user.email, 'Poolstatis'));
+  const display = cleanText(user.displayName, cleanText(user.email, 'Poolstatis'));
   return `${display}'s workspace`;
 }
 
@@ -105,17 +112,32 @@ export async function getOrCreateAuthenticatedAccount(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [`${input.issuer.length}:${input.issuer}${input.subject}`],
+    );
     const { rows: userRows } = await client.query(
-      `INSERT INTO auth_users (subject, email, name, picture_url, updated_at, last_seen_at)
-       VALUES ($1, $2, $3, $4, now(), now())
-       ON CONFLICT (subject) DO UPDATE SET
+      `INSERT INTO auth_users (
+         identity_issuer, subject, email, email_verified, display_name, name,
+         picture_url, connection_strategy, updated_at, last_seen_at
+       ) VALUES ($1, $2, $3, $4, $5, $5, $6, $7, now(), now())
+       ON CONFLICT (identity_issuer, subject) DO UPDATE SET
          email = COALESCE(EXCLUDED.email, auth_users.email),
-         name = COALESCE(EXCLUDED.name, auth_users.name),
+         email_verified = EXCLUDED.email_verified,
          picture_url = COALESCE(EXCLUDED.picture_url, auth_users.picture_url),
+         connection_strategy = EXCLUDED.connection_strategy,
          updated_at = now(),
          last_seen_at = now()
-       RETURNING id, subject, email, name, picture_url`,
-      [input.subject, input.email ?? null, input.name ?? null, input.pictureUrl ?? null],
+       RETURNING id, identity_issuer, subject, email, email_verified, display_name, name, picture_url, connection_strategy`,
+      [
+        input.issuer,
+        input.subject,
+        input.email ?? null,
+        input.emailVerified,
+        input.displayName ?? null,
+        input.pictureUrl ?? null,
+        input.connectionStrategy,
+      ],
     );
     const user = userRows[0];
 
@@ -170,6 +192,55 @@ export async function getOrCreateAuthenticatedAccount(
   } finally {
     client.release();
   }
+}
+
+export interface AuthenticatedProfile extends AuthenticatedAccount {}
+
+export async function getAuthenticatedProfile(
+  pool: pg.Pool,
+  userId: string,
+  orgId: string,
+): Promise<AuthenticatedProfile | null> {
+  const { rows } = await pool.query(
+    `SELECT au.id, au.identity_issuer, au.subject, au.email, au.email_verified,
+            au.display_name, au.name, au.picture_url, au.connection_strategy,
+            o.id AS org_id, o.name AS org_name, om.role
+     FROM auth_users au
+     JOIN organization_members om ON om.user_id = au.id
+     JOIN organizations o ON o.id = om.org_id
+     WHERE au.id = $1 AND o.id = $2
+     LIMIT 1`,
+    [userId, orgId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    user: {
+      id: row.id,
+      identity_issuer: row.identity_issuer,
+      subject: row.subject,
+      email: row.email,
+      email_verified: row.email_verified,
+      display_name: row.display_name,
+      name: row.name,
+      picture_url: row.picture_url,
+      connection_strategy: row.connection_strategy,
+    },
+    organization: { id: row.org_id, name: row.org_name, role: row.role },
+  };
+}
+
+export async function updateAuthenticatedProfile(
+  pool: pg.Pool,
+  userId: string,
+  displayName: string,
+): Promise<void> {
+  await pool.query(
+    `UPDATE auth_users
+     SET display_name = $2, name = $2, updated_at = now()
+     WHERE id = $1`,
+    [userId, displayName],
+  );
 }
 
 export async function getBillingSummary(pool: pg.Pool, orgId: string): Promise<BillingSummary> {

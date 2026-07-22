@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 
 describe('production protection config', () => {
+  it('rejects an explicitly empty hosted-auth claim name', () => {
+    expect(() => loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      AUTH_JWT_EMAIL_CLAIM: ' ',
+    })).toThrow('AUTH_JWT_EMAIL_CLAIM must not be empty');
+  });
+
   it('enables bounded tenant limits and automatic retention by default', () => {
     const config = loadConfig({});
 

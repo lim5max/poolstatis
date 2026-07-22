@@ -25,6 +25,7 @@ const app = buildServer(pool, {
   ingestBuffer: config.ingestBuffer,
   queryCache: config.queryCache,
   rateLimit: config.rateLimit,
+  corsOrigins: config.corsOrigins,
   ...(config.connectorEncryptionKey
     ? { connectorEncryptionKey: config.connectorEncryptionKey }
     : {}),
