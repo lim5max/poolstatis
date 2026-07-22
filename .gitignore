@@ -6,6 +6,8 @@ dist/
 .playwright-mcp/
 web/.playwright-mcp/
 *.tsbuildinfo
+.worktrees/
+.superpowers/
 
 # OS / editor junk
 .DS_Store
