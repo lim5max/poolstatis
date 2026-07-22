@@ -2,6 +2,44 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 
 describe('production protection config', () => {
+  it('uses the approved hosted-claim namespace and safe CORS defaults', () => {
+    const hosted = loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+    });
+    const production = loadConfig({ NODE_ENV: 'production' });
+
+    expect(hosted.auth).toMatchObject({
+      claims: {
+        email: 'https://poolstatis.xyz/email',
+        emailVerified: 'https://poolstatis.xyz/email_verified',
+        displayName: 'https://poolstatis.xyz/display_name',
+        picture: 'https://poolstatis.xyz/picture',
+      },
+    });
+    expect(hosted.corsOrigins).toEqual([
+      'http://localhost:5273',
+      'http://127.0.0.1:5273',
+      'http://[::1]:5273',
+    ]);
+    expect(production.corsOrigins).toEqual([]);
+  });
+
+  it('normalizes a comma-separated exact-origin CORS allowlist and rejects unsafe entries', () => {
+    expect(loadConfig({
+      POOLSTATIS_CORS_ORIGINS: 'https://console.example/, https://console.example, http://localhost:5273',
+    }).corsOrigins).toEqual(['https://console.example', 'http://localhost:5273']);
+
+    for (const origin of [
+      'ftp://console.example',
+      'https://user:pass@console.example',
+      'https://console.example/path',
+      'https://console.example?query=true',
+    ]) {
+      expect(() => loadConfig({ POOLSTATIS_CORS_ORIGINS: origin })).toThrow('POOLSTATIS_CORS_ORIGINS');
+    }
+  });
+
   it('rejects an explicitly empty hosted-auth claim name', () => {
     expect(() => loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',

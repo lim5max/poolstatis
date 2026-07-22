@@ -64,6 +64,7 @@ export interface Config {
       picture: string;
     };
     connectionStrategy: string;
+    legacyIssuer: string | null;
   } | null;
   corsOrigins: string[];
 }
@@ -269,12 +270,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       audience,
       jwksUri,
       claims: {
-        email: requiredText(env.AUTH_JWT_EMAIL_CLAIM, 'https://poolstatis.com/email', 'AUTH_JWT_EMAIL_CLAIM'),
-        emailVerified: requiredText(env.AUTH_JWT_EMAIL_VERIFIED_CLAIM, 'https://poolstatis.com/email_verified', 'AUTH_JWT_EMAIL_VERIFIED_CLAIM'),
-        displayName: requiredText(env.AUTH_JWT_DISPLAY_NAME_CLAIM, 'https://poolstatis.com/display_name', 'AUTH_JWT_DISPLAY_NAME_CLAIM'),
-        picture: requiredText(env.AUTH_JWT_PICTURE_CLAIM, 'https://poolstatis.com/picture', 'AUTH_JWT_PICTURE_CLAIM'),
+        email: requiredText(env.AUTH_JWT_EMAIL_CLAIM, 'https://poolstatis.xyz/email', 'AUTH_JWT_EMAIL_CLAIM'),
+        emailVerified: requiredText(env.AUTH_JWT_EMAIL_VERIFIED_CLAIM, 'https://poolstatis.xyz/email_verified', 'AUTH_JWT_EMAIL_VERIFIED_CLAIM'),
+        displayName: requiredText(env.AUTH_JWT_DISPLAY_NAME_CLAIM, 'https://poolstatis.xyz/display_name', 'AUTH_JWT_DISPLAY_NAME_CLAIM'),
+        picture: requiredText(env.AUTH_JWT_PICTURE_CLAIM, 'https://poolstatis.xyz/picture', 'AUTH_JWT_PICTURE_CLAIM'),
       },
       connectionStrategy: requiredText(env.AUTH_CONNECTION_STRATEGY, 'oidc', 'AUTH_CONNECTION_STRATEGY'),
+      legacyIssuer: env.AUTH_JWT_LEGACY_ISSUER === undefined
+        ? null
+        : requiredText(env.AUTH_JWT_LEGACY_ISSUER, '', 'AUTH_JWT_LEGACY_ISSUER'),
     } : null,
     corsOrigins,
   };

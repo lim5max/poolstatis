@@ -10,6 +10,7 @@ export interface AuthUserInput {
   displayName?: string | null;
   pictureUrl?: string | null;
   connectionStrategy: string;
+  legacyIssuer?: string | null;
 }
 
 export interface AuthenticatedAccount {
@@ -112,34 +113,63 @@ export async function getOrCreateAuthenticatedAccount(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(
-      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-      [`${input.issuer.length}:${input.issuer}${input.subject}`],
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.subject]);
+    const selectUser = () => client.query(
+      `SELECT id, identity_issuer, subject, email, email_verified, display_name, name, picture_url, connection_strategy
+       FROM auth_users WHERE subject = $1 FOR UPDATE`,
+      [input.subject],
     );
-    const { rows: userRows } = await client.query(
-      `INSERT INTO auth_users (
-         identity_issuer, subject, email, email_verified, display_name, name,
-         picture_url, connection_strategy, updated_at, last_seen_at
-       ) VALUES ($1, $2, $3, $4, $5, $5, $6, $7, now(), now())
-       ON CONFLICT (identity_issuer, subject) DO UPDATE SET
-         email = COALESCE(EXCLUDED.email, auth_users.email),
-         email_verified = EXCLUDED.email_verified,
-         picture_url = COALESCE(EXCLUDED.picture_url, auth_users.picture_url),
-         connection_strategy = EXCLUDED.connection_strategy,
-         updated_at = now(),
-         last_seen_at = now()
-       RETURNING id, identity_issuer, subject, email, email_verified, display_name, name, picture_url, connection_strategy`,
-      [
-        input.issuer,
-        input.subject,
-        input.email ?? null,
-        input.emailVerified,
-        input.displayName ?? null,
-        input.pictureUrl ?? null,
-        input.connectionStrategy,
-      ],
-    );
-    const user = userRows[0];
+    let existing = (await selectUser()).rows[0];
+    let user;
+    if (!existing) {
+      const { rows } = await client.query(
+        `INSERT INTO auth_users (
+           identity_issuer, subject, email, email_verified, display_name, name,
+           picture_url, connection_strategy, updated_at, last_seen_at
+         ) VALUES ($1, $2, $3, $4, $5, $5, $6, $7, now(), now())
+         ON CONFLICT (subject) DO NOTHING
+         RETURNING id, identity_issuer, subject, email, email_verified, display_name, name, picture_url, connection_strategy`,
+        [
+          input.issuer,
+          input.subject,
+          input.email ?? null,
+          input.emailVerified,
+          input.displayName ?? null,
+          input.pictureUrl ?? null,
+          input.connectionStrategy,
+        ],
+      );
+      user = rows[0];
+      if (!user) existing = (await selectUser()).rows[0];
+    }
+    if (existing) {
+      const adoptLegacy = existing.identity_issuer === null && input.legacyIssuer === input.issuer;
+      if ((!adoptLegacy && existing.identity_issuer === null)
+        || (existing.identity_issuer !== null && existing.identity_issuer !== input.issuer)) {
+        throw new ApiError(401, 'unauthorized', 'authentication failed');
+      }
+      const { rows } = await client.query(
+        `UPDATE auth_users SET
+           identity_issuer = COALESCE(identity_issuer, $2),
+           email = COALESCE($3, email),
+           email_verified = $4,
+           picture_url = COALESCE($5, picture_url),
+           connection_strategy = $6,
+           updated_at = now(),
+           last_seen_at = now()
+         WHERE id = $1
+         RETURNING id, identity_issuer, subject, email, email_verified, display_name, name, picture_url, connection_strategy`,
+        [
+          existing.id,
+          input.issuer,
+          input.email ?? null,
+          input.emailVerified,
+          input.pictureUrl ?? null,
+          input.connectionStrategy,
+        ],
+      );
+      user = rows[0];
+    }
 
     const { rows: memberships } = await client.query(
       `SELECT o.id, o.name, om.role

@@ -18,6 +18,8 @@ export interface JwtAuthOptions {
     picture: string;
   };
   connectionStrategy?: string;
+  /** Explicit operator opt-in for adopting pre-017 rows with no issuer binding. */
+  legacyIssuer?: string | null;
 }
 
 export interface AuthContext {
@@ -52,6 +54,10 @@ function stringClaim(payload: Record<string, unknown>, name: string): string | n
   return typeof value === 'string' ? value : null;
 }
 
+function hostedUnauthorized(): ApiError {
+  return new ApiError(401, 'unauthorized', 'authentication failed');
+}
+
 function bearer(header: string | undefined): string {
   const token = header?.match(/^Bearer\s+(.+)$/i)?.[1];
   if (!token) throw unauthorized();
@@ -83,12 +89,13 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
     const verified = await jwtVerify(token, key, {
       issuer: options.issuer,
       audience: options.audience,
+      requiredClaims: ['sub', 'exp'],
     });
     payload = verified.payload;
   } catch {
-    throw unauthorized('invalid hosted auth token');
+    throw hostedUnauthorized();
   }
-  if (!payload.sub) throw unauthorized('hosted auth token is missing subject');
+  if (typeof payload.sub !== 'string' || !payload.sub.trim()) throw hostedUnauthorized();
   const claims = options.claims ?? standardClaimNames;
   if (payload[claims.emailVerified] !== true) {
     throw new ApiError(
@@ -106,6 +113,7 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
     displayName: stringClaim(payload, claims.displayName),
     pictureUrl: stringClaim(payload, claims.picture),
     connectionStrategy: options.connectionStrategy ?? 'oidc',
+    legacyIssuer: options.legacyIssuer ?? null,
   });
   return {
     keyId: null,
