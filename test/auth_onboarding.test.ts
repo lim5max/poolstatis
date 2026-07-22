@@ -61,7 +61,7 @@ afterAll(async () => {
 });
 
 describe('hosted auth onboarding', () => {
-  it('creates a hosted user, default org, and returns free billing meters on first /me', async () => {
+  it('creates a hosted user, default org, and exposes only the generic events_stored meter on first /me', async () => {
     const res = await authApi('GET', '/api/v1/me');
 
     expect(res.status).toBe(200);
@@ -76,14 +76,7 @@ describe('hosted auth onboarding', () => {
       price_cents: 0,
       currency: 'USD',
     });
-    expect(res.body.billing.meters.map((m: any) => m.key)).toEqual([
-      'events',
-      'monthly_tracked_users',
-      'retained_entities',
-      'projects',
-      'retention_months',
-      'seats',
-    ]);
+    expect(res.body.billing.meters.map((m: any) => m.key)).toEqual(['events_stored']);
     expect(res.body.onboarding.completed).toBe(false);
   });
 
@@ -148,5 +141,8 @@ describe('hosted auth onboarding', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('insufficient_role');
+    const usage = await authApiAs(memberToken, 'GET', `/api/v1/me/usage?period=${new Date().toISOString().slice(0, 7)}`);
+    expect(usage.status).toBe(403);
+    expect(usage.body.error.code).toBe('insufficient_role');
   });
 });

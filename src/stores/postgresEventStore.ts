@@ -1,5 +1,7 @@
 import type pg from 'pg';
 import type {
+  AppendResult,
+  UsageWarning,
   ActorSummary,
   EntityStatusEvidence,
   EntityStatusEvidenceQuery,
@@ -31,17 +33,50 @@ import type {
 } from './eventStore.js';
 import { andFilters, compileFilters, numericPropSql } from './filters.js';
 import { ApiError } from '../errors.js';
+import { randomUUID } from 'node:crypto';
+import { recordUsageWarnings, type PendingUsageWarning } from '../services/usageWarnings.js';
+
+const IDEMPOTENCY_RECLAIM_INTERVAL = '35 days';
+
+interface MeteredInsertResult {
+  inserted: number;
+  warnings: PendingUsageWarning[];
+}
 
 export class PostgresEventStore implements EventStore {
   private readonly knownPartitions = new Set<string>();
 
   constructor(private readonly pool: pg.Pool) {}
 
-  async append(events: StorableEvent[]): Promise<void> {
-    if (events.length === 0) return;
+  async append(events: StorableEvent[]): Promise<AppendResult> {
+    if (events.length === 0) return { inserted: 0 };
     await this.ensurePartitions(events.map((e) => e.timestamp));
-
-    await this.insert(this.pool, events);
+    const groups = new Map<string, StorableEvent[]>();
+    for (const event of events) {
+      const key = `${event.projectId}:${event.env}`;
+      const group = groups.get(key);
+      if (group) group.push(event);
+      else groups.set(key, [event]);
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      let inserted = 0;
+      const warnings: PendingUsageWarning[] = [];
+      for (const group of [...groups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+        const result = await this.insertMetered(client, group[1], `direct:${randomUUID()}`);
+        inserted += result.inserted;
+        warnings.push(...result.warnings);
+      }
+      await client.query('COMMIT');
+      await recordUsageWarnings(this.pool, warnings).catch(() => {});
+      return { inserted, ...(warnings.length > 0 ? { warnings: warnings.map(toUsageWarning) } : {}) };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -49,7 +84,7 @@ export class PostgresEventStore implements EventStore {
    * connection. A lost HTTP response can therefore only observe a completed
    * batch, never append the same clicks twice on retry.
    */
-  async appendIdempotent(batch: IdempotentAppend): Promise<boolean> {
+  async appendIdempotent(batch: IdempotentAppend): Promise<AppendResult> {
     if (batch.events.length > 0) {
       await this.ensurePartitions(batch.events.map((event) => event.timestamp));
     }
@@ -73,7 +108,10 @@ export class PostgresEventStore implements EventStore {
         ? await client.query(
           `INSERT INTO experience_batches (project_id, env, batch_id, status, completed_at, last_error)
            VALUES ($1, $2, $3, 'completed', now(), NULL)
-           ON CONFLICT (project_id, env, batch_id) DO NOTHING
+           ON CONFLICT (project_id, env, batch_id) DO UPDATE
+           SET received_at = now(), status = 'completed', completed_at = now(), last_error = NULL
+           WHERE experience_batches.status = 'failed'
+              OR experience_batches.received_at < now() - interval '${IDEMPOTENCY_RECLAIM_INTERVAL}'
            RETURNING batch_id`,
           [batch.projectId, batch.env, batch.batchId],
         )
@@ -83,7 +121,7 @@ export class PostgresEventStore implements EventStore {
            ON CONFLICT (project_id, env, batch_id) DO UPDATE
            SET received_at = now(), status = 'completed', completed_at = now(), last_error = NULL
            WHERE ingest_batches.status = 'failed'
-              OR ingest_batches.received_at < now() - interval '24 hours'
+              OR ingest_batches.received_at < now() - interval '${IDEMPOTENCY_RECLAIM_INTERVAL}'
            RETURNING batch_id`,
           [batch.projectId, batch.env, batch.batchId],
         );
@@ -102,11 +140,17 @@ export class PostgresEventStore implements EventStore {
           );
         }
         await client.query('COMMIT');
-        return false;
+        return { inserted: 0, duplicate: true };
       }
-      if (batch.events.length > 0) await this.insert(client, batch.events);
+      const metered = batch.events.length > 0
+        ? await this.insertMetered(client, batch.events, `${batch.dedupe}:${batch.projectId}:${batch.env}:${batch.batchId}`)
+        : { inserted: 0, warnings: [] };
       await client.query('COMMIT');
-      return true;
+      await recordUsageWarnings(this.pool, metered.warnings).catch(() => {});
+      return {
+        inserted: metered.inserted,
+        ...(metered.warnings.length > 0 ? { warnings: metered.warnings.map(toUsageWarning) } : {}),
+      };
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       throw err;
@@ -115,7 +159,72 @@ export class PostgresEventStore implements EventStore {
     }
   }
 
-  private async insert(client: pg.Pool | pg.PoolClient, events: StorableEvent[]): Promise<void> {
+  private async insertMetered(client: pg.PoolClient, events: StorableEvent[], sourceBatch: string): Promise<MeteredInsertResult> {
+    const first = events[0];
+    if (!first) return { inserted: 0, warnings: [] };
+    if (events.some((event) => event.projectId !== first.projectId || event.env !== first.env)) {
+      throw new Error('a metered append must contain one project and environment');
+    }
+    const billable = events.filter((event) => event.isSystem !== true && event.eventSource !== 'system');
+    if (billable.length === 0) return { inserted: await this.insert(client, events), warnings: [] };
+
+    const project = await client.query<{ org_id: string }>(
+      'SELECT org_id FROM projects WHERE id = $1 FOR KEY SHARE',
+      [first.projectId],
+    );
+    if (!project.rows[0]) throw new Error(`project ${first.projectId} does not exist`);
+    const period = await client.query<{ period_start: string }>(
+      `SELECT date_trunc('month', transaction_timestamp() AT TIME ZONE 'UTC')::date::text AS period_start`,
+    );
+    const orgId = project.rows[0].org_id;
+    const periodStart = period.rows[0]!.period_start;
+    await client.query(
+      `INSERT INTO organization_usage (org_id, meter_key, period_start, quantity)
+       VALUES ($1, 'events_stored', $2::date, 0)
+       ON CONFLICT (org_id, meter_key, period_start) DO NOTHING`,
+      [orgId, periodStart],
+    );
+    const usage = await client.query<{ quantity: string }>(
+      `SELECT quantity FROM organization_usage
+       WHERE org_id = $1 AND meter_key = 'events_stored' AND period_start = $2::date FOR UPDATE`,
+      [orgId, periodStart],
+    );
+    const entitlement = await client.query<{ hard_limit: string | null; warning_thresholds: string[] }>(
+      `SELECT hard_limit, warning_thresholds FROM organization_entitlements WHERE org_id = $1 AND meter_key = 'events_stored'`,
+      [orgId],
+    );
+    const used = BigInt(usage.rows[0]?.quantity ?? 0);
+    const limit = entitlement.rows[0]?.hard_limit;
+    if (limit !== null && limit !== undefined && used + BigInt(billable.length) > BigInt(limit)) {
+      throw new ApiError(
+        402,
+        'billing_limit_reached',
+        'the accepted event batch would exceed this organization\'s configured limit',
+        'wait for the next UTC billing period or raise the generic events_stored entitlement',
+      );
+    }
+    const inserted = await this.insert(client, events);
+    const nextQuantity = used + BigInt(billable.length);
+    const warnings = (entitlement.rows[0]?.warning_thresholds ?? [])
+      .map(BigInt)
+      .filter((threshold) => used < threshold && threshold <= nextQuantity)
+      .map((threshold) => ({
+        orgId, periodStart, meter: 'events_stored' as const, threshold: Number(threshold), quantity: Number(nextQuantity),
+      }));
+    await client.query(
+      `INSERT INTO usage_ledger (org_id, project_id, env, meter_key, period_start, quantity, source_batch, dedupe_key)
+       VALUES ($1, $2, $3, 'events_stored', $4::date, $5, $6, $7)`,
+      [orgId, first.projectId, first.env, periodStart, billable.length, sourceBatch, sourceBatch],
+    );
+    await client.query(
+      `UPDATE organization_usage SET quantity = quantity + $3, updated_at = now()
+       WHERE org_id = $1 AND meter_key = 'events_stored' AND period_start = $2::date`,
+      [orgId, periodStart, billable.length],
+    );
+    return { inserted, warnings };
+  }
+
+  private async insert(client: pg.Pool | pg.PoolClient, events: StorableEvent[]): Promise<number> {
     const params: unknown[] = [];
     const rows = events.map((e) => {
       params.push(
@@ -126,11 +235,12 @@ export class PostgresEventStore implements EventStore {
       const base = params.length - 10;
       return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
     });
-    await client.query(
+    const result = await client.query(
       `INSERT INTO events (project_id, env, event, "timestamp", distinct_id, session_id, properties, registered, is_system, event_source)
        VALUES ${rows.join(', ')}`,
       params,
     );
+    return result.rowCount ?? 0;
   }
 
   async trend(q: TrendQuery): Promise<TrendPoint[]> {
@@ -846,10 +956,19 @@ export class PostgresEventStore implements EventStore {
   }
 }
 
+function toUsageWarning(warning: PendingUsageWarning): UsageWarning {
+  return { meter: warning.meter, threshold: warning.threshold, quantity: warning.quantity };
+}
+
 function isPartitionOverlapError(err: unknown): boolean {
   // 42P17 invalid_object_definition: thrown when the DEFAULT partition already
-  // holds rows that would belong to the new partition.
-  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '42P17';
+  // holds rows that would belong to the new partition. PostgreSQL can surface
+  // the same race as a 23514 partition-constraint violation after another
+  // writer has populated the default partition.
+  if (typeof err !== 'object' || err === null) return false;
+  const value = err as { code?: string; message?: string };
+  return value.code === '42P17'
+    || (value.code === '23514' && value.message?.includes('default partition') === true);
 }
 
 function toIso(value: Date | string): string {

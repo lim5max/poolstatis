@@ -166,6 +166,9 @@ describe('personal token lifecycle', () => {
     });
     expect(deniedProject.status).toBe(403);
     expect(deniedProject.body.error.code).toBe('insufficient_role');
+    const deniedUsage = await request(ownedToken.body.token, 'GET', `/api/v1/me/usage?period=${new Date().toISOString().slice(0, 7)}`);
+    expect(deniedUsage.status).toBe(403);
+    expect(deniedUsage.body.error.code).toBe('insufficient_role');
     const deniedProjectMutation = await request(ownedToken.body.token, 'POST', `/api/v1/projects/${managedSlug}/keys`, {
       kind: 'ingest',
     });

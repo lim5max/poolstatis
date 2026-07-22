@@ -55,6 +55,9 @@ describe('browser experience MCP tools', () => {
       ],
     });
     expect(captured.status).toBe(200);
+    const beforeReads = await env.pool.query<{ quantity: string }>(
+      `SELECT COALESCE(sum(quantity), 0)::bigint AS quantity FROM usage_ledger WHERE project_id = $1`, [env.projectId],
+    );
 
     const map = await client.callTool({
       name: 'query_interaction_map',
@@ -71,5 +74,9 @@ describe('browser experience MCP tools', () => {
     expect(session.structuredContent).toMatchObject({
       kind: 'experience_session', summary: { page_views: 1, clicks: 1 },
     });
+    const afterReads = await env.pool.query<{ quantity: string }>(
+      `SELECT COALESCE(sum(quantity), 0)::bigint AS quantity FROM usage_ledger WHERE project_id = $1`, [env.projectId],
+    );
+    expect(afterReads.rows[0]?.quantity).toBe(beforeReads.rows[0]?.quantity);
   });
 });

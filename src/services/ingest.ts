@@ -1,8 +1,9 @@
 import type pg from 'pg';
-import type { EventStore, StorableEvent } from '../stores/eventStore.js';
+import type { AppendResult, EventStore, StorableEvent } from '../stores/eventStore.js';
 import { ingestEventSchema, type IngestEnvelope } from '../schemas.js';
 import { registeredEventNames } from './registry.js';
 import { recordWarnings, type WarningDelta } from './warnings.js';
+import { randomUUID } from 'node:crypto';
 
 const CLOCK_SKEW_FUTURE_MS = 5 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 30_000;
@@ -12,6 +13,7 @@ export interface IngestResult {
   unregistered: number;
   duplicate?: boolean;
   errors?: Array<{ index: number; message: string }>;
+  warnings?: AppendResult['warnings'];
 }
 
 interface CacheEntry {
@@ -96,25 +98,25 @@ export class IngestService {
         });
       });
 
-      if (batch.batch_id) {
-        const appended = await this.eventStore.appendIdempotent({
-          dedupe: 'ingest_24h',
-          projectId: project.id,
-          env,
-          batchId: batch.batch_id,
-          events: storable,
-        });
-        if (!appended) return { accepted: 0, unregistered: 0, duplicate: true };
-      } else {
-        await this.eventStore.append(storable);
-      }
+      // Even a request without a caller-supplied batch id gets a server-only
+      // claim. That keeps one HTTP batch, its quota check, and its durable
+      // writes indivisible through BufferedEventStore.
+      const appended = await this.eventStore.appendIdempotent({
+        dedupe: 'ingest_24h',
+        projectId: project.id,
+        env,
+        batchId: batch.batch_id ?? `server:${randomUUID()}`,
+        events: storable,
+      });
+      if (appended.duplicate) return { accepted: 0, unregistered: 0, duplicate: true };
       if (warn.size > 0) {
         // Best-effort: a warnings-log failure must never fail ingestion.
         await recordWarnings(this.pool, project.id, env, [...warn.values()]).catch(() => {});
       }
 
-      const result: IngestResult = { accepted: storable.length, unregistered };
+      const result: IngestResult = { accepted: appended.inserted, unregistered };
       if (errors.length > 0) result.errors = errors;
+      if (appended.warnings?.length) result.warnings = appended.warnings;
       return result;
     }
   }

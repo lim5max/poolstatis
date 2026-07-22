@@ -56,11 +56,8 @@ export interface BillingSummary {
     name: string;
     unit: string;
     aggregation: string;
-    free_quantity: number;
-    overage_unit_quantity: number;
-    overage_price_cents: string;
-    pricing_stage: string;
-    source_note: string;
+    hard_limit: number | null;
+    warning_thresholds: number[];
   }>;
 }
 
@@ -293,12 +290,10 @@ export async function getBillingSummary(pool: pg.Pool, orgId: string): Promise<B
   const plan = rows[0];
   if (!plan) throw new ApiError(500, 'billing_not_initialized', 'free billing plan was not initialized');
 
-  const { rows: meters } = await pool.query(
-    `SELECT key, name, unit, aggregation, free_quantity, overage_unit_quantity,
-       overage_price_cents::text, pricing_stage, source_note
-     FROM billing_meters
-     WHERE active = true
-     ORDER BY sort_order, key`,
+  const { rows: entitlements } = await pool.query<{ hard_limit: string | null; warning_thresholds: string[] }>(
+    `SELECT hard_limit, warning_thresholds FROM organization_entitlements
+     WHERE org_id = $1 AND meter_key = 'events_stored'`,
+    [orgId],
   );
 
   return {
@@ -320,11 +315,15 @@ export async function getBillingSummary(pool: pg.Pool, orgId: string): Promise<B
     billing_limit_cents: plan.billing_limit_cents,
     current_period_start: plan.current_period_start,
     current_period_end: plan.current_period_end,
-    meters: meters.map((m) => ({
-      ...m,
-      free_quantity: Number(m.free_quantity),
-      overage_unit_quantity: Number(m.overage_unit_quantity),
-    })),
+    meters: [{
+      key: 'events_stored',
+      name: 'Accepted events stored',
+      unit: 'event',
+      aggregation: 'sum',
+      hard_limit: entitlements[0]?.hard_limit === null || entitlements[0]?.hard_limit === undefined
+        ? null : Number(entitlements[0].hard_limit),
+      warning_thresholds: (entitlements[0]?.warning_thresholds ?? []).map(Number),
+    }],
   };
 }
 

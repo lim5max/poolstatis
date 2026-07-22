@@ -50,6 +50,7 @@ import {
   approveAction, getAction, listActions, prepareAction, rejectAction, retryAction,
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
+import { getOrganizationUsage } from '../services/usage.js';
 import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
 import {
   acknowledgeOnboardingGate, getOnboardingStatus, recordAgentObservation, recordQueryRun,
@@ -63,7 +64,7 @@ import {
   actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
-  createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema,
+  createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -113,6 +114,27 @@ function requirePlatformAccess(auth: AuthContext): void {
       'ask an owner or admin to upgrade your workspace role',
     );
   }
+}
+
+/** Usage is organization-wide: never expose it through a project secret key. */
+function requireUsageReadAccess(auth: AuthContext): void {
+  if ((auth.kind === 'user' || auth.kind === 'personal')
+    && auth.projectId === null
+    && hasOrganizationManagementRole(auth)) return;
+  if (auth.kind === 'user' || auth.kind === 'personal') {
+    throw new ApiError(
+      403,
+      'insufficient_role',
+      'this hosted account role cannot read organization usage',
+      'ask an owner or admin to upgrade your workspace role',
+    );
+  }
+  throw new ApiError(
+    403,
+    'insufficient_scope',
+    'organization usage requires a hosted user or organization-wide personal token',
+    'use a hosted user session or a personal token with no project scope',
+  );
 }
 
 function requireTokenIssuanceAccess(auth: AuthContext): void {
@@ -296,6 +318,8 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         const route = req.routeOptions.url;
         if (route === '/api/v1/me' || route === '/api/v1/onboarding') {
           requireKind(req.auth, 'user');
+        } else if (route === '/api/v1/me/usage') {
+          requireUsageReadAccess(req.auth);
         } else if (route === '/api/v1/me/tokens' && req.method === 'POST') {
           requireTokenIssuanceAccess(req.auth);
         } else if (route === '/api/v1/me/tokens' || route === '/api/v1/me/tokens/:id') {
@@ -540,6 +564,17 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     req.resolvedProject = project;
     return project;
   };
+
+  app.get('/api/v1/me/usage', async (req) => {
+    requireUsageReadAccess(req.auth);
+    const { period } = req.query as { period?: string };
+    if (!period || !usagePeriodSchema.safeParse(period).success) {
+      throw badRequest('invalid_query_param', 'period must be a UTC month in YYYY-MM format');
+    }
+    // The organization comes only from the authenticated credential. Caller
+    // query parameters never widen an organization-scoped usage read.
+    return getOrganizationUsage(ctx.pool, req.auth.orgId, period);
+  });
 
   app.get('/api/v1/projects', async (req) => {
     platform(req);

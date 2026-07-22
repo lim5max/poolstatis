@@ -10,6 +10,7 @@ import type {
   EventNameStat,
   EventStatsQuery,
   EventStore,
+  AppendResult,
   IdempotentAppend,
   FunnelQuery,
   IntervalActivityQuery,
@@ -39,14 +40,14 @@ export interface BufferedEventStoreOptions {
 
 interface PendingAppend {
   events: StorableEvent[];
-  resolve: () => void;
+  resolve: (result: AppendResult) => void;
   reject: (err: unknown) => void;
 }
 
 interface PendingIdempotentAppend {
   batch: IdempotentAppend;
   weight: number;
-  resolve: (appended: boolean) => void;
+  resolve: (result: AppendResult) => void;
   reject: (err: unknown) => void;
 }
 
@@ -77,8 +78,8 @@ export class BufferedEventStore implements EventStore {
     this.options = validateOptions(options);
   }
 
-  async append(events: StorableEvent[]): Promise<void> {
-    if (events.length === 0) return;
+  async append(events: StorableEvent[]): Promise<AppendResult> {
+    if (events.length === 0) return { inserted: 0 };
     if (events.length > this.options.maxEvents) {
       throw new ApiError(
         413,
@@ -108,7 +109,7 @@ export class BufferedEventStore implements EventStore {
     });
   }
 
-  appendIdempotent(batch: IdempotentAppend): Promise<boolean> {
+  appendIdempotent(batch: IdempotentAppend): Promise<AppendResult> {
     if (batch.events.length > this.options.maxEvents) {
       return Promise.reject(new ApiError(
         413,
@@ -248,8 +249,14 @@ export class BufferedEventStore implements EventStore {
 
         this.inFlightEvents += batchEvents;
         try {
-          await this.inner.append(batch.flatMap((item) => item.events));
-          batch.forEach((item) => item.resolve());
+          const result = await this.inner.append(batch.flatMap((item) => item.events));
+          let offset = 0;
+          batch.forEach((item) => {
+            const expected = item.events.length;
+            const inserted = Math.max(0, Math.min(expected, result.inserted - offset));
+            offset += expected;
+            item.resolve({ inserted });
+          });
         } catch (err) {
           batch.forEach((item) => item.reject(err));
         } finally {

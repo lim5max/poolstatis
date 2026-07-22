@@ -628,6 +628,9 @@ export const ingestEnvelopeSchema = z.object({
 
 export type IngestEnvelope = z.infer<typeof ingestEnvelopeSchema>;
 
+/** UTC calendar month used by the server-side accepted-event meter. */
+export const usagePeriodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+
 export const entityUpsertSchema = z.object({
   entities: z
     .array(

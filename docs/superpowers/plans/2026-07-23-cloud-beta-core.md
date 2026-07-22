@@ -103,12 +103,12 @@ Run: `pnpm test test/cloud-tenant-isolation.test.ts test/personal-token-lifecycl
 ### Task 3: Atomic accepted-event metering and generic quotas
 
 **Files:**
-- Create: `migrations/019_usage_ledger_entitlements.sql`
+- Create: `migrations/024_usage_ledger_entitlements.sql`
 - Modify: `src/stores/eventStore.ts`
 - Modify: `src/stores/postgresEventStore.ts`
 - Modify: `src/stores/bufferedEventStore.ts`
 - Modify: `src/services/ingest.ts`
-- Modify: `src/services/experienceIngest.ts`
+- Modify: `src/services/experience.ts`
 - Modify: `src/http/server.ts`
 - Modify: `src/schemas.ts`
 - Test: `test/usage-metering.test.ts`

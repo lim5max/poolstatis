@@ -25,6 +25,19 @@ export interface IdempotentAppend {
   events: StorableEvent[];
 }
 
+/** Durable append outcome. `inserted` is the exact number of event rows committed. */
+export interface AppendResult {
+  inserted: number;
+  duplicate?: boolean;
+  warnings?: UsageWarning[];
+}
+
+export interface UsageWarning {
+  meter: 'events_stored';
+  threshold: number;
+  quantity: number;
+}
+
 export interface TrendQuery {
   projectId: string;
   env: string;
@@ -286,9 +299,9 @@ export interface ExperienceSessionEvent {
  * ClickHouse — that constraint is what keeps the Query DSL small.
  */
 export interface EventStore {
-  append(events: StorableEvent[]): Promise<void>;
-  /** Returns false when the batch was already durably appended. */
-  appendIdempotent(batch: IdempotentAppend): Promise<boolean>;
+  append(events: StorableEvent[]): Promise<AppendResult>;
+  /** Returns `duplicate` when the batch was already durably appended. */
+  appendIdempotent(batch: IdempotentAppend): Promise<AppendResult>;
   trend(q: TrendQuery): Promise<TrendPoint[]>;
   funnel(q: FunnelQuery): Promise<number[]>; // actor count per step
   retention(q: RetentionQuery): Promise<RetentionCohort[]>;

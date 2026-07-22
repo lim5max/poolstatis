@@ -78,7 +78,7 @@ export async function captureExperienceEvents(
   env: string,
   input: ExperienceCaptureInput,
   now = new Date(),
-): Promise<{ accepted: number; duplicate?: boolean }> {
+): Promise<{ accepted: number; duplicate?: boolean; warnings?: import('../stores/eventStore.js').UsageWarning[] }> {
   const surface = await getExperienceSurface(pool, projectId, input.surface);
   if (surface.status !== 'active') {
     throw new ApiError(
@@ -113,7 +113,10 @@ export async function captureExperienceEvents(
   const appended = await eventStore.appendIdempotent({
     dedupe: 'experience', projectId, env, batchId: input.batch_id, events,
   });
-  return appended ? { accepted: events.length } : { accepted: 0, duplicate: true };
+  return appended.duplicate ? { accepted: 0, duplicate: true } : {
+    accepted: appended.inserted,
+    ...(appended.warnings?.length ? { warnings: appended.warnings } : {}),
+  };
 }
 
 function isUniqueViolation(err: unknown): boolean {
