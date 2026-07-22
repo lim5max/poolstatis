@@ -161,8 +161,11 @@ export async function authenticate(
     throw unauthorized('unknown or revoked API key');
   }
   const key = rows[0];
-  // NULL owner denotes a legacy/self-host token and preserves the existing
-  // token protocol. Hosted personal tokens require a current membership.
+  if (key.kind === 'personal' && !key.issued_by_user_id && jwtOptions) {
+    throw unauthorized('ownerless personal tokens are not accepted by hosted authentication');
+  }
+  // NULL owner is compatible only for self-host mode (without hosted JWT
+  // auth). Hosted personal tokens require a current membership.
   if (key.kind === 'personal' && key.issued_by_user_id && !key.issued_user_role) {
     throw unauthorized('personal token owner no longer belongs to this organization');
   }

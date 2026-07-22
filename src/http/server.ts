@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 import type pg from 'pg';
 import { ApiError, badRequest, notFound } from '../errors.js';
 import { authenticate, requireKind, type AuthContext, type JwtAuthOptions } from './auth.js';
@@ -482,7 +482,7 @@ function registerAccountRoutes(
 
   app.delete('/api/v1/me/tokens/:id', async (req) => {
     requireOwnedTokenAccess(req.auth);
-    const { id } = req.params as { id: string };
+    const id = z.string().uuid().parse((req.params as { id: string }).id);
     await revokePersonalApiKey(ctx.pool, req.auth.orgId, req.auth.userId!, id);
     return { revoked: true };
   });

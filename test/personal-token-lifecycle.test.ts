@@ -128,6 +128,10 @@ describe('personal token lifecycle', () => {
     expect(foreignList.status).toBe(200);
     expect(foreignList.body.tokens).toEqual([]);
 
+    const invalidId = await request(owner.token, 'DELETE', '/api/v1/me/tokens/not-a-uuid');
+    expect(invalidId.status).toBe(400);
+    expect(invalidId.body.error.code).toBe('validation_error');
+
     const revoked = await request(owner.token, 'DELETE', `/api/v1/me/tokens/${created.body.id}`);
     expect(revoked.status).toBe(200);
     expect(revoked.body).toEqual({ revoked: true });
@@ -182,12 +186,24 @@ describe('personal token lifecycle', () => {
       'DELETE FROM organization_members WHERE org_id = $1 AND user_id = $2',
       [removedProfile.body.organization.id, removedProfile.body.user.id],
     );
+    const deletedOwnedToken = await pool.query('SELECT 1 FROM api_keys WHERE id = $1', [removedToken.body.id]);
+    expect(deletedOwnedToken.rowCount).toBe(0);
     const afterRemoval = await request(removedToken.body.token, 'GET', '/api/v1/projects');
     expect(afterRemoval.status).toBe(401);
     expect(afterRemoval.body.error.code).toBe('unauthorized');
 
     const legacy = await createApiKey(pool, { orgId: member.orgId, projectId: null, kind: 'personal' });
-    expect((await request(legacy.token, 'GET', '/api/v1/projects')).status).toBe(200);
+    const hostedLegacy = await request(legacy.token, 'GET', '/api/v1/projects');
+    expect(hostedLegacy.status).toBe(401);
+    const selfHostedApp = buildServer(pool);
+    try {
+      const selfHostedLegacy = await selfHostedApp.inject({
+        method: 'GET', url: '/api/v1/projects', headers: { authorization: `Bearer ${legacy.token}` },
+      });
+      expect(selfHostedLegacy.statusCode).toBe(200);
+    } finally {
+      await selfHostedApp.close();
+    }
   });
 
   it('serializes concurrent onboarding and same-slug project creation without duplicate projects or tokens', async () => {

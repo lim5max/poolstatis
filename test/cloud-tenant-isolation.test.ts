@@ -4,7 +4,6 @@ import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { createPool } from '../src/db.js';
 import { buildServer } from '../src/http/server.js';
-import { createApiKey } from '../src/services/projects.js';
 import { TEST_DB_URL } from './urls.js';
 
 let pool: pg.Pool;
@@ -51,7 +50,7 @@ async function createHostedOrg(label: string) {
   const token = await jwt(`auth0|${id}`, `${id}@example.test`, label);
   const me = await request(token, 'GET', '/api/v1/me');
   expect(me.status).toBe(200);
-  return { token, orgId: me.body.organization.id };
+  return { token, orgId: me.body.organization.id, userId: me.body.user.id };
 }
 
 beforeAll(async () => {
@@ -108,13 +107,15 @@ describe('cloud tenant boundaries', () => {
     expect(alphaSample.body.events.map((event: any) => event.properties.tenant)).toEqual(['alpha']);
     expect(betaSample.body.events.map((event: any) => event.properties.tenant)).toEqual(['beta']);
 
-    const alphaPersonal = await createApiKey(pool, { orgId: alpha.orgId, projectId: null, kind: 'personal' });
-    const betaPersonal = await createApiKey(pool, { orgId: beta.orgId, projectId: null, kind: 'personal' });
-    const alphaMcpProjects = await request(alphaPersonal.token, 'GET', '/api/v1/projects', undefined, true);
-    const betaMcpProjects = await request(betaPersonal.token, 'GET', '/api/v1/projects', undefined, true);
+    const alphaPersonal = await request(alpha.token, 'POST', '/api/v1/me/tokens', { label: 'Alpha MCP' });
+    const betaPersonal = await request(beta.token, 'POST', '/api/v1/me/tokens', { label: 'Beta MCP' });
+    expect(alphaPersonal.status).toBe(201);
+    expect(betaPersonal.status).toBe(201);
+    const alphaMcpProjects = await request(alphaPersonal.body.token, 'GET', '/api/v1/projects', undefined, true);
+    const betaMcpProjects = await request(betaPersonal.body.token, 'GET', '/api/v1/projects', undefined, true);
     expect(alphaMcpProjects.body.projects.map((project: any) => project.slug)).toEqual([slug]);
     expect(betaMcpProjects.body.projects.map((project: any) => project.slug)).toEqual([slug]);
-    expect((await request(alphaPersonal.token, 'GET', `/api/v1/projects/${slug}/metrics`, undefined, true)).body.metrics)
+    expect((await request(alphaPersonal.body.token, 'GET', `/api/v1/projects/${slug}/metrics`, undefined, true)).body.metrics)
       .toHaveLength(1);
   });
 
@@ -158,8 +159,9 @@ describe('cloud tenant boundaries', () => {
     });
     expect(adminCreated.status).toBe(201);
 
-    const personal = await createApiKey(pool, { orgId: owner.orgId, projectId: null, kind: 'personal' });
-    const personalCreated = await request(personal.token, 'POST', '/api/v1/projects', {
+    const personal = await request(owner.token, 'POST', '/api/v1/me/tokens', { label: 'Owner MCP' });
+    expect(personal.status).toBe(201);
+    const personalCreated = await request(personal.body.token, 'POST', '/api/v1/projects', {
       slug: `personal-${Date.now()}-${sequence++}`, name: 'Personal project', orgId: other.orgId,
     });
     expect(personalCreated.status).toBe(201);
@@ -187,5 +189,10 @@ describe('cloud tenant boundaries', () => {
        VALUES ($1, $2, 'personal', $3)`,
       [owner.orgId, baseProject.rows[0].id, `bound-personal-${Date.now()}-${sequence++}`],
     )).rejects.toMatchObject({ code: '23514' });
+    await expect(pool.query(
+      `INSERT INTO api_keys (org_id, project_id, kind, token_hash, issued_by_user_id)
+       VALUES ($1, NULL, 'personal', $2, $3)`,
+      [owner.orgId, `cross-org-owner-${Date.now()}-${sequence++}`, other.userId],
+    )).rejects.toMatchObject({ code: '23503' });
   });
 });
