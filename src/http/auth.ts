@@ -54,6 +54,11 @@ function stringClaim(payload: Record<string, unknown>, name: string): string | n
   return typeof value === 'string' ? value : null;
 }
 
+function verifiedEmailClaim(payload: Record<string, unknown>, name: string): string | null {
+  const email = stringClaim(payload, name)?.trim();
+  return email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
 function hostedUnauthorized(): ApiError {
   return new ApiError(401, 'unauthorized', 'authentication failed');
 }
@@ -97,7 +102,8 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
   }
   if (typeof payload.sub !== 'string' || !payload.sub.trim()) throw hostedUnauthorized();
   const claims = options.claims ?? standardClaimNames;
-  if (payload[claims.emailVerified] !== true) {
+  const email = verifiedEmailClaim(payload, claims.email);
+  if (payload[claims.emailVerified] !== true || !email) {
     throw new ApiError(
       403,
       'email_verification_required',
@@ -108,7 +114,7 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
   const account = await getOrCreateAuthenticatedAccount(pool, {
     issuer: options.issuer,
     subject: payload.sub,
-    email: stringClaim(payload, claims.email),
+    email,
     emailVerified: true,
     displayName: stringClaim(payload, claims.displayName),
     pictureUrl: stringClaim(payload, claims.picture),

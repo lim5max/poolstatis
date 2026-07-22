@@ -37,12 +37,14 @@ async function token(input: {
   tokenIssuer?: string;
   expiresAt?: string | false;
   signingKey?: CryptoKey | Uint8Array;
+  claimNames?: typeof claims;
 }): Promise<string> {
+  const claimNames = input.claimNames ?? claims;
   const payload: Record<string, string | boolean> = {};
-  if (input.email !== undefined) payload[claims.email] = input.email;
-  if (input.emailVerified !== undefined) payload[claims.emailVerified] = input.emailVerified;
-  if (input.displayName !== undefined) payload[claims.displayName] = input.displayName;
-  if (input.picture !== undefined) payload[claims.picture] = input.picture;
+  if (input.email !== undefined) payload[claimNames.email] = input.email;
+  if (input.emailVerified !== undefined) payload[claimNames.emailVerified] = input.emailVerified;
+  if (input.displayName !== undefined) payload[claimNames.displayName] = input.displayName;
+  if (input.picture !== undefined) payload[claimNames.picture] = input.picture;
 
   const jwt = new SignJWT(payload)
     .setProtectedHeader({ alg: 'RS256', kid: 'cloud-auth-test-key' })
@@ -91,6 +93,42 @@ afterAll(async () => {
 });
 
 describe('verified hosted JWT profile', () => {
+  it('uses the exact production claims from loadConfig for profile read-back', async () => {
+    const config = loadConfig({
+      AUTH_JWT_ISSUER: issuer,
+      AUTH_JWT_AUDIENCE: audience,
+    });
+    const productionApp = buildServer(pool, {
+      auth: { ...config.auth!, jwks: async () => jwks },
+      corsOrigins: config.corsOrigins,
+    });
+    const sub = uniqueSubject('production-claims');
+    const productionClaims = config.auth!.claims;
+    const response = await productionApp.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: {
+        authorization: `Bearer ${await token({
+          sub,
+          email: 'production-claims@example.com',
+          emailVerified: true,
+          displayName: 'Production Claim Name',
+          picture: 'https://images.example.com/production.png',
+          claimNames: productionClaims,
+        })}`,
+      },
+    });
+    await productionApp.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().user).toMatchObject({
+      subject: sub,
+      email: 'production-claims@example.com',
+      display_name: 'Production Claim Name',
+      picture_url: 'https://images.example.com/production.png',
+    });
+  });
+
   it('reads namespaced claims into a local profile, membership, and identity', async () => {
     const sub = uniqueSubject('profile');
     const result = await api('GET', '/api/v1/me', await token({
@@ -129,6 +167,30 @@ describe('verified hosted JWT profile', () => {
     expect(JSON.stringify(result.body)).not.toContain('unverified@example.com');
     const stored = await pool.query('SELECT 1 FROM auth_users WHERE subject = $1', [sub]);
     expect(stored.rowCount).toBe(0);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['blank', '   '],
+    ['invalid', 'not-an-email'],
+  ])('rejects a %s email before provisioning even when the verification claim is true', async (_kind, email) => {
+    const sub = uniqueSubject('invalid-email');
+    const beforeUsers = await pool.query('SELECT count(*)::int AS count FROM auth_users');
+    const beforeOrganizations = await pool.query('SELECT count(*)::int AS count FROM organizations');
+    const result = await api('GET', '/api/v1/me', await token({
+      sub,
+      ...(email === undefined ? {} : { email }),
+      emailVerified: true,
+    }));
+
+    expect(result.status).toBe(403);
+    expect(result.body).toEqual({
+      error: expect.objectContaining({ code: 'email_verification_required' }),
+    });
+    expect(JSON.stringify(result.body)).not.toContain('not-an-email');
+    expect(await pool.query('SELECT count(*)::int AS count FROM auth_users')).toEqual(beforeUsers);
+    expect(await pool.query('SELECT count(*)::int AS count FROM organizations')).toEqual(beforeOrganizations);
+    expect(await pool.query('SELECT 1 FROM auth_users WHERE subject = $1', [sub])).toMatchObject({ rowCount: 0 });
   });
 
   it.each([
@@ -222,12 +284,33 @@ describe('verified hosted JWT profile', () => {
       [organization.id, userId, 'owner'],
     );
 
-    const result = await api('GET', '/api/v1/me', await token({
-      sub,
-      email: 'after-upgrade@example.com',
-      emailVerified: true,
-      displayName: 'After Upgrade',
-    }));
+    const config = loadConfig({
+      AUTH_JWT_ISSUER: issuer,
+      AUTH_JWT_AUDIENCE: audience,
+      AUTH_JWT_LEGACY_ISSUER: issuer,
+      AUTH_JWT_EMAIL_CLAIM: claims.email,
+      AUTH_JWT_EMAIL_VERIFIED_CLAIM: claims.emailVerified,
+      AUTH_JWT_DISPLAY_NAME_CLAIM: claims.displayName,
+      AUTH_JWT_PICTURE_CLAIM: claims.picture,
+    });
+    const adoptionApp = buildServer(pool, {
+      auth: { ...config.auth!, jwks: async () => jwks },
+      corsOrigins: config.corsOrigins,
+    });
+    const response = await adoptionApp.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: {
+        authorization: `Bearer ${await token({
+          sub,
+          email: 'after-upgrade@example.com',
+          emailVerified: true,
+          displayName: 'After Upgrade',
+        })}`,
+      },
+    });
+    await adoptionApp.close();
+    const result = { status: response.statusCode, body: response.json() };
 
     expect(result.status).toBe(200);
     expect(result.body.user.id).toBe(userId);
@@ -239,6 +322,45 @@ describe('verified hosted JWT profile', () => {
     expect(stored.rows).toEqual([{ identity_issuer: issuer }]);
     const projects = await pool.query('SELECT id FROM projects WHERE org_id = $1', [organization.id]);
     expect(projects.rows).toEqual([{ id: project.id }]);
+  });
+
+  it('rejects an unbound pre-017 identity when legacy adoption is not configured', async () => {
+    const sub = uniqueSubject('unbound-legacy');
+    await pool.query(
+      'INSERT INTO auth_users (subject, email, name) VALUES ($1, $2, $3)',
+      [sub, 'unbound@example.com', 'Unbound legacy user'],
+    );
+    const config = loadConfig({
+      AUTH_JWT_ISSUER: issuer,
+      AUTH_JWT_AUDIENCE: audience,
+      AUTH_JWT_EMAIL_CLAIM: claims.email,
+      AUTH_JWT_EMAIL_VERIFIED_CLAIM: claims.emailVerified,
+      AUTH_JWT_DISPLAY_NAME_CLAIM: claims.displayName,
+      AUTH_JWT_PICTURE_CLAIM: claims.picture,
+    });
+    const noAdoptionApp = buildServer(pool, {
+      auth: { ...config.auth!, jwks: async () => jwks },
+      corsOrigins: config.corsOrigins,
+    });
+    const response = await noAdoptionApp.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: {
+        authorization: `Bearer ${await token({
+          sub,
+          email: 'unbound@example.com',
+          emailVerified: true,
+        })}`,
+      },
+    });
+    await noAdoptionApp.close();
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: { code: 'unauthorized', message: 'authentication failed' } });
+    expect(await pool.query(
+      'SELECT identity_issuer FROM auth_users WHERE subject = $1',
+      [sub],
+    )).toMatchObject({ rows: [{ identity_issuer: null }] });
   });
 
   it('does not allow a configured issuer to capture a subject already bound to another issuer', async () => {

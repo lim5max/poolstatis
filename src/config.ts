@@ -133,6 +133,12 @@ function parseCorsOrigins(raw: string | undefined, production: boolean): string[
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const issuer = env.AUTH_JWT_ISSUER;
   const audience = env.AUTH_JWT_AUDIENCE;
+  const legacyIssuer = env.AUTH_JWT_LEGACY_ISSUER === undefined
+    ? null
+    : requiredText(env.AUTH_JWT_LEGACY_ISSUER, '', 'AUTH_JWT_LEGACY_ISSUER');
+  if (legacyIssuer !== null && legacyIssuer !== issuer) {
+    throw new Error('AUTH_JWT_LEGACY_ISSUER must equal AUTH_JWT_ISSUER');
+  }
   const jwksUri = env.AUTH_JWKS_URI ?? (issuer ? new URL('.well-known/jwks.json', issuer).toString() : undefined);
   const packageStatus = env.POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true' ? 'published' : 'publish_pending';
   const databasePoolMax = positiveInt(env.DATABASE_POOL_MAX, 10, 'DATABASE_POOL_MAX');
@@ -272,13 +278,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       claims: {
         email: requiredText(env.AUTH_JWT_EMAIL_CLAIM, 'https://poolstatis.xyz/email', 'AUTH_JWT_EMAIL_CLAIM'),
         emailVerified: requiredText(env.AUTH_JWT_EMAIL_VERIFIED_CLAIM, 'https://poolstatis.xyz/email_verified', 'AUTH_JWT_EMAIL_VERIFIED_CLAIM'),
-        displayName: requiredText(env.AUTH_JWT_DISPLAY_NAME_CLAIM, 'https://poolstatis.xyz/display_name', 'AUTH_JWT_DISPLAY_NAME_CLAIM'),
+        displayName: requiredText(env.AUTH_JWT_DISPLAY_NAME_CLAIM, 'https://poolstatis.xyz/name', 'AUTH_JWT_DISPLAY_NAME_CLAIM'),
         picture: requiredText(env.AUTH_JWT_PICTURE_CLAIM, 'https://poolstatis.xyz/picture', 'AUTH_JWT_PICTURE_CLAIM'),
       },
       connectionStrategy: requiredText(env.AUTH_CONNECTION_STRATEGY, 'oidc', 'AUTH_CONNECTION_STRATEGY'),
-      legacyIssuer: env.AUTH_JWT_LEGACY_ISSUER === undefined
-        ? null
-        : requiredText(env.AUTH_JWT_LEGACY_ISSUER, '', 'AUTH_JWT_LEGACY_ISSUER'),
+      legacyIssuer,
     } : null,
     corsOrigins,
   };

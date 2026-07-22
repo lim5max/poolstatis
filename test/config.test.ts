@@ -13,7 +13,7 @@ describe('production protection config', () => {
       claims: {
         email: 'https://poolstatis.xyz/email',
         emailVerified: 'https://poolstatis.xyz/email_verified',
-        displayName: 'https://poolstatis.xyz/display_name',
+        displayName: 'https://poolstatis.xyz/name',
         picture: 'https://poolstatis.xyz/picture',
       },
     });
@@ -46,6 +46,20 @@ describe('production protection config', () => {
       AUTH_JWT_AUDIENCE: 'https://api.example/',
       AUTH_JWT_EMAIL_CLAIM: ' ',
     })).toThrow('AUTH_JWT_EMAIL_CLAIM must not be empty');
+  });
+
+  it('fails fast when legacy issuer adoption is configured for a different issuer', () => {
+    expect(() => loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      AUTH_JWT_LEGACY_ISSUER: 'https://another-issuer.example/',
+    })).toThrow('AUTH_JWT_LEGACY_ISSUER must equal AUTH_JWT_ISSUER');
+
+    expect(loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      AUTH_JWT_LEGACY_ISSUER: 'https://issuer.example/',
+    }).auth?.legacyIssuer).toBe('https://issuer.example/');
   });
 
   it('enables bounded tenant limits and automatic retention by default', () => {
