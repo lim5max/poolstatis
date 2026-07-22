@@ -90,10 +90,22 @@ function authOwner(auth: AuthContext): string {
   return auth.keyId ? `key:${auth.keyId}` : `user:${auth.userId}`;
 }
 
+/** Hosted identities fail closed without a current owner/admin role. */
+export function hasOrganizationManagementRole(auth: AuthContext): boolean {
+  if (auth.kind === 'user') {
+    return auth.userRole === 'owner' || auth.userRole === 'admin';
+  }
+  if (auth.kind === 'personal') {
+    // Ownerless personal tokens predate hosted auth and remain self-host compatible.
+    return auth.userId === undefined || auth.userRole === 'owner' || auth.userRole === 'admin';
+  }
+  return false;
+}
+
 function requirePlatformAccess(auth: AuthContext): void {
   requireKind(auth, 'secret', 'personal', 'user');
   if ((auth.kind === 'user' || auth.kind === 'personal')
-    && auth.userRole !== undefined && auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+    && !hasOrganizationManagementRole(auth)) {
     throw new ApiError(
       403,
       'insufficient_role',
@@ -132,7 +144,7 @@ function requireOrganizationManagementAccess(auth: AuthContext): void {
   }
   requireKind(auth, 'personal', 'user');
   if ((auth.kind === 'user' || auth.kind === 'personal')
-    && auth.userRole !== undefined && auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+    && !hasOrganizationManagementRole(auth)) {
     throw new ApiError(
       403,
       'insufficient_role',

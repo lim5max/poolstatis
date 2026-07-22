@@ -3,7 +3,8 @@ import { exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { createPool } from '../src/db.js';
-import { buildServer } from '../src/http/server.js';
+import { buildServer, hasOrganizationManagementRole } from '../src/http/server.js';
+import type { AuthContext } from '../src/http/auth.js';
 import { createApiKey } from '../src/services/projects.js';
 import { TEST_DB_URL } from './urls.js';
 
@@ -64,6 +65,17 @@ afterAll(async () => {
 });
 
 describe('personal token lifecycle', () => {
+  it('fails closed when hosted user contexts lack an owner/admin role, while legacy personal tokens remain compatible', () => {
+    const base = { keyId: null, orgId: 'org', projectId: null, env: 'prod' };
+    const missingUserRole: AuthContext = { ...base, kind: 'user', userId: 'user' };
+    const missingBoundPersonalRole: AuthContext = { ...base, kind: 'personal', userId: 'user' };
+    const legacyPersonal: AuthContext = { ...base, kind: 'personal' };
+
+    expect(hasOrganizationManagementRole(missingUserRole)).toBe(false);
+    expect(hasOrganizationManagementRole(missingBoundPersonalRole)).toBe(false);
+    expect(hasOrganizationManagementRole(legacyPersonal)).toBe(true);
+  });
+
   it('returns plaintext only at creation, lists a masked token, and records use without storing plaintext', async () => {
     const user = await hostedUser('lifecycle');
     const created = await request(user.token, 'POST', '/api/v1/me/tokens', { label: 'Codex laptop' });
