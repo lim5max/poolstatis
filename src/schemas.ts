@@ -25,6 +25,21 @@ export const updateProfileSchema = z.object({
 
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 
+export const createProjectSchema = z.object({
+  slug: z.string().trim().min(1).max(200),
+  name: z.string().trim().min(1).max(200),
+});
+
+export const createPersonalTokenSchema = z.object({
+  label: z.string().trim().min(1).max(200).optional(),
+});
+
+export const hostedOnboardingSchema = z.object({
+  workspace_name: z.string().trim().min(1).max(200),
+  project_slug: z.string().trim().min(1).max(200),
+  project_name: z.string().trim().min(1).max(200),
+});
+
 const eventName = z
   .string()
   .min(1)

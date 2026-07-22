@@ -336,6 +336,7 @@ export async function organizationHasProjects(pool: pg.Pool, orgId: string): Pro
 export async function completeHostedOnboarding(
   pool: pg.Pool,
   orgId: string,
+  userId: string,
   input: OnboardingInput,
   publicUrl: string,
   mcpRunner: McpRunnerConfig,
@@ -350,6 +351,7 @@ export async function completeHostedOnboarding(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`onboarding:${orgId}`]);
     const { rowCount } = await client.query('SELECT 1 FROM projects WHERE org_id = $1 LIMIT 1', [orgId]);
     if (rowCount) {
       throw new ApiError(
@@ -379,6 +381,7 @@ export async function completeHostedOnboarding(
       projectId: null,
       kind: 'personal',
       label: 'hosted onboarding MCP',
+      issuedByUserId: userId,
     });
     const ingest = await createApiKey(client as unknown as pg.Pool, {
       orgId,

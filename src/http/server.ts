@@ -9,8 +9,8 @@ import {
   updateAuthenticatedProfile, type McpRunnerConfig,
 } from '../services/accounts.js';
 import {
-  createApiKey, createProject, getProjectBySlug, listApiKeys,
-  listProjectsWithStats, revokeApiKey, type Project,
+  createApiKey, createProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
+  listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
 } from '../services/projects.js';
 import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
 import {
@@ -63,7 +63,7 @@ import {
   actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
-  updateProfileSchema,
+  createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -92,7 +92,8 @@ function authOwner(auth: AuthContext): string {
 
 function requirePlatformAccess(auth: AuthContext): void {
   requireKind(auth, 'secret', 'personal', 'user');
-  if (auth.kind === 'user' && auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+  if ((auth.kind === 'user' || auth.kind === 'personal')
+    && auth.userRole !== undefined && auth.userRole !== 'owner' && auth.userRole !== 'admin') {
     throw new ApiError(
       403,
       'insufficient_role',
@@ -110,6 +111,33 @@ function requireTokenIssuanceAccess(auth: AuthContext): void {
       'insufficient_role',
       'this hosted account role cannot issue MCP tokens',
       'ask an owner or admin to issue a personal token',
+    );
+  }
+}
+
+/** A hosted user may always inspect or revoke only their own personal tokens. */
+function requireOwnedTokenAccess(auth: AuthContext): void {
+  requireKind(auth, 'user');
+}
+
+/** Organization-scoped mutations must never be authorized by an exact-project secret key. */
+function requireOrganizationManagementAccess(auth: AuthContext): void {
+  if (auth.kind === 'secret') {
+    throw new ApiError(
+      403,
+      'insufficient_scope',
+      'a secret key is scoped to one project and cannot create organization projects',
+      'use a personal token or hosted owner/admin account',
+    );
+  }
+  requireKind(auth, 'personal', 'user');
+  if ((auth.kind === 'user' || auth.kind === 'personal')
+    && auth.userRole !== undefined && auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+    throw new ApiError(
+      403,
+      'insufficient_role',
+      'this hosted account role cannot manage organization projects',
+      'ask an owner or admin to upgrade your workspace role',
     );
   }
 }
@@ -256,8 +284,12 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         const route = req.routeOptions.url;
         if (route === '/api/v1/me' || route === '/api/v1/onboarding') {
           requireKind(req.auth, 'user');
-        } else if (route === '/api/v1/me/tokens') {
+        } else if (route === '/api/v1/me/tokens' && req.method === 'POST') {
           requireTokenIssuanceAccess(req.auth);
+        } else if (route === '/api/v1/me/tokens' || route === '/api/v1/me/tokens/:id') {
+          requireOwnedTokenAccess(req.auth);
+        } else if (route === '/api/v1/projects' && req.method === 'POST') {
+          requireOrganizationManagementAccess(req.auth);
         } else {
           requirePlatformAccess(req.auth);
         }
@@ -412,28 +444,35 @@ function registerAccountRoutes(
 
   app.post('/api/v1/onboarding', async (req, reply) => {
     requireKind(req.auth, 'user');
-    const body = req.body as { workspace_name?: string; project_slug?: string; project_name?: string };
-    if (!body?.workspace_name || !body?.project_slug || !body?.project_name) {
-      throw badRequest('validation_error', 'workspace_name, project_slug and project_name are required');
-    }
-    const result = await completeHostedOnboarding(ctx.pool, req.auth.orgId, {
-      workspace_name: body.workspace_name,
-      project_slug: body.project_slug,
-      project_name: body.project_name,
-    }, publicUrl, mcpRunner);
+    requireOrganizationManagementAccess(req.auth);
+    const body = hostedOnboardingSchema.parse(req.body);
+    const result = await completeHostedOnboarding(ctx.pool, req.auth.orgId, req.auth.userId!, body, publicUrl, mcpRunner);
     return reply.status(201).send(result);
   });
 
   app.post('/api/v1/me/tokens', async (req, reply) => {
     requireTokenIssuanceAccess(req.auth);
-    const body = req.body as { label?: string } | null;
+    const body = createPersonalTokenSchema.parse(req.body ?? {});
     const created = await createApiKey(ctx.pool, {
       orgId: req.auth.orgId,
       projectId: null,
       kind: 'personal',
-      label: body?.label?.trim() || 'hosted MCP token',
+      label: body.label ?? 'hosted MCP token',
+      issuedByUserId: req.auth.userId!,
     });
     return reply.status(201).send(created);
+  });
+
+  app.get('/api/v1/me/tokens', async (req) => {
+    requireOwnedTokenAccess(req.auth);
+    return { tokens: await listPersonalApiKeys(ctx.pool, req.auth.orgId, req.auth.userId!) };
+  });
+
+  app.delete('/api/v1/me/tokens/:id', async (req) => {
+    requireOwnedTokenAccess(req.auth);
+    const { id } = req.params as { id: string };
+    await revokePersonalApiKey(ctx.pool, req.auth.orgId, req.auth.userId!, id);
+    return { revoked: true };
   });
 }
 
@@ -503,11 +542,8 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.post('/api/v1/projects', async (req, reply) => {
-    platform(req);
-    const body = req.body as { slug?: string; name?: string; timezone?: string };
-    if (!body?.slug || !body?.name) {
-      throw badRequest('validation_error', 'slug and name are required');
-    }
+    requireOrganizationManagementAccess(req.auth);
+    const body = createProjectSchema.parse(req.body);
     if (!/^[a-z][a-z0-9-]*$/.test(body.slug)) {
       throw badRequest('invalid_slug', 'slug must be lowercase letters, digits and hyphens, starting with a letter');
     }

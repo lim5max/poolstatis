@@ -148,20 +148,40 @@ export async function authenticate(
 ): Promise<AuthContext> {
   const token = bearer(header);
   const { rows } = await pool.query(
-    `SELECT id, org_id, project_id, kind, env FROM api_keys
-     WHERE token_hash = $1 AND revoked_at IS NULL`,
+    `SELECT k.id, k.org_id, k.project_id, k.kind, k.env, k.issued_by_user_id,
+            om.role AS issued_user_role
+     FROM api_keys k
+     LEFT JOIN organization_members om
+       ON om.org_id = k.org_id AND om.user_id = k.issued_by_user_id
+     WHERE k.token_hash = $1 AND k.revoked_at IS NULL`,
     [hashToken(token)],
   );
   if (!rows[0]) {
     if (jwtOptions) return authenticateJwt(pool, token, jwtOptions);
     throw unauthorized('unknown or revoked API key');
   }
+  const key = rows[0];
+  // NULL owner denotes a legacy/self-host token and preserves the existing
+  // token protocol. Hosted personal tokens require a current membership.
+  if (key.kind === 'personal' && key.issued_by_user_id && !key.issued_user_role) {
+    throw unauthorized('personal token owner no longer belongs to this organization');
+  }
+  if (key.kind === 'personal') {
+    await pool.query(
+      'UPDATE api_keys SET last_used_at = now() WHERE id = $1 AND revoked_at IS NULL',
+      [key.id],
+    );
+  }
   return {
-    keyId: rows[0].id,
-    orgId: rows[0].org_id,
-    projectId: rows[0].project_id,
-    kind: rows[0].kind,
-    env: rows[0].env,
+    keyId: key.id,
+    orgId: key.org_id,
+    projectId: key.project_id,
+    kind: key.kind,
+    env: key.env,
+    ...(key.issued_by_user_id && key.issued_user_role ? {
+      userId: key.issued_by_user_id as string,
+      userRole: key.issued_user_role as NonNullable<AuthContext['userRole']>,
+    } : {}),
   };
 }
 
