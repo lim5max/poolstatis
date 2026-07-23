@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
 import type pg from 'pg';
-import { ApiError, badRequest, notFound } from '../errors.js';
+import { ApiError, badRequest, databasePolicyError, notFound } from '../errors.js';
 import { authenticate, requireKind, type AuthContext, type JwtAuthOptions } from './auth.js';
 import { createContext, type AppContext, type CreateContextOptions } from './context.js';
 import {
@@ -263,6 +263,10 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ApiError) {
       return reply.status(err.statusCode).send(err.toBody());
+    }
+    const policyError = databasePolicyError(err);
+    if (policyError) {
+      return reply.status(policyError.statusCode).send(policyError.toBody());
     }
     if (err instanceof ZodError) {
       const issue = err.issues[0];
