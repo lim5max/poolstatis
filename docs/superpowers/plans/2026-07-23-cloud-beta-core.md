@@ -19,6 +19,7 @@
 - The primary meter counts only accepted events durably inserted in the same transaction.
 - Existing self-host behavior remains available when hosted JWT, entitlements, or quota configuration is absent.
 - A private hosted provisioner commits an organization entitlement before issuing that organization's ingest key; self-host provisioning may omit the entitlement row, which remains unlimited.
+- An entitlement-control transaction changes exactly one `(organization, meter)` scope; bulk hosted changes use separate transactions so ingest cannot deadlock with an unsorted writer.
 
 ---
 
@@ -106,6 +107,7 @@ Run: `pnpm test test/cloud-tenant-isolation.test.ts test/personal-token-lifecycl
 **Files:**
 - Create: `migrations/024_usage_ledger_entitlements.sql`
 - Create: `migrations/025_usage_concurrency_invariants.sql`
+- Create: `migrations/026_usage_config_lock_upgrade_validation.sql`
 - Modify: `src/stores/eventStore.ts`
 - Modify: `src/stores/postgresEventStore.ts`
 - Modify: `src/stores/bufferedEventStore.ts`

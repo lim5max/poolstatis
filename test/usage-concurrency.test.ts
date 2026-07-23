@@ -16,7 +16,32 @@ function raw(projectId: string, name: string) {
   };
 }
 
+async function waitForConfigLockWait(pool: TestEnv['pool']): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const waiting = await pool.query<{ waiting: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_stat_activity
+         WHERE wait_event_type = 'Lock' AND wait_event = 'advisory'
+           AND query LIKE '%poolstatis_usage_config_lock_key%'
+       ) AS waiting`,
+    );
+    if (waiting.rows[0]?.waiting) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('raw append did not wait on the stable usage config lock');
+}
+
 describe('usage concurrency protocol', () => {
+  it('uses one database-defined config lock key independent of the UTC billing month', async () => {
+    const identity = await env.pool.query<{ args: string }>(
+      `SELECT pg_get_function_identity_arguments(
+         'poolstatis_usage_config_lock_key(uuid,text)'::regprocedure
+       ) AS args`,
+    );
+    expect(identity.rows[0]?.args).toBe('p_org uuid, p_meter text');
+  });
+
   it('commits opposite-order multi-organization raw appends without a deadlock', async () => {
     const suffix = `${Date.now()}`.slice(-8).padStart(8, '0');
     const orgA = `10000000-0000-4000-8000-${suffix}0001`;
@@ -103,6 +128,51 @@ describe('usage concurrency protocol', () => {
       await writer.query('ROLLBACK').catch(() => {});
       writer.release();
       await isolated.close();
+    }
+  });
+
+  it('rejects a B-to-A entitlement writer before it can deadlock a raw A-to-B append', async () => {
+    const suffix = `${Date.now()}`.slice(-8).padStart(8, '0');
+    const orgA = (await env.pool.query<{ id: string }>(
+      `INSERT INTO organizations (name) VALUES ('Writer deadlock A') RETURNING id::text AS id`,
+    )).rows[0]!.id;
+    const orgB = (await env.pool.query<{ id: string }>(
+      `INSERT INTO organizations (name) VALUES ('Writer deadlock B') RETURNING id::text AS id`,
+    )).rows[0]!.id;
+    const projectA = (await env.pool.query<{ id: string }>(
+      `INSERT INTO projects (org_id, slug, name) VALUES ($1, $2, 'Writer A') RETURNING id::text AS id`,
+      [orgA, `writer-a-${suffix}`],
+    )).rows[0]!.id;
+    const projectB = (await env.pool.query<{ id: string }>(
+      `INSERT INTO projects (org_id, slug, name) VALUES ($1, $2, 'Writer B') RETURNING id::text AS id`,
+      [orgB, `writer-b-${suffix}`],
+    )).rows[0]!.id;
+    await env.pool.query(
+      `INSERT INTO organization_entitlements (org_id, meter_key, hard_limit)
+       VALUES ($1, 'events_stored', 10)`,
+      [orgA],
+    );
+    await env.pool.query(
+      `INSERT INTO organization_entitlements (org_id, meter_key, hard_limit)
+       VALUES ($1, 'events_stored', 10)`,
+      [orgB],
+    );
+    const writer = await env.pool.connect();
+    try {
+      await writer.query('BEGIN');
+      await writer.query(`UPDATE organization_entitlements SET hard_limit = 9 WHERE org_id = $1`, [orgB]);
+      const rawAppend = new PostgresEventStore(env.pool).append([
+        raw(projectA, 'writer-race-a'), raw(projectB, 'writer-race-b'),
+      ]);
+      await waitForConfigLockWait(env.pool);
+      await expect(writer.query(
+        `UPDATE organization_entitlements SET hard_limit = 9 WHERE org_id = $1`, [orgA],
+      )).rejects.toMatchObject({ code: '23514' });
+      await writer.query('ROLLBACK');
+      expect((await rawAppend).inserted).toBe(2);
+    } finally {
+      await writer.query('ROLLBACK').catch(() => {});
+      writer.release();
     }
   });
 

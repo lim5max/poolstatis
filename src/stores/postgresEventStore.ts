@@ -74,11 +74,11 @@ export class PostgresEventStore implements EventStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const periodStart = await this.currentPeriodStart(client);
       const resolved = await this.resolveMeteredGroups(client, [...groups.values()]);
-      await this.acquireUsageLocks(client, resolved.filter((group) => hasBillableEvents(group.events)).map((group) => ({
-        orgId: group.orgId!, periodStart,
-      })));
+      await this.acquireUsageConfigLocks(client, resolved
+        .filter((group) => hasBillableEvents(group.events))
+        .map((group) => group.orgId!));
+      const periodStart = await this.currentPeriodStart(client);
       let inserted = 0;
       const warnings: PendingUsageWarning[] = [];
       for (const group of resolved.sort(compareMeteredGroups)) {
@@ -162,13 +162,13 @@ export class PostgresEventStore implements EventStore {
         await client.query('COMMIT');
         return { inserted: 0, duplicate: true };
       }
-      const periodStart = await this.currentPeriodStart(client);
       const [group] = await this.resolveMeteredGroups(client, [{
         projectId: batch.projectId, env: batch.env, events: batch.events,
       }]);
       if (group?.orgId && hasBillableEvents(batch.events)) {
-        await this.acquireUsageLocks(client, [{ orgId: group.orgId, periodStart }]);
+        await this.acquireUsageConfigLocks(client, [group.orgId]);
       }
+      const periodStart = await this.currentPeriodStart(client);
       const metered = batch.events.length > 0
         ? await this.insertMetered(client, batch.events, `${batch.dedupe}:${batch.projectId}:${batch.env}:${batch.batchId}`, group?.orgId ? {
           orgId: group.orgId, periodStart,
@@ -273,12 +273,13 @@ export class PostgresEventStore implements EventStore {
     return groups;
   }
 
-  private async acquireUsageLocks(client: pg.PoolClient, scopes: MeteredScope[]): Promise<void> {
-    const unique = new Map(scopes.map((scope) => [`${scope.orgId}:${scope.periodStart}`, scope]));
-    for (const scope of [...unique.values()].sort((left, right) => left.orgId.localeCompare(right.orgId))) {
+  private async acquireUsageConfigLocks(client: pg.PoolClient, orgIds: string[]): Promise<void> {
+    for (const orgId of [...new Set(orgIds)].sort((left, right) => left.localeCompare(right))) {
       await client.query(
-        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        [usageLockKey(scope.orgId, scope.periodStart)],
+        `SELECT pg_advisory_xact_lock(
+           poolstatis_usage_config_lock_key($1::uuid, 'events_stored')
+         )`,
+        [orgId],
       );
     }
   }
@@ -1027,10 +1028,6 @@ function compareMeteredGroups(left: MeteredGroup, right: MeteredGroup): number {
   return (left.orgId ?? '').localeCompare(right.orgId ?? '')
     || left.projectId.localeCompare(right.projectId)
     || left.env.localeCompare(right.env);
-}
-
-function usageLockKey(orgId: string, periodStart: string): string {
-  return `poolstatis:usage:${orgId}:events_stored:${periodStart}`;
 }
 
 function isPartitionOverlapError(err: unknown): boolean {
