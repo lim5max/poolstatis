@@ -37,10 +37,23 @@ import { randomUUID } from 'node:crypto';
 import { recordUsageWarnings, type PendingUsageWarning } from '../services/usageWarnings.js';
 
 const IDEMPOTENCY_RECLAIM_INTERVAL = '35 days';
+const MAX_METER_QUANTITY = BigInt(Number.MAX_SAFE_INTEGER);
 
 interface MeteredInsertResult {
   inserted: number;
   warnings: PendingUsageWarning[];
+}
+
+interface MeteredGroup {
+  projectId: string;
+  env: string;
+  events: StorableEvent[];
+  orgId?: string;
+}
+
+interface MeteredScope {
+  orgId: string;
+  periodStart: string;
 }
 
 export class PostgresEventStore implements EventStore {
@@ -51,20 +64,27 @@ export class PostgresEventStore implements EventStore {
   async append(events: StorableEvent[]): Promise<AppendResult> {
     if (events.length === 0) return { inserted: 0 };
     await this.ensurePartitions(events.map((e) => e.timestamp));
-    const groups = new Map<string, StorableEvent[]>();
+    const groups = new Map<string, MeteredGroup>();
     for (const event of events) {
       const key = `${event.projectId}:${event.env}`;
       const group = groups.get(key);
-      if (group) group.push(event);
-      else groups.set(key, [event]);
+      if (group) group.events.push(event);
+      else groups.set(key, { projectId: event.projectId, env: event.env, events: [event] });
     }
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      const periodStart = await this.currentPeriodStart(client);
+      const resolved = await this.resolveMeteredGroups(client, [...groups.values()]);
+      await this.acquireUsageLocks(client, resolved.filter((group) => hasBillableEvents(group.events)).map((group) => ({
+        orgId: group.orgId!, periodStart,
+      })));
       let inserted = 0;
       const warnings: PendingUsageWarning[] = [];
-      for (const group of [...groups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-        const result = await this.insertMetered(client, group[1], `direct:${randomUUID()}`);
+      for (const group of resolved.sort(compareMeteredGroups)) {
+        const result = await this.insertMetered(client, group.events, `direct:${randomUUID()}`, group.orgId ? {
+          orgId: group.orgId, periodStart,
+        } : undefined);
         inserted += result.inserted;
         warnings.push(...result.warnings);
       }
@@ -142,8 +162,17 @@ export class PostgresEventStore implements EventStore {
         await client.query('COMMIT');
         return { inserted: 0, duplicate: true };
       }
+      const periodStart = await this.currentPeriodStart(client);
+      const [group] = await this.resolveMeteredGroups(client, [{
+        projectId: batch.projectId, env: batch.env, events: batch.events,
+      }]);
+      if (group?.orgId && hasBillableEvents(batch.events)) {
+        await this.acquireUsageLocks(client, [{ orgId: group.orgId, periodStart }]);
+      }
       const metered = batch.events.length > 0
-        ? await this.insertMetered(client, batch.events, `${batch.dedupe}:${batch.projectId}:${batch.env}:${batch.batchId}`)
+        ? await this.insertMetered(client, batch.events, `${batch.dedupe}:${batch.projectId}:${batch.env}:${batch.batchId}`, group?.orgId ? {
+          orgId: group.orgId, periodStart,
+        } : undefined)
         : { inserted: 0, warnings: [] };
       await client.query('COMMIT');
       await recordUsageWarnings(this.pool, metered.warnings).catch(() => {});
@@ -159,7 +188,12 @@ export class PostgresEventStore implements EventStore {
     }
   }
 
-  private async insertMetered(client: pg.PoolClient, events: StorableEvent[], sourceBatch: string): Promise<MeteredInsertResult> {
+  private async insertMetered(
+    client: pg.PoolClient,
+    events: StorableEvent[],
+    sourceBatch: string,
+    scope?: MeteredScope,
+  ): Promise<MeteredInsertResult> {
     const first = events[0];
     if (!first) return { inserted: 0, warnings: [] };
     if (events.some((event) => event.projectId !== first.projectId || event.env !== first.env)) {
@@ -168,16 +202,8 @@ export class PostgresEventStore implements EventStore {
     const billable = events.filter((event) => event.isSystem !== true && event.eventSource !== 'system');
     if (billable.length === 0) return { inserted: await this.insert(client, events), warnings: [] };
 
-    const project = await client.query<{ org_id: string }>(
-      'SELECT org_id FROM projects WHERE id = $1 FOR KEY SHARE',
-      [first.projectId],
-    );
-    if (!project.rows[0]) throw new Error(`project ${first.projectId} does not exist`);
-    const period = await client.query<{ period_start: string }>(
-      `SELECT date_trunc('month', transaction_timestamp() AT TIME ZONE 'UTC')::date::text AS period_start`,
-    );
-    const orgId = project.rows[0].org_id;
-    const periodStart = period.rows[0]!.period_start;
+    if (!scope) throw new Error('metered append scope was not resolved');
+    const { orgId, periodStart } = scope;
     await client.query(
       `INSERT INTO organization_usage (org_id, meter_key, period_start, quantity)
        VALUES ($1, 'events_stored', $2::date, 0)
@@ -195,7 +221,8 @@ export class PostgresEventStore implements EventStore {
     );
     const used = BigInt(usage.rows[0]?.quantity ?? 0);
     const limit = entitlement.rows[0]?.hard_limit;
-    if (limit !== null && limit !== undefined && used + BigInt(billable.length) > BigInt(limit)) {
+    const nextQuantity = used + BigInt(billable.length);
+    if (nextQuantity > MAX_METER_QUANTITY || (limit !== null && limit !== undefined && nextQuantity > BigInt(limit))) {
       throw new ApiError(
         402,
         'billing_limit_reached',
@@ -204,7 +231,6 @@ export class PostgresEventStore implements EventStore {
       );
     }
     const inserted = await this.insert(client, events);
-    const nextQuantity = used + BigInt(billable.length);
     const warnings = (entitlement.rows[0]?.warning_thresholds ?? [])
       .map(BigInt)
       .filter((threshold) => used < threshold && threshold <= nextQuantity)
@@ -222,6 +248,39 @@ export class PostgresEventStore implements EventStore {
       [orgId, periodStart, billable.length],
     );
     return { inserted, warnings };
+  }
+
+  private async currentPeriodStart(client: pg.PoolClient): Promise<string> {
+    const period = await client.query<{ period_start: string }>(
+      `SELECT date_trunc('month', transaction_timestamp() AT TIME ZONE 'UTC')::date::text AS period_start`,
+    );
+    return period.rows[0]!.period_start;
+  }
+
+  private async resolveMeteredGroups(client: pg.PoolClient, groups: MeteredGroup[]): Promise<MeteredGroup[]> {
+    const projectIds = [...new Set(groups.filter((group) => hasBillableEvents(group.events)).map((group) => group.projectId))];
+    if (projectIds.length === 0) return groups;
+    const projects = await client.query<{ id: string; org_id: string }>(
+      'SELECT id::text, org_id::text FROM projects WHERE id = ANY($1::uuid[]) FOR KEY SHARE', [projectIds],
+    );
+    const orgByProject = new Map(projects.rows.map((project) => [project.id, project.org_id]));
+    for (const group of groups) {
+      if (!hasBillableEvents(group.events)) continue;
+      const orgId = orgByProject.get(group.projectId);
+      if (!orgId) throw new Error(`project ${group.projectId} does not exist`);
+      group.orgId = orgId;
+    }
+    return groups;
+  }
+
+  private async acquireUsageLocks(client: pg.PoolClient, scopes: MeteredScope[]): Promise<void> {
+    const unique = new Map(scopes.map((scope) => [`${scope.orgId}:${scope.periodStart}`, scope]));
+    for (const scope of [...unique.values()].sort((left, right) => left.orgId.localeCompare(right.orgId))) {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [usageLockKey(scope.orgId, scope.periodStart)],
+      );
+    }
   }
 
   private async insert(client: pg.Pool | pg.PoolClient, events: StorableEvent[]): Promise<number> {
@@ -958,6 +1017,20 @@ export class PostgresEventStore implements EventStore {
 
 function toUsageWarning(warning: PendingUsageWarning): UsageWarning {
   return { meter: warning.meter, threshold: warning.threshold, quantity: warning.quantity };
+}
+
+function hasBillableEvents(events: StorableEvent[]): boolean {
+  return events.some((event) => event.isSystem !== true && event.eventSource !== 'system');
+}
+
+function compareMeteredGroups(left: MeteredGroup, right: MeteredGroup): number {
+  return (left.orgId ?? '').localeCompare(right.orgId ?? '')
+    || left.projectId.localeCompare(right.projectId)
+    || left.env.localeCompare(right.env);
+}
+
+function usageLockKey(orgId: string, periodStart: string): string {
+  return `poolstatis:usage:${orgId}:events_stored:${periodStart}`;
 }
 
 function isPartitionOverlapError(err: unknown): boolean {

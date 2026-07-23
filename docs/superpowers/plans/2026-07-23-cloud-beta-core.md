@@ -18,6 +18,7 @@
 - `pt_` is organization-scoped, shown once, hashed at rest, listable in masked form, and revocable.
 - The primary meter counts only accepted events durably inserted in the same transaction.
 - Existing self-host behavior remains available when hosted JWT, entitlements, or quota configuration is absent.
+- A private hosted provisioner commits an organization entitlement before issuing that organization's ingest key; self-host provisioning may omit the entitlement row, which remains unlimited.
 
 ---
 
@@ -104,6 +105,7 @@ Run: `pnpm test test/cloud-tenant-isolation.test.ts test/personal-token-lifecycl
 
 **Files:**
 - Create: `migrations/024_usage_ledger_entitlements.sql`
+- Create: `migrations/025_usage_concurrency_invariants.sql`
 - Modify: `src/stores/eventStore.ts`
 - Modify: `src/stores/postgresEventStore.ts`
 - Modify: `src/stores/bufferedEventStore.ts`
