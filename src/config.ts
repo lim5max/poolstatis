@@ -66,6 +66,8 @@ export interface Config {
       picture: string;
     };
     connectionStrategy: string;
+    allowedClientIds: string[];
+    requiredScopes: string[];
     legacyIssuer: string | null;
     requireOrganizationPolicy: boolean;
   } | null;
@@ -121,6 +123,18 @@ function requiredText(raw: string | undefined, fallback: string, name: string): 
   const value = raw === undefined ? fallback : raw.trim();
   if (!value) throw new Error(`${name} must not be empty`);
   return value;
+}
+
+function exactList(raw: string | undefined, name: string): string[] {
+  if (raw === undefined) return [];
+  const values = raw.split(',').map((value) => value.trim());
+  if (values.some((value) => !value)
+      || values.some((value) => value.length > 128 || !/^[A-Za-z0-9:._~/-]+$/.test(value))) {
+    throw new Error(`${name} must contain comma-separated values`);
+  }
+  const unique = [...new Set(values)];
+  if (unique.length > 32) throw new Error(`${name} must contain at most 32 values`);
+  return unique;
 }
 
 function databaseCredential(raw: string, name: string): {
@@ -248,6 +262,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (requireOrganizationPolicy && (!issuer || !audience || !jwksUri)) {
     throw new Error('HOSTED_POLICY_REQUIRED requires configured JWT authentication');
   }
+  const allowedClientIds = exactList(env.AUTH_JWT_ALLOWED_CLIENT_IDS, 'AUTH_JWT_ALLOWED_CLIENT_IDS');
+  const requiredScopes = exactList(env.AUTH_JWT_REQUIRED_SCOPES, 'AUTH_JWT_REQUIRED_SCOPES');
+  if (requireOrganizationPolicy && allowedClientIds.length === 0) {
+    throw new Error('HOSTED_POLICY_REQUIRED requires AUTH_JWT_ALLOWED_CLIENT_IDS');
+  }
+  if (requireOrganizationPolicy && requiredScopes.length === 0) {
+    throw new Error('HOSTED_POLICY_REQUIRED requires AUTH_JWT_REQUIRED_SCOPES');
+  }
   const migrationDatabaseUrl = env.MIGRATION_DATABASE_URL === undefined
     ? (requireOrganizationPolicy ? null : databaseUrl)
     : requiredText(env.MIGRATION_DATABASE_URL, '', 'MIGRATION_DATABASE_URL');
@@ -343,6 +365,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         picture: requiredText(env.AUTH_JWT_PICTURE_CLAIM, 'https://poolstatis.xyz/picture', 'AUTH_JWT_PICTURE_CLAIM'),
       },
       connectionStrategy: requiredText(env.AUTH_CONNECTION_STRATEGY, 'oidc', 'AUTH_CONNECTION_STRATEGY'),
+      allowedClientIds,
+      requiredScopes,
       legacyIssuer,
       requireOrganizationPolicy,
     } : null,

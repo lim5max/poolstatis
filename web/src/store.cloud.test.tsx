@@ -5,15 +5,18 @@ import type { AccountMe, ProjectWithStats } from './api/types';
 import { Profile } from './screens/Profile';
 import { StoreProvider, useStore } from './store';
 
-vi.mock('@auth0/auth0-react', () => ({ useAuth0: () => ({ logout: vi.fn() }) }));
+vi.mock('./oidc', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./oidc')>()),
+  useHostedAuth: () => ({ logout: vi.fn() }),
+}));
 
 function account(role: AccountMe['membership']['role']): AccountMe {
   return {
     user: {
-      id: 'user-1', subject: 'auth0|user-1', email: `${role}@example.test`, email_verified: true,
+      id: 'user-1', subject: 'better-auth-user-1', email: `${role}@example.test`, email_verified: true,
       display_name: role, name: role, picture_url: null, connection_strategy: 'google-oauth2',
     },
-    identity: { issuer: 'https://example.auth0.com/', subject: 'auth0|user-1' },
+    identity: { issuer: 'https://auth.poolstatis.xyz', subject: 'better-auth-user-1' },
     organization: { id: 'org-1', name: 'Acme', role },
     membership: { organization_id: 'org-1', role },
     billing: {} as AccountMe['billing'],

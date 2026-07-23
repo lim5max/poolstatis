@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'react';
-import { useAuth0 } from '@auth0/auth0-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Confirm, EmptyState, ErrorNote, FieldLabel, Loading, OneTimeTokenReveal, Panel, TableScroll, fmtRelative } from '../components/ui';
 import { useAsync, useStore } from '../store';
+import { useHostedAuth } from '../oidc';
 
 function ProfileUnavailable() {
   return <Panel title="Profile"><EmptyState headline="Hosted profile unavailable" lead="Sign in with a hosted account to manage your identity and personal tokens." /></Panel>;
 }
 
-/** This outer guard deliberately never invokes Auth0 hooks for self-host key sessions. */
+/** This outer guard deliberately never invokes hosted identity actions for self-host key sessions. */
 export function Profile() {
   const { tokenKind } = useStore();
   if (tokenKind !== 'user') return <ProfileUnavailable />;
@@ -20,7 +20,7 @@ export function Profile() {
 
 function HostedProfile() {
   const { account, client, disconnect, refreshAccount } = useStore();
-  const { logout } = useAuth0();
+  const { logout } = useHostedAuth();
   const [displayName, setDisplayName] = useState(account?.user.display_name ?? '');
   const [profileError, setProfileError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -77,13 +77,13 @@ function HostedProfile() {
 
   const signOut = () => {
     disconnect();
-    logout({ logoutParams: { returnTo: window.location.origin } });
+    void logout();
   };
 
   const initial = (account.user.display_name || account.user.email || '?').slice(0, 1).toUpperCase();
   return (
     <div className="space-y-4">
-      <Panel title="Profile" right={<Button variant="outline" onClick={signOut}>Log out</Button>}>
+      <Panel title="Profile" right={<div className="flex gap-2"><Button asChild variant="outline"><a href="https://auth.poolstatis.xyz/profile">Manage login</a></Button><Button variant="outline" onClick={signOut}>Log out</Button></div>}>
         <div className="grid gap-6 md:flex md:items-start">
           {account.user.picture_url ? <img className="size-16 rounded-full border object-cover" src={account.user.picture_url} alt="Profile avatar" /> : <div className="flex size-16 items-center justify-center rounded-full border bg-muted font-medium text-xl" aria-label="Profile avatar">{initial}</div>}
           <div className="min-w-0 space-y-4">

@@ -11,7 +11,10 @@ const { logout, hostedAuth } = vi.hoisted(() => {
   const logout = vi.fn();
   return { logout, hostedAuth: vi.fn(() => ({ logout })) };
 });
-vi.mock('@auth0/auth0-react', () => ({ useAuth0: hostedAuth }));
+vi.mock('./oidc', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./oidc')>()),
+  useHostedAuth: hostedAuth,
+}));
 
 const mockedStore = vi.mocked(useStore);
 const createProject = vi.fn();
@@ -153,8 +156,8 @@ describe('hosted profile and personal token lifecycle', () => {
     expect(screen.getByTestId('personal-tokens-scroll')).toHaveClass('overflow-x-auto');
   });
 
-  it('does not initialize Auth0 for secret or personal self-host profile visits', () => {
-    hostedAuth.mockImplementation(() => { throw new Error('Auth0 provider is absent'); });
+  it('does not initialize hosted identity actions for secret or personal self-host profile visits', () => {
+    hostedAuth.mockImplementation(() => { throw new Error('OIDC provider is absent'); });
     mockedStore.mockReturnValue({ tokenKind: 'secret' } as never);
     const secret = render(<Profile />);
     expect(screen.getByText('Hosted profile unavailable')).toBeInTheDocument();

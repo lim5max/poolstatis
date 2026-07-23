@@ -18,6 +18,10 @@ export interface JwtAuthOptions {
     picture: string;
   };
   connectionStrategy?: string;
+  /** Exact OAuth client ids accepted in the JWT `azp` claim. */
+  allowedClientIds?: string[];
+  /** OAuth scopes that must all be present in the space-delimited `scope` claim. */
+  requiredScopes?: string[];
   /** Explicit operator opt-in for adopting pre-017 rows with no issuer binding. */
   legacyIssuer?: string | null;
   /** Fail closed until an external hosted policy is durably activated. */
@@ -92,17 +96,31 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
     verifierCache.set(options, key);
   }
   let payload;
+  const strictTokenPolicy = (options.allowedClientIds?.length ?? 0) > 0
+    || (options.requiredScopes?.length ?? 0) > 0;
   try {
     const verified = await jwtVerify(token, key, {
       issuer: options.issuer,
       audience: options.audience,
-      requiredClaims: ['sub', 'exp'],
+      requiredClaims: strictTokenPolicy ? ['sub', 'exp', 'iat'] : ['sub', 'exp'],
     });
     payload = verified.payload;
   } catch {
     throw hostedUnauthorized();
   }
   if (typeof payload.sub !== 'string' || !payload.sub.trim()) throw hostedUnauthorized();
+  if (strictTokenPolicy) {
+    if (!Number.isInteger(payload.iat) || (payload.iat as number) <= 0) throw hostedUnauthorized();
+    const authorizedParty = typeof payload.azp === 'string' ? payload.azp.trim() : '';
+    if (!authorizedParty || !options.allowedClientIds?.includes(authorizedParty)) {
+      throw hostedUnauthorized();
+    }
+    if (typeof payload.scope !== 'string') throw hostedUnauthorized();
+    const scopes = new Set(payload.scope.split(/\s+/).filter(Boolean));
+    if (!options.requiredScopes?.every((scope) => scopes.has(scope))) {
+      throw hostedUnauthorized();
+    }
+  }
   const claims = options.claims ?? standardClaimNames;
   const email = verifiedEmailClaim(payload, claims.email);
   if (payload[claims.emailVerified] !== true || !email) {

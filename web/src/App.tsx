@@ -1,9 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { useAuth0 } from '@auth0/auth0-react';
 import { motion } from 'motion/react';
 import { LayoutGrid, List, Database, GridView, KeyRound, Settings, SystemSettings, Target, PackageBox, Check, ChevronsUpDown, Menu, X, type PoolstatisIcon } from '@/components/icons';
-import { auth0Enabled } from './auth0';
+import { hostedAuthEnabled, useHostedAuth } from './oidc';
 import { useStore } from './store';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -24,6 +23,7 @@ import { Changes } from './screens/Changes';
 import { Decisions } from './screens/Decisions';
 import { Profile } from './screens/Profile';
 import { Usage } from './screens/Usage';
+import { AuthPortal } from './screens/AuthPortal';
 
 type NavItem = { to: string; Icon: PoolstatisIcon; label: string; end?: boolean };
 const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
@@ -47,6 +47,11 @@ const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' :
 const isProjectScoped = (path: string) => path === '/' || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
 
 export function App() {
+  if (window.location.hostname === 'auth.poolstatis.xyz') return <AuthPortal />;
+  return <AdminApp />;
+}
+
+function AdminApp() {
   const { client } = useStore();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   useEffect(() => {
@@ -162,7 +167,7 @@ function NavGroups({ onNavigate }: { onNavigate?: () => void }) {
 
 function ConnectionFooter({ onDisconnect }: { onDisconnect?: () => void }) {
   const { client, disconnect, tokenKind } = useStore();
-  if (auth0Enabled && tokenKind === 'user') return <HostedConnectionFooter onDisconnect={onDisconnect} />;
+  if (hostedAuthEnabled && tokenKind === 'user') return <HostedConnectionFooter onDisconnect={onDisconnect} />;
   const handleDisconnect = () => {
     disconnect();
     onDisconnect?.();
@@ -179,11 +184,11 @@ function ConnectionFooter({ onDisconnect }: { onDisconnect?: () => void }) {
 
 function HostedConnectionFooter({ onDisconnect }: { onDisconnect?: () => void }) {
   const { client, disconnect } = useStore();
-  const { logout } = useAuth0();
+  const { logout } = useHostedAuth();
   const handleDisconnect = () => {
     disconnect();
     onDisconnect?.();
-    logout({ logoutParams: { returnTo: window.location.origin } });
+    void logout();
   };
   return (
     <div className="mt-2 flex items-center justify-between border-t px-5 pt-3">

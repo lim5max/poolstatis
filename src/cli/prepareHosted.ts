@@ -24,7 +24,7 @@ if (process.argv.includes('--help')) {
   try {
     const applied = await migrate(migrationPool);
     await migrationPool.query(
-      'SELECT poolstatis_apply_hosted_policy_role_hardening()',
+      'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
     );
     await ensureRollingEventPartitions(migrationPool, new Date(), 12);
     if (!await rollingEventPartitionsReady(migrationPool, new Date(), 12)) {

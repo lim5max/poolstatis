@@ -38,6 +38,9 @@ async function token(input: {
   expiresAt?: string | false;
   signingKey?: CryptoKey | Uint8Array;
   claimNames?: typeof claims;
+  issuedAt?: boolean;
+  authorizedParty?: string;
+  scope?: string;
 }): Promise<string> {
   const claimNames = input.claimNames ?? claims;
   const payload: Record<string, string | boolean> = {};
@@ -45,12 +48,14 @@ async function token(input: {
   if (input.emailVerified !== undefined) payload[claimNames.emailVerified] = input.emailVerified;
   if (input.displayName !== undefined) payload[claimNames.displayName] = input.displayName;
   if (input.picture !== undefined) payload[claimNames.picture] = input.picture;
+  if (input.authorizedParty !== undefined) payload.azp = input.authorizedParty;
+  if (input.scope !== undefined) payload.scope = input.scope;
 
   const jwt = new SignJWT(payload)
     .setProtectedHeader({ alg: 'RS256', kid: 'cloud-auth-test-key' })
     .setIssuer(input.tokenIssuer ?? issuer)
-    .setAudience(audience)
-    .setIssuedAt();
+    .setAudience(audience);
+  if (input.issuedAt !== false) jwt.setIssuedAt();
   if (input.sub !== undefined) jwt.setSubject(input.sub);
   if (input.expiresAt !== false) jwt.setExpirationTime(input.expiresAt ?? '10m');
   return jwt.sign(input.signingKey ?? privateKey);
@@ -93,6 +98,77 @@ afterAll(async () => {
 });
 
 describe('verified hosted JWT profile', () => {
+  it.each([
+    ['missing issued-at', { issuedAt: false, authorizedParty: 'customer-web', scope: 'poolstatis:customer' }],
+    ['missing authorized party', { scope: 'poolstatis:customer' }],
+    ['wrong authorized party', { authorizedParty: 'rogue-client', scope: 'poolstatis:customer' }],
+    ['missing scope', { authorizedParty: 'customer-web' }],
+    ['wrong scope', { authorizedParty: 'customer-web', scope: 'openid profile' }],
+  ])('rejects a hosted token with %s using one neutral response', async (_kind, tokenClaims) => {
+    const strictApp = buildServer(pool, {
+      auth: {
+        issuer,
+        audience,
+        jwks: async () => jwks,
+        claims,
+        allowedClientIds: ['customer-web', 'mcp-client'],
+        requiredScopes: ['poolstatis:customer'],
+      },
+    });
+    const sub = uniqueSubject('strict-token-policy');
+    const response = await strictApp.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: {
+        authorization: `Bearer ${await token({
+          sub,
+          email: 'strict-token-policy@example.com',
+          emailVerified: true,
+          ...tokenClaims,
+        })}`,
+      },
+    });
+    await strictApp.close();
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({
+      error: { code: 'unauthorized', message: 'authentication failed' },
+    });
+    expect(await pool.query(
+      'SELECT 1 FROM auth_users WHERE subject = $1',
+      [sub],
+    )).toMatchObject({ rowCount: 0 });
+  });
+
+  it('accepts a hosted token with exact client, required scope, and issued-at claims', async () => {
+    const strictApp = buildServer(pool, {
+      auth: {
+        issuer,
+        audience,
+        jwks: async () => jwks,
+        claims,
+        allowedClientIds: ['customer-web', 'mcp-client'],
+        requiredScopes: ['poolstatis:customer'],
+      },
+    });
+    const response = await strictApp.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: {
+        authorization: `Bearer ${await token({
+          sub: uniqueSubject('strict-token-valid'),
+          email: 'strict-token-valid@example.com',
+          emailVerified: true,
+          authorizedParty: 'customer-web',
+          scope: 'openid poolstatis:customer profile',
+        })}`,
+      },
+    });
+    await strictApp.close();
+
+    expect(response.statusCode).toBe(200);
+  });
+
   it('uses the exact production claims from loadConfig for profile read-back', async () => {
     const config = loadConfig({
       AUTH_JWT_ISSUER: issuer,

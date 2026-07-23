@@ -156,7 +156,9 @@ describe('hosted policy migration role topology', () => {
       );
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
-      expect(applied.at(-1)).toBe('027_hosted_policy_readiness.sql');
+      expect(applied.at(-1)).toBe(
+        '028_hosted_policy_hardening_idempotency.sql',
+      );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
         runtime_can_write_projects: boolean;
@@ -175,7 +177,12 @@ describe('hosted policy migration role topology', () => {
         marker_owner: 'core_deploy',
         runtime_can_write_projects: false,
       }]);
-      await deploy.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
+      await deploy.query(
+        'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
+      );
       await ensureRollingEventPartitions(deploy, new Date(), 12);
       expect(await rollingEventPartitionsReady(deploy, new Date(), 12)).toBe(true);
       expect((await ensureRetentionIndexes(deploy)).ready).toBe(true);
@@ -425,7 +432,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '027_hosted_policy_readiness.sql',
+        last_migration: '028_hosted_policy_hardening_idempotency.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -631,7 +638,9 @@ describe('hosted policy migration role topology', () => {
         { max: 4 },
       );
       const applied = await migrateWithEvidence(selfHost);
-      expect(applied.at(-1)).toBe('027_hosted_policy_readiness.sql');
+      expect(applied.at(-1)).toBe(
+        '028_hosted_policy_hardening_idempotency.sql',
+      );
       const topology = await selfHost.query<{
         superuser: boolean;
         create_role: boolean;

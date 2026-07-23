@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { useAuth0 } from '@auth0/auth0-react';
 import { motion } from 'motion/react';
 import { Loader2 } from '@/components/icons';
-import { auth0Config, auth0Enabled, auth0Incomplete, useHostedToken } from '../auth0';
+import {
+  hostedAuthConfig,
+  hostedAuthEnabled,
+  hostedAuthIncomplete,
+  useHostedAuth,
+  useHostedToken,
+} from '../oidc';
 import { useStore } from '../store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -10,13 +15,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 export function Connect() {
-  if (auth0Enabled) return <HostedConnect />;
+  if (hostedAuthEnabled) return <HostedConnect />;
   return <TokenConnect />;
 }
 
 function HostedConnect() {
   const { connectHosted } = useStore();
-  const { isAuthenticated, isLoading, loginWithRedirect, user, error } = useAuth0();
+  const { isAuthenticated, isLoading, login, user, error } = useHostedAuth();
   const getToken = useHostedToken();
   const attempted = useRef(false);
   const [err, setErr] = useState<string | null>(null);
@@ -26,12 +31,12 @@ function HostedConnect() {
     if (!isAuthenticated || attempted.current) return;
     attempted.current = true;
     setBusy(true);
-    connectHosted({ baseUrl: auth0Config.apiUrl, getToken })
+    connectHosted({ baseUrl: hostedAuthConfig.apiUrl, getToken })
       .catch((ex) => setErr((ex as Error).message))
       .finally(() => setBusy(false));
   }, [connectHosted, getToken, isAuthenticated]);
 
-  const signIn = () => loginWithRedirect({ appState: { returnTo: window.location.pathname } });
+  const signIn = () => login();
 
   return (
     <ConnectShell>
@@ -44,7 +49,7 @@ function HostedConnect() {
         Use hosted auth, then create an MCP token during onboarding. No database keys are needed in the browser.
       </p>
       <Button className="h-10 w-full" onClick={signIn} disabled={isLoading || busy}>
-        {isLoading || busy ? <Loader2 className="size-4 animate-spin" /> : isAuthenticated ? `Continue as ${user?.email ?? 'workspace user'}` : 'Continue with Auth0'}
+        {isLoading || busy ? <Loader2 className="size-4 animate-spin" /> : isAuthenticated ? `Continue as ${user?.email ?? 'workspace user'}` : 'Continue to sign in'}
       </Button>
       {(err || error) && <div className="mt-4 text-xs text-destructive">{err ?? error?.message}</div>}
     </ConnectShell>
@@ -56,7 +61,7 @@ function TokenConnect() {
   const [token, setToken] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const baseUrl = auth0Config.apiUrl;
+  const baseUrl = hostedAuthConfig.apiUrl;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,8 +79,8 @@ function TokenConnect() {
       </div>
       <h1 className="serif text-3xl">Connect the instrument.</h1>
       <p className="text-muted-foreground mt-2 mb-6 text-sm">
-        {auth0Incomplete
-          ? 'Hosted auth is partially configured. Add Auth0 domain, client id, audience, and API URL to enable the sign-in flow.'
+        {hostedAuthIncomplete
+          ? 'Hosted auth is partially configured. Add the OIDC authority, client id, audience, and API URL to enable the sign-in flow.'
           : 'Hosted auth is not configured in this environment. Paste a personal token (pt_) or a project secret key (sk_) to continue.'}
       </p>
       <form onSubmit={submit} className="space-y-4">

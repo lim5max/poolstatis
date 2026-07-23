@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { assertHostedApiCredentialBoundary, loadConfig } from '../src/config.js';
 
+const hostedTokenPolicy = {
+  AUTH_JWT_ALLOWED_CLIENT_IDS: 'customer-web,mcp-client',
+  AUTH_JWT_REQUIRED_SCOPES: 'poolstatis:customer',
+};
+
 describe('production protection config', () => {
   it('uses the approved hosted-claim namespace and safe CORS defaults', () => {
     const hosted = loadConfig({
@@ -33,6 +38,7 @@ describe('production protection config', () => {
     const hosted = loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',
       AUTH_JWT_AUDIENCE: 'https://api.example/',
+      ...hostedTokenPolicy,
       HOSTED_POLICY_REQUIRED: 'true',
       DATABASE_URL: 'postgres://core-runtime@db.example/poolstatis',
       MIGRATION_DATABASE_URL: 'postgres://core-deploy@db.example/poolstatis',
@@ -45,8 +51,37 @@ describe('production protection config', () => {
     expect(() => loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',
       AUTH_JWT_AUDIENCE: 'https://api.example/',
+      ...hostedTokenPolicy,
       HOSTED_POLICY_REQUIRED: 'yes',
     })).toThrow('HOSTED_POLICY_REQUIRED must be true or false');
+  });
+
+  it('requires an exact OAuth client allowlist and scopes in hosted mode', () => {
+    const base = {
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      HOSTED_POLICY_REQUIRED: 'true',
+      DATABASE_URL: 'postgres://core-runtime@db.example/poolstatis',
+    };
+
+    expect(() => loadConfig(base)).toThrow('AUTH_JWT_ALLOWED_CLIENT_IDS');
+    expect(() => loadConfig({
+      ...base,
+      AUTH_JWT_ALLOWED_CLIENT_IDS: 'customer-web',
+    })).toThrow('AUTH_JWT_REQUIRED_SCOPES');
+    expect(() => loadConfig({
+      ...base,
+      AUTH_JWT_ALLOWED_CLIENT_IDS: 'customer-web, customer-web, mcp-client',
+      AUTH_JWT_REQUIRED_SCOPES: 'poolstatis:customer poolstatis:read',
+    })).toThrow('AUTH_JWT_REQUIRED_SCOPES must contain comma-separated values');
+
+    expect(loadConfig({
+      ...base,
+      ...hostedTokenPolicy,
+    }).auth).toMatchObject({
+      allowedClientIds: ['customer-web', 'mcp-client'],
+      requiredScopes: ['poolstatis:customer'],
+    });
   });
 
   it('requires separate deploy and runtime database credentials for hosted policy', () => {
@@ -54,12 +89,14 @@ describe('production protection config', () => {
     expect(loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',
       AUTH_JWT_AUDIENCE: 'https://api.example/',
+      ...hostedTokenPolicy,
       HOSTED_POLICY_REQUIRED: 'true',
       DATABASE_URL: runtime,
     }).migrationDatabaseUrl).toBeNull();
     expect(() => loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',
       AUTH_JWT_AUDIENCE: 'https://api.example/',
+      ...hostedTokenPolicy,
       HOSTED_POLICY_REQUIRED: 'true',
       DATABASE_URL: runtime,
       MIGRATION_DATABASE_URL: `${runtime}?application_name=migrator`,
@@ -67,6 +104,7 @@ describe('production protection config', () => {
     expect(() => loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',
       AUTH_JWT_AUDIENCE: 'https://api.example/',
+      ...hostedTokenPolicy,
       HOSTED_POLICY_REQUIRED: 'true',
       DATABASE_URL: runtime,
       MIGRATION_DATABASE_URL: 'postgres://core-deploy@other-db.example/poolstatis',
@@ -78,6 +116,7 @@ describe('production protection config', () => {
     const hostedRuntime = loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',
       AUTH_JWT_AUDIENCE: 'https://api.example/',
+      ...hostedTokenPolicy,
       HOSTED_POLICY_REQUIRED: 'true',
       DATABASE_URL: runtime,
     });
@@ -85,6 +124,7 @@ describe('production protection config', () => {
     const hostedJob = loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',
       AUTH_JWT_AUDIENCE: 'https://api.example/',
+      ...hostedTokenPolicy,
       HOSTED_POLICY_REQUIRED: 'true',
       DATABASE_URL: runtime,
       MIGRATION_DATABASE_URL: 'postgres://core-deploy@db.example/poolstatis',
