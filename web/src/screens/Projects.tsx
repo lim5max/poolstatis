@@ -66,7 +66,7 @@ function CreateProject({ create, onCreated }: { create: (b: { slug: string; name
       <div className="flex flex-col gap-3.5 sm:flex-row sm:items-end">
         <div className="flex-1 space-y-1.5"><Label htmlFor="project-slug" className="text-xs font-medium text-muted-foreground">Slug</Label><Input id="project-slug" placeholder="my-app" value={slug} onChange={(e) => setSlug(e.target.value)} /></div>
         <div className="flex-1 space-y-1.5"><Label htmlFor="project-name" className="text-xs font-medium text-muted-foreground">Name</Label><Input id="project-name" placeholder="My App" value={name} onChange={(e) => setName(e.target.value)} /></div>
-        <Button onClick={submit} disabled={busy || !slug.trim()}>{busy ? <Loader2 className="size-4 animate-spin" /> : 'Create'}</Button>
+        <Button onClick={submit} disabled={busy || !slug.trim()}>{busy ? <><Loader2 className="size-4 animate-spin" /><span>Creating…</span></> : 'Create'}</Button>
       </div>
       {err && <div className="mt-3"><ErrorNote>{err}</ErrorNote></div>}
     </Panel>

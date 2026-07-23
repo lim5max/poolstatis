@@ -94,16 +94,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const connectHosted = useCallback(async (c: HostedConn) => {
     const probe = new PoolstatisClient(c.baseUrl, c.getToken);
     const profile = await probe.me(); // creates/refreshes the hosted user and org.
-    const { projects: list, scope } = await probe.listProjects();
+    const canReadProjects = profile.membership.role === 'owner' || profile.membership.role === 'admin';
+    const projectResponse = canReadProjects ? await probe.listProjects() : { projects: [], scope: 'org' as const };
     localStorage.removeItem(LS_KEY);
     setBaseUrl(c.baseUrl);
     setToken('');
     setHostedToken(() => c.getToken);
     setExplicitKind('user');
-    setProjectScope(scope);
+    setProjectScope(projectResponse.scope);
     setAccount(profile);
-    setProjects(list);
-    setProjectState(list[0]?.slug ?? null);
+    setProjects(projectResponse.projects);
+    setProjectState(projectResponse.projects[0]?.slug ?? null);
   }, []);
 
   const disconnect = useCallback(() => {
@@ -145,9 +146,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => { alive = false; };
   }, [client, project]);
 
-  // Re-hydrate the project list when a saved connection exists on first load.
+  // Re-hydrate a persisted key session. Hosted sessions are never persisted and
+  // connectHosted already establishes the allowed project scope for that role.
   useEffect(() => {
-    if (client && projects.length === 0) {
+    if (client && explicitKind !== 'user' && projects.length === 0) {
       client.listProjects()
         .then(({ projects: list, scope }) => {
           setProjects(list);
@@ -156,8 +158,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         })
         .catch(() => disconnect());
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [client, disconnect, explicitKind, projects.length]);
 
   const value: Store = {
     client, baseUrl, token, tokenKind: explicitKind, projectScope, account, projects, project, env, availableEnvs,

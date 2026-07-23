@@ -15,9 +15,12 @@ function whole(value: number): string {
 }
 
 function LedgerRail({ usage }: { usage: OrganizationUsage }) {
-  const highestThreshold = usage.warning_thresholds.at(-1) ?? 0;
-  const scale = Math.max(usage.hard_limit ?? 0, usage.quantity, highestThreshold, 1);
-  const progress = Math.max(0, Math.min(1, usage.quantity / scale));
+  const finite = (value: number) => Number.isFinite(value) ? value : 0;
+  const hardLimit = usage.hard_limit === null ? null : finite(usage.hard_limit);
+  const highestThreshold = finite(usage.warning_thresholds.at(-1) ?? 0);
+  const scale = Math.max(hardLimit ?? 0, finite(usage.quantity), highestThreshold, 1);
+  const progress = Math.max(0, Math.min(1, finite(usage.quantity) / scale));
+  const hardLimitPosition = hardLimit === null ? null : Math.max(0, Math.min(1, hardLimit / scale));
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -35,7 +38,7 @@ function LedgerRail({ usage }: { usage: OrganizationUsage }) {
             <span className="mono whitespace-nowrap text-xs text-muted-foreground">{whole(threshold)}</span>
           </span>;
         })}
-        {usage.hard_limit !== null && <span className="absolute right-0 top-1 flex translate-x-1/2 flex-col items-center gap-1" aria-label={`Hard limit ${whole(usage.hard_limit)}`}><span className="h-4 w-px bg-destructive" /><span className="mono whitespace-nowrap text-xs text-muted-foreground">limit</span></span>}
+        {hardLimitPosition !== null && <span className="absolute top-1 flex -translate-x-1/2 flex-col items-center gap-1" style={{ left: `${hardLimitPosition * 100}%` }} aria-label={`Hard limit ${whole(hardLimit!)}`}><span className="h-4 w-px bg-destructive" /><span className="mono whitespace-nowrap text-xs text-muted-foreground">limit</span></span>}
       </div>
     </div>
   );

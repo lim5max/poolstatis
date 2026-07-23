@@ -76,6 +76,21 @@ describe('cloud workspace project controls', () => {
     expect(setProject).toHaveBeenCalledWith('new-project');
   });
 
+  it('keeps the busy project-create control accessible', async () => {
+    let resolveCreate: ((project: { slug: string }) => void) | undefined;
+    createProject.mockReturnValue(new Promise((resolve) => { resolveCreate = resolve; }));
+    mockedStore.mockReturnValue({
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 }], project: 'alpha', setProject, tokenKind: 'user', client: { createProject }, refreshProjects,
+      account: { membership: { role: 'owner' } },
+    } as never);
+    renderProjects();
+    fireEvent.change(screen.getByLabelText('Slug'), { target: { value: 'new-project' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled();
+    resolveCreate?.({ slug: 'new-project' });
+    await waitFor(() => expect(refreshProjects).toHaveBeenCalledOnce());
+  });
+
   it('offers creation to an organization-wide personal token under the backend policy', () => {
     mockedStore.mockReturnValue({
       projects: [], project: null, setProject, tokenKind: 'personal', client: { createProject }, refreshProjects,
@@ -254,5 +269,6 @@ describe('organization usage ledger', () => {
     render(<Usage />);
     await screen.findByText('Hard limit reached — 0 event limit');
     expect(screen.getByTestId('usage-ledger-rail').innerHTML).not.toContain('NaN');
+    expect(screen.getByLabelText('Hard limit 0')).toHaveStyle({ left: '0%' });
   });
 });
