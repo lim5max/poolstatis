@@ -24,7 +24,7 @@ describe('decision-loop trust MCP tools', () => {
   beforeAll(async () => {
     await new Promise<void>((resolveListen) => upstream.listen(0, '127.0.0.1', resolveListen));
     upstreamHost = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
-    env = await createTestEnv({ connectorEncryptionKey: 'mcp-decision-loop-test-key' });
+    env = await createTestEnv({ connectorEncryptionKey: 'mcp-decision-loop-test-key', outboundPolicy: { allowLocalHttp: true } });
     await env.app.listen({ host: '127.0.0.1', port: 0 });
     const address = env.app.server.address();
     if (!address || typeof address === 'string') throw new Error('test server did not bind');

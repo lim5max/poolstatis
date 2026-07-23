@@ -1,6 +1,14 @@
 -- Cloud cutover: a hosted personal token must belong to a current member of
--- its organization.  Remove stale owner-bound credentials before installing
--- the FK; they were already unusable at the application layer.
+-- its organization.  First remove an invalid legacy owner annotation from
+-- non-personal rows: owner semantics are exclusively personal-token semantics.
+-- This is deliberate cleanup, not a cross-kind ownership conversion.
+
+UPDATE api_keys
+SET issued_by_user_id = NULL
+WHERE kind <> 'personal' AND issued_by_user_id IS NOT NULL;
+
+-- Remove stale personal credentials before installing the FK; they were
+-- already unusable at the application layer.
 
 DELETE FROM api_keys k
 WHERE k.issued_by_user_id IS NOT NULL

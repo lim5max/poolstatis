@@ -50,6 +50,7 @@ import {
   approveAction, getAction, listActions, prepareAction, rejectAction, retryAction,
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
+import type { OutboundPolicyOptions } from '../security/outbound.js';
 import { getOrganizationUsage } from '../services/usage.js';
 import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
 import {
@@ -83,6 +84,7 @@ export interface ServerOptions {
   rateLimit?: TenantRateLimitOptions | false;
   connectorEncryptionKey?: string;
   corsOrigins?: string[];
+  outboundPolicy?: OutboundPolicyOptions;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -218,6 +220,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   if (options.connectorEncryptionKey !== undefined) {
     contextOptions.connectorEncryptionKey = options.connectorEncryptionKey;
   }
+  if (options.outboundPolicy !== undefined) contextOptions.outboundPolicy = options.outboundPolicy;
   const ctx = createContext(pool, contextOptions);
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
   const rateLimiter = options.rateLimit === false || options.rateLimit === undefined

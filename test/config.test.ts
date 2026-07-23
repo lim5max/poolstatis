@@ -131,8 +131,10 @@ describe('production protection config', () => {
       WEBHOOK_OUTBOX_MAX_RETRY_MS: '3333',
       WEBHOOK_OUTBOX_LEASE_MS: '4444',
       WEBHOOK_REQUEST_TIMEOUT_MS: '555',
+      OUTBOUND_ALLOW_LOCAL_HTTP: 'true',
     });
     expect(config.rateLimit).toBe(false);
+    expect(config.outboundPolicy).toEqual({ allowLocalHttp: true });
     expect(config.retentionWorker).toEqual({
       enabled: false,
       intervalMs: 1234,

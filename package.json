@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.type-tests.json",
     "migrate": "tsx src/cli/migrate.ts",
     "bootstrap": "tsx src/cli/bootstrap.ts",
     "seed": "tsx src/cli/seed.ts",

@@ -11,6 +11,11 @@ export interface Project {
   retention_months: number;
 }
 
+export type CreateApiKeyInput =
+  | { orgId: string; projectId: null; kind: 'personal'; env?: string; label?: string; issuedByUserId: string; legacySelfHost?: never }
+  | { orgId: string; projectId: null; kind: 'personal'; env?: string; label?: string; legacySelfHost: true; issuedByUserId?: never }
+  | { orgId: string; projectId: string; kind: 'ingest' | 'secret'; env?: string; label?: string; issuedByUserId?: never };
+
 export async function createOrganization(pool: pg.Pool, name: string): Promise<{ id: string }> {
   const { rows } = await pool.query(
     'INSERT INTO organizations (name) VALUES ($1) RETURNING id',
@@ -35,15 +40,14 @@ export async function createProject(
 
 export async function createApiKey(
   pool: pg.Pool,
-  opts: {
-    orgId: string;
-    projectId: string | null;
-    kind: KeyKind;
-    env?: string;
-    label?: string;
-    issuedByUserId?: string;
-  },
+  opts: CreateApiKeyInput,
 ): Promise<{ id: string; token: string }> {
+  if (opts.kind !== 'personal' && 'issuedByUserId' in opts && opts.issuedByUserId !== undefined) {
+    throw new Error('issuedByUserId is only valid for personal keys');
+  }
+  if (opts.kind === 'personal' && !opts.issuedByUserId && opts.legacySelfHost !== true) {
+    throw new Error('personal keys require issuedByUserId unless legacySelfHost is explicitly enabled');
+  }
   const { token, hash } = generateToken(opts.kind);
   const { rows } = await pool.query(
     `INSERT INTO api_keys (

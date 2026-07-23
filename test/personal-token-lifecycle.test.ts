@@ -195,7 +195,7 @@ describe('personal token lifecycle', () => {
     expect(afterRemoval.status).toBe(401);
     expect(afterRemoval.body.error.code).toBe('unauthorized');
 
-    const legacy = await createApiKey(pool, { orgId: member.orgId, projectId: null, kind: 'personal' });
+    const legacy = await createApiKey(pool, { orgId: member.orgId, projectId: null, kind: 'personal', legacySelfHost: true });
     const hostedLegacy = await request(legacy.token, 'GET', '/api/v1/projects');
     expect(hostedLegacy.status).toBe(401);
     const selfHostedApp = buildServer(pool);

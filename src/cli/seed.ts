@@ -29,7 +29,7 @@ try {
   const pid = project.id;
   const ingest = await createApiKey(pool, { orgId: org.id, projectId: pid, kind: 'ingest', env: 'prod' });
   const secret = await createApiKey(pool, { orgId: org.id, projectId: pid, kind: 'secret' });
-  const personal = await createApiKey(pool, { orgId: org.id, projectId: null, kind: 'personal' });
+  const personal = await createApiKey(pool, { orgId: org.id, projectId: null, kind: 'personal', legacySelfHost: true });
 
   // ---- registry ----
   const metrics: Array<Parameters<typeof registerMetric>[2]> = [

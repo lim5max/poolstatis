@@ -7,6 +7,7 @@ export interface Config {
   host: string;
   publicUrl: string;
   connectorEncryptionKey: string | null;
+  outboundPolicy: { allowLocalHttp: boolean };
   ingestBuffer: {
     maxEvents: number;
     maxDelayMs: number;
@@ -214,6 +215,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST ?? '127.0.0.1',
     publicUrl: (env.POOLSTATIS_PUBLIC_URL ?? 'https://api.poolstatis.com').replace(/\/$/, ''),
     connectorEncryptionKey: env.POOLSTATIS_CONNECTOR_ENCRYPTION_KEY?.trim() || null,
+    outboundPolicy: { allowLocalHttp: booleanValue(env.OUTBOUND_ALLOW_LOCAL_HTTP, false, 'OUTBOUND_ALLOW_LOCAL_HTTP') },
     ingestBuffer,
     queryCache: {
       ttlMs: positiveInt(env.QUERY_CACHE_TTL_MS, 1_000, 'QUERY_CACHE_TTL_MS'),

@@ -26,6 +26,7 @@ const app = buildServer(pool, {
   queryCache: config.queryCache,
   rateLimit: config.rateLimit,
   corsOrigins: config.corsOrigins,
+  outboundPolicy: config.outboundPolicy,
   ...(config.connectorEncryptionKey
     ? { connectorEncryptionKey: config.connectorEncryptionKey }
     : {}),
@@ -100,7 +101,7 @@ const prepareMaintenance = async (): Promise<void> => {
         maxRetryMs: config.webhookOutbox.maxRetryMs,
         leaseMs: config.webhookOutbox.leaseMs,
         requestTimeoutMs: config.webhookOutbox.requestTimeoutMs,
-      });
+      }, config.outboundPolicy);
       webhookOutboxWorker = startWebhookOutbox(outbox, {
         intervalMs: config.webhookOutbox.intervalMs,
         onResult: (result) => {

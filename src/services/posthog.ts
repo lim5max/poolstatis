@@ -7,6 +7,7 @@ import type {
 } from '../schemas.js';
 import type { RetentionCohort, TrendPoint } from '../stores/eventStore.js';
 import type { MetricAggregate } from '../stores/eventStore.js';
+import { OutboundPolicyError, requestOutbound, resolveOutboundTarget, sanitizedOutboundError, type OutboundPolicyOptions } from '../security/outbound.js';
 
 export interface SourceConnection {
   id: string;
@@ -59,7 +60,7 @@ export class PostHogAdapter {
   constructor(
     private readonly pool: pg.Pool,
     private readonly encryptionKey: string | undefined,
-    private readonly fetcher: typeof fetch = fetch,
+    private readonly outboundPolicy: OutboundPolicyOptions = {},
   ) {}
 
   async configure(
@@ -67,6 +68,11 @@ export class PostHogAdapter {
     input: PostHogConnectionInput,
     actor: string,
   ): Promise<SourceConnection> {
+    try { await resolveOutboundTarget(input.host, this.outboundPolicy); }
+    catch (error) {
+      if (error instanceof OutboundPolicyError) throw new ApiError(400, error.code, 'PostHog host is not permitted');
+      throw error;
+    }
     const encrypted = encryptSecret(input.personal_api_key, this.requireEncryptionKey());
     try {
       const { rows } = await this.pool.query<SourceConnection>(
@@ -477,8 +483,6 @@ export class PostHogAdapter {
     path: string,
     body?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
     const credential = decryptSecret({
       ciphertext: connection.secret_ciphertext,
       iv: connection.secret_iv,
@@ -488,26 +492,24 @@ export class PostHogAdapter {
       + '/api/projects/' + encodeURIComponent(connection.external_project_id)
       + path;
     try {
-      const response = await this.fetcher(url, {
-        method,
-        redirect: 'error',
-        headers: {
-          authorization: 'Bearer ' + credential,
-          accept: 'application/json',
-          ...(body ? { 'content-type': 'application/json' } : {}),
-        },
-        ...(body ? { body: JSON.stringify(body) } : {}),
-        signal: controller.signal,
+      const headers = {
+        authorization: 'Bearer ' + credential,
+        accept: 'application/json',
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      };
+      let status: number;
+      let text: string;
+      const response = await requestOutbound(url, {
+        ...this.outboundPolicy, method, headers, ...(body ? { body: JSON.stringify(body) } : {}),
+        timeoutMs: 10_000, maxResponseBytes: MAX_RESPONSE_BYTES,
       });
-      const announced = Number(response.headers.get('content-length') ?? 0);
-      if (announced > MAX_RESPONSE_BYTES) throw upstreamTooLarge();
-      const text = await response.text();
-      if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) throw upstreamTooLarge();
-      if (!response.ok) {
+      status = response.status;
+      text = response.body.toString('utf8');
+      if (status < 200 || status >= 300) {
         throw new ApiError(
           502,
           'posthog_upstream_error',
-          `PostHog returned HTTP ${response.status} for a bounded read request`,
+          `PostHog returned HTTP ${status} for a bounded read request`,
           'verify the host, project ID, personal API key scopes, and PostHog availability',
         );
       }
@@ -532,9 +534,7 @@ export class PostHogAdapter {
         'Poolstatis could not reach the configured PostHog host',
         'verify the private API host and network access',
       );
-    } finally {
-      clearTimeout(timeout);
-    }
+    } finally { /* requestOutbound owns the absolute query deadline. */ }
   }
 
   private requireEncryptionKey(): string {
@@ -629,8 +629,9 @@ function upstreamTooLarge(): ApiError {
 function sanitizedError(error: unknown): string {
   return error instanceof ApiError
     ? error.code + ': ' + error.message
-    : 'posthog_connection_failed';
+    : sanitizedOutboundError(error);
 }
+
 
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === 'object' && error !== null
