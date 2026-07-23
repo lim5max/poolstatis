@@ -11,6 +11,7 @@ export interface AuthUserInput {
   pictureUrl?: string | null;
   connectionStrategy: string;
   legacyIssuer?: string | null;
+  requireOrganizationPolicy?: boolean;
 }
 
 export interface AuthenticatedAccount {
@@ -204,6 +205,15 @@ export async function getOrCreateAuthenticatedAccount(
       );
     }
 
+    if (input.requireOrganizationPolicy === true) {
+      // The marker is part of the same transaction as first hosted account
+      // provisioning. Cloud activates it only after its policy rows are durable.
+      await client.query(
+        'SELECT poolstatis_require_organization_policy($1::uuid)',
+        [organization.id],
+      );
+    }
+
     await client.query('COMMIT');
     return {
       user,
@@ -219,6 +229,46 @@ export async function getOrCreateAuthenticatedAccount(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Upgrade gate for a hosted process. This must complete before the server
+ * starts listening so pre-existing JWT organizations and their old keys fail
+ * closed until the external control plane activates each policy.
+ */
+export async function prepareHostedOrganizationPolicies(
+  pool: pg.Pool,
+  required: boolean,
+): Promise<number> {
+  if (!required) return 0;
+  const { rows: privilegeRows } = await pool.query<{
+    runtime_member: boolean;
+    can_require: boolean;
+    can_backfill: boolean;
+  }>(
+    `SELECT
+       pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS runtime_member,
+       has_function_privilege(
+         current_user,
+         'poolstatis_require_organization_policy(uuid)',
+         'EXECUTE'
+       ) AS can_require,
+       has_function_privilege(
+         current_user,
+         'poolstatis_backfill_organization_policy_state()',
+         'EXECUTE'
+       ) AS can_backfill`,
+  );
+  const privileges = privilegeRows[0];
+  if (!privileges?.runtime_member || !privileges.can_require || !privileges.can_backfill) {
+    throw new Error(
+      'hosted policy startup requires membership in poolstatis_core_runtime with require/backfill execute privileges',
+    );
+  }
+  const { rows } = await pool.query<{ inserted: string }>(
+    'SELECT poolstatis_backfill_organization_policy_state()::text AS inserted',
+  );
+  return Number(rows[0]?.inserted ?? 0);
 }
 
 export interface AuthenticatedProfile extends AuthenticatedAccount {}

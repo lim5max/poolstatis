@@ -7,10 +7,15 @@ import { ensureRetentionIndexes } from '../services/retentionIndexes.js';
 import { createContext } from '../http/context.js';
 import { ReleaseMonitor, startReleaseMonitor } from '../services/releaseMonitor.js';
 import { WebhookOutbox, startWebhookOutbox } from '../services/webhooks.js';
+import { prepareHostedOrganizationPolicies } from '../services/accounts.js';
 
 const config = loadConfig();
 const pool = createPool(config.databaseUrl, { max: config.databasePoolMax });
 await migrate(pool);
+await prepareHostedOrganizationPolicies(
+  pool,
+  config.auth?.requireOrganizationPolicy === true,
+);
 // Index builds and retention never borrow a request-serving connection.
 const maintenanceApplicationName = `poolstatis-maintenance-${randomUUID()}`;
 const maintenancePool = createPool(config.databaseUrl, {

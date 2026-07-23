@@ -20,6 +20,8 @@ export interface JwtAuthOptions {
   connectionStrategy?: string;
   /** Explicit operator opt-in for adopting pre-017 rows with no issuer binding. */
   legacyIssuer?: string | null;
+  /** Fail closed until an external hosted policy is durably activated. */
+  requireOrganizationPolicy?: boolean;
 }
 
 export interface AuthContext {
@@ -120,6 +122,7 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
     pictureUrl: stringClaim(payload, claims.picture),
     connectionStrategy: options.connectionStrategy ?? 'oidc',
     legacyIssuer: options.legacyIssuer ?? null,
+    requireOrganizationPolicy: options.requireOrganizationPolicy ?? false,
   });
   return {
     keyId: null,

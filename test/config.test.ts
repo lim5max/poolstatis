@@ -25,6 +25,26 @@ describe('production protection config', () => {
     expect(production.corsOrigins).toEqual([]);
   });
 
+  it('requires an explicit hosted opt-in before enforcing external organization policy', () => {
+    const selfHost = loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+    });
+    const hosted = loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      HOSTED_POLICY_REQUIRED: 'true',
+    });
+
+    expect(selfHost.auth?.requireOrganizationPolicy).toBe(false);
+    expect(hosted.auth?.requireOrganizationPolicy).toBe(true);
+    expect(() => loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      HOSTED_POLICY_REQUIRED: 'yes',
+    })).toThrow('HOSTED_POLICY_REQUIRED must be true or false');
+  });
+
   it('normalizes a comma-separated exact-origin CORS allowlist and rejects unsafe entries', () => {
     expect(loadConfig({
       POOLSTATIS_CORS_ORIGINS: 'https://console.example/, https://console.example, http://localhost:5273',

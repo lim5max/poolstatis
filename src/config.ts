@@ -66,6 +66,7 @@ export interface Config {
     };
     connectionStrategy: string;
     legacyIssuer: string | null;
+    requireOrganizationPolicy: boolean;
   } | null;
   corsOrigins: string[];
 }
@@ -285,6 +286,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       },
       connectionStrategy: requiredText(env.AUTH_CONNECTION_STRATEGY, 'oidc', 'AUTH_CONNECTION_STRATEGY'),
       legacyIssuer,
+      requireOrganizationPolicy: booleanValue(
+        env.HOSTED_POLICY_REQUIRED,
+        false,
+        'HOSTED_POLICY_REQUIRED',
+      ),
     } : null,
     corsOrigins,
   };
