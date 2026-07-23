@@ -26,4 +26,17 @@ describe('immutable runtime operations CLI contract', () => {
     expect(dockerfile).toContain('COPY --from=build /app/migrations ./migrations');
     expect(dockerfile).toContain('RUN pnpm prune --prod');
   });
+
+  it('keeps self-host startup non-blocking while hosted startup stays read-only', async () => {
+    const serve = await readFile('src/cli/serve.ts', 'utf8');
+
+    expect(serve).toContain('} else {\n  await migrate(pool);\n}');
+    expect(serve).toContain('manageEventPartitions: !hostedPolicyRequired');
+    expect(serve).toContain('hostedPolicyRequired\n      ? {');
+    expect(serve).toContain(': await ensureRetentionIndexes(maintenancePool)');
+    expect(serve).not.toContain('await ensureRollingEventPartitions(pool');
+    expect(serve.indexOf('await app.listen')).toBeLessThan(
+      serve.indexOf(': await ensureRetentionIndexes(maintenancePool)'),
+    );
+  });
 });

@@ -8,7 +8,6 @@ import {
   retentionIndexesReady,
 } from '../services/retentionIndexes.js';
 import {
-  ensureRollingEventPartitions,
   rollingEventPartitionsReady,
 } from '../stores/postgresEventStore.js';
 import { createContext } from '../http/context.js';
@@ -37,9 +36,6 @@ if (hostedPolicyRequired) {
   }
 } else {
   await migrate(pool);
-  await ensureRollingEventPartitions(pool, new Date(), 12);
-  const indexes = await ensureRetentionIndexes(pool);
-  if (!indexes.ready) throw new Error('operational indexes are not ready after migration');
 }
 await prepareHostedOrganizationPolicies(
   pool,
@@ -79,7 +75,18 @@ let maintenanceTask: Promise<void> | null = null;
 const prepareMaintenance = async (): Promise<void> => {
   if (stopping) return;
   try {
-    if (!await retentionIndexesReady(maintenancePool)) {
+    const indexes = hostedPolicyRequired
+      ? {
+          lockAcquired: false,
+          ready: await retentionIndexesReady(maintenancePool),
+          partitionsIndexed: 0,
+          metadataIndexed: false,
+        }
+      : await ensureRetentionIndexes(maintenancePool);
+    if (indexes.partitionsIndexed > 0 || indexes.metadataIndexed) {
+      console.log(JSON.stringify({ maintenance: 'operational_indexes', ...indexes }));
+    }
+    if (!indexes.ready) {
       maintenanceTimer = setTimeout(() => { maintenanceTask = prepareMaintenance(); }, 5_000);
       maintenanceTimer.unref();
       return;
