@@ -3,7 +3,7 @@ import { createPool, migrate } from '../src/db.js';
 import { ensureRetentionIndexes } from '../src/services/retentionIndexes.js';
 import { ADMIN_URL, TEST_DB, TEST_DB_URL } from './urls.js';
 
-export default async function setup(): Promise<void> {
+export default async function setup(): Promise<void | (() => Promise<void>)> {
   const admin = new pg.Pool({ connectionString: ADMIN_URL });
   try {
     const client = await admin.connect();
