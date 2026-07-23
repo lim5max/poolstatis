@@ -4,7 +4,12 @@ import { loadConfig } from '../config.js';
 if (process.argv.includes('--help')) {
   console.log('Usage: node dist/cli/migrate.js');
 } else {
-  const pool = createPool(loadConfig().databaseUrl);
+  const config = loadConfig();
+  if (config.auth?.requireOrganizationPolicy === true
+      && config.migrationDatabaseUrl === null) {
+    throw new Error('MIGRATION_DATABASE_URL is required for hosted migrations');
+  }
+  const pool = createPool(config.migrationDatabaseUrl ?? config.databaseUrl);
   try {
     const applied = await migrate(pool);
     console.log(applied.length ? `applied: ${applied.join(', ')}` : 'schema up to date');

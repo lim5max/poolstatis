@@ -1,20 +1,49 @@
 import { randomUUID } from 'node:crypto';
 import { createPool, migrate } from '../db.js';
-import { loadConfig } from '../config.js';
+import { assertHostedApiCredentialBoundary, loadConfig } from '../config.js';
 import { buildServer } from '../http/server.js';
 import { startRetentionWorker } from '../services/retention.js';
-import { ensureRetentionIndexes } from '../services/retentionIndexes.js';
+import {
+  ensureRetentionIndexes,
+  retentionIndexesReady,
+} from '../services/retentionIndexes.js';
+import {
+  ensureRollingEventPartitions,
+  rollingEventPartitionsReady,
+} from '../stores/postgresEventStore.js';
 import { createContext } from '../http/context.js';
 import { ReleaseMonitor, startReleaseMonitor } from '../services/releaseMonitor.js';
 import { WebhookOutbox, startWebhookOutbox } from '../services/webhooks.js';
-import { prepareHostedOrganizationPolicies } from '../services/accounts.js';
+import {
+  assertHostedRuntimeDatabaseRole,
+  prepareHostedOrganizationPolicies,
+} from '../services/accounts.js';
 
 const config = loadConfig();
+const hostedPolicyRequired = config.auth?.requireOrganizationPolicy === true;
+assertHostedApiCredentialBoundary(config);
 const pool = createPool(config.databaseUrl, { max: config.databasePoolMax });
-await migrate(pool);
+if (hostedPolicyRequired) {
+  await assertHostedRuntimeDatabaseRole(pool, true);
+  if (!await rollingEventPartitionsReady(pool, new Date(), 12)) {
+    throw new Error(
+      'hosted rolling event partitions are not ready; run the privileged prepare-hosted job',
+    );
+  }
+  if (!await retentionIndexesReady(pool)) {
+    throw new Error(
+      'hosted runtime is not prepared; run the privileged prepare-hosted job before serve',
+    );
+  }
+} else {
+  await migrate(pool);
+  await ensureRollingEventPartitions(pool, new Date(), 12);
+  const indexes = await ensureRetentionIndexes(pool);
+  if (!indexes.ready) throw new Error('operational indexes are not ready after migration');
+}
 await prepareHostedOrganizationPolicies(
   pool,
-  config.auth?.requireOrganizationPolicy === true,
+  hostedPolicyRequired,
 );
 // Index builds and retention never borrow a request-serving connection.
 const maintenanceApplicationName = `poolstatis-maintenance-${randomUUID()}`;
@@ -32,6 +61,7 @@ const app = buildServer(pool, {
   rateLimit: config.rateLimit,
   corsOrigins: config.corsOrigins,
   outboundPolicy: config.outboundPolicy,
+  manageEventPartitions: !hostedPolicyRequired,
   ...(config.connectorEncryptionKey
     ? { connectorEncryptionKey: config.connectorEncryptionKey }
     : {}),
@@ -49,11 +79,7 @@ let maintenanceTask: Promise<void> | null = null;
 const prepareMaintenance = async (): Promise<void> => {
   if (stopping) return;
   try {
-    const indexes = await ensureRetentionIndexes(maintenancePool);
-    if (indexes.partitionsIndexed > 0 || indexes.metadataIndexed) {
-      console.log(JSON.stringify({ maintenance: 'operational_indexes', ...indexes }));
-    }
-    if (!indexes.ready) {
+    if (!await retentionIndexesReady(maintenancePool)) {
       maintenanceTimer = setTimeout(() => { maintenanceTask = prepareMaintenance(); }, 5_000);
       maintenanceTimer.unref();
       return;

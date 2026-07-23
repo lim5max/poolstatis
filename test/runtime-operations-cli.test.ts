@@ -8,10 +8,14 @@ describe('immutable runtime operations CLI contract', () => {
     };
 
     expect(packageJson.scripts.migrate).toBe('node dist/cli/migrate.js');
+    expect(packageJson.scripts['prepare:hosted']).toBe(
+      'node dist/cli/prepareHosted.js',
+    );
     expect(packageJson.scripts['preflight:migration-023']).toBe(
       'node dist/cli/preflightMigration023.js',
     );
     expect(packageJson.scripts.migrate).not.toContain('tsx');
+    expect(packageJson.scripts['prepare:hosted']).not.toContain('tsx');
     expect(packageJson.scripts['preflight:migration-023']).not.toContain('tsx');
   });
 

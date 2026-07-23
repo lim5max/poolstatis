@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/config.js';
+import { assertHostedApiCredentialBoundary, loadConfig } from '../src/config.js';
 
 describe('production protection config', () => {
   it('uses the approved hosted-claim namespace and safe CORS defaults', () => {
@@ -34,15 +34,64 @@ describe('production protection config', () => {
       AUTH_JWT_ISSUER: 'https://issuer.example/',
       AUTH_JWT_AUDIENCE: 'https://api.example/',
       HOSTED_POLICY_REQUIRED: 'true',
+      DATABASE_URL: 'postgres://core-runtime@db.example/poolstatis',
+      MIGRATION_DATABASE_URL: 'postgres://core-deploy@db.example/poolstatis',
     });
 
     expect(selfHost.auth?.requireOrganizationPolicy).toBe(false);
     expect(hosted.auth?.requireOrganizationPolicy).toBe(true);
+    expect(hosted.databaseUrl).toBe('postgres://core-runtime@db.example/poolstatis');
+    expect(hosted.migrationDatabaseUrl).toBe('postgres://core-deploy@db.example/poolstatis');
     expect(() => loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',
       AUTH_JWT_AUDIENCE: 'https://api.example/',
       HOSTED_POLICY_REQUIRED: 'yes',
     })).toThrow('HOSTED_POLICY_REQUIRED must be true or false');
+  });
+
+  it('requires separate deploy and runtime database credentials for hosted policy', () => {
+    const runtime = 'postgres://core-runtime@db.example/poolstatis';
+    expect(loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      HOSTED_POLICY_REQUIRED: 'true',
+      DATABASE_URL: runtime,
+    }).migrationDatabaseUrl).toBeNull();
+    expect(() => loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      HOSTED_POLICY_REQUIRED: 'true',
+      DATABASE_URL: runtime,
+      MIGRATION_DATABASE_URL: `${runtime}?application_name=migrator`,
+    })).toThrow('must use a different database credential');
+    expect(() => loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      HOSTED_POLICY_REQUIRED: 'true',
+      DATABASE_URL: runtime,
+      MIGRATION_DATABASE_URL: 'postgres://core-deploy@other-db.example/poolstatis',
+    })).toThrow('must target the same database');
+
+    const selfHost = loadConfig({ DATABASE_URL: runtime });
+    expect(selfHost.migrationDatabaseUrl).toBe(runtime);
+
+    const hostedRuntime = loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      HOSTED_POLICY_REQUIRED: 'true',
+      DATABASE_URL: runtime,
+    });
+    expect(() => assertHostedApiCredentialBoundary(hostedRuntime)).not.toThrow();
+    const hostedJob = loadConfig({
+      AUTH_JWT_ISSUER: 'https://issuer.example/',
+      AUTH_JWT_AUDIENCE: 'https://api.example/',
+      HOSTED_POLICY_REQUIRED: 'true',
+      DATABASE_URL: runtime,
+      MIGRATION_DATABASE_URL: 'postgres://core-deploy@db.example/poolstatis',
+    });
+    expect(() => assertHostedApiCredentialBoundary(hostedJob)).toThrow(
+      'must not be present in the hosted API process',
+    );
   });
 
   it('normalizes a comma-separated exact-origin CORS allowlist and rejects unsafe entries', () => {

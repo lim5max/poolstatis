@@ -2,6 +2,7 @@ import type { TenantRateLimitOptions } from './services/rateLimiter.js';
 
 export interface Config {
   databaseUrl: string;
+  migrationDatabaseUrl: string | null;
   databasePoolMax: number;
   port: number;
   host: string;
@@ -71,6 +72,15 @@ export interface Config {
   corsOrigins: string[];
 }
 
+export function assertHostedApiCredentialBoundary(config: Config): void {
+  if (config.auth?.requireOrganizationPolicy === true
+      && config.migrationDatabaseUrl !== null) {
+    throw new Error(
+      'MIGRATION_DATABASE_URL must not be present in the hosted API process; run prepare-hosted separately',
+    );
+  }
+}
+
 function parseArgs(raw: string | undefined): string[] {
   if (!raw?.trim()) return ['--silent', 'dlx', '@poolstatis/mcp'];
   const trimmed = raw.trim();
@@ -111,6 +121,26 @@ function requiredText(raw: string | undefined, fallback: string, name: string): 
   const value = raw === undefined ? fallback : raw.trim();
   if (!value) throw new Error(`${name} must not be empty`);
   return value;
+}
+
+function databaseCredential(raw: string, name: string): {
+  username: string;
+  target: string;
+} {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${name} must be a PostgreSQL URL`);
+  }
+  if ((url.protocol !== 'postgres:' && url.protocol !== 'postgresql:')
+      || !url.username || !url.hostname || url.pathname.length <= 1) {
+    throw new Error(`${name} must be a PostgreSQL URL with username, host, and database`);
+  }
+  return {
+    username: decodeURIComponent(url.username),
+    target: `${url.hostname.toLowerCase()}:${url.port || '5432'}${url.pathname}`,
+  };
 }
 
 function parseCorsOrigins(raw: string | undefined, production: boolean): string[] {
@@ -207,10 +237,38 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (retentionMaxBatches < 4) {
     throw new Error('RETENTION_MAX_BATCHES must be at least 4');
   }
+  const databaseUrl =
+    env.DATABASE_URL ??
+    'postgres://poolsatis:poolsatis@localhost:5444/poolsatis';
+  const requireOrganizationPolicy = booleanValue(
+    env.HOSTED_POLICY_REQUIRED,
+    false,
+    'HOSTED_POLICY_REQUIRED',
+  );
+  if (requireOrganizationPolicy && (!issuer || !audience || !jwksUri)) {
+    throw new Error('HOSTED_POLICY_REQUIRED requires configured JWT authentication');
+  }
+  const migrationDatabaseUrl = env.MIGRATION_DATABASE_URL === undefined
+    ? (requireOrganizationPolicy ? null : databaseUrl)
+    : requiredText(env.MIGRATION_DATABASE_URL, '', 'MIGRATION_DATABASE_URL');
+  if (requireOrganizationPolicy && migrationDatabaseUrl !== null) {
+    const runtimeCredential = databaseCredential(databaseUrl, 'DATABASE_URL');
+    const migrationCredential = databaseCredential(
+      migrationDatabaseUrl,
+      'MIGRATION_DATABASE_URL',
+    );
+    if (migrationCredential.target !== runtimeCredential.target) {
+      throw new Error('MIGRATION_DATABASE_URL must target the same database as DATABASE_URL');
+    }
+    if (migrationCredential.username === runtimeCredential.username) {
+      throw new Error(
+        'MIGRATION_DATABASE_URL must use a different database credential from DATABASE_URL in hosted mode',
+      );
+    }
+  }
   return {
-    databaseUrl:
-      env.DATABASE_URL ??
-      'postgres://poolsatis:poolsatis@localhost:5444/poolsatis',
+    databaseUrl,
+    migrationDatabaseUrl,
     databasePoolMax,
     port: env.PORT ? Number(env.PORT) : 3300,
     host: env.HOST ?? '127.0.0.1',
@@ -286,11 +344,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       },
       connectionStrategy: requiredText(env.AUTH_CONNECTION_STRATEGY, 'oidc', 'AUTH_CONNECTION_STRATEGY'),
       legacyIssuer,
-      requireOrganizationPolicy: booleanValue(
-        env.HOSTED_POLICY_REQUIRED,
-        false,
-        'HOSTED_POLICY_REQUIRED',
-      ),
+      requireOrganizationPolicy,
     } : null,
     corsOrigins,
   };

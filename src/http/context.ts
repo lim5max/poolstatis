@@ -25,13 +25,16 @@ export interface AppContext {
 
 export interface CreateContextOptions {
   ingestBuffer?: BufferedEventStoreOptions | false;
+  manageEventPartitions?: boolean;
   queryCache?: QueryCacheOptions | false;
   connectorEncryptionKey?: string;
   outboundPolicy?: OutboundPolicyOptions;
 }
 
 export function createContext(pool: pg.Pool, options: CreateContextOptions = {}): AppContext {
-  const rawEventStore = new PostgresEventStore(pool);
+  const rawEventStore = new PostgresEventStore(pool, {
+    managePartitions: options.manageEventPartitions ?? true,
+  });
   const eventStore = options.ingestBuffer === false
     ? rawEventStore
     : new BufferedEventStore(rawEventStore, options.ingestBuffer ?? DEFAULT_BUFFERED_EVENT_STORE_OPTIONS);

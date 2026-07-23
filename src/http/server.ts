@@ -80,6 +80,7 @@ export interface ServerOptions {
   publicUrl?: string;
   mcpRunner?: McpRunnerConfig;
   ingestBuffer?: CreateContextOptions['ingestBuffer'];
+  manageEventPartitions?: boolean;
   queryCache?: CreateContextOptions['queryCache'];
   rateLimit?: TenantRateLimitOptions | false;
   connectorEncryptionKey?: string;
@@ -216,6 +217,9 @@ function parsePropFilter(token: string): PropertyFilter {
 export function buildServer(pool: pg.Pool, options: ServerOptions = {}): FastifyInstance {
   const contextOptions: CreateContextOptions = {};
   if (options.ingestBuffer !== undefined) contextOptions.ingestBuffer = options.ingestBuffer;
+  if (options.manageEventPartitions !== undefined) {
+    contextOptions.manageEventPartitions = options.manageEventPartitions;
+  }
   if (options.queryCache !== undefined) contextOptions.queryCache = options.queryCache;
   if (options.connectorEncryptionKey !== undefined) {
     contextOptions.connectorEncryptionKey = options.connectorEncryptionKey;

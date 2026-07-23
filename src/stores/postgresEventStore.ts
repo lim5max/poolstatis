@@ -56,14 +56,27 @@ interface MeteredScope {
   periodStart: string;
 }
 
+export interface PostgresEventStoreOptions {
+  /** Hosted runtime uses pre-created rolling partitions and never performs DDL. */
+  managePartitions?: boolean;
+}
+
 export class PostgresEventStore implements EventStore {
   private readonly knownPartitions = new Set<string>();
+  private readonly managePartitions: boolean;
 
-  constructor(private readonly pool: pg.Pool) {}
+  constructor(
+    private readonly pool: pg.Pool,
+    options: PostgresEventStoreOptions = {},
+  ) {
+    this.managePartitions = options.managePartitions ?? true;
+  }
 
   async append(events: StorableEvent[]): Promise<AppendResult> {
     if (events.length === 0) return { inserted: 0 };
-    await this.ensurePartitions(events.map((e) => e.timestamp));
+    if (this.managePartitions) {
+      await this.ensurePartitions(events.map((e) => e.timestamp));
+    }
     const groups = new Map<string, MeteredGroup>();
     for (const event of events) {
       const key = `${event.projectId}:${event.env}`;
@@ -105,7 +118,7 @@ export class PostgresEventStore implements EventStore {
    * batch, never append the same clicks twice on retry.
    */
   async appendIdempotent(batch: IdempotentAppend): Promise<AppendResult> {
-    if (batch.events.length > 0) {
+    if (this.managePartitions && batch.events.length > 0) {
       await this.ensurePartitions(batch.events.map((event) => event.timestamp));
     }
     const client = await this.pool.connect();
@@ -983,36 +996,82 @@ export class PostgresEventStore implements EventStore {
    * partitions keeps retention cheap (DROP TABLE instead of DELETE).
    */
   private async ensurePartitions(timestamps: Date[]): Promise<void> {
-    const months = new Set<string>();
-    for (const ts of timestamps) {
-      months.add(`${ts.getUTCFullYear()}-${String(ts.getUTCMonth() + 1).padStart(2, '0')}`);
-    }
-    for (const month of months) {
-      if (this.knownPartitions.has(month)) continue;
-      const [y, m] = month.split('-').map(Number) as [number, number];
-      const from = `${y}-${String(m).padStart(2, '0')}-01`;
-      const next = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
-      const table = `events_y${y}m${String(m).padStart(2, '0')}`;
-      const client = await this.pool.connect();
-      try {
-        await client.query('BEGIN');
-        // Advisory lock serializes concurrent partition creation across workers.
-        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [table]);
-        await client.query(
-          `CREATE TABLE IF NOT EXISTS ${table} PARTITION OF events
+    await ensureEventPartitions(this.pool, timestamps, this.knownPartitions);
+  }
+}
+
+export async function ensureRollingEventPartitions(
+  pool: pg.Pool,
+  now: Date = new Date(),
+  monthsAhead = 2,
+): Promise<void> {
+  const timestamps = rollingPartitionDates(now, monthsAhead);
+  await ensureEventPartitions(pool, timestamps);
+}
+
+export async function rollingEventPartitionsReady(
+  pool: pg.Pool,
+  now: Date = new Date(),
+  monthsAhead = 12,
+): Promise<boolean> {
+  const names = rollingPartitionDates(now, monthsAhead).map((date) =>
+    `events_y${date.getUTCFullYear()}m${String(date.getUTCMonth() + 1).padStart(2, '0')}`);
+  const { rows } = await pool.query<{ count: number }>(
+    `SELECT count(DISTINCT child.relname)::int AS count
+     FROM pg_inherits
+     JOIN pg_class parent ON parent.oid = inhparent
+     JOIN pg_class child ON child.oid = inhrelid
+     WHERE parent.oid = 'events'::regclass
+       AND child.relname = ANY($1::text[])`,
+    [names],
+  );
+  return rows[0]?.count === names.length;
+}
+
+function rollingPartitionDates(now: Date, monthsAhead: number): Date[] {
+  const timestamps: Date[] = [];
+  for (let offset = 0; offset <= monthsAhead; offset += 1) {
+    timestamps.push(new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth() + offset,
+      1,
+    )));
+  }
+  return timestamps;
+}
+
+export async function ensureEventPartitions(
+  pool: pg.Pool,
+  timestamps: Date[],
+  knownPartitions: Set<string> = new Set<string>(),
+): Promise<void> {
+  const months = new Set<string>();
+  for (const ts of timestamps) {
+    months.add(`${ts.getUTCFullYear()}-${String(ts.getUTCMonth() + 1).padStart(2, '0')}`);
+  }
+  for (const month of months) {
+    if (knownPartitions.has(month)) continue;
+    const [y, m] = month.split('-').map(Number) as [number, number];
+    const from = `${y}-${String(m).padStart(2, '0')}-01`;
+    const next = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
+    const table = `events_y${y}m${String(m).padStart(2, '0')}`;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Advisory lock serializes concurrent partition creation across workers.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [table]);
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS ${table} PARTITION OF events
            FOR VALUES FROM ('${from}') TO ('${next}')`,
-        );
-        await client.query('COMMIT');
-      } catch (err) {
-        await client.query('ROLLBACK');
-        // A row for this month will land in the DEFAULT partition instead —
-        // ingest must not fail because partition DDL raced or was denied.
-        if (!isPartitionOverlapError(err)) throw err;
-      } finally {
-        client.release();
-      }
-      this.knownPartitions.add(month);
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (!isPartitionOverlapError(err)) throw err;
+    } finally {
+      client.release();
     }
+    knownPartitions.add(month);
   }
 }
 

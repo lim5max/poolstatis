@@ -271,6 +271,143 @@ export async function prepareHostedOrganizationPolicies(
   return Number(rows[0]?.inserted ?? 0);
 }
 
+/**
+ * Hosted deployments use a short-lived deploy credential and a distinct
+ * least-privilege runtime credential. Check the effective database roles after
+ * migrations and before the deploy pool is closed.
+ */
+export async function assertHostedDatabaseRoleSeparation(
+  migrationPool: pg.Pool,
+  runtimePool: pg.Pool,
+  required: boolean,
+): Promise<void> {
+  if (!required) return;
+  const { rows: migrationRows } = await migrationPool.query<{
+    user_name: string;
+    core_admin: boolean;
+    activator_admin: boolean;
+  }>(
+    `SELECT
+       current_user AS user_name,
+       EXISTS (
+         SELECT 1 FROM pg_auth_members am
+         JOIN pg_roles granted_role ON granted_role.oid = am.roleid
+         JOIN pg_roles member_role ON member_role.oid = am.member
+         WHERE granted_role.rolname = 'poolstatis_core_runtime'
+           AND member_role.rolname = current_user
+           AND am.admin_option
+       ) AS core_admin,
+       EXISTS (
+         SELECT 1 FROM pg_auth_members am
+         JOIN pg_roles granted_role ON granted_role.oid = am.roleid
+         JOIN pg_roles member_role ON member_role.oid = am.member
+         WHERE granted_role.rolname = 'poolstatis_policy_activator'
+           AND member_role.rolname = current_user
+           AND am.admin_option
+       ) AS activator_admin`,
+  );
+  const { rows: runtimeRows } = await runtimePool.query<{
+    user_name: string;
+    core_member: boolean;
+    can_activate: boolean;
+    can_read_policy: boolean;
+    can_write_policy: boolean;
+    can_read_migrations: boolean;
+    can_write_migrations: boolean;
+  }>(
+    `SELECT
+       current_user AS user_name,
+       pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS core_member,
+       has_function_privilege(
+         current_user,
+         'poolstatis_activate_organization_policy(uuid)',
+         'EXECUTE'
+       ) AS can_activate,
+       has_table_privilege(
+         current_user,
+         'organization_policy_state',
+         'SELECT'
+       ) AS can_read_policy,
+       has_table_privilege(
+         current_user,
+         'organization_policy_state',
+         'INSERT,UPDATE,DELETE'
+       ) AS can_write_policy,
+       has_table_privilege(current_user, 'schema_migrations', 'SELECT')
+         AS can_read_migrations,
+       has_table_privilege(
+         current_user,
+         'schema_migrations',
+         'INSERT,UPDATE,DELETE'
+       ) AS can_write_migrations`,
+  );
+  const migration = migrationRows[0];
+  const runtime = runtimeRows[0];
+  if (!migration || !runtime
+      || migration.user_name === runtime.user_name
+      || !migration.core_admin
+      || !migration.activator_admin
+      || !runtime.core_member
+      || runtime.can_activate
+      || runtime.can_read_policy
+      || runtime.can_write_policy
+      || runtime.can_read_migrations
+      || runtime.can_write_migrations) {
+    throw new Error(
+      'hosted database roles are not separated: use a deploy migrator with Core/activator ADMIN OPTION and a distinct poolstatis_core_runtime login without policy or migration-table access',
+    );
+  }
+}
+
+export async function assertHostedRuntimeDatabaseRole(
+  runtimePool: pg.Pool,
+  required: boolean,
+): Promise<void> {
+  if (!required) return;
+  const { rows } = await runtimePool.query<{
+    core_member: boolean;
+    can_activate: boolean;
+    can_read_policy: boolean;
+    can_write_policy: boolean;
+    can_read_migrations: boolean;
+    can_write_migrations: boolean;
+  }>(
+    `SELECT
+       pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS core_member,
+       has_function_privilege(
+         current_user,
+         'poolstatis_activate_organization_policy(uuid)',
+         'EXECUTE'
+       ) AS can_activate,
+       has_table_privilege(current_user, 'organization_policy_state', 'SELECT')
+         AS can_read_policy,
+       has_table_privilege(
+         current_user,
+         'organization_policy_state',
+         'INSERT,UPDATE,DELETE'
+       ) AS can_write_policy,
+       has_table_privilege(current_user, 'schema_migrations', 'SELECT')
+         AS can_read_migrations,
+       has_table_privilege(
+         current_user,
+         'schema_migrations',
+         'INSERT,UPDATE,DELETE'
+       ) AS can_write_migrations`,
+  );
+  const runtime = rows[0];
+  if (!runtime
+      || !runtime.core_member
+      || runtime.can_activate
+      || runtime.can_read_policy
+      || runtime.can_write_policy
+      || runtime.can_read_migrations
+      || runtime.can_write_migrations) {
+    throw new Error(
+      'hosted runtime must use poolstatis_core_runtime without activation, policy-table, or schema-migration access',
+    );
+  }
+}
+
 export interface AuthenticatedProfile extends AuthenticatedAccount {}
 
 export async function getAuthenticatedProfile(

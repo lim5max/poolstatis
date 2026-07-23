@@ -11,6 +11,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.type-tests.json",
     "migrate": "node dist/cli/migrate.js",
+    "prepare:hosted": "node dist/cli/prepareHosted.js",
     "bootstrap": "tsx src/cli/bootstrap.ts",
     "seed": "tsx src/cli/seed.ts",
     "serve": "tsx src/cli/serve.ts",
