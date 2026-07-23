@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.type-tests.json",
-    "migrate": "tsx src/cli/migrate.ts",
+    "migrate": "node dist/cli/migrate.js",
     "bootstrap": "tsx src/cli/bootstrap.ts",
     "seed": "tsx src/cli/seed.ts",
     "serve": "tsx src/cli/serve.ts",
@@ -18,7 +18,7 @@
     "mcp:smoke": "tsx src/cli/mcpSmoke.ts",
     "load:smoke": "tsx src/cli/loadSmoke.ts",
     "retention:run": "tsx src/cli/retention.ts",
-    "preflight:migration-023": "tsx scripts/preflight-migration-023.ts",
+    "preflight:migration-023": "node dist/cli/preflightMigration023.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -1,7 +1,5 @@
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import type pg from 'pg';
-import { createPool } from '../src/db.js';
 
 export interface Migration023Report {
   non_personal_owner_count: number;
@@ -48,6 +46,8 @@ export async function applyMigration023Cleanup(
       await client.query(`SET LOCAL search_path TO ${input.searchPath}, public`);
     }
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended('poolstatis:migration-023-preflight', 0))");
+    await client.query('LOCK TABLE organization_members IN SHARE ROW EXCLUSIVE MODE');
+    await client.query('LOCK TABLE api_keys IN ACCESS EXCLUSIVE MODE');
     const report = await inspectMigration023(client);
     if (input.acknowledgement !== report.digest) throw new Error('preflight acknowledgement is stale or incorrect');
     await client.query("UPDATE api_keys SET issued_by_user_id = NULL WHERE kind <> 'personal' AND issued_by_user_id IS NOT NULL");
@@ -55,23 +55,17 @@ export async function applyMigration023Cleanup(
       AND NOT EXISTS (SELECT 1 FROM organization_members om WHERE om.org_id = k.org_id AND om.user_id = k.issued_by_user_id)`);
     const post = await inspectMigration023(client);
     if (post.non_personal_owner_count || post.stale_personal_count) throw new Error('migration 023 cleanup post-check failed');
+    const migration = await readFile(
+      new URL('../../migrations/023_personal_token_owner_membership.sql', import.meta.url),
+      'utf8',
+    );
+    await client.query(migration);
     await client.query('COMMIT');
     return report;
-  } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
-  finally { client.release(); }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
-
-async function main(): Promise<void> {
-  const pool = createPool(process.env.DATABASE_URL ?? 'postgres://poolsatis:poolsatis@localhost:5444/poolsatis');
-  try {
-    const report = await inspectMigration023(pool);
-    if (process.argv.includes('--apply')) {
-      const ack = argument('--ack'); const backup = argument('--backup');
-      if (!ack || !backup) throw new Error('--apply requires --ack <digest> and --backup <reference>');
-      await applyMigration023Cleanup(pool, { acknowledgement: ack, backupAttestation: backup });
-      console.log(JSON.stringify({ protocol: 'migration-023/v1', status: 'cleaned', backup_attestation: backup, ...report }));
-    } else console.log(JSON.stringify({ status: 'report_only', ...report }));
-  } finally { await pool.end(); }
-}
-function argument(name: string): string | undefined { const index = process.argv.indexOf(name); return index >= 0 ? process.argv[index + 1] : undefined; }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch((error) => { console.error(error instanceof Error ? error.message : 'preflight failed'); process.exitCode = 1; });

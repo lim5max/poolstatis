@@ -59,6 +59,7 @@ separate repositories.
 ```bash
 docker compose up -d
 pnpm install
+pnpm build
 pnpm migrate
 pnpm bootstrap "Poolstatis" poolstatis "Local project"
 pnpm serve
