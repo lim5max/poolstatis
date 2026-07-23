@@ -23,6 +23,9 @@ if (process.argv.includes('--help')) {
   const runtimePool = createPool(config.databaseUrl, { max: 1 });
   try {
     const applied = await migrate(migrationPool);
+    await migrationPool.query(
+      'SELECT poolstatis_apply_hosted_policy_role_hardening()',
+    );
     await ensureRollingEventPartitions(migrationPool, new Date(), 12);
     if (!await rollingEventPartitionsReady(migrationPool, new Date(), 12)) {
       throw new Error('rolling event partitions are not ready');

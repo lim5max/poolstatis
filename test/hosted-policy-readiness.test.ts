@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 
@@ -24,6 +28,7 @@ let sequence = 0;
 
 const issuer = 'https://policy-auth.poolstatis.test/';
 const audience = 'https://policy-api.poolstatis.test/';
+const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 async function jwt(subject: string, email: string): Promise<string> {
   return new SignJWT({ email, email_verified: true, name: 'Policy Owner' })
@@ -38,7 +43,7 @@ async function jwt(subject: string, email: string): Promise<string> {
 
 async function request(
   token: string,
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   url: string,
   payload?: unknown,
 ): Promise<{ status: number; body: any }> {
@@ -51,12 +56,36 @@ async function request(
   return { status: response.statusCode, body: response.json() };
 }
 
+async function connectMcp(token: string): Promise<Client> {
+  const address = app.server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('hosted policy test server did not bind a TCP port');
+  }
+  const transport = new StdioClientTransport({
+    command: 'pnpm',
+    args: ['--silent', '--dir', repoDir, 'mcp'],
+    env: {
+      ...process.env,
+      POOLSTATIS_URL: `http://127.0.0.1:${address.port}`,
+      POOLSTATIS_TOKEN: token,
+    },
+    stderr: 'pipe',
+  });
+  const client = new Client(
+    { name: 'hosted-policy-readiness-test', version: '0.1.0' },
+    { capabilities: {} },
+  );
+  await client.connect(transport);
+  return client;
+}
+
 beforeAll(async () => {
   const pair = await generateKeyPair('RS256');
   privateKey = pair.privateKey;
   const publicJwk = await exportJWK(pair.publicKey);
   jwks = { keys: [{ ...publicJwk, kid: 'policy-key', alg: 'RS256', use: 'sig' }] };
   pool = createPool(TEST_DB_URL);
+  await pool.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
   app = buildServer(pool, {
     auth: {
       issuer,
@@ -66,6 +95,7 @@ beforeAll(async () => {
     },
     ingestBuffer: false,
   });
+  await app.listen({ host: '127.0.0.1', port: 0 });
 });
 
 afterAll(async () => {
@@ -197,11 +227,26 @@ describe('hosted policy readiness', () => {
       kind: 'personal',
       issuedByUserId: userId,
     });
+    const personalToRevoke = await createApiKey(pool, {
+      orgId: organization.id,
+      projectId: null,
+      kind: 'personal',
+      issuedByUserId: userId,
+    });
     const secret = await createApiKey(pool, {
       orgId: organization.id,
       projectId: project.id,
       kind: 'secret',
     });
+    expect((await request(
+      secret.token,
+      'POST',
+      `/api/v1/projects/${project.slug}/entity-types`,
+      {
+        name: 'account',
+        description: 'Represents an account whose current state is synchronized by the product.',
+      },
+    )).status).toBe(201);
     const pendingEvent = 'policy.pending_event';
     expect(await pool.query(
       'SELECT 1 FROM organization_policy_state WHERE org_id = $1',
@@ -229,6 +274,172 @@ describe('hosted policy readiness', () => {
     );
     expect(keyBefore.status).toBe(402);
     expect(keyBefore.body.error.code).toBe('organization_write_disabled');
+    const metricBefore = await request(
+      secret.token,
+      'POST',
+      `/api/v1/projects/${project.slug}/metrics`,
+      {
+        key: 'pending_metric',
+        name: 'Pending metric',
+        type: 'count',
+        purpose: 'Must not be registered while the hosted organization policy is pending.',
+        source: { event: pendingEvent },
+      },
+    );
+    expect(metricBefore.status).toBe(402);
+    expect(metricBefore.body.error.code).toBe('organization_write_disabled');
+    const mcp = await connectMcp(personal.token);
+    try {
+      const mcpMetric = await mcp.callTool({
+        name: 'register_metric',
+        arguments: {
+          project: project.slug,
+          metric: {
+            key: 'pending_mcp_metric',
+            name: 'Pending MCP metric',
+            type: 'count',
+            purpose: 'Must not be registered through MCP while hosted policy is pending.',
+            source: { event: 'policy.pending_mcp_event' },
+          },
+        },
+      });
+      expect(mcpMetric.isError).toBe(true);
+      expect(mcpMetric.content[0]?.text).toContain('organization_write_disabled');
+      const mcpRead = await mcp.callTool({
+        name: 'list_metrics',
+        arguments: { project: project.slug },
+      });
+      expect(mcpRead.isError).not.toBe(true);
+      const mcpQuery = await mcp.callTool({
+        name: 'query_entities',
+        arguments: {
+          project: project.slug,
+          query: { entity_type: 'account', env: 'prod' },
+        },
+      });
+      expect(mcpQuery.isError).not.toBe(true);
+      const mcpOnboarding = await mcp.callTool({
+        name: 'get_onboarding_status',
+        arguments: { project: project.slug, env: 'prod' },
+      });
+      expect(mcpOnboarding.isError).not.toBe(true);
+    } finally {
+      await mcp.close();
+    }
+    const rateLimitedApp = buildServer(pool, {
+      auth: {
+        issuer,
+        audience,
+        jwks: async () => jwks,
+        requireOrganizationPolicy: true,
+      },
+      ingestBuffer: false,
+      rateLimit: {
+        ingest: {
+          key: { ratePerSecond: 100, burst: 100 },
+          project: { ratePerSecond: 100, burst: 100 },
+        },
+        api: {
+          key: { ratePerSecond: 100, burst: 100 },
+          project: { ratePerSecond: 100, burst: 100 },
+        },
+        maxEntries: 100,
+        maxEntriesPerTenant: 100,
+        idleTtlMs: 60_000,
+      },
+    });
+    try {
+      const rateLimitedMetric = await rateLimitedApp.inject({
+        method: 'POST',
+        url: `/api/v1/projects/${project.slug}/metrics`,
+        headers: { authorization: `Bearer ${secret.token}` },
+        payload: {
+          key: 'pending_rate_limited_metric',
+          name: 'Pending rate-limited metric',
+          type: 'count',
+          purpose: 'Must be blocked before either rate-limit path can mutate project state.',
+          source: { event: 'policy.pending_rate_limited_event' },
+        },
+      });
+      expect(rateLimitedMetric.statusCode).toBe(402);
+      expect(rateLimitedMetric.json().error.code).toBe('organization_write_disabled');
+      const blockedBeforeResolution = await rateLimitedApp.inject({
+        method: 'POST',
+        url: '/api/v1/projects/does-not-exist/metrics',
+        headers: { authorization: `Bearer ${secret.token}` },
+        payload: {},
+      });
+      expect(blockedBeforeResolution.statusCode).toBe(402);
+      expect(blockedBeforeResolution.json().error.code).toBe(
+        'organization_write_disabled',
+      );
+    } finally {
+      await rateLimitedApp.close();
+    }
+    const asymmetricRateApp = buildServer(pool, {
+      auth: {
+        issuer,
+        audience,
+        jwks: async () => jwks,
+        requireOrganizationPolicy: true,
+      },
+      ingestBuffer: false,
+      rateLimit: {
+        ingest: {
+          key: { ratePerSecond: 1_000, burst: 100 },
+          project: { ratePerSecond: 1_000, burst: 100 },
+        },
+        api: {
+          key: { ratePerSecond: 0.01, burst: 1 },
+          project: { ratePerSecond: 0.01, burst: 1 },
+        },
+        maxEntries: 100,
+        maxEntriesPerTenant: 100,
+        idleTtlMs: 60_000,
+      },
+    });
+    try {
+      const pendingIngestAttempts = await Promise.all(
+        Array.from({ length: 11 }, (_, index) => asymmetricRateApp.inject({
+          method: 'POST',
+          url: '/i/v1/events',
+          headers: { authorization: `Bearer ${ingest.token}` },
+          payload: {
+            events: [{
+              event: `policy.pending_attempt_${index}`,
+              distinct_id: `pending-attempt-${index}`,
+            }],
+          },
+        })),
+      );
+      expect(pendingIngestAttempts.map((attempt) => attempt.statusCode)).toEqual(
+        Array(11).fill(402),
+      );
+    } finally {
+      await asymmetricRateApp.close();
+    }
+    const entityBefore = await request(ingest.token, 'POST', '/i/v1/entities', {
+      entities: [{
+        entity_type: 'account',
+        entity_id: 'pending-account',
+        properties: { plan: 'blocked' },
+      }],
+    });
+    expect(entityBefore.status).toBe(402);
+    expect(entityBefore.body.error.code).toBe('organization_write_disabled');
+
+    const ownerToken = await jwt(subject, `upgrade-${id}@example.test`);
+    const profileUpdate = await request(ownerToken, 'PATCH', '/api/v1/me', {
+      display_name: 'Still readable owner',
+    });
+    expect(profileUpdate.status).toBe(200);
+    expect(profileUpdate.body.user.display_name).toBe('Still readable owner');
+    const revokedOwnToken = await request(
+      ownerToken,
+      'DELETE',
+      `/api/v1/me/tokens/${personalToRevoke.id}`,
+    );
+    expect(revokedOwnToken).toEqual({ status: 200, body: { revoked: true } });
 
     const ingestAttempts = await Promise.all(Array.from({ length: 10 }, (_, index) => request(
       ingest.token,
@@ -250,15 +461,41 @@ describe('hosted policy readiness', () => {
     expect(readable.status).toBe(200);
     expect(readable.body.projects.map((candidate: any) => candidate.slug)).toEqual([project.slug]);
 
-    const beforeActivation = await pool.query<{ events: number; ledger: number; usage: number; projects: number }>(
+    const beforeActivation = await pool.query<{
+      events: number;
+      entities: number;
+      ledger: number;
+      metrics: number;
+      observations: number;
+      query_runs: number;
+      usage: number;
+      projects: number;
+    }>(
       `SELECT
          (SELECT count(*)::int FROM events WHERE project_id = $1 AND event = $2) AS events,
+         (SELECT count(*)::int FROM entities
+          WHERE project_id = $1 AND entity_id = 'pending-account') AS entities,
          (SELECT count(*)::int FROM usage_ledger WHERE org_id = $3) AS ledger,
+         (SELECT count(*)::int FROM metrics
+          WHERE project_id = $1 AND key LIKE 'pending%metric') AS metrics,
+         (SELECT count(*)::int FROM agent_observations
+          WHERE project_id = $1) AS observations,
+         (SELECT count(*)::int FROM query_runs
+          WHERE project_id = $1) AS query_runs,
          (SELECT count(*)::int FROM organization_usage WHERE org_id = $3) AS usage,
          (SELECT count(*)::int FROM projects WHERE org_id = $3) AS projects`,
       [project.id, pendingEvent, organization.id],
     );
-    expect(beforeActivation.rows).toEqual([{ events: 0, ledger: 0, usage: 0, projects: 1 }]);
+    expect(beforeActivation.rows).toEqual([{
+      events: 0,
+      entities: 0,
+      ledger: 0,
+      metrics: 0,
+      observations: 1,
+      query_runs: 1,
+      usage: 0,
+      projects: 1,
+    }]);
 
     const deployMigrator = `poolstatis_policy_deploy_${process.pid}`;
     const activator = `poolstatis_policy_cloud_${process.pid}`;
@@ -345,6 +582,27 @@ describe('hosted policy readiness', () => {
     );
     expect(hostedToken.status).toBe(201);
     expect(hostedToken.body.token).toMatch(/^pt_/);
+    const activatedMetric = await request(
+      secret.token,
+      'POST',
+      `/api/v1/projects/${project.slug}/metrics`,
+      {
+        key: 'pending_metric',
+        name: 'Pending metric',
+        type: 'count',
+        purpose: 'Can be registered after the hosted organization policy is active.',
+        source: { event: pendingEvent },
+      },
+    );
+    expect(activatedMetric.status).toBe(201);
+    const activatedEntity = await request(ingest.token, 'POST', '/i/v1/entities', {
+      entities: [{
+        entity_type: 'account',
+        entity_id: 'pending-account',
+        properties: { plan: 'active' },
+      }],
+    });
+    expect(activatedEntity.status).toBe(200);
     const activatedIngest = await request(ingest.token, 'POST', '/i/v1/events', {
       batch_id: `upgrade-active-${id}`,
       events: [{ event: pendingEvent, distinct_id: 'active-actor' }],
@@ -382,7 +640,8 @@ describe('hosted policy readiness', () => {
          'poolstatis_activate_organization_policy(uuid)'::regprocedure,
          'poolstatis_backfill_organization_policy_state()'::regprocedure,
          'poolstatis_enforce_organization_policy_ready()'::regprocedure,
-         'poolstatis_protect_organization_policy_state()'::regprocedure
+         'poolstatis_protect_organization_policy_state()'::regprocedure,
+         'poolstatis_organization_policy_allows_writes(uuid)'::regprocedure
        )
        ORDER BY p.proname`,
     );
@@ -404,6 +663,12 @@ describe('hosted policy readiness', () => {
         security_definer: true,
         config: ['search_path=pg_catalog, public'],
         core_execute: false,
+      },
+      {
+        name: 'poolstatis_organization_policy_allows_writes',
+        security_definer: true,
+        config: ['search_path=pg_catalog, public'],
+        core_execute: true,
       },
       {
         name: 'poolstatis_protect_organization_policy_state',

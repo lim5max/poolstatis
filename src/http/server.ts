@@ -6,8 +6,9 @@ import { authenticate, requireKind, type AuthContext, type JwtAuthOptions } from
 import { createContext, type AppContext, type CreateContextOptions } from './context.js';
 import {
   completeHostedOnboarding, getAuthenticatedProfile, getBillingSummary, organizationHasProjects,
-  updateAuthenticatedProfile, type McpRunnerConfig,
+  requireOrganizationWriteReadiness, updateAuthenticatedProfile, type McpRunnerConfig,
 } from '../services/accounts.js';
+import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
   createApiKey, createProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
   listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
@@ -298,31 +299,48 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
     req.auth = await authenticate(pool, req.headers.authorization, options.auth);
   });
 
+  if (credentialAttemptLimiter) {
+    app.addHook('preHandler', async (req, reply) => {
+      if (req.method === 'OPTIONS' || req.url === '/health' || req.url === '/ready') return;
+      const lane = req.url.startsWith('/i/v1/') ? 'ingest' as const : 'api' as const;
+      try {
+        credentialAttemptLimiter.consume({
+          lane,
+          tenantId: req.auth.orgId,
+          keyId: authOwner(req.auth),
+          projectId: lane === 'ingest'
+            ? req.auth.projectId ?? `org:${req.auth.orgId}`
+            : 'credential-attempts',
+          cost: 1,
+        });
+      } catch (error) {
+        if (!(error instanceof RateLimitExceeded)) throw error;
+        void reply.header('retry-after', String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))));
+        throw new ApiError(
+          429,
+          'rate_limited',
+          'credential request-attempt limit exceeded',
+          `retry after approximately ${Math.max(1, Math.ceil(error.retryAfterMs / 1_000))} seconds`,
+        );
+      }
+    });
+  }
+
+  // Keep this hook unconditional: hosted writes must still fail closed when
+  // rate limiting is disabled. A configured bounded credential-attempt lane
+  // runs first, while project lookup and body validation remain after policy.
+  app.addHook('preHandler', async (req) => {
+    if (options.auth?.requireOrganizationPolicy === true
+      && requiresOrganizationWriteReadiness(req.method, req.routeOptions.url)) {
+      await requireOrganizationWriteReadiness(pool, req.auth.orgId);
+    }
+  });
+
   if (rateLimiter) {
     app.addHook('preHandler', async (req, reply) => {
       if (req.method === 'OPTIONS' || req.url === '/health' || req.url === '/ready') return;
       const lane = req.url.startsWith('/i/v1/') ? 'ingest' as const : 'api' as const;
       const slug = (req.params as { slug?: string } | undefined)?.slug;
-      if (lane === 'api' && credentialAttemptLimiter) {
-        try {
-          credentialAttemptLimiter.consume({
-            lane: 'api',
-            tenantId: req.auth.orgId,
-            keyId: authOwner(req.auth),
-            projectId: 'credential-attempts',
-            cost: 1,
-          });
-        } catch (error) {
-          if (!(error instanceof RateLimitExceeded)) throw error;
-          void reply.header('retry-after', String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))));
-          throw new ApiError(
-            429,
-            'rate_limited',
-            'credential request-attempt limit exceeded',
-            `retry after approximately ${Math.max(1, Math.ceil(error.retryAfterMs / 1_000))} seconds`,
-          );
-        }
-      }
       if (lane === 'ingest') {
         requireKind(req.auth, 'ingest');
       } else {
@@ -389,17 +407,19 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
 }
 
 function credentialAttemptLimits(options: TenantRateLimitOptions): TenantRateLimitOptions {
-  const key = {
-    ratePerSecond: options.api.key.ratePerSecond,
-    burst: Math.max(10, options.api.key.burst * 2),
-  };
-  const project = {
-    ratePerSecond: Math.max(key.ratePerSecond, options.api.project.ratePerSecond),
-    burst: Math.max(21, options.api.project.burst * 2),
-  };
+  const attemptLane = (lane: TenantRateLimitOptions['api']) => ({
+    key: {
+      ratePerSecond: lane.key.ratePerSecond,
+      burst: Math.max(10, lane.key.burst * 2),
+    },
+    project: {
+      ratePerSecond: Math.max(lane.key.ratePerSecond, lane.project.ratePerSecond),
+      burst: Math.max(21, lane.project.burst * 2),
+    },
+  });
   return {
-    ingest: { key, project },
-    api: { key, project },
+    ingest: attemptLane(options.ingest),
+    api: attemptLane(options.api),
     maxEntries: options.maxEntries,
     maxEntriesPerTenant: options.maxEntriesPerTenant,
     idleTtlMs: options.idleTtlMs,

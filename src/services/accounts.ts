@@ -1,5 +1,5 @@
 import type pg from 'pg';
-import { ApiError, badRequest } from '../errors.js';
+import { ApiError, badRequest, organizationWriteDisabled } from '../errors.js';
 import { createApiKey, createProject, type Project } from './projects.js';
 
 export interface AuthUserInput {
@@ -245,6 +245,7 @@ export async function prepareHostedOrganizationPolicies(
     runtime_member: boolean;
     can_require: boolean;
     can_backfill: boolean;
+    can_check_writes: boolean;
   }>(
     `SELECT
        pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS runtime_member,
@@ -257,18 +258,42 @@ export async function prepareHostedOrganizationPolicies(
          current_user,
          'poolstatis_backfill_organization_policy_state()',
          'EXECUTE'
-       ) AS can_backfill`,
+       ) AS can_backfill,
+       has_function_privilege(
+         current_user,
+         'poolstatis_organization_policy_allows_writes(uuid)',
+         'EXECUTE'
+       ) AS can_check_writes`,
   );
   const privileges = privilegeRows[0];
-  if (!privileges?.runtime_member || !privileges.can_require || !privileges.can_backfill) {
+  if (!privileges?.runtime_member
+      || !privileges.can_require
+      || !privileges.can_backfill
+      || !privileges.can_check_writes) {
     throw new Error(
-      'hosted policy startup requires membership in poolstatis_core_runtime with require/backfill execute privileges',
+      'hosted policy startup requires membership in poolstatis_core_runtime with require/backfill/write-check execute privileges',
     );
   }
   const { rows } = await pool.query<{ inserted: string }>(
     'SELECT poolstatis_backfill_organization_policy_state()::text AS inserted',
   );
   return Number(rows[0]?.inserted ?? 0);
+}
+
+/**
+ * Shared HTTP/MCP write boundary. The MCP server is a thin HTTP client, so
+ * both customer surfaces resolve the same authenticated organization marker.
+ * No marker means ordinary self-host behavior remains unlimited.
+ */
+export async function requireOrganizationWriteReadiness(
+  pool: pg.Pool,
+  organizationId: string,
+): Promise<void> {
+  const { rows } = await pool.query<{ allowed: boolean }>(
+    `SELECT poolstatis_organization_policy_allows_writes($1) AS allowed`,
+    [organizationId],
+  );
+  if (rows[0]?.allowed !== true) throw organizationWriteDisabled();
 }
 
 /**
@@ -309,6 +334,7 @@ export async function assertHostedDatabaseRoleSeparation(
   const { rows: runtimeRows } = await runtimePool.query<{
     user_name: string;
     core_member: boolean;
+    can_check_writes: boolean;
     can_activate: boolean;
     can_read_policy: boolean;
     can_write_policy: boolean;
@@ -318,6 +344,11 @@ export async function assertHostedDatabaseRoleSeparation(
     `SELECT
        current_user AS user_name,
        pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS core_member,
+       has_function_privilege(
+         current_user,
+         'poolstatis_organization_policy_allows_writes(uuid)',
+         'EXECUTE'
+       ) AS can_check_writes,
        has_function_privilege(
          current_user,
          'poolstatis_activate_organization_policy(uuid)',
@@ -348,6 +379,7 @@ export async function assertHostedDatabaseRoleSeparation(
       || !migration.core_admin
       || !migration.activator_admin
       || !runtime.core_member
+      || !runtime.can_check_writes
       || runtime.can_activate
       || runtime.can_read_policy
       || runtime.can_write_policy
@@ -366,6 +398,7 @@ export async function assertHostedRuntimeDatabaseRole(
   if (!required) return;
   const { rows } = await runtimePool.query<{
     core_member: boolean;
+    can_check_writes: boolean;
     can_activate: boolean;
     can_read_policy: boolean;
     can_write_policy: boolean;
@@ -374,6 +407,11 @@ export async function assertHostedRuntimeDatabaseRole(
   }>(
     `SELECT
        pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS core_member,
+       has_function_privilege(
+         current_user,
+         'poolstatis_organization_policy_allows_writes(uuid)',
+         'EXECUTE'
+       ) AS can_check_writes,
        has_function_privilege(
          current_user,
          'poolstatis_activate_organization_policy(uuid)',
@@ -397,6 +435,7 @@ export async function assertHostedRuntimeDatabaseRole(
   const runtime = rows[0];
   if (!runtime
       || !runtime.core_member
+      || !runtime.can_check_writes
       || runtime.can_activate
       || runtime.can_read_policy
       || runtime.can_write_policy

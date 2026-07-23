@@ -19,6 +19,11 @@ import {
   ensureRollingEventPartitions,
   rollingEventPartitionsReady,
 } from '../src/stores/postgresEventStore.js';
+import {
+  createApiKey,
+  createOrganization,
+  createProject,
+} from '../src/services/projects.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -152,6 +157,25 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe('027_hosted_policy_readiness.sql');
+      const beforePrepare = await deploy.query<{
+        marker_owner: string;
+        runtime_can_write_projects: boolean;
+      }>(
+        `SELECT
+           (SELECT pg_get_userbyid(relowner)
+            FROM pg_class
+            WHERE oid = 'organization_policy_state'::regclass) AS marker_owner,
+           has_table_privilege(
+             'poolstatis_core_runtime',
+             'projects',
+             'INSERT'
+           ) AS runtime_can_write_projects`,
+      );
+      expect(beforePrepare.rows).toEqual([{
+        marker_owner: 'core_deploy',
+        runtime_can_write_projects: false,
+      }]);
+      await deploy.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(deploy, new Date(), 12);
       expect(await rollingEventPartitionsReady(deploy, new Date(), 12)).toBe(true);
       expect((await ensureRetentionIndexes(deploy)).ready).toBe(true);
@@ -354,7 +378,7 @@ describe('hosted policy migration role topology', () => {
     }
   }, 60_000);
 
-  it('fails before partial 027 DDL when pre-existing roles were not bootstrapped for the deploy role', async () => {
+  it('keeps migration schema-only and fails explicit hosted preparation when roles were not bootstrapped', async () => {
     const isolated = await startIsolatedPostgres('negative');
     const deployPassword = `deploy-negative-${process.pid}`;
     let deploy: pg.Pool | undefined;
@@ -378,31 +402,285 @@ describe('hosted policy migration role topology', () => {
         ),
         { max: 1 },
       );
-      await expect(migrateWithEvidence(deploy)).rejects.toThrow(
-        'hosted policy migration requires poolstatis_policy_owner SET membership',
+      await expect(migrateWithEvidence(deploy)).resolves.toContain(
+        '027_hosted_policy_readiness.sql',
+      );
+      await expect(deploy.query(
+        'SELECT poolstatis_apply_hosted_policy_role_hardening()',
+      )).rejects.toThrow(
+        'hosted policy hardening requires poolstatis_policy_owner SET membership',
       );
       const state = await deploy.query<{
         last_migration: string;
         marker_table: string | null;
-        policy_functions: number;
+        policy_functions: string;
         policy_triggers: number;
       }>(
         `SELECT
            (SELECT max(name) FROM schema_migrations) AS last_migration,
            to_regclass('public.organization_policy_state')::text AS marker_table,
-           (SELECT count(*)::int FROM pg_proc
+           (SELECT string_agg(proname, ',' ORDER BY proname) FROM pg_proc
             WHERE proname LIKE 'poolstatis_%organization_policy%') AS policy_functions,
            (SELECT count(*)::int FROM pg_trigger
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '026_usage_config_lock_upgrade_validation.sql',
-        marker_table: null,
-        policy_functions: 0,
-        policy_triggers: 0,
+        last_migration: '027_hosted_policy_readiness.sql',
+        marker_table: 'organization_policy_state',
+        policy_functions: [
+          'poolstatis_activate_organization_policy',
+          'poolstatis_backfill_organization_policy_state',
+          'poolstatis_enforce_organization_policy_ready',
+          'poolstatis_organization_policy_allows_writes',
+          'poolstatis_protect_organization_policy_state',
+          'poolstatis_require_organization_policy',
+        ].join(','),
+        policy_triggers: 3,
       }]);
     } finally {
       await deploy?.end().catch(() => {});
+      await isolated.close();
+    }
+  }, 60_000);
+
+  it('converts a CREATEROLE self-host database through explicit hosted preparation without replaying 027', async () => {
+    const isolated = await startIsolatedPostgres('selfhost-createrole');
+    const selfHostPassword = `selfhost-createrole-${process.pid}`;
+    const corePassword = `converted-core-${process.pid}`;
+    const cloudPassword = `converted-cloud-${process.pid}`;
+    let selfHost: pg.Pool | undefined;
+    let coreRuntime: pg.Pool | undefined;
+    let cloudRuntime: pg.Pool | undefined;
+    let app: FastifyInstance | undefined;
+    try {
+      await isolated.bootstrap.query(
+        `CREATE ROLE selfhost_createrole_owner LOGIN PASSWORD '${selfHostPassword}'
+         NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION`,
+      );
+      await isolated.bootstrap.query(
+        'CREATE DATABASE poolstatis_selfhost_createrole OWNER selfhost_createrole_owner',
+      );
+      selfHost = createPool(
+        databaseUrl(
+          isolated.port,
+          'selfhost_createrole_owner',
+          selfHostPassword,
+          'poolstatis_selfhost_createrole',
+        ),
+        { max: 1 },
+      );
+      await expect(migrateWithEvidence(selfHost)).resolves.toContain(
+        '027_hosted_policy_readiness.sql',
+      );
+      const topology = await selfHost.query<{
+        stable_roles: number;
+        marker_owner: string;
+      }>(
+        `SELECT
+           (SELECT count(*)::int
+            FROM pg_roles
+            WHERE rolname IN (
+              'poolstatis_policy_owner',
+              'poolstatis_core_runtime',
+              'poolstatis_policy_activator'
+            )) AS stable_roles,
+           (SELECT pg_get_userbyid(relowner)
+            FROM pg_class
+            WHERE oid = 'organization_policy_state'::regclass) AS marker_owner`,
+      );
+      expect(topology.rows).toEqual([{
+        stable_roles: 0,
+        marker_owner: 'selfhost_createrole_owner',
+      }]);
+
+      await isolated.bootstrap.query(
+        `CREATE ROLE poolstatis_policy_owner NOLOGIN NOINHERIT;
+         CREATE ROLE poolstatis_core_runtime NOLOGIN NOINHERIT;
+         CREATE ROLE poolstatis_policy_activator NOLOGIN NOINHERIT;
+         GRANT poolstatis_policy_owner TO selfhost_createrole_owner WITH ADMIN TRUE;
+         GRANT poolstatis_policy_owner TO selfhost_createrole_owner WITH SET TRUE;
+         GRANT poolstatis_core_runtime TO selfhost_createrole_owner WITH ADMIN TRUE;
+         GRANT poolstatis_core_runtime TO selfhost_createrole_owner WITH INHERIT FALSE;
+         GRANT poolstatis_policy_activator TO selfhost_createrole_owner WITH ADMIN TRUE;
+         GRANT poolstatis_policy_activator TO selfhost_createrole_owner WITH INHERIT FALSE`,
+      );
+      await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
+      await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
+      await ensureRollingEventPartitions(selfHost, new Date(), 12);
+      await ensureRetentionIndexes(selfHost);
+      expect(await migrateWithEvidence(selfHost)).toEqual([]);
+      await expect(selfHost.query(
+        `SELECT count(*)::int AS applied
+         FROM schema_migrations
+         WHERE name = '027_hosted_policy_readiness.sql'`,
+      )).resolves.toMatchObject({ rows: [{ applied: 1 }] });
+
+      await selfHost.query(
+        `CREATE ROLE converted_core_runtime LOGIN INHERIT PASSWORD '${corePassword}'
+         NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+         CREATE ROLE converted_cloud_runtime LOGIN INHERIT PASSWORD '${cloudPassword}'
+         NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+         GRANT poolstatis_core_runtime TO converted_core_runtime WITH INHERIT TRUE;
+         GRANT poolstatis_core_runtime TO converted_core_runtime WITH SET FALSE;
+         GRANT poolstatis_policy_activator TO converted_cloud_runtime WITH INHERIT TRUE;
+         GRANT poolstatis_policy_activator TO converted_cloud_runtime WITH SET FALSE`,
+      );
+      coreRuntime = createPool(
+        databaseUrl(
+          isolated.port,
+          'converted_core_runtime',
+          corePassword,
+          'poolstatis_selfhost_createrole',
+        ),
+        { max: 4 },
+      );
+      cloudRuntime = createPool(
+        databaseUrl(
+          isolated.port,
+          'converted_cloud_runtime',
+          cloudPassword,
+          'poolstatis_selfhost_createrole',
+        ),
+        { max: 1 },
+      );
+      await assertHostedDatabaseRoleSeparation(selfHost, coreRuntime, true);
+      await expect(prepareHostedOrganizationPolicies(coreRuntime, true)).resolves.toBe(0);
+
+      const pair = await generateKeyPair('RS256');
+      const publicJwk = await exportJWK(pair.publicKey);
+      const issuer = 'https://converted-policy-auth.test/';
+      const audience = 'https://converted-policy-api.test/';
+      const token = await new SignJWT({
+        email: 'converted-owner@example.test',
+        email_verified: true,
+        name: 'Converted Owner',
+      })
+        .setProtectedHeader({ alg: 'RS256', kid: 'converted-key' })
+        .setIssuer(issuer)
+        .setAudience(audience)
+        .setSubject('auth0|converted-owner')
+        .setIssuedAt()
+        .setExpirationTime('10m')
+        .sign(pair.privateKey);
+      app = buildServer(coreRuntime, {
+        auth: {
+          issuer,
+          audience,
+          jwks: async () => ({
+            keys: [{ ...publicJwk, kid: 'converted-key', alg: 'RS256', use: 'sig' }],
+          }),
+          requireOrganizationPolicy: true,
+        },
+        ingestBuffer: false,
+        manageEventPartitions: false,
+      });
+      const profile = await app.inject({
+        method: 'GET',
+        url: '/api/v1/me',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(profile.statusCode).toBe(200);
+      const organizationId = profile.json().organization.id as string;
+      const pending = await app.inject({
+        method: 'POST',
+        url: '/api/v1/projects',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { slug: 'converted-project', name: 'Converted project' },
+      });
+      expect(pending.statusCode).toBe(402);
+      await expect(cloudRuntime.query(
+        'SELECT poolstatis_activate_organization_policy($1) AS activated',
+        [organizationId],
+      )).resolves.toMatchObject({ rows: [{ activated: true }] });
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/v1/projects',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { slug: 'converted-project', name: 'Converted project' },
+      });
+      expect(created.statusCode).toBe(201);
+    } finally {
+      await app?.close().catch(() => {});
+      await cloudRuntime?.end().catch(() => {});
+      await coreRuntime?.end().catch(() => {});
+      await selfHost?.end().catch(() => {});
+      await isolated.close();
+    }
+  }, 60_000);
+
+  it('keeps full self-host migration and startup available to a database owner without CREATEROLE', async () => {
+    const isolated = await startIsolatedPostgres('selfhost');
+    const selfHostPassword = `selfhost-${process.pid}`;
+    let selfHost: pg.Pool | undefined;
+    let app: FastifyInstance | undefined;
+    try {
+      await isolated.bootstrap.query(
+        `CREATE ROLE selfhost_owner LOGIN PASSWORD '${selfHostPassword}'
+         NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
+      );
+      await isolated.bootstrap.query(
+        'CREATE DATABASE poolstatis_selfhost OWNER selfhost_owner',
+      );
+      selfHost = createPool(
+        databaseUrl(
+          isolated.port,
+          'selfhost_owner',
+          selfHostPassword,
+          'poolstatis_selfhost',
+        ),
+        { max: 4 },
+      );
+      const applied = await migrateWithEvidence(selfHost);
+      expect(applied.at(-1)).toBe('027_hosted_policy_readiness.sql');
+      const topology = await selfHost.query<{
+        superuser: boolean;
+        create_role: boolean;
+        policy_owner_exists: boolean;
+        marker_owner: string;
+      }>(
+        `SELECT
+           current_setting('is_superuser')::boolean AS superuser,
+           (SELECT rolcreaterole FROM pg_roles WHERE rolname = current_user) AS create_role,
+           EXISTS (
+             SELECT 1 FROM pg_roles WHERE rolname = 'poolstatis_policy_owner'
+           ) AS policy_owner_exists,
+           (SELECT pg_get_userbyid(relowner)
+            FROM pg_class
+            WHERE oid = 'organization_policy_state'::regclass) AS marker_owner`,
+      );
+      expect(topology.rows).toEqual([{
+        superuser: false,
+        create_role: false,
+        policy_owner_exists: false,
+        marker_owner: 'selfhost_owner',
+      }]);
+
+      const organization = await createOrganization(selfHost, 'Self-host no CREATEROLE');
+      const project = await createProject(
+        selfHost,
+        organization.id,
+        'selfhost-no-createrole',
+        'Self-host no CREATEROLE',
+      );
+      const ingest = await createApiKey(selfHost, {
+        orgId: organization.id,
+        projectId: project.id,
+        kind: 'ingest',
+      });
+      app = buildServer(selfHost, { ingestBuffer: false });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/i/v1/events',
+        headers: { authorization: `Bearer ${ingest.token}` },
+        payload: {
+          events: [{ event: 'selfhost.started', distinct_id: 'selfhost-owner' }],
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().accepted).toBe(1);
+    } finally {
+      await app?.close().catch(() => {});
+      await selfHost?.end().catch(() => {});
       await isolated.close();
     }
   }, 60_000);

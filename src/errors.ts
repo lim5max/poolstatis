@@ -34,6 +34,14 @@ export const badRequest = (code: string, message: string, hint?: string) =>
 export const unauthorized = (message = 'invalid or missing API key') =>
   new ApiError(401, 'unauthorized', message, 'pass the key as `Authorization: Bearer <token>`');
 
+export const organizationWriteDisabled = () =>
+  new ApiError(
+    402,
+    'organization_write_disabled',
+    'writes are disabled for this organization',
+    'read access remains available; ask an organization operator to restore writes',
+  );
+
 /**
  * Stable database-policy SQLSTATE contract for hosted overlays.
  *
@@ -60,12 +68,7 @@ export function databasePolicyError(error: unknown): ApiError | null {
     );
   }
   if (code === 'PSO01') {
-    return new ApiError(
-      402,
-      'organization_write_disabled',
-      'writes are disabled for this organization',
-      'read access remains available; ask an organization operator to restore writes',
-    );
+    return organizationWriteDisabled();
   }
   return null;
 }
