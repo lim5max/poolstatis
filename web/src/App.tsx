@@ -22,10 +22,12 @@ import { Experience } from './screens/Experience';
 import { Measurement } from './screens/Measurement';
 import { Changes } from './screens/Changes';
 import { Decisions } from './screens/Decisions';
+import { Profile } from './screens/Profile';
+import { Usage } from './screens/Usage';
 
 type NavItem = { to: string; Icon: PoolstatisIcon; label: string; end?: boolean };
 const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
-  { label: 'Workspace', items: [{ to: '/', Icon: LayoutGrid, label: 'Projects', end: true }] },
+  { label: 'Workspace', items: [{ to: '/', Icon: LayoutGrid, label: 'Projects', end: true }, { to: '/usage', Icon: Database, label: 'Usage' }] },
   { label: 'Instrument', items: [
     { to: '/registry', Icon: List, label: 'Registry' },
     { to: '/measurement', Icon: SystemSettings, label: 'Measurement' },
@@ -38,9 +40,9 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     { to: '/changes', Icon: PackageBox, label: 'Changes' },
     { to: '/decisions', Icon: Check, label: 'Decisions' },
   ] },
-  { label: 'System', items: [{ to: '/setup', Icon: Settings, label: 'Setup & MCP' }] },
+  { label: 'System', items: [{ to: '/profile', Icon: Settings, label: 'Profile' }, { to: '/setup', Icon: Settings, label: 'Setup & MCP' }] },
 ];
-const TITLES: Record<string, string> = { '/': 'Projects', '/registry': 'Registry', '/measurement': 'Measurement', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/changes': 'Changes', '/decisions': 'Decisions', '/setup': 'Setup & MCP' };
+const TITLES: Record<string, string> = { '/': 'Projects', '/usage': 'Usage', '/profile': 'Profile', '/registry': 'Registry', '/measurement': 'Measurement', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/changes': 'Changes', '/decisions': 'Decisions', '/setup': 'Setup & MCP' };
 const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' : TITLES[path] ?? 'Poolstatis');
 const isProjectScoped = (path: string) => path === '/' || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
 
@@ -231,6 +233,8 @@ function Main() {
         <Routes>
           <Route path="/" element={<Projects />} />
           <Route path="/onboarding" element={<Onboarding />} />
+          <Route path="/profile" element={<Profile />} />
+          <Route path="/usage" element={<Usage />} />
           <Route path="/registry" element={<Guarded><Registry /></Guarded>} />
           <Route path="/measurement" element={<Guarded><Measurement /></Guarded>} />
           <Route path="/data" element={<Guarded><Data /></Guarded>} />

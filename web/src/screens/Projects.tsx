@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useStore } from '../store';
-import { Panel, EmptyState, ErrorNote, fmtNum } from '../components/ui';
+import { Panel, EmptyState, ErrorNote, fmtNum, TableScroll } from '../components/ui';
 import { Onboarding } from './Onboarding';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,59 +11,61 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 export function Projects() {
-  const { projects, project, setProject, tokenKind, client, refreshProjects } = useStore();
+  const { projects, project, setProject, tokenKind, projectScope, account, client, refreshProjects } = useStore();
   const nav = useNavigate();
-  const canCreate = tokenKind === 'personal' || tokenKind === 'secret';
+  const canCreate = tokenKind === 'personal'
+    || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
   const open = (slug: string) => { setProject(slug); nav('/registry'); };
 
-  if (tokenKind === 'user' && projects.length === 0) return <Onboarding />;
+  const canOnboard = tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin');
+  if (canOnboard && projects.length === 0) return <Onboarding />;
 
   return (
     <div className="space-y-4">
       <Panel
-        title={<>Projects <span className="font-sans text-muted-foreground text-sm font-normal ml-2">{projects.length} in this {tokenKind === 'secret' ? 'key scope' : 'org'}</span></>}
-        right={tokenKind === 'secret' ? <span className="text-xs text-muted-foreground">secret key — scoped to one project</span> : null}
+        title={<>Projects <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{projects.length} in this {projectScope === 'project' ? 'key scope' : 'org'}</span></>}
+        right={projectScope === 'project' ? <span className="text-xs text-muted-foreground">secret key — scoped to one project</span> : null}
       >
-        {projects.length === 0 ? <EmptyState headline="No projects" lead="create one below, or bootstrap via the CLI" /> : (
-          <Table>
+        {projects.length === 0 ? <EmptyState headline={tokenKind === 'user' ? 'No projects in this workspace' : 'No projects'} lead={tokenKind === 'user' ? 'Ask an owner or admin to create a project, then choose it here.' : 'create one below, or bootstrap via the CLI'} /> : (
+          <TableScroll><Table>
             <TableHeader>
               <TableRow><TableHead>Project</TableHead><TableHead>Timezone</TableHead><TableHead className="text-right">Active metrics</TableHead><TableHead className="text-right">Funnels</TableHead><TableHead className="text-right">Events · 30d</TableHead><TableHead /></TableRow>
             </TableHeader>
             <TableBody>
               {projects.map((p) => (
-                <TableRow key={p.slug} className="cursor-pointer" onClick={() => open(p.slug)}>
+                <TableRow key={p.slug}>
                   <TableCell><div className="font-medium flex items-center gap-2">{p.name}{p.slug === project && <Badge className="text-xs">selected</Badge>}</div><div className="text-xs text-muted-foreground">{p.slug}</div></TableCell>
                   <TableCell className="text-muted-foreground">{p.timezone}</TableCell>
                   <TableCell className="text-right tabular-nums">{p.active_metrics}</TableCell>
                   <TableCell className="text-right tabular-nums">{p.funnels}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(p.events_30d)}</TableCell>
-                  <TableCell className="text-right text-muted-foreground text-xs">manage →</TableCell>
+                  <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => open(p.slug)} aria-label={`Open ${p.name}`}>Open</Button></TableCell>
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table></TableScroll>
         )}
       </Panel>
-      {canCreate && <CreateProject onCreated={refreshProjects} create={(b) => client!.createProject(b)} />}
+      {canCreate && <CreateProject onCreated={async (created) => { await refreshProjects(); setProject(created.slug); }} create={(b) => client!.createProject(b)} />}
     </div>
   );
 }
 
-function CreateProject({ create, onCreated }: { create: (b: { slug: string; name: string }) => Promise<unknown>; onCreated: () => void }) {
+function CreateProject({ create, onCreated }: { create: (b: { slug: string; name: string }) => Promise<{ slug: string }>; onCreated: (project: { slug: string }) => Promise<void> }) {
   const [slug, setSlug] = useState('');
   const [name, setName] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     setBusy(true); setErr(null);
-    try { await create({ slug: slug.trim(), name: name.trim() || slug.trim() }); setSlug(''); setName(''); onCreated(); }
+    try { const created = await create({ slug: slug.trim(), name: name.trim() || slug.trim() }); setSlug(''); setName(''); await onCreated(created); }
     catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
     <Panel title="New project">
-      <div className="flex items-end gap-3.5">
-        <div className="flex-1 space-y-1.5"><Label className="text-xs font-medium text-muted-foreground">Slug</Label><Input placeholder="my-app" value={slug} onChange={(e) => setSlug(e.target.value)} /></div>
-        <div className="flex-1 space-y-1.5"><Label className="text-xs font-medium text-muted-foreground">Name</Label><Input placeholder="My App" value={name} onChange={(e) => setName(e.target.value)} /></div>
+      <div className="flex flex-col gap-3.5 sm:flex-row sm:items-end">
+        <div className="flex-1 space-y-1.5"><Label htmlFor="project-slug" className="text-xs font-medium text-muted-foreground">Slug</Label><Input id="project-slug" placeholder="my-app" value={slug} onChange={(e) => setSlug(e.target.value)} /></div>
+        <div className="flex-1 space-y-1.5"><Label htmlFor="project-name" className="text-xs font-medium text-muted-foreground">Name</Label><Input id="project-name" placeholder="My App" value={name} onChange={(e) => setName(e.target.value)} /></div>
         <Button onClick={submit} disabled={busy || !slug.trim()}>{busy ? <Loader2 className="size-4 animate-spin" /> : 'Create'}</Button>
       </div>
       {err && <div className="mt-3"><ErrorNote>{err}</ErrorNote></div>}

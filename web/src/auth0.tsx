@@ -9,6 +9,8 @@ export const auth0Config = {
   apiUrl: ((import.meta.env.VITE_POOLSTATIS_API_URL as string | undefined) ?? '').replace(/\/$/, ''),
 };
 
+export const hostedAuthScope = 'openid profile email';
+
 export const auth0Enabled = Boolean(auth0Config.domain && auth0Config.clientId && auth0Config.audience && auth0Config.apiUrl);
 export const auth0Incomplete = Boolean(auth0Config.domain || auth0Config.clientId || auth0Config.audience || auth0Config.apiUrl) && !auth0Enabled;
 
@@ -21,7 +23,7 @@ export function OptionalAuth0Provider({ children }: { children: ReactNode }) {
       authorizationParams={{
         redirect_uri: window.location.origin,
         audience: auth0Config.audience!,
-        scope: 'openid profile email',
+        scope: hostedAuthScope,
       }}
       onRedirectCallback={(appState) => {
         window.history.replaceState({}, document.title, appState?.returnTo || window.location.pathname);
@@ -37,7 +39,7 @@ export function useHostedToken() {
   return useCallback(() => getAccessTokenSilently({
     authorizationParams: {
       audience: auth0Config.audience!,
-      scope: 'openid profile email',
+      scope: hostedAuthScope,
     },
   }), [getAccessTokenSilently]);
 }

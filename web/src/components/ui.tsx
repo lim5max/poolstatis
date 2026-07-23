@@ -129,6 +129,15 @@ export function ErrorNote({ children }: { children: ReactNode }) {
   return <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">⚠ {children}</div>;
 }
 
+export function WarningNote({ children }: { children: ReactNode }) {
+  return <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">⚠ {children}</div>;
+}
+
+/** Keeps wide administrative tables usable inside Panels, including on mobile. */
+export function TableScroll({ children, testId }: { children: ReactNode; testId?: string }) {
+  return <div className="overflow-x-auto" data-testid={testId}>{children}</div>;
+}
+
 export function Meter({ value }: { value: number }) {
   const safe = Number.isFinite(value) ? value : 0; // never render width: NaN%
   const pct = Math.max(0, Math.min(1, safe)) * 100;
@@ -225,8 +234,8 @@ export function Overflow({ items }: { items: Array<{ label: string; onClick: () 
 
 // ===== modals =====
 
-export function Confirm({ title, body, confirmLabel, tone = 'neutral', onConfirm, onCancel }: {
-  title: string; body: ReactNode; confirmLabel: string; tone?: 'neutral' | 'warn'; onConfirm: () => void; onCancel: () => void;
+export function Confirm({ title, body, error, confirmLabel, tone = 'neutral', onConfirm, onCancel }: {
+  title: string; body: ReactNode; error?: ReactNode; confirmLabel: string; tone?: 'neutral' | 'warn'; onConfirm: () => void; onCancel: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const go = async () => { setBusy(true); try { await onConfirm(); } finally { setBusy(false); } };
@@ -234,6 +243,7 @@ export function Confirm({ title, body, confirmLabel, tone = 'neutral', onConfirm
     <Dialog open onOpenChange={(o) => !o && onCancel()}>
       <DialogContent>
         <DialogHeader><DialogTitle className="serif font-normal text-xl">{title}</DialogTitle><DialogDescription>{body}</DialogDescription></DialogHeader>
+        {error && <ErrorNote>{error}</ErrorNote>}
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
           <Button onClick={go} disabled={busy} className={tone === 'warn' ? 'bg-amber-500 text-black hover:bg-amber-400' : ''}>
@@ -308,6 +318,36 @@ export function SecretReveal({ token, kind, onDone }: { token: string; kind: str
           <Button variant="outline" size="icon" className="size-8" onClick={download}><Download className="size-4" /></Button>
         </div>
         <DialogFooter><Button onClick={onDone}>Done</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Ephemeral credential reveal: the owner sees plaintext only in this dialog. */
+export function OneTimeTokenReveal({ token, title, onDismiss }: { token: string; title: string; onDismiss: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && onDismiss()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="serif font-normal text-xl">{title}</DialogTitle>
+          <DialogDescription className="text-amber-600 dark:text-amber-400">This is the only time the full token is shown. Copy it into your agent configuration before closing this dialog.</DialogDescription>
+        </DialogHeader>
+        <div className="rounded-md border bg-muted/40 p-3">
+          <code className="mono block break-all text-sm">{token}</code>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={copy} aria-label="Copy token">{copied ? 'Copied' : 'Copy token'}</Button>
+          <Button onClick={onDismiss}>I copied the token</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

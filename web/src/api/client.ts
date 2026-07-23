@@ -1,6 +1,6 @@
 import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse,
+  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken,
 } from './types';
 
 export class ApiError extends Error {
@@ -42,6 +42,14 @@ export class PoolstatisClient {
 
   me() {
     return this.req<AccountMe>('GET', '/api/v1/me');
+  }
+
+  updateProfile(body: { display_name: string }) {
+    return this.req<AccountMe>('PATCH', '/api/v1/me', body);
+  }
+
+  usage(period: string) {
+    return this.req<OrganizationUsage>('GET', `/api/v1/me/usage?period=${encodeURIComponent(period)}`);
   }
 
   completeOnboarding(body: { workspace_name: string; project_slug: string; project_name: string }) {
@@ -373,6 +381,14 @@ export class PoolstatisClient {
 
   issuePersonalToken(body: { label?: string } = {}) {
     return this.req<{ id: string; token: string }>('POST', '/api/v1/me/tokens', body);
+  }
+
+  personalTokens() {
+    return this.req<{ tokens: PersonalToken[] }>('GET', '/api/v1/me/tokens').then((response) => response.tokens);
+  }
+
+  revokePersonalToken(id: string) {
+    return this.req<{ revoked: boolean }>('DELETE', `/api/v1/me/tokens/${id}`);
   }
 
   revokeKey(slug: string, id: string) {

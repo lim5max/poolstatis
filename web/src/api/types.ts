@@ -590,12 +590,9 @@ export interface BillingMeter {
   key: string;
   name: string;
   unit: string;
-  aggregation: 'sum' | 'max' | 'latest';
-  free_quantity: number;
-  overage_unit_quantity: number;
-  overage_price_cents: string;
-  pricing_stage: 'free_now' | 'future_reference' | 'active';
-  source_note: string;
+  aggregation: string;
+  hard_limit: number | null;
+  warning_thresholds: number[];
 }
 
 export interface BillingSummary {
@@ -625,18 +622,55 @@ export interface AccountMe {
     id: string;
     subject: string;
     email: string | null;
+    email_verified: boolean;
+    display_name: string | null;
     name: string | null;
     picture_url: string | null;
+    connection_strategy: string;
+  };
+  identity: {
+    issuer: string | null;
+    subject: string;
   };
   organization: {
     id: string;
     name: string;
     role: 'owner' | 'admin' | 'member';
   };
+  membership: {
+    organization_id: string;
+    role: 'owner' | 'admin' | 'member';
+  };
   billing: BillingSummary;
   onboarding: {
     completed: boolean;
   };
+}
+
+export interface PersonalToken {
+  id: string;
+  label: string | null;
+  /** Permanently masked server value, e.g. pt_...cafe. */
+  token: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface OrganizationUsage {
+  meter: 'events_stored';
+  period: string;
+  quantity: number;
+  hard_limit: number | null;
+  warning_thresholds: number[];
+  warnings: Array<{ threshold: number; quantity: number }>;
+  projects: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    quantity: number;
+    environments: Array<{ env: string; quantity: number }>;
+  }>;
 }
 
 export interface HostedOnboardingResult {
