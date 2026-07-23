@@ -8,8 +8,6 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import {
   actorLinkSchema,
@@ -29,9 +27,9 @@ import { INSTRUMENTATION_STANDARD } from './standard.js';
 export interface McpConfig { baseUrl: string; token: string; }
 
 /** Configuration is checked before stdio opens so a broken launcher cannot leak a token to protocol output. */
-export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOKEN?: string } = process.env): McpConfig {
+export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOKEN?: string }): McpConfig {
   const token = env.POOLSTATIS_TOKEN?.trim();
-  if (!token || (!token.startsWith('pt_') && !token.startsWith('sk_'))) {
+  if (!token || !/^(pt|sk)_[a-f0-9]{16,}$/i.test(token)) {
     throw new Error('POOLSTATIS_TOKEN must be a non-empty pt_ personal token or sk_ secret key');
   }
   const raw = env.POOLSTATIS_URL?.trim() || 'http://127.0.0.1:3300';
@@ -45,14 +43,12 @@ export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOK
   return { baseUrl: url.origin, token };
 }
 
-let activeConfig: McpConfig | null = null;
-
+export function createMcpServer(config: Readonly<McpConfig>): McpServer {
 async function api(method: string, path: string, body?: unknown): Promise<unknown> {
-  if (!activeConfig) throw new Error('MCP runner is not configured');
-  const res = await fetch(`${activeConfig.baseUrl}${path}`, {
+  const res = await fetch(`${config.baseUrl}${path}`, {
     method,
     headers: {
-      authorization: `Bearer ${activeConfig.token}`,
+      authorization: `Bearer ${config.token}`,
       'x-poolstatis-client': 'mcp',
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
@@ -803,16 +799,10 @@ server.resource(
   },
 );
 
-/** The root CLI and package CLI call this exact runner; the tool registry stays single-sourced above. */
-export async function runMcpServer(config: McpConfig = validateMcpConfig()): Promise<void> {
-  activeConfig = config;
-  await server.connect(new StdioServerTransport());
+return server;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  runMcpServer().catch((error: unknown) => {
-    // Do not emit env values or transport URLs during launcher failure.
-    console.error(error instanceof Error ? error.message.replace(/(pt_|sk_)[^\s]*/g, '[redacted]') : 'MCP configuration failed');
-    process.exitCode = 1;
-  });
+/** The root CLI and package CLI call this exact runner; the tool registry stays single-sourced above. */
+export async function runMcpServer(config: McpConfig): Promise<void> {
+  await createMcpServer(config).connect(new StdioServerTransport());
 }

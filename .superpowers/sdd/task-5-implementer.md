@@ -1,5 +1,11 @@
 # Task 5 implementer report
 
+## Formal-review correction (`16c57d2` follow-up)
+
+The first implementer commit was **not approval-ready** despite its green suite: the formal reviewer found five P1 gaps (textual IPv6 classification, incomplete Cloud MCP process assertions, missing workspace lock importer, destructive migration cleanup without operator protocol, and global mutable MCP credentials). The claims below are superseded where they conflict with this correction.
+
+The follow-up replaces address string matching with `ipaddr.js` numeric parsing/CIDR controls (including conservative `2001::/23` rejection), adds a same-slug/same-registry/different-data packed-process E2E with exact trend/funnel/isolation/revoke/meter assertions, regenerates the lockfile and verifies frozen offline install, changes migration 023 to abort until a versioned acknowledged preflight cleanup is run, and makes each MCP server a fresh immutable-config instance. The package public export is side-effect-free and ships the actual generated root declaration; CLI remains a separate bin entry. DNS work has a 64-resolution circuit cap because Node's system lookup cannot be cancelled after dispatch.
+
 ## RED then GREEN
 
 - RED: `pnpm test test/ssrf-security.test.ts test/api-key-ownership.test.ts test/mcp-cli-config.test.ts` failed as expected: missing `src/security/outbound.ts`, MCP import exited because it read env at module load, and secret key creation accepted `issuedByUserId`.
@@ -8,7 +14,7 @@
 
 ## Delivered
 
-- `packages/mcp` is a packable `@poolstatis/mcp` CLI. It imports the compiled root MCP runner; it does not maintain a second tool registry. Tarball allowlist is `dist/cli.js`, the shared compiled MCP/schema runtime, README, LICENSE and package metadata. No publication was performed; server package status remains `publish_pending` unless the explicit existing operator switch is set.
+- `packages/mcp` is a packable `@poolstatis/mcp` CLI. It imports the compiled root MCP runner; it does not maintain a second tool registry. Tarball allowlist also includes the generated root `server.d.ts`; no handwritten signature stub remains. No publication was performed; server package status remains `publish_pending` unless the explicit existing operator switch is set.
 - `validateMcpConfig` checks `pt_`/`sk_`, clean HTTPS or loopback HTTP origin and rejects userinfo, query, fragment and non-root paths before stdio opens. Root and package use `runMcpServer`.
 - `src/security/outbound.ts` centralizes URL parsing, address classification, per-attempt resolution, all-answer rejection, direct validated-address transport with original Host/SNI, immediate 3xx destruction, bounded streamed bodies and absolute deadline that includes DNS.
 - Webhook outbox and PostHog now have no raw-fetch bypass. HTTP context and maintenance outbox receive the exact same `OUTBOUND_ALLOW_LOCAL_HTTP` default-false setting. Controlled local tests opt in explicitly.
@@ -31,7 +37,8 @@ Static source/control/sink assessment: attacker-controlled configured URL crosse
 - `pnpm --dir web test --run` passed: 17 tests.
 - `pnpm --dir web build` passed.
 - `pnpm --dir sdk test` passed: 20 tests.
-- `pnpm --dir packages/mcp build && pnpm --dir packages/mcp pack --pack-destination /tmp` passed. Tarball listing contained only the seven allowlisted artifacts. A packed child process passed initialize/list-tools.
+- `pnpm install --frozen-lockfile --offline` passed with the `packages/mcp` importer present.
+- `pnpm --dir packages/mcp build && pnpm --dir packages/mcp pack --pack-destination /tmp` passed. Tarball listing contained only the runtime/docs/package artifacts plus generated declaration. A packed child process executes tenant discovery/query/revoke assertions in the root suite.
 - `docker compose -f docker-compose.selfhost.yml config >/dev/null` passed.
 - `git diff --check` passed.
 

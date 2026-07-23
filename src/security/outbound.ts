@@ -2,6 +2,7 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import type { IncomingHttpHeaders } from 'node:http';
+import ipaddr from 'ipaddr.js';
 
 export type ResolvedAddress = { address: string; family: 4 | 6 };
 export type OutboundResolver = (hostname: string) => Promise<ResolvedAddress[]>;
@@ -31,6 +32,14 @@ const systemResolver: OutboundResolver = async (hostname) => {
   const { lookup } = await import('node:dns/promises');
   return lookup(hostname, { all: true, verbatim: true }) as Promise<ResolvedAddress[]>;
 };
+const MAX_CONCURRENT_RESOLUTIONS = 64;
+let activeResolutions = 0;
+
+function boundedResolve(resolver: OutboundResolver, hostname: string): Promise<ResolvedAddress[]> {
+  if (activeResolutions >= MAX_CONCURRENT_RESOLUTIONS) return Promise.reject(new OutboundPolicyError('outbound_dns_busy'));
+  activeResolutions += 1;
+  return resolver(hostname).finally(() => { activeResolutions -= 1; });
+}
 
 /**
  * Parse and resolve an outbound endpoint at the point of delivery.  The first
@@ -55,7 +64,7 @@ export async function resolveOutboundTarget(
   const literalFamily = isIP(stripBrackets(url.hostname));
   const answers = literalFamily
     ? [{ address: stripBrackets(url.hostname), family: literalFamily as 4 | 6 }]
-    : await withDeadline((options.resolver ?? systemResolver)(url.hostname), options.timeoutMs ?? 10_000);
+    : await withDeadline(boundedResolve(options.resolver ?? systemResolver, url.hostname), options.timeoutMs ?? 10_000);
   if (!answers.length || answers.some((answer) => !validAddress(answer)
     || (isUnsafeAddress(answer.address) && !(options.allowLocalHttp && local && isLoopbackAddress(answer.address))))) {
     throw new OutboundPolicyError('outbound_address_unsafe');
@@ -150,31 +159,27 @@ export function sanitizedOutboundError(error: unknown): string {
 }
 
 function stripBrackets(value: string): string { return value.replace(/^\[|\]$/g, ''); }
-function validAddress(value: ResolvedAddress): boolean { return (value.family === 4 || value.family === 6) && isIP(value.address) === value.family; }
+function validAddress(value: ResolvedAddress): boolean {
+  try { return ipaddr.parse(value.address).kind() === (value.family === 4 ? 'ipv4' : 'ipv6'); } catch { return false; }
+}
 function isLoopbackHost(host: string): boolean { return host.toLowerCase() === 'localhost' || isLoopbackAddress(stripBrackets(host)); }
-function isLoopbackAddress(value: string): boolean { return value.startsWith('127.') || value === '::1' || value.toLowerCase().startsWith('::ffff:127.'); }
+function isLoopbackAddress(value: string): boolean {
+  try { return ipaddr.parse(value).range() === 'loopback'; } catch { return false; }
+}
 
 function isUnsafeAddress(address: string): boolean {
-  const family = isIP(address);
-  if (family === 4) {
-    const [a = -1, b = -1, c = -1] = address.split('.').map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127)
-      || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-      || (a === 192 && (b === 0 || b === 168 || (b === 88 && c === 99)))
-      || (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100)))
-      || (a === 203 && b === 0 && c === 113) || a >= 224;
-  }
-  if (family === 6) {
-    const normalized = address.toLowerCase();
-    const first = Number.parseInt(normalized.split(':')[0] || '0', 16);
-    return normalized === '::' || normalized === '::1' || normalized.startsWith('::ffff:')
-      || normalized.startsWith('fc') || normalized.startsWith('fd')
-      || /^fe[89ab]/.test(normalized) || normalized.startsWith('ff')
-      || first < 0x2000 || first > 0x3fff
-      || normalized.startsWith('2001:db8:') || normalized.startsWith('2001:2:')
-      || normalized.startsWith('2002:') || normalized.startsWith('3fff:');
-  }
-  return true;
+  let parsed: ipaddr.IPv4 | ipaddr.IPv6;
+  try { parsed = ipaddr.parse(address); } catch { return true; }
+  if (parsed.kind() === 'ipv4') return parsed.range() !== 'unicast';
+  const ipv6 = parsed as ipaddr.IPv6;
+  if (ipv6.isIPv4MappedAddress()) return true;
+  if (ipv6.range() !== 'unicast') return true;
+  const blocked = [
+    ipaddr.parseCIDR('2001::/23'),
+    ipaddr.parseCIDR('2002::/16'),
+    ipaddr.parseCIDR('3fff::/20'),
+  ];
+  return !ipv6.match(ipaddr.parseCIDR('2000::/3')) || blocked.some((range) => ipv6.match(range));
 }
 
 async function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

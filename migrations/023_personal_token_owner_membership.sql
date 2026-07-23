@@ -1,21 +1,19 @@
 -- Cloud cutover: a hosted personal token must belong to a current member of
--- its organization.  First remove an invalid legacy owner annotation from
--- non-personal rows: owner semantics are exclusively personal-token semantics.
--- This is deliberate cleanup, not a cross-kind ownership conversion.
-
-UPDATE api_keys
-SET issued_by_user_id = NULL
-WHERE kind <> 'personal' AND issued_by_user_id IS NOT NULL;
-
--- Remove stale personal credentials before installing the FK; they were
--- already unusable at the application layer.
-
-DELETE FROM api_keys k
-WHERE k.issued_by_user_id IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM organization_members om
-    WHERE om.org_id = k.org_id AND om.user_id = k.issued_by_user_id
-  );
+-- its organization. Any legacy rows must be reviewed and cleaned explicitly
+-- with `pnpm preflight:migration-023` before generic migration execution.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM api_keys k
+    WHERE (k.kind <> 'personal' AND k.issued_by_user_id IS NOT NULL)
+       OR (k.kind = 'personal' AND k.issued_by_user_id IS NOT NULL AND NOT EXISTS (
+         SELECT 1 FROM organization_members om
+         WHERE om.org_id = k.org_id AND om.user_id = k.issued_by_user_id
+       ))
+  ) THEN
+    RAISE EXCEPTION 'migration 023 preflight required: run pnpm preflight:migration-023 --report, verify backup, then acknowledged cleanup';
+  END IF;
+END $$;
 
 ALTER TABLE api_keys
   ADD CONSTRAINT api_keys_personal_owner_membership_fk

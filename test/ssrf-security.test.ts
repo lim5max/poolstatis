@@ -8,6 +8,7 @@ const resolver = async (host: string): Promise<Array<{ address: string; family: 
     'safe.example.test': [{ address: '93.184.216.34', family: 4 }],
     'mixed.example.test': [{ address: '93.184.216.34', family: 4 }, { address: '127.0.0.1', family: 4 }],
     'empty.example.test': [],
+    'expanded.example.test': [{ address: '2001:0000:0000:0000:0000:0000:0000:0001', family: 6 }],
   };
   return answers[host] ?? [];
 };
@@ -32,6 +33,7 @@ describe('central outbound URL policy', () => {
       'https://[5f00::1]/',
       'https://mixed.example.test/hook',
       'https://empty.example.test/hook',
+      'https://expanded.example.test/hook',
     ]) {
       await expect(resolveOutboundTarget(value, { resolver })).rejects.toBeInstanceOf(OutboundPolicyError);
     }
