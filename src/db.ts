@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
+const CANONICAL_MIGRATION_BASENAME = /^[0-9]{3}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 
 export interface PoolOptions {
   max?: number;
@@ -21,7 +22,23 @@ export function createPool(databaseUrl: string, options: PoolOptions = {}): pg.P
   });
 }
 
-/** Apply pending .sql migrations in lexicographic order, tracked in schema_migrations. */
+export async function discoverMigrationFiles(
+  directory = MIGRATIONS_DIR,
+): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith('._')) continue;
+    if (!entry.name.endsWith('.sql')) continue;
+    if (!entry.isFile() || !CANONICAL_MIGRATION_BASENAME.test(entry.name)) {
+      throw new Error('migration directory contains a non-canonical SQL entry');
+    }
+    files.push(entry.name);
+  }
+  return files.sort();
+}
+
+/** Apply pending canonical migrations in lexicographic order, tracked in schema_migrations. */
 export async function migrate(pool: pg.Pool): Promise<string[]> {
   const client = await pool.connect();
   let locked = false;
@@ -36,7 +53,7 @@ export async function migrate(pool: pg.Pool): Promise<string[]> {
          applied_at timestamptz NOT NULL DEFAULT now()
        )`,
     );
-    const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
+    const files = await discoverMigrationFiles();
     for (const file of files) {
       await client.query('BEGIN');
       try {
