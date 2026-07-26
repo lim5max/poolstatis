@@ -105,6 +105,22 @@ fingerprint; исполнение требует отдельного human appr
 `$feature_flag_called` при первом evaluation, MCP-tool намеренно этого не
 делает.
 
+### Browser acquisition attribution
+
+```
+propose_acquisition_properties(project)
+assess_measurement_trust(project, input)
+```
+
+Идемпотентно создаёт предложенные definitions для `$utm_source`, `$utm_medium`,
+`$utm_campaign`, `$utm_term`, `$utm_content`. `list_properties` возвращает те же
+name/purpose/type/trust state, что Platform API и admin. Перед decision contract
+owner отдельно переводит нужное property в `trusted`. Для analysis используй
+обычный `query_trend` с `filters`/`breakdown`; ответ маркирует результат как
+session landing attribution, а не causal campaign impact.
+`assess_measurement_trust` с UTM `target_filters` возвращает его coverage и
+trust state для конкретной зарегистрированной метрики.
+
 ### Browser Experience (consent → interaction evidence)
 
 ```

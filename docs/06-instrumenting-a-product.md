@@ -134,6 +134,23 @@ ph.track("signup.completed", user.id, { plan: "free" });
 ph.identify("account", user.accountId, { plan: "free", seats: 1 }); // mutable state → entity
 ```
 
+### 2.0 Browser landing attribution (optional)
+
+Для consented browser-продукта сначала вызови MCP
+`propose_acquisition_properties` (или `POST /properties/acquisition-attribution`)
+с platform credential. Это создаст пять `$utm_*` definitions как `proposed`;
+ингест-ключ в браузере не может и не должен менять реестр. Затем подключи
+`@poolstatis/sdk/attribution`, как показано в [SDK guide](../sdk/README.md#browser-acquisition-attribution-optional-module).
+
+Модуль пишет только pathname landing, origin referrer и стандартные UTM; raw URL,
+full referrer, click ids и unknown query params не отправляются. Для SPA вызывай
+`pageViewed()` после навигации. Передай обязательный `subscribeConsent` callback,
+который синхронно вызывает listener при отзыве product-analytics consent: модуль сам
+вызовет `stop()` и удалит unsent/retrying attribution events.
+Связь anonymous→authenticated делается отдельно через audited actor link: история
+immutable events не переписывается. UTM trend — только session landing association,
+не доказательство причинного эффекта кампании.
+
 ### 2.1 Roll out and measure a product change
 
 Create an active flag and an experiment in **Experiments** admin (or with the

@@ -41,6 +41,7 @@ import {
   createPropertyDefinition, listPropertyDefinitions, updatePropertyDefinition,
   type PropertyDefinition,
 } from '../services/properties.js';
+import { proposeAcquisitionProperties } from '../services/acquisitionAttribution.js';
 import { assessMeasurementTrust } from '../services/measurementTrust.js';
 import {
   applyDeclaration, diffDeclaration, exportDeclaration, getContract, listContracts,
@@ -1182,6 +1183,14 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
       authOwner(req.auth),
     );
     return reply.status(201).send(property);
+  });
+
+  app.post('/api/v1/projects/:slug/properties/acquisition-attribution', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return {
+      properties: await proposeAcquisitionProperties(ctx.pool, project.id, authOwner(req.auth)),
+    };
   });
 
   app.get('/api/v1/projects/:slug/properties', async (req) => {

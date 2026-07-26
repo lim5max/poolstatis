@@ -132,6 +132,7 @@ POST   /api/v1/projects/{slug}/identity-links
 GET    /api/v1/projects/{slug}/identity-links?env=prod
 POST   /api/v1/projects/{slug}/identity-links/{id}/revoke
 POST   /api/v1/projects/{slug}/properties
+POST   /api/v1/projects/{slug}/properties/acquisition-attribution
 GET    /api/v1/projects/{slug}/properties
 PATCH  /api/v1/projects/{slug}/properties/{scope}/{key}
 POST   /api/v1/projects/{slug}/measurement/trust
@@ -281,7 +282,8 @@ the API never fetches a caller-supplied URL.
   "date_from": "-30d",                   // относительные и ISO-даты
   "date_to": null,
   "interval": "day",                     // hour | day | week | month
-  "breakdown": { "property": "plan" },   // опционально, топ-10 значений + other
+  "filters": [{ "property": "$utm_source", "op": "eq", "value": "newsletter" }],
+  "breakdown": { "property": "$utm_source" }, // опционально, топ-10 значений + other
   "env": "prod"
 }
 
@@ -306,6 +308,13 @@ the API never fetches a caller-supplied URL.
 Операторы фильтров: `eq, ne, gt, gte, lt, lte, in, contains, is_set, is_not_set`.
 
 Ответ любого запроса включает `meta`: `{computed_at, date_range, sampling: null}` — задел под кеширование и сэмплирование без смены контракта.
+
+`$utm_source`, `$utm_medium`, `$utm_campaign`, `$utm_term`, `$utm_content` —
+зарезервированные event properties browser-attribution entrypoint. Перед
+filter/breakdown вызови `POST .../properties/acquisition-attribution`: он
+идемпотентно создаёт пять native string definitions со статусом `proposed`.
+`meta.note` такого trend явно говорит **Session landing attribution**: это связь
+с tagged landing в этой browser session, не causal credit кампании.
 
 Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки.
 

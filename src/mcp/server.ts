@@ -16,7 +16,7 @@ import {
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
   experienceRouteRegistrationSchema, experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
-  editDecisionSchema, measurementDeclarationSchema, posthogConnectionSchema, propertyDefinitionSchema,
+  editDecisionSchema, measurementDeclarationSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
   registerReleaseSchema, reviewDecisionSchema,
   retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
@@ -183,6 +183,20 @@ jsonTool(
     if (status) qs.set('status', status);
     return api('GET', `/api/v1/projects/${slug}/properties${qs.size ? `?${qs}` : ''}`);
   }),
+);
+
+jsonTool(
+  'propose_acquisition_properties',
+  'Idempotently propose the five reserved browser acquisition UTM event properties. They remain proposed until an owner explicitly reviews and trusts a definition for decision contracts.',
+  { project },
+  wrap(({ project: slug }) => api('POST', `/api/v1/projects/${slug}/properties/acquisition-attribution`, {})),
+);
+
+jsonTool(
+  'assess_measurement_trust',
+  'Read evidence-backed metric, identity and target-property coverage before a decision. Use target_filters for a property-specific coverage and trust read-back.',
+  { project, input: measurementTrustSchema },
+  wrap(({ project: slug, input }) => api('POST', `/api/v1/projects/${slug}/measurement/trust`, input)),
 );
 
 jsonTool(

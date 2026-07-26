@@ -120,6 +120,12 @@ export class PoolstatisClient {
     );
   }
 
+  proposeAcquisitionProperties(slug: string) {
+    return this.req<{ properties: PropertyDefinition[] }>(
+      'POST', `/api/v1/projects/${slug}/properties/acquisition-attribution`, {},
+    ).then((response) => response.properties);
+  }
+
   sources(slug: string) {
     return this.req<{ sources: SourceConnection[] }>('GET', `/api/v1/projects/${slug}/sources`)
       .then((response) => response.sources);

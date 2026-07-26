@@ -60,6 +60,8 @@ describe('decision-loop trust MCP tools', () => {
       'revoke_actor_link',
       'register_property',
       'list_properties',
+      'propose_acquisition_properties',
+      'assess_measurement_trust',
       'update_property',
       'configure_posthog',
       'verify_posthog',
@@ -135,6 +137,15 @@ describe('decision-loop trust MCP tools', () => {
     });
     expect(properties.structuredContent).toMatchObject({
       properties: [expect.objectContaining({ key: 'plan', status: 'trusted' })],
+    });
+
+    const acquisition = await client.callTool({
+      name: 'propose_acquisition_properties',
+      arguments: { project: env.projectSlug },
+    });
+    expect(acquisition.isError).not.toBe(true);
+    expect(acquisition.structuredContent).toMatchObject({
+      properties: expect.arrayContaining([expect.objectContaining({ key: '$utm_source', status: 'proposed' })]),
     });
 
     const configured = await client.callTool({

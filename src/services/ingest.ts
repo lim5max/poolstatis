@@ -4,6 +4,7 @@ import { ingestEventSchema, type IngestEnvelope } from '../schemas.js';
 import { registeredEventNames } from './registry.js';
 import { recordWarnings, type WarningDelta } from './warnings.js';
 import { randomUUID } from 'node:crypto';
+import { validateAcquisitionProperties } from './acquisitionAttribution.js';
 
 const CLOCK_SKEW_FUTURE_MS = 5 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 30_000;
@@ -72,6 +73,14 @@ export class IngestService {
         }
         const e = parsed.data;
         const properties: Record<string, unknown> = { ...e.properties };
+        const acquisitionError = validateAcquisitionProperties(properties, e.session_id);
+        if (acquisitionError) {
+          errors.push({ index, message: acquisitionError });
+          // Do not retain the rejected payload: attribution must never turn a
+          // raw URL into an observability log entry.
+          bump('rejected', e.event, acquisitionError);
+          return;
+        }
 
         let timestamp = e.timestamp ? new Date(e.timestamp) : now;
         if (timestamp.getTime() > now.getTime() + CLOCK_SKEW_FUTURE_MS || timestamp < retentionFloor) {

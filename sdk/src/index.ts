@@ -104,6 +104,11 @@ const MAX_RETRY_BATCHES = 100;
 /** A formed-but-unsent request, kept verbatim so retries reuse the same batch_id. */
 interface PendingBatch { path: string; body: unknown }
 
+function isEventBatch(body: unknown): body is { batch_id?: string; events: PoolstatisEvent[] } {
+  return typeof body === 'object' && body !== null
+    && Array.isArray((body as { events?: unknown }).events);
+}
+
 function uuid(): string {
   const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
   if (c?.randomUUID) return c.randomUUID();
@@ -154,6 +159,16 @@ export class Poolstatis {
     this.events.push(e);
     if (this.events.length > this.maxQueue) this.events.splice(0, this.events.length - this.maxQueue);
     if (this.events.length >= this.maxBatchSize) void this.flush();
+  }
+
+  /** Remove locally queued events selected by an explicit privacy boundary. */
+  discardQueuedEvents(predicate: (event: PoolstatisEvent) => boolean): void {
+    this.events = this.events.filter((event) => !predicate(event));
+    this.retries = this.retries.flatMap((batch) => {
+      if (batch.path !== '/i/v1/events' || !isEventBatch(batch.body)) return [batch];
+      const events = batch.body.events.filter((event) => !predicate(event));
+      return events.length > 0 ? [{ ...batch, body: { ...batch.body, events } }] : [];
+    });
   }
 
   /** Upsert mutable entity state (user/account/…). Merge semantics; null deletes a key. */

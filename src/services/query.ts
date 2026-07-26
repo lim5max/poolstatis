@@ -21,6 +21,9 @@ import { countEntities, queryEntities } from './entities.js';
 import { getExactExperienceSnapshot, getExperienceSurface } from './experience.js';
 import { canonicalQueryKey, type QueryCache } from './queryCache.js';
 import type { PostHogAdapter } from './posthog.js';
+import { assertRegisteredAcquisitionProperties } from './acquisitionAttribution.js';
+
+const SESSION_ATTRIBUTION_NOTE = 'Session landing attribution: this associates events with the tagged landing in the same browser session; it is not causal campaign credit.';
 
 export interface QueryMeta {
   computed_at: string;
@@ -389,6 +392,15 @@ export class QueryService {
   }
 
   private async trend(projectId: string, q: TrendQueryInput, now: Date): Promise<QueryResult> {
+    const queryProperties = [...q.filters.map((filter) => filter.property), ...(q.breakdown ? [q.breakdown.property] : [])];
+    await assertRegisteredAcquisitionProperties(
+      this.pool,
+      projectId,
+      queryProperties,
+    );
+    const attributionNote = queryProperties.some((property) => property.startsWith('$utm_'))
+      ? SESSION_ATTRIBUTION_NOTE
+      : undefined;
     const metric = await getMetric(this.pool, projectId, q.metric);
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
@@ -451,7 +463,7 @@ export class QueryService {
         interval: q.interval,
         ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
       });
-      return { kind: 'trend', series, meta: meta({ source: 'posthog' }) };
+      return { kind: 'trend', series, meta: meta({ source: 'posthog', ...(attributionNote ? { note: attributionNote } : {}) }) };
     }
     const agg =
       metric.type === 'count'
@@ -471,7 +483,7 @@ export class QueryService {
       interval: q.interval,
       ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
     });
-    return { kind: 'trend', series, meta: meta({ source: 'native' }) };
+    return { kind: 'trend', series, meta: meta({ source: 'native', ...(attributionNote ? { note: attributionNote } : {}) }) };
   }
 
   private async funnel(projectId: string, q: FunnelQueryInput, now: Date): Promise<QueryResult> {
