@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Loader2, ChevronRight, ChevronDown } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import {
-  Loading, ErrorNote, CategoryChip, StatusBadge, TypeTag, EmptyState, Panel,
+  Loading, ErrorNote, RecoverableError, CategoryChip, StatusBadge, TypeTag, EmptyState, Panel,
   Toolbar, SearchInput, FilterChips, CategoryFilter, GroupBy, Overflow,
   DangerConfirm, NumberedStepChips, VerticalStepper, type Chip,
 } from '../components/ui';
@@ -23,7 +23,7 @@ export function Registry() {
   const { data, error, loading, reload } = useAsync(() => client!.schema(project!, env), [project, env]);
 
   if (loading) return <Loading what="reading registry…" />;
-  if (error) return <ErrorNote>{error}</ErrorNote>;
+  if (error) return <RecoverableError onRetry={reload}>{error}</RecoverableError>;
   if (!data) return null;
 
   return (

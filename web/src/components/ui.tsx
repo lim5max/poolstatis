@@ -113,7 +113,7 @@ export function Stat({ label, value, sub }: { label: string; value: ReactNode; s
 
 export function EmptyState({ headline, lead, action }: { headline: string; lead?: string; action?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 py-14 text-center text-muted-foreground">
+    <div className="flex flex-col items-center justify-center gap-2 py-14 text-center text-muted-foreground" role="status">
       <div className="serif text-xl text-foreground/70">{headline}</div>
       {lead && <div className="text-sm">{lead}</div>}
       {action && <div className="flex gap-2 mt-1">{action}</div>}
@@ -122,15 +122,24 @@ export function EmptyState({ headline, lead, action }: { headline: string; lead?
 }
 
 export function Loading({ what }: { what?: string }) {
-  return <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> {what ?? 'reading instrument…'}</div>;
+  return <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground" role="status" aria-live="polite" aria-busy="true"><Loader2 className="size-4 animate-spin" /> {what ?? 'Loading…'}</div>;
 }
 
 export function ErrorNote({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">⚠ {children}</div>;
+  return <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground" role="alert">⚠ {children}</div>;
+}
+
+export function RecoverableError({ children, onRetry }: { children: ReactNode; onRetry: () => void }) {
+  return (
+    <div className="space-y-3">
+      <ErrorNote>{children}</ErrorNote>
+      <Button variant="outline" size="sm" onClick={onRetry}>Try again</Button>
+    </div>
+  );
 }
 
 export function WarningNote({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">⚠ {children}</div>;
+  return <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100" role="status">⚠ {children}</div>;
 }
 
 /** Keeps wide administrative tables usable inside Panels, including on mobile. */

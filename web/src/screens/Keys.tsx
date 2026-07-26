@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Loader2 } from '@/components/icons';
 import { useStore, useAsync } from '../store';
-import { Loading, ErrorNote, Panel, EmptyState, SecretReveal, Confirm, Overflow } from '../components/ui';
+import { Loading, ErrorNote, RecoverableError, Panel, EmptyState, SecretReveal, Confirm, Overflow } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,7 +17,7 @@ export function Keys() {
   const [revoking, setRevoking] = useState<ApiKeyRow | null>(null);
 
   if (loading) return <Loading what="reading keys…" />;
-  if (error) return <ErrorNote>{error}</ErrorNote>;
+  if (error) return <RecoverableError onRetry={reload}>{error}</RecoverableError>;
 
   return (
     <div className="space-y-4">

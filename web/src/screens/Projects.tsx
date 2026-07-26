@@ -26,7 +26,7 @@ export function Projects() {
         title={<>Projects <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{projects.length} in this {projectScope === 'project' ? 'key scope' : 'org'}</span></>}
         right={projectScope === 'project' ? <span className="text-xs text-muted-foreground">secret key — scoped to one project</span> : null}
       >
-        {projects.length === 0 ? <EmptyState headline={tokenKind === 'user' ? 'No projects in this workspace' : 'No projects'} lead={tokenKind === 'user' ? 'Ask an owner or admin to create a project, then choose it here.' : 'create one below, or bootstrap via the CLI'} /> : (
+        {projects.length === 0 ? <EmptyState headline={tokenKind === 'user' ? 'No projects in this workspace' : 'No projects'} lead={tokenKind === 'user' ? 'Ask an owner or admin to create one.' : 'Create one below or use the CLI.'} /> : (
           <TableScroll><Table>
             <TableHeader>
               <TableRow><TableHead>Project</TableHead><TableHead>Timezone</TableHead><TableHead className="text-right">Active metrics</TableHead><TableHead className="text-right">Funnels</TableHead><TableHead className="text-right">Events · 30d</TableHead><TableHead /></TableRow>
