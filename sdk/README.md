@@ -106,6 +106,43 @@ The agent can use `query_interaction_map` for normalised click cells and
 `get_experience_session` for a known session id. These are interaction maps,
 not gaze or full session replay.
 
+## Browser acquisition attribution (optional module)
+
+`@poolstatis/sdk/attribution` is a separate, consent-gated browser entrypoint.
+The base client never reads `location`, referrer or URL parameters. First use a
+Platform API credential or MCP `propose_acquisition_properties` to add the five
+canonical `$utm_*` event definitions as `proposed`; an owner must trust one
+before using it in a measurement contract or decision target.
+
+```ts
+import { createClient } from '@poolstatis/sdk';
+import { createAttributionClient } from '@poolstatis/sdk/attribution';
+
+const client = createClient({ url: 'https://analytics.example.com', ingestKey: 'pk_…' });
+const analytics = createAttributionClient({
+  client,
+  distinctId: () => currentActorId(), // can change from anonymous to authenticated
+  hasConsent: () => consent.has('product_analytics'),
+  subscribeConsent: (listener) => consent.onChange(listener), // must synchronously call on withdrawal
+  route: () => router.currentPathname(), // safe product route/path provider
+});
+
+await analytics.start(); // exactly one session.started + initial page.viewed
+analytics.track('signup.completed', { plan: 'pro' });
+// On SPA navigation: analytics.pageViewed();  It preserves the original landing snapshot.
+// `subscribeConsent` calls stop automatically on withdrawal and drops unsent/retrying attribution events.
+```
+
+The helper owns and exposes `analytics.sessionId`; it snapshots only `pathname`,
+referrer **origin**, and first valid `utm_source`, `utm_medium`, `utm_campaign`,
+`utm_term`, `utm_content` (trimmed, NFC, max 256). It discards unknown query
+parameters, query/hash from the path, full referrer URLs, click IDs and all
+previous-session values. It does not link anonymous and authenticated actors:
+use Poolstatis's audited actor-link API/MCP flow for that query-time resolution.
+
+UTM trends are labelled **session landing attribution**. They are associations,
+not causal campaign credit or an ad-attribution model.
+
 ## Notes
 
 - Runs anywhere `fetch` exists (Node ≥18, modern browsers). Inject `fetch` otherwise.

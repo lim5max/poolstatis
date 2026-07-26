@@ -9,7 +9,8 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./experience": { "types": "./dist/experience.d.ts", "import": "./dist/experience.js" }
+    "./experience": { "types": "./dist/experience.d.ts", "import": "./dist/experience.js" },
+    "./attribution": { "types": "./dist/attribution.d.ts", "import": "./dist/attribution.js" }
   },
   "files": ["dist"],
   "sideEffects": false,

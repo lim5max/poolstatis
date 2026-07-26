@@ -4,7 +4,7 @@ import { ErrorNote, Hint, Loading, Panel, Toolbar } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import type { MeasurementContract, MeasurementTrust, Metric } from '../api/types';
+import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 
 interface MetricTrustRow {
   metric: Metric;
@@ -12,8 +12,17 @@ interface MetricTrustRow {
   error: string | null;
 }
 
+interface PropertyCoverageRow {
+  metric: Metric;
+  property: string;
+  coverage: number;
+  status: 'missing' | PropertyDefinition['status'];
+}
+
 export function Measurement() {
   const { client, project, env } = useStore();
+  const [proposingAttribution, setProposingAttribution] = useState(false);
+  const [attributionError, setAttributionError] = useState<string | null>(null);
   const audit = useAsync(async () => {
     const [properties, identity, sources, metrics, contracts] = await Promise.all([
       client!.properties(project!),
@@ -42,13 +51,32 @@ export function Measurement() {
         };
       }
     }));
-    return { properties, identity, sources, trust, contracts };
+    const acquisitionProperties = properties.filter((property) => property.scope === 'event' && property.key.startsWith('$utm_'));
+    const propertyCoverage = (await Promise.all(metrics.flatMap((metric) => acquisitionProperties.map(async (property): Promise<PropertyCoverageRow | null> => {
+      try {
+        const result = await client!.measurementTrust(project!, {
+          metric_key: metric.key,
+          env,
+          since_days: 30,
+          target_filters: [{ property: property.key, op: 'is_set' }],
+        });
+        const coverage = result.properties.find((item) => item.key === property.key);
+        return coverage ? { metric, property: property.key, coverage: coverage.coverage, status: coverage.status } : null;
+      } catch { return null; }
+    })))).filter((row): row is PropertyCoverageRow => row !== null);
+    return { properties, identity, sources, trust, contracts, propertyCoverage };
   }, [project, env]);
 
   if (audit.loading) return <Loading what="checking measurement trust…" />;
   if (audit.error) return <ErrorNote>{audit.error}</ErrorNote>;
   if (!audit.data) return null;
-  const { properties, identity, sources, trust, contracts } = audit.data;
+  const { properties, identity, sources, trust, contracts, propertyCoverage } = audit.data;
+  const proposeAttribution = async () => {
+    setProposingAttribution(true); setAttributionError(null);
+    try { await client!.proposeAcquisitionProperties(project!); await audit.reload(); }
+    catch (error) { setAttributionError(error instanceof Error ? error.message : 'could not propose acquisition properties'); }
+    finally { setProposingAttribution(false); }
+  };
 
   return <div className="space-y-4">
     <Panel title="Measurement trust" right={<span className="text-xs text-muted-foreground">real evidence · last 30 days</span>}>
@@ -96,14 +124,17 @@ export function Measurement() {
 
     <ContractsPanel contracts={contracts} />
 
-    <Panel title={<>Property meanings <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{properties.length}</span></>}>
+    <Panel title={<>Property meanings <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{properties.length}</span></>} right={<Button variant="outline" size="sm" onClick={proposeAttribution} disabled={proposingAttribution}>{proposingAttribution ? 'Proposing…' : 'Propose acquisition UTM properties'}</Button>}>
+      <p className="mb-4 max-w-3xl text-sm text-muted-foreground">Browser acquisition setup adds only the five canonical UTM definitions as proposed. Session landing attribution is an association, not causal campaign credit.</p>
+      {attributionError && <div className="mb-4"><ErrorNote>{attributionError}</ErrorNote></div>}
       {properties.length === 0 ? <p className="text-sm text-muted-foreground">No decision properties are registered yet.</p> : <div className="overflow-x-auto">
-        <Table><TableHeader><TableRow><TableHead>Property</TableHead><TableHead>Meaning</TableHead><TableHead>Type</TableHead><TableHead>Trust</TableHead><TableHead>Source</TableHead></TableRow></TableHeader>
+        <Table><TableHeader><TableRow><TableHead>Property</TableHead><TableHead>Meaning</TableHead><TableHead>Type</TableHead><TableHead>Trust</TableHead><TableHead>Coverage</TableHead><TableHead>Source</TableHead></TableRow></TableHeader>
           <TableBody>{properties.map((property) => <TableRow key={`${property.scope}:${property.key}`}>
             <TableCell><code className="text-xs">{property.scope}.{property.key}</code></TableCell>
             <TableCell className="max-w-lg text-sm text-muted-foreground">{property.purpose}</TableCell>
             <TableCell><Badge variant="outline" className="font-normal">{property.value_type}</Badge></TableCell>
             <TableCell><PropertyTrustBadge status={property.status} /></TableCell>
+            <TableCell className="min-w-44 text-xs text-muted-foreground"><PropertyCoverage property={property.key} rows={propertyCoverage} /></TableCell>
             <TableCell className="text-xs text-muted-foreground">{property.source}</TableCell>
           </TableRow>)}</TableBody>
         </Table>
@@ -135,6 +166,12 @@ export function Measurement() {
       </div>}
     </Panel>
   </div>;
+}
+
+function PropertyCoverage({ property, rows }: { property: string; rows: PropertyCoverageRow[] }) {
+  const coverage = rows.filter((row) => row.property === property);
+  if (coverage.length === 0) return <span>Not assessed</span>;
+  return <div className="space-y-1">{coverage.map((row) => <div key={row.metric.key}><code>{row.metric.key}</code> · {pct(row.coverage)}</div>)}</div>;
 }
 
 function ContractsPanel({ contracts }: { contracts: MeasurementContract[] }) {
