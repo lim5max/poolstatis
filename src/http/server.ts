@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import cors from '@fastify/cors';
 import { ZodError, z } from 'zod';
 import type pg from 'pg';
 import { ApiError, badRequest, databasePolicyError, notFound } from '../errors.js';
@@ -243,12 +244,24 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   };
   const corsOrigins = new Set(options.corsOrigins ?? []);
 
-  void app.register(import('@fastify/cors'), {
+  void app.register(cors, {
     origin(origin, callback) {
       callback(null, !origin || corsOrigins.has(origin));
     },
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
+  });
+
+  // Authentication runs in an onRequest hook and can reject before a route
+  // handler is reached. Set the actual-response CORS headers in the root scope
+  // before authentication so browser clients can read neutral 4xx/5xx bodies.
+  app.addHook('onRequest', async (req, reply) => {
+    const origin = req.headers.origin;
+    if (!origin) return;
+    void reply.header('vary', 'Origin');
+    if (corsOrigins.has(origin)) {
+      void reply.header('access-control-allow-origin', origin);
+    }
   });
 
   // Unauthenticated liveness probe the dashboard uses to check the base URL

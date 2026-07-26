@@ -539,4 +539,53 @@ describe('verified hosted JWT profile', () => {
     expect(allowed.headers['access-control-allow-origin']).toBe('https://console.poolstatis.test');
     expect(rejected.headers['access-control-allow-origin']).toBeUndefined();
   });
+
+  it('keeps actual auth failures and not-found responses readable to the allowed browser origin', async () => {
+    const invalidAuth = await app.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: {
+        origin: 'https://console.poolstatis.test',
+        authorization: 'Bearer invalid-token',
+      },
+    });
+    expect(invalidAuth.statusCode).toBe(401);
+    expect(invalidAuth.headers['access-control-allow-origin']).toBe(
+      'https://console.poolstatis.test',
+    );
+    expect(invalidAuth.headers.vary).toContain('Origin');
+    expect(invalidAuth.json()).toMatchObject({
+      error: { code: expect.any(String), message: expect.any(String) },
+    });
+
+    const authToken = await token({
+      sub: uniqueSubject('cors-not-found'),
+      email: 'cors-not-found@example.test',
+      emailVerified: true,
+    });
+    const notFound = await app.inject({
+      method: 'GET',
+      url: '/api/v1/does-not-exist',
+      headers: {
+        origin: 'https://console.poolstatis.test',
+        authorization: `Bearer ${authToken}`,
+      },
+    });
+    expect(notFound.statusCode).toBe(404);
+    expect(notFound.headers['access-control-allow-origin']).toBe(
+      'https://console.poolstatis.test',
+    );
+    expect(notFound.headers.vary).toContain('Origin');
+
+    const rejectedOrigin = await app.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: {
+        origin: 'https://attacker.example',
+        authorization: 'Bearer invalid-token',
+      },
+    });
+    expect(rejectedOrigin.statusCode).toBe(401);
+    expect(rejectedOrigin.headers['access-control-allow-origin']).toBeUndefined();
+  });
 });

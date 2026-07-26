@@ -8,6 +8,7 @@ import {
   useHostedAuth,
   useHostedToken,
 } from '../oidc';
+import { ApiError } from '../api/client';
 import { useStore } from '../store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -32,7 +33,7 @@ function HostedConnect() {
     attempted.current = true;
     setBusy(true);
     connectHosted({ baseUrl: hostedAuthConfig.apiUrl, getToken })
-      .catch((ex) => setErr((ex as Error).message))
+      .catch((ex) => setErr(hostedConnectionError(ex)))
       .finally(() => setBusy(false));
   }, [connectHosted, getToken, isAuthenticated]);
 
@@ -54,6 +55,18 @@ function HostedConnect() {
       {(err || error) && <div className="mt-4 text-xs text-destructive">{err ?? error?.message}</div>}
     </ConnectShell>
   );
+}
+
+export function hostedConnectionError(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401 || error.code === 'authentication_failed') {
+      return 'Your sign-in session is unavailable or expired. Verify your email, then sign in again.';
+    }
+    if (error.status === 403) {
+      return 'Your account is signed in but does not have access to this workspace.';
+    }
+  }
+  return error instanceof Error ? error.message : 'The hosted sign-in could not be completed.';
 }
 
 function TokenConnect() {
