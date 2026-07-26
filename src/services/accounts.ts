@@ -566,7 +566,6 @@ export async function completeHostedOnboarding(
   publicUrl: string,
   mcpRunner: McpRunnerConfig,
 ): Promise<OnboardingResult> {
-  const workspaceName = cleanText(input.workspace_name, 'Poolstatis workspace');
   const projectSlug = cleanText(input.project_slug, '');
   const projectName = cleanText(input.project_name, projectSlug);
   if (!/^[a-z][a-z0-9-]*$/.test(projectSlug)) {
@@ -587,8 +586,8 @@ export async function completeHostedOnboarding(
       );
     }
     const { rows: orgRows } = await client.query(
-      'UPDATE organizations SET name = $2 WHERE id = $1 RETURNING id, name',
-      [orgId, workspaceName],
+      'SELECT id, name FROM organizations WHERE id = $1',
+      [orgId],
     );
     if (!orgRows[0]) throw new ApiError(404, 'organization_not_found', 'organization not found');
 

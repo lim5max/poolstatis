@@ -81,13 +81,16 @@ describe('hosted auth onboarding', () => {
   });
 
   it('creates the first project and one-time MCP tokens', async () => {
+    const before = await authApi('GET', '/api/v1/me');
     const res = await authApi('POST', '/api/v1/onboarding', {
-      workspace_name: 'Analytical Engines',
+      workspace_name: 'Attacker-controlled replacement name',
       project_slug: 'agent-product',
       project_name: 'Agent Product',
     });
 
     expect(res.status).toBe(201);
+    expect(res.body.organization.id).toBe(before.body.organization.id);
+    expect(res.body.organization.name).toBe(before.body.organization.name);
     expect(res.body.project).toMatchObject({
       slug: 'agent-product',
       name: 'Agent Product',

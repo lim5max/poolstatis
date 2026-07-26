@@ -113,6 +113,25 @@ describe('cloud workspace project controls', () => {
     expect(screen.getByText('No projects in this workspace')).toBeInTheDocument();
     expect(screen.queryByText('Create your workspace')).not.toBeInTheDocument();
   });
+
+  it('creates the first project inside an existing owner organization without offering a new workspace', () => {
+    mockedStore.mockReturnValue({
+      projects: [], project: null, setProject, tokenKind: 'user', client: {
+        completeOnboarding: vi.fn(),
+      }, refreshProjects,
+      account: {
+        organization: { id: 'org-existing', name: 'Existing owner organization' },
+        membership: { organization_id: 'org-existing', role: 'owner' },
+      },
+    } as never);
+    renderProjects();
+
+    expect(screen.getByText('Create your first project')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create first project' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create workspace' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Workspace name')).not.toBeInTheDocument();
+    expect(screen.getByText('The existing organization remains the tenant boundary.')).toBeInTheDocument();
+  });
 });
 
 describe('hosted profile and personal token lifecycle', () => {
