@@ -5,7 +5,7 @@ import { useStore, useAsync } from '../store';
 import {
   Loading, ErrorNote, RecoverableError, CategoryChip, StatusBadge, TypeTag, EmptyState, Panel,
   Toolbar, SearchInput, FilterChips, CategoryFilter, GroupBy, Overflow,
-  DangerConfirm, NumberedStepChips, VerticalStepper, type Chip,
+  DangerConfirm, VerticalStepper, type Chip,
 } from '../components/ui';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -338,12 +338,9 @@ function groupRows(rows: Metric[], by: string): Array<{ label: string | null; ro
 function FunnelsTable({ funnels }: { funnels: Funnel[] }) {
   if (funnels.length === 0) return <Panel><EmptyState headline="No funnels" lead="defined from registry metrics via MCP or API" /></Panel>;
   return (
-    <Panel title="Funnels">
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader><TableRow><TableHead className="w-7" /><TableHead>Funnel</TableHead><TableHead>Goal</TableHead><TableHead>Steps</TableHead><TableHead>Window</TableHead></TableRow></TableHeader>
-          <TableBody>{funnels.map((f) => <FunnelRow key={f.key} funnel={f} />)}</TableBody>
-        </Table>
+    <Panel title={<>Funnels <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{funnels.length}</span></>}>
+      <div className="divide-y">
+        {funnels.map((f) => <FunnelRow key={f.key} funnel={f} />)}
       </div>
     </Panel>
   );
@@ -352,16 +349,36 @@ function FunnelsTable({ funnels }: { funnels: Funnel[] }) {
 function FunnelRow({ funnel }: { funnel: Funnel }) {
   const [open, setOpen] = useState(false);
   return (
-    <>
-      <TableRow>
-        <TableCell><button onClick={() => setOpen((o) => !o)} className="text-muted-foreground">{open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</button></TableCell>
-        <TableCell><div className="font-medium">{funnel.name}</div><div className="text-xs text-muted-foreground">{funnel.key}</div></TableCell>
-        <TableCell><div className="text-xs text-muted-foreground italic max-w-sm">{funnel.goal}</div></TableCell>
-        <TableCell><NumberedStepChips steps={funnel.steps} /></TableCell>
-        <TableCell className="text-xs">{Math.round(funnel.window_seconds / 86400)}d</TableCell>
-      </TableRow>
-      {open && <TableRow><TableCell /><TableCell colSpan={4} className="bg-background"><VerticalStepper steps={funnel.steps} /></TableCell></TableRow>}
-    </>
+    <section data-testid={`funnel-summary-${funnel.key}`} className="grid min-w-0 gap-3 px-5 py-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(16rem,2fr)_auto] lg:items-start">
+      <div className="min-w-0">
+        <div className="font-medium break-words">{funnel.name}</div>
+        <code className="text-xs text-muted-foreground break-all">{funnel.key}</code>
+      </div>
+      <div className="min-w-0">
+        <div className="text-xs font-medium text-muted-foreground">Goal</div>
+        <p className="mt-1 text-sm text-muted-foreground break-words">{funnel.goal}</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        <Badge variant="outline">{funnel.steps.length} steps</Badge>
+        <Badge variant="outline">{Math.round(funnel.window_seconds / 86400)}d window</Badge>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={open}
+          aria-controls={`funnel-${funnel.key}-steps`}
+          aria-label={`${open ? 'Hide' : 'Show'} ${funnel.name} steps`}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          {open ? 'Hide steps' : 'Review steps'}
+        </Button>
+      </div>
+      {open && (
+        <div id={`funnel-${funnel.key}-steps`} className="min-w-0 rounded-md border bg-muted/20 p-4 lg:col-span-3">
+          <VerticalStepper steps={funnel.steps} />
+        </div>
+      )}
+    </section>
   );
 }
 

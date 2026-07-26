@@ -157,7 +157,7 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe(
-        '028_hosted_policy_hardening_idempotency.sql',
+        '029_experience_surface_recency.sql',
       );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
@@ -432,7 +432,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '028_hosted_policy_hardening_idempotency.sql',
+        last_migration: '029_experience_surface_recency.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -639,7 +639,7 @@ describe('hosted policy migration role topology', () => {
       );
       const applied = await migrateWithEvidence(selfHost);
       expect(applied.at(-1)).toBe(
-        '028_hosted_policy_hardening_idempotency.sql',
+        '029_experience_surface_recency.sql',
       );
       const topology = await selfHost.query<{
         superuser: boolean;

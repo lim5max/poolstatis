@@ -310,6 +310,7 @@ export interface EventStore {
   experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]>;
   interactionMap(q: InteractionMapQuery): Promise<InteractionMapResult>;
   experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]>;
+  experienceLastCaptures(projectId: string, env: string, surfaces: string[]): Promise<Record<string, string>>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;

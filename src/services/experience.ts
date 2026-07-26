@@ -11,6 +11,7 @@ export interface ExperienceSurface {
   status: 'active' | 'archived';
   created_at: string | Date;
   updated_at: string | Date;
+  last_capture_at?: string | Date | null;
 }
 
 const SURFACE_COLS = 'id, key, name, purpose, status, created_at, updated_at';
@@ -51,12 +52,21 @@ export async function getExperienceSurface(
   return rows[0];
 }
 
-export async function listExperienceSurfaces(pool: pg.Pool, projectId: string): Promise<ExperienceSurface[]> {
+export async function listExperienceSurfaces(
+  pool: pg.Pool,
+  eventStore: EventStore,
+  projectId: string,
+  env: string,
+): Promise<ExperienceSurface[]> {
   const { rows } = await pool.query<ExperienceSurface>(
     `SELECT ${SURFACE_COLS} FROM experience_surfaces WHERE project_id = $1 ORDER BY created_at`,
     [projectId],
   );
-  return rows;
+  const lastCaptures = await eventStore.experienceLastCaptures(projectId, env, rows.map((surface) => surface.key));
+  return rows.map((surface) => ({
+    ...surface,
+    last_capture_at: lastCaptures[surface.key] ?? null,
+  }));
 }
 
 export async function archiveExperienceSurface(pool: pg.Pool, projectId: string, key: string): Promise<ExperienceSurface> {

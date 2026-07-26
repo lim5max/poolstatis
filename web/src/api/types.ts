@@ -112,6 +112,7 @@ export interface ExperienceSurface {
   status: ExperienceSurfaceStatus;
   created_at: string;
   updated_at: string;
+  last_capture_at?: string | null;
 }
 
 export interface InteractionMapResponse {
@@ -120,6 +121,18 @@ export interface InteractionMapResponse {
   grid: number;
   cells: Array<{ x: number; y: number; count: number; actors: number }>;
   labels: Array<{ label: string; count: number; actors: number }>;
+}
+
+export interface TrendResponse {
+  kind: 'trend';
+  series: Array<{ bucket: string; value: number; breakdown_value?: string }>;
+  meta: {
+    computed_at: string;
+    date_range?: { from: string; to: string };
+    sampling: null;
+    note?: string;
+    source?: 'native' | 'posthog';
+  };
 }
 
 export interface ExperienceSessionResponse {

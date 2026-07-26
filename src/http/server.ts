@@ -711,7 +711,8 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/api/v1/projects/:slug/experience/surfaces', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    return { surfaces: await listExperienceSurfaces(ctx.pool, project.id) };
+    const { env = req.auth.env } = req.query as { env?: string };
+    return { surfaces: await listExperienceSurfaces(ctx.pool, ctx.eventStore, project.id, env) };
   });
 
   app.post('/api/v1/projects/:slug/experience/surfaces/:key/archive', async (req) => {

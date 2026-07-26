@@ -166,6 +166,10 @@ export class BufferedEventStore implements EventStore {
     return this.inner.experienceSession(q);
   }
 
+  experienceLastCaptures(projectId: string, env: string, surfaces: string[]): Promise<Record<string, string>> {
+    return this.inner.experienceLastCaptures(projectId, env, surfaces);
+  }
+
   sample(q: SampleQuery): Promise<RawEvent[]> {
     return this.inner.sample(q);
   }

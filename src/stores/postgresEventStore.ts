@@ -693,6 +693,20 @@ export class PostgresEventStore implements EventStore {
     return rows.map((row) => toExperienceSessionEvent(row));
   }
 
+  async experienceLastCaptures(projectId: string, env: string, surfaces: string[]): Promise<Record<string, string>> {
+    if (surfaces.length === 0) return {};
+    const { rows } = await this.pool.query<{ surface: string; last_capture_at: Date }>(
+      `SELECT properties->>'surface' AS surface, max("timestamp") AS last_capture_at
+       FROM events
+       WHERE project_id = $1 AND env = $2
+         AND event_source = 'experience'
+         AND properties->>'surface' = ANY($3::text[])
+       GROUP BY properties->>'surface'`,
+      [projectId, env, surfaces],
+    );
+    return Object.fromEntries(rows.map((row) => [row.surface, row.last_capture_at.toISOString()]));
+  }
+
   async purge(projectId: string, env?: string, distinctId?: string): Promise<number> {
     const params: unknown[] = [projectId];
     let sql = 'DELETE FROM events WHERE project_id = $1';

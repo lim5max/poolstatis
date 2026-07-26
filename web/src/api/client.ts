@@ -1,6 +1,6 @@
 import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken,
+  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken,
 } from './types';
 
 export class ApiError extends Error {
@@ -315,8 +315,8 @@ export class PoolstatisClient {
   }
 
   // ---- browser experience ----
-  experienceSurfaces(slug: string) {
-    return this.req<{ surfaces: ExperienceSurface[] }>('GET', `/api/v1/projects/${slug}/experience/surfaces`).then((r) => r.surfaces);
+  experienceSurfaces(slug: string, env = 'prod') {
+    return this.req<{ surfaces: ExperienceSurface[] }>('GET', `/api/v1/projects/${slug}/experience/surfaces?env=${encodeURIComponent(env)}`).then((r) => r.surfaces);
   }
 
   createExperienceSurface(slug: string, body: { key: string; name: string; purpose: string }) {
@@ -333,6 +333,16 @@ export class PoolstatisClient {
 
   experienceSession(slug: string, body: { surface: string; session_id: string; date_from?: string; date_to?: string; env: string; limit?: number }) {
     return this.req<ExperienceSessionResponse>('POST', `/api/v1/projects/${slug}/query`, { kind: 'experience_session', ...body });
+  }
+
+  trend(slug: string, body: {
+    metric: string; date_from: string; date_to?: string | null;
+    interval?: 'hour' | 'day' | 'week' | 'month';
+    filters?: SampleFilter[]; breakdown?: { property: string }; env: string;
+  }) {
+    return this.req<TrendResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'trend', interval: 'day', filters: [], ...body,
+    });
   }
 
   // ---- data inspection ----

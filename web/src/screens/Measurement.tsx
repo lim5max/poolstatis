@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { ChevronDown, ChevronRight, Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { ErrorNote, Hint, Loading, Panel, RecoverableError, Toolbar } from '../components/ui';
+import { EmptyState, ErrorNote, Hint, Loading, Panel, RecoverableError, fmtNum } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import type { MeasurementContract, MeasurementTrust, Metric } from '../api/types';
+import type { MeasurementContract, MeasurementTrust, Metric, TrendResponse } from '../api/types';
 
 interface MetricTrustRow {
   metric: Metric;
@@ -51,46 +54,13 @@ export function Measurement() {
   const { properties, identity, sources, trust, contracts } = audit.data;
 
   return <div className="space-y-4">
-    <Panel title="Measurement trust" right={<span className="text-xs text-muted-foreground">real evidence · last 30 days</span>}>
-      <p className="max-w-3xl text-sm text-muted-foreground">Check whether active metrics have enough source, identity, and property evidence for a decision.</p>
+    <Panel title="Measurement" right={<span className="text-xs text-muted-foreground">server evidence · {env}</span>}>
+      <p className="max-w-3xl text-sm text-muted-foreground">Review what is decision-ready, then open only the metric that needs action.</p>
     </Panel>
 
-    <Panel>
-      <Toolbar
-        left={<span className="text-sm">Environment <code>{env}</code></span>}
-        center={<>
-          <Badge variant="outline">{trust.length} active metrics</Badge>
-          <Badge variant="outline">{properties.length} properties</Badge>
-          <Badge variant="outline">{identity.links.filter((link) => link.status === 'active').length} active links</Badge>
-        </>}
-        right={<Button variant="outline" size="sm" onClick={audit.reload}>Refresh evidence</Button>}
-      />
-      {trust.length === 0 ? (
-        <div className="p-5 text-sm text-muted-foreground">No active metric can be assessed yet. Review proposed metrics in Registry first.</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader><TableRow><TableHead>Metric and purpose</TableHead><TableHead>Trust</TableHead><TableHead>Evidence</TableHead><TableHead>Blocker / next action</TableHead></TableRow></TableHeader>
-            <TableBody>{trust.map(({ metric, trust: result, error }) => {
-              const finding = result?.blockers[0] ?? result?.warnings[0];
-              return <TableRow key={metric.key}>
-                <TableCell className="min-w-64"><div className="font-medium">{metric.name}</div><code className="text-xs text-muted-foreground">{metric.key}</code><p className="mt-1 max-w-md text-xs text-muted-foreground">{metric.purpose}</p></TableCell>
-                <TableCell><TrustBadge trusted={result?.status === 'trusted'} unavailable={Boolean(error)} /></TableCell>
-                <TableCell className="min-w-48 text-xs text-muted-foreground">
-                  {result ? <>
-                    <div>{result.primary_metric.observed_events} observations · {result.primary_metric.observed_actors} actors</div>
-                    <div>{pct(result.primary_metric.registered_coverage)} registered · {pct(result.identity.distinct_id_coverage)} identified</div>
-                  </> : 'Unavailable'}
-                </TableCell>
-                <TableCell className="min-w-72 text-xs">
-                  {error ? <span className="text-destructive">{error}</span> : finding ? <div><div>{finding.message}</div><div className="mt-1 text-muted-foreground">Next: {finding.next_action}</div></div> : <span className="text-emerald-600">No trust blockers in this evidence window.</span>}
-                </TableCell>
-              </TableRow>;
-            })}</TableBody>
-          </Table>
-        </div>
-      )}
-    </Panel>
+    <TrustOverview rows={trust} properties={properties.length} activeLinks={identity.links.filter((link) => link.status === 'active').length} onRefresh={audit.reload} />
+
+    <AcquisitionPanel metrics={trust.map((row) => row.metric)} env={env} />
 
     <ContractsPanel contracts={contracts} />
 
@@ -133,6 +103,128 @@ export function Measurement() {
       </div>}
     </Panel>
   </div>;
+}
+
+function TrustOverview({ rows, properties, activeLinks, onRefresh }: {
+  rows: MetricTrustRow[]; properties: number; activeLinks: number; onRefresh: () => void;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  const trusted = rows.filter((row) => row.trust?.status === 'trusted').length;
+  const unavailable = rows.filter((row) => Boolean(row.error)).length;
+  const untrusted = rows.length - trusted - unavailable;
+  return <Panel title="Decision readiness" right={<Button variant="outline" size="sm" onClick={onRefresh}>Refresh evidence</Button>}>
+    <div className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-3" aria-live="polite">
+      {[
+        [`${trusted} trusted`, 'No trust blockers'],
+        [`${untrusted} untrusted`, 'Review the first blocker'],
+        [`${unavailable} unavailable`, 'Retry or inspect the source'],
+      ].map(([value, label]) => <div key={value} className="bg-card p-4"><div className="serif text-2xl">{value}</div><div className="mt-1 text-xs text-muted-foreground">{label}</div></div>)}
+    </div>
+    <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+      <Badge variant="outline">{rows.length} active metrics</Badge>
+      <Badge variant="outline">{properties} properties</Badge>
+      <Badge variant="outline">{activeLinks} active identity links</Badge>
+    </div>
+    {rows.length === 0 ? <div className="mt-4"><EmptyState headline="Nothing to assess" lead="activate a proposed metric in Registry first" /></div> : (
+      <div className="mt-4 divide-y rounded-md border">
+        {rows.map(({ metric, trust: result, error }) => {
+          const expanded = open === metric.key;
+          const finding = result?.blockers[0] ?? result?.warnings[0];
+          return <section key={metric.key}>
+            <div className="grid min-w-0 gap-3 p-4 md:grid-cols-[minmax(12rem,1.4fr)_auto_minmax(12rem,1fr)_auto] md:items-center">
+              <div className="min-w-0"><div className="font-medium break-words">{metric.name}</div><code className="text-xs text-muted-foreground break-all">{metric.key}</code></div>
+              <TrustBadge trusted={result?.status === 'trusted'} unavailable={Boolean(error)} />
+              <div className="text-xs text-muted-foreground">
+                {result ? <><div>{fmtNum(result.primary_metric.observed_events)} observations</div><div>{fmtNum(result.primary_metric.observed_actors)} actors · {pct(result.primary_metric.registered_coverage)} registered</div></> : 'Evidence unavailable'}
+              </div>
+              <Button variant="ghost" size="sm" aria-expanded={expanded} aria-controls={`trust-${metric.key}`} aria-label={`Review ${metric.name}`} onClick={() => setOpen(expanded ? null : metric.key)}>
+                {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}Review
+              </Button>
+            </div>
+            {expanded && <div id={`trust-${metric.key}`} className="grid gap-3 border-t bg-muted/20 p-4 md:grid-cols-2">
+              <div><div className="text-xs font-medium text-muted-foreground">Purpose</div><p className="mt-1 text-sm">{metric.purpose}</p></div>
+              <div>
+                <div className="text-xs font-medium text-muted-foreground">{error ? 'Error' : finding ? 'Next action' : 'Status'}</div>
+                {error ? <p className="mt-1 text-sm text-destructive">{error}</p> : finding ? <><p className="mt-1 text-sm">{finding.message}</p><p className="mt-1 text-xs text-muted-foreground">Next: {finding.next_action}</p></> : <p className="mt-1 text-sm text-emerald-600">No trust blockers in this window.</p>}
+              </div>
+            </div>}
+          </section>;
+        })}
+      </div>
+    )}
+  </Panel>;
+}
+
+type AcquisitionDimension = '$utm_source' | '$utm_medium' | '$utm_campaign' | '$utm_term' | '$utm_content';
+type AcquisitionResult = Record<AcquisitionDimension, TrendResponse>;
+
+function AcquisitionPanel({ metrics, env }: { metrics: Metric[]; env: string }) {
+  const { client, project } = useStore();
+  const eligible = useMemo(() => metrics.filter((metric) => metric.status === 'active' && metric.type === 'count'), [metrics]);
+  const preferred = eligible.find((metric) => metric.category === 'acquisition') ?? eligible[0];
+  const [metricKey, setMetricKey] = useState(preferred?.key ?? '');
+  const [period, setPeriod] = useState('30');
+  const [result, setResult] = useState<AcquisitionResult | null>(null);
+  const [details, setDetails] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selected = eligible.find((metric) => metric.key === metricKey) ?? preferred;
+  const run = async () => {
+    if (!selected) return;
+    setBusy(true); setError(null); setResult(null);
+    try {
+      const base = { metric: selected.key, date_from: `-${period}d`, interval: 'day' as const, env };
+      const dimensions: AcquisitionDimension[] = details
+        ? ['$utm_source', '$utm_medium', '$utm_campaign', '$utm_term', '$utm_content']
+        : ['$utm_source', '$utm_medium', '$utm_campaign'];
+      const responses = await Promise.all(dimensions.map((property) => client!.trend(project!, { ...base, breakdown: { property } })));
+      setResult(Object.fromEntries(dimensions.map((dimension, index) => [dimension, responses[index]])) as AcquisitionResult);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'could not query acquisition breakdowns');
+    } finally { setBusy(false); }
+  };
+  const event = selected ? String((selected.source as Record<string, unknown>).event ?? '') : '';
+  return <Panel title="Acquisition / UTM" right={<span className="text-xs text-muted-foreground">registered metric query · {env}</span>}>
+    <div className="flex flex-wrap items-end gap-2">
+      <div className="min-w-52 flex-1 space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Count metric</label><Select value={selected?.key ?? ''} onValueChange={(value) => { setMetricKey(value); setResult(null); }} disabled={eligible.length === 0}><SelectTrigger aria-label="Acquisition metric"><SelectValue placeholder="Choose an active count metric" /></SelectTrigger><SelectContent>{eligible.map((metric) => <SelectItem key={metric.key} value={metric.key}>{metric.name} · {metric.key}</SelectItem>)}</SelectContent></Select></div>
+      <div className="space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Period</label><Select value={period} onValueChange={(value) => { setPeriod(value); setResult(null); }}><SelectTrigger aria-label="Acquisition period" className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent></Select></div>
+      <Button onClick={run} disabled={!selected || busy}>{busy && <Loader2 className="size-4 animate-spin" />}Run UTM report</Button>
+    </div>
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+      <button className="underline underline-offset-2 hover:text-foreground" aria-expanded={details} onClick={() => { setDetails((value) => !value); setResult(null); }}>{details ? 'Hide term and content' : 'Include term and content'}</button>
+      {event && <Button variant="link" size="sm" asChild className="h-auto p-0"><Link to={`/data?tab=events&event=${encodeURIComponent(event)}`}>Open raw events</Link></Button>}
+    </div>
+    {eligible.length === 0 && <div className="mt-4"><EmptyState headline="No reportable count metric" lead="activate a count metric whose source event carries canonical UTM properties" /></div>}
+    {busy && <div className="mt-4" role="status" aria-live="polite">Loading canonical UTM breakdowns…</div>}
+    {error && <div className="mt-4"><ErrorNote>{error}. Check that the metric uses native events and that landing ingest is not blocked by CORS.</ErrorNote></div>}
+    {result && <AcquisitionResults result={result} />}
+  </Panel>;
+}
+
+function AcquisitionResults({ result }: { result: AcquisitionResult }) {
+  const dimensions = Object.entries(result) as Array<[AcquisitionDimension, TrendResponse]>;
+  const hasValues = dimensions.some(([, response]) => response.series.length > 0);
+  if (!hasValues) return <div className="mt-4"><EmptyState headline="No attributed events in this window" lead="check raw events, metric source, and landing CORS; zero is preserved, not estimated" /></div>;
+  return <div className="mt-4 grid gap-3 lg:grid-cols-3" aria-live="polite">
+    {dimensions.map(([dimension, response]) => {
+      const rows = aggregateBreakdown(response);
+      const total = rows.reduce((sum, row) => sum + row.value, 0);
+      return <div key={dimension} className="min-w-0 rounded-md border">
+        <div className="border-b px-3 py-2"><code className="text-xs">{dimension}</code></div>
+        <div className="divide-y">{rows.length === 0 ? <div className="p-3 text-xs text-muted-foreground">No values</div> : rows.slice(0, 6).map((row) => <div key={row.label} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 px-3 py-2 text-sm"><span className="truncate" title={row.label}>{row.label}</span><span className="tabular-nums">{fmtNum(row.value)}</span><span className="w-10 text-right text-xs text-muted-foreground">{pct(total ? row.value / total : 0)}</span></div>)}</div>
+      </div>;
+    })}
+  </div>;
+}
+
+function aggregateBreakdown(response: TrendResponse) {
+  const values = new Map<string, number>();
+  response.series.forEach((point) => {
+    const raw = point.breakdown_value ?? '(none)';
+    const label = raw === '(none)' ? 'Direct / unknown' : raw === '$other' ? 'Other' : raw;
+    values.set(label, (values.get(label) ?? 0) + point.value);
+  });
+  return [...values.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
 }
 
 function ContractsPanel({ contracts }: { contracts: MeasurementContract[] }) {
