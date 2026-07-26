@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
@@ -135,7 +135,7 @@ function AuthCard({
     <Card className="gap-0 overflow-hidden border-border/80 bg-card/95 py-0 shadow-2xl shadow-black/20 backdrop-blur">
       <div className="h-1 bg-gradient-to-r from-sky-400 via-indigo-400 to-violet-400" />
       <CardHeader className="px-6 pb-5 pt-6">
-        <CardTitle className="serif text-3xl font-normal leading-tight">{title}</CardTitle>
+        <h1 className="serif text-3xl font-normal leading-tight">{title}</h1>
         <CardDescription className="leading-6">{description}</CardDescription>
       </CardHeader>
       <CardContent className="px-6 pb-6">{children}</CardContent>
@@ -146,7 +146,7 @@ function AuthCard({
 function FormMessage({ error, message }: { error: string; message: string }) {
   if (!error && !message) return null;
   return (
-    <p role="status" className={error ? 'text-sm text-destructive' : 'text-sm text-emerald-400'}>
+    <p role={error ? 'alert' : 'status'} className={error ? 'text-sm text-destructive' : 'text-sm text-emerald-400'}>
       {error || message}
     </p>
   );
@@ -309,7 +309,7 @@ function ResetPassword() {
     <AuthCard title="Choose a new password" description="Reset links expire after one hour and can be used once.">
       {invalid ? (
         <div className="grid gap-4">
-          <p className="text-sm text-destructive">This reset link is invalid or expired.</p>
+          <p role="alert" className="text-sm text-destructive">This reset link is invalid or expired.</p>
           <Link className="text-sm text-muted-foreground hover:text-foreground" to="/forgot">Request a new link</Link>
         </div>
       ) : (
@@ -392,7 +392,7 @@ function AccountProfile() {
     );
   }
   if (!user) {
-    return <AuthCard title="Account" description="Loading your identity…"><div className="h-9 animate-pulse rounded-md bg-muted" /></AuthCard>;
+    return <AuthCard title="Account" description="Loading your identity…"><div role="status" aria-label="Loading account" className="h-9 animate-pulse rounded-md bg-muted" /></AuthCard>;
   }
   return (
     <AuthCard title="Your account" description={`${user.email} · verified identity`}>
@@ -449,6 +449,15 @@ function AccountProfile() {
 
 export function AuthPortal() {
   const { pathname } = useLocation();
+  const pageTitle = pathname === '/signup' ? 'Create account'
+    : pathname === '/forgot' ? 'Forgot password'
+      : pathname === '/reset' ? 'Reset password'
+        : pathname === '/consent' ? 'Authorize access'
+          : pathname === '/profile' ? 'Account'
+            : 'Sign in';
+  useEffect(() => {
+    document.title = `${pageTitle} — Poolstatis`;
+  }, [pageTitle]);
   let content: ReactNode;
   if (pathname === '/signup') content = <Signup />;
   else if (pathname === '/forgot') content = <ForgotPassword />;

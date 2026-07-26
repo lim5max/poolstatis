@@ -94,7 +94,7 @@ export function Onboarding() {
         <div className="mt-5 space-y-2">
           <Label className="text-xs font-medium text-muted-foreground">MCP client template</Label>
           <Select value={clientId} onValueChange={(value) => setClientId(value as McpClientId)}>
-            <SelectTrigger className="w-full md:w-80">
+            <SelectTrigger aria-label="MCP client template" className="w-full md:w-80">
               <SelectValue placeholder="Choose MCP client" />
             </SelectTrigger>
             <SelectContent>

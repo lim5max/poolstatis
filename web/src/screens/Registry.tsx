@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, ChevronRight, ChevronDown } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import {
@@ -20,14 +20,23 @@ import type { Funnel, Metric, MetricStatus } from '../api/types';
 
 export function Registry() {
   const { client, project, env } = useStore();
+  const [params, setParams] = useSearchParams();
   const { data, error, loading, reload } = useAsync(() => client!.schema(project!, env), [project, env]);
+  const requestedTab = params.get('tab');
+  const tab = requestedTab === 'funnels' || requestedTab === 'entities' ? requestedTab : 'metrics';
+  const changeTab = (value: string) => {
+    const next = new URLSearchParams(params);
+    if (value === 'metrics') next.delete('tab');
+    else next.set('tab', value);
+    setParams(next, { replace: true });
+  };
 
   if (loading) return <Loading what="reading registry…" />;
   if (error) return <ErrorNote>{error}</ErrorNote>;
   if (!data) return null;
 
   return (
-    <Tabs defaultValue="metrics" className="gap-4">
+    <Tabs value={tab} onValueChange={changeTab} className="gap-4">
       <div className="max-w-full overflow-x-auto pb-1">
         <TabsList className="w-max">
           <TabsTrigger value="metrics">Metrics · {data.metrics.length}</TabsTrigger>
@@ -104,20 +113,20 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
   const del = async (key: string) => { setBusy(key); try { await client!.deleteMetric(project!, key); onChanged(); } finally { setBusy(null); } };
   const saveTags = async (key: string, tags: string[]) => { setBusy(key); try { await client!.setMetricTags(project!, key, tags); onChanged(); } finally { setBusy(null); } };
   const clickSort = (k: SortKey) => setSort((s) => ({ key: k, dir: s.key === k && s.dir === 'asc' ? 'desc' : 'asc' }));
-  const caret = (k: SortKey) => <span className={cn('ml-1 text-xs', sort.key === k ? 'text-primary' : 'text-muted-foreground/40')}>{sort.key === k && sort.dir === 'desc' ? '▾' : '▴'}</span>;
+  const caret = (k: SortKey) => <span aria-hidden className={cn('ml-1 text-xs', sort.key === k ? 'text-primary' : 'text-muted-foreground/40')}>{sort.key === k && sort.dir === 'desc' ? '▾' : '▴'}</span>;
 
   return (
     <Card className="gap-0 py-0 overflow-hidden">
       <div className="flex items-center px-5 py-3.5 border-b">
-        <h3 className="serif text-lg flex items-center gap-2">Metrics {proposedCount > 0 && <Badge variant="outline" className="font-sans">{proposedCount} awaiting activation</Badge>}</h3>
+        <h2 className="serif text-lg flex items-center gap-2">Metrics {proposedCount > 0 && <Badge variant="outline" className="font-sans">{proposedCount} awaiting activation</Badge>}</h2>
       </div>
       <Toolbar
-        left={<SearchInput value={search} onChange={setSearch} placeholder="Search name, key, purpose…" />}
+        left={<SearchInput value={search} onChange={setSearch} label="Search metrics" placeholder="Search name, key, purpose…" />}
         center={<>
           <CategoryFilter selected={cats} onToggle={(c) => toggle(cats, setCats, c)} />
           <div className="flex h-9 rounded-md border overflow-hidden text-sm">
             {STATUS_OPTS.map((s) => (
-              <button key={s} onClick={() => toggle(statuses, setStatuses, s)}
+              <button key={s} type="button" aria-pressed={statuses.has(s)} onClick={() => toggle(statuses, setStatuses, s)}
                 className={cn('px-3 capitalize border-r last:border-r-0 transition-colors',
                   statuses.has(s) ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>
                 {s}
@@ -134,11 +143,19 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('name')}>Metric{caret('name')}</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('category')}>Category{caret('category')}</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('type')}>Type{caret('type')}</TableHead>
+                <TableHead aria-sort={sort.key === 'name' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                  <button type="button" className="inline-flex min-h-6 items-center text-left" onClick={() => clickSort('name')}>Metric{caret('name')}</button>
+                </TableHead>
+                <TableHead aria-sort={sort.key === 'category' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                  <button type="button" className="inline-flex min-h-6 items-center text-left" onClick={() => clickSort('category')}>Category{caret('category')}</button>
+                </TableHead>
+                <TableHead aria-sort={sort.key === 'type' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                  <button type="button" className="inline-flex min-h-6 items-center text-left" onClick={() => clickSort('type')}>Type{caret('type')}</button>
+                </TableHead>
                 <TableHead>Source</TableHead><TableHead>Purpose</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('status')}>Status{caret('status')}</TableHead>
+                <TableHead aria-sort={sort.key === 'status' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                  <button type="button" className="inline-flex min-h-6 items-center text-left" onClick={() => clickSort('status')}>Status{caret('status')}</button>
+                </TableHead>
                 <TableHead className="w-12" />
               </TableRow>
             </TableHeader>
@@ -193,8 +210,9 @@ function DeprecateDialog({ metric, onCancel, onConfirm }: { metric: Metric; onCa
           <DialogDescription>New events stop counting toward this metric; existing data and the definition are kept.</DialogDescription>
         </DialogHeader>
         <div className="space-y-1.5">
-          <label className="text-xs text-muted-foreground">Reason</label>
+          <label htmlFor="metric-deprecation-reason" className="text-xs text-muted-foreground">Reason</label>
           <textarea
+            id="metric-deprecation-reason"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="Replaced by a more precise activation metric."
@@ -241,10 +259,10 @@ function TagEditor({ metric, suggestions, onCancel, onSave }: { metric: Metric; 
         <DialogHeader><DialogTitle className="serif font-normal text-xl">Tags · {metric.name}</DialogTitle>
           <DialogDescription>Free-form labels (e.g. a feature like <code>checkout</code>, or <code>north-star</code>). Comma-separated; lowercased.</DialogDescription>
         </DialogHeader>
-        <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="checkout, product, north-star" autoFocus />
+        <Input aria-label="Metric tags" value={text} onChange={(e) => setText(e.target.value)} placeholder="checkout, product, north-star" autoFocus />
         {suggestions.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {suggestions.slice(0, 12).map((t) => <button key={t} className="text-xs rounded-full border px-2 py-0.5 text-muted-foreground hover:text-foreground hover:border-foreground/30" onClick={() => add(t)}>#{t}</button>)}
+            {suggestions.slice(0, 12).map((t) => <button type="button" key={t} className="min-h-6 rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:border-foreground/30 hover:text-foreground" onClick={() => add(t)}>#{t}</button>)}
           </div>
         )}
         <DialogFooter>
@@ -267,7 +285,7 @@ function Section({ group, busy, onActivate, onDeprecate, onDelete, onEditTags, o
       {group.label && (
         <TableRow className="bg-muted/40 hover:bg-muted/40">
           <TableCell colSpan={7} className="py-2">
-            <button className="flex items-center gap-2 text-xs font-medium text-muted-foreground capitalize" onClick={() => setOpen((o) => !o)}>
+            <button type="button" aria-expanded={open} className="flex min-h-6 items-center gap-2 text-xs font-medium text-muted-foreground capitalize" onClick={() => setOpen((o) => !o)}>
               {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}{group.label}<Badge variant="secondary">{group.rows.length}</Badge>
             </button>
           </TableCell>
@@ -277,7 +295,7 @@ function Section({ group, busy, onActivate, onDeprecate, onDelete, onEditTags, o
         <TableRow key={m.id} className="group">
           <TableCell>
             {metricEvent(m)
-              ? <button className="font-medium text-left hover:text-primary hover:underline underline-offset-2" title="See this metric's events" onClick={() => onOpenEvents(metricEvent(m)!)}>{m.name}</button>
+              ? <button className="min-h-6 rounded-sm text-left font-medium underline-offset-2 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="See this metric's events" onClick={() => onOpenEvents(metricEvent(m)!)}>{m.name}</button>
               : <div className="font-medium">{m.name}</div>}
             <div className="text-xs text-muted-foreground">{m.key}</div>
             {(m.tags ?? []).length > 0 && (
@@ -302,7 +320,7 @@ function Section({ group, busy, onActivate, onDeprecate, onDelete, onEditTags, o
             {busy === m.key ? <Loader2 className="size-4 animate-spin inline" /> : (
               <div className="inline-flex items-center gap-1.5">
                 {m.status !== 'active' && <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onActivate(m.key)}>activate</Button>}
-                <Overflow items={[
+                <Overflow label={`${m.name} actions`} items={[
                   { label: 'Edit tags', onClick: () => onEditTags(m) },
                   ...(m.status !== 'deprecated' ? [{ label: 'Deprecate', onClick: () => onDeprecate(m) }] : []),
                   ...(m.status === 'deprecated' ? [{ label: 'Delete metric', onClick: () => onDelete(m), danger: true }] : []),
@@ -354,7 +372,17 @@ function FunnelRow({ funnel }: { funnel: Funnel }) {
   return (
     <>
       <TableRow>
-        <TableCell><button onClick={() => setOpen((o) => !o)} className="text-muted-foreground">{open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</button></TableCell>
+        <TableCell>
+          <button
+            type="button"
+            aria-label={`${open ? 'Collapse' : 'Expand'} ${funnel.name}`}
+            aria-expanded={open}
+            onClick={() => setOpen((o) => !o)}
+            className="inline-flex size-7 items-center justify-center rounded-sm text-muted-foreground"
+          >
+            {open ? <ChevronDown aria-hidden className="size-3.5" /> : <ChevronRight aria-hidden className="size-3.5" />}
+          </button>
+        </TableCell>
         <TableCell><div className="font-medium">{funnel.name}</div><div className="text-xs text-muted-foreground">{funnel.key}</div></TableCell>
         <TableCell><div className="text-xs text-muted-foreground italic max-w-sm">{funnel.goal}</div></TableCell>
         <TableCell><NumberedStepChips steps={funnel.steps} /></TableCell>

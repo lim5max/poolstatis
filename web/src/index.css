@@ -141,3 +141,14 @@
   .serif { font-family: var(--font-serif); }
   .mono { font-family: var(--font-mono); font-feature-settings: "tnum"; }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

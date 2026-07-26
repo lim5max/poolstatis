@@ -3,6 +3,8 @@ import { PoolstatisClient } from './api/client';
 import type { AccountMe, KeyKind, ProjectWithStats } from './api/types';
 
 const LS_KEY = 'poolstatis.conn';
+const PROJECT_KEY = 'poolstatis.project';
+const ENV_KEY = 'poolstatis.env';
 
 interface Conn {
   baseUrl: string;
@@ -34,13 +36,18 @@ interface Store {
   disconnect: () => void;
 }
 
-const ENV_KEY = 'poolstatis.env';
-
 function kindOf(token: string): KeyKind | null {
   if (token.startsWith('pk_')) return 'ingest';
   if (token.startsWith('sk_')) return 'secret';
   if (token.startsWith('pt_')) return 'personal';
   return null;
+}
+
+function availableProject(projects: ProjectWithStats[], preferred?: string | null): string | null {
+  const candidate = preferred ?? localStorage.getItem(PROJECT_KEY);
+  return projects.some((project) => project.slug === candidate)
+    ? candidate
+    : projects[0]?.slug ?? null;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -72,6 +79,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setEnvState(e);
   }, []);
 
+  const setProject = useCallback((slug: string) => {
+    localStorage.setItem(PROJECT_KEY, slug);
+    setProjectState(slug);
+  }, []);
+
   const client = useMemo(
     () => (hostedToken ? new PoolstatisClient(baseUrl, hostedToken) : token ? new PoolstatisClient(baseUrl, token) : null),
     [baseUrl, hostedToken, token],
@@ -88,7 +100,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setProjectScope(scope);
     setAccount(null);
     setProjects(list);
-    setProjectState(list[0]?.slug ?? null);
+    const selected = availableProject(list);
+    if (selected) localStorage.setItem(PROJECT_KEY, selected);
+    setProjectState(selected);
   }, []);
 
   const connectHosted = useCallback(async (c: HostedConn) => {
@@ -104,7 +118,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setProjectScope(projectResponse.scope);
     setAccount(profile);
     setProjects(projectResponse.projects);
-    setProjectState(projectResponse.projects[0]?.slug ?? null);
+    const selected = availableProject(projectResponse.projects);
+    if (selected) localStorage.setItem(PROJECT_KEY, selected);
+    setProjectState(selected);
   }, []);
 
   const disconnect = useCallback(() => {
@@ -123,7 +139,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const { projects: list, scope } = await client.listProjects();
     setProjects(list);
     setProjectScope(scope);
-    setProjectState((p) => p ?? list[0]?.slug ?? null);
+    setProjectState((current) => {
+      const selected = availableProject(list, current);
+      if (selected) localStorage.setItem(PROJECT_KEY, selected);
+      return selected;
+    });
   }, [client]);
 
   const refreshAccount = useCallback(async () => {
@@ -140,11 +160,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .then((keys) => {
         if (!alive) return;
         const envs = [...new Set(keys.filter((k) => !k.revoked_at).map((k) => k.env))];
-        setAvailableEnvs(envs.length ? envs.sort() : ['prod']);
+        const nextEnvs = envs.length ? envs.sort() : ['prod'];
+        setAvailableEnvs(nextEnvs);
+        if (!nextEnvs.includes(env)) setEnv(nextEnvs.includes('prod') ? 'prod' : nextEnvs[0]!);
       })
-      .catch(() => alive && setAvailableEnvs(['prod']));
+      .catch(() => {
+        if (!alive) return;
+        setAvailableEnvs(['prod']);
+        if (env !== 'prod') setEnv('prod');
+      });
     return () => { alive = false; };
-  }, [client, project]);
+  }, [client, env, project, setEnv]);
 
   // Re-hydrate a persisted key session. Hosted sessions are never persisted and
   // connectHosted already establishes the allowed project scope for that role.
@@ -154,7 +180,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .then(({ projects: list, scope }) => {
           setProjects(list);
           setProjectScope(scope);
-          setProjectState((p) => p ?? list[0]?.slug ?? null);
+          setProjectState((current) => {
+            const selected = availableProject(list, current);
+            if (selected) localStorage.setItem(PROJECT_KEY, selected);
+            return selected;
+          });
         })
         .catch(() => disconnect());
     }
@@ -163,7 +193,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value: Store = {
     client, baseUrl, token, tokenKind: explicitKind, projectScope, account, projects, project, env, availableEnvs,
     setEnv,
-    setProject: setProjectState,
+    setProject,
     refreshProjects, refreshAccount,
     connect, connectHosted, disconnect,
   };

@@ -48,7 +48,7 @@ export function Person() {
           <div>
             <Link to="/data" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-0.5"><ArrowLeft className="size-3" /> Data</Link>
             <div className="serif text-2xl">{String(props.name ?? distinctId)}</div>
-            <button className="text-xs text-muted-foreground font-mono flex items-center gap-1 hover:text-primary" onClick={() => navigator.clipboard?.writeText(distinctId)}>{distinctId} <Copy className="size-3" /></button>
+            <button type="button" aria-label={`Copy actor ID ${distinctId}`} className="text-xs text-muted-foreground font-mono flex min-h-6 items-center gap-1 hover:text-primary" onClick={() => navigator.clipboard?.writeText(distinctId)}>{distinctId} <Copy aria-hidden className="size-3" /></button>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -88,7 +88,7 @@ export function Person() {
                 {summary.top_events.map((e) => (
                   <div key={e.event} className="flex items-center gap-3">
                     <span className="w-44 truncate font-mono text-xs">{e.event}</span>
-                    <div className="flex-1"><Meter value={summary.total_events ? e.count / summary.top_events[0]!.count : 0} /></div>
+                    <div className="flex-1"><Meter value={summary.total_events ? e.count / summary.top_events[0]!.count : 0} label={`${e.event} relative frequency`} /></div>
                     <span className="w-10 text-right tabular-nums text-xs">{e.count}</span>
                   </div>
                 ))}
@@ -101,7 +101,7 @@ export function Person() {
               <div className="divide-y">
                 {events.map((e, i) => (
                   <div key={i}>
-                    <button className="w-full flex items-center justify-between gap-3 py-2.5 text-left hover:bg-accent/40 px-1 rounded" onClick={() => setSelected(selected === e ? null : e)}>
+                    <button type="button" aria-expanded={selected === e} className="w-full flex items-center justify-between gap-3 py-2.5 text-left hover:bg-accent/40 px-1 rounded" onClick={() => setSelected(selected === e ? null : e)}>
                       <span className="font-medium text-sm">{e.event}</span>
                       <span className="flex items-center gap-3">
                         <span className="text-xs text-muted-foreground">{new Date(e.timestamp).toLocaleString()}</span>

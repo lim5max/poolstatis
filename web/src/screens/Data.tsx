@@ -19,7 +19,7 @@ function EnvSelect() {
   if (availableEnvs.length <= 1) return null;
   return (
     <Select value={env} onValueChange={setEnv}>
-      <SelectTrigger size="sm" className="w-28"><span className="text-muted-foreground text-xs mr-1">env</span><SelectValue /></SelectTrigger>
+      <SelectTrigger aria-label="Environment" size="sm" className="w-28"><span className="text-muted-foreground text-xs mr-1">env</span><SelectValue /></SelectTrigger>
       <SelectContent>{availableEnvs.map((e) => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
     </Select>
   );
@@ -27,9 +27,16 @@ function EnvSelect() {
 
 export function Data() {
   const { client, project, env } = useStore();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   // Deep links: ?tab=events&event=<name> (from a metric) or &distinct_id=<id> (from a person).
-  const [tab, setTab] = useState(params.get('tab') ?? 'health');
+  const requestedTab = params.get('tab');
+  const tab = requestedTab === 'events' || requestedTab === 'entities' || requestedTab === 'warnings' ? requestedTab : 'health';
+  const changeTab = (value: string) => {
+    const next = new URLSearchParams(params);
+    if (value === 'health') next.delete('tab');
+    else next.set('tab', value);
+    setParams(next, { replace: true });
+  };
   const eventParam = params.get('event') ?? undefined;
   const actorParam = params.get('distinct_id') ?? undefined;
   const schema = useAsync(() => client!.schema(project!, env), [project, env]);
@@ -38,7 +45,7 @@ export function Data() {
   if (!schema.data) return null;
 
   return (
-    <Tabs value={tab} onValueChange={setTab} className="gap-4">
+    <Tabs value={tab} onValueChange={changeTab} className="gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="max-w-full overflow-x-auto pb-1">
           <TabsList className="w-max">
@@ -86,7 +93,7 @@ function Health({ observed }: { observed: ObservedEvent[] }) {
                 {events.map((e) => (
                   <TableRow key={e.event}>
                     <TableCell className={cn('font-medium', e.registered_share < 0.999 && 'text-destructive')}>{e.event}</TableCell>
-                    <TableCell><div className="flex items-center gap-2.5"><div className="flex-1"><Meter value={e.registered_share} /></div><span className="text-xs tabular-nums w-9 text-right">{fmtPct(e.registered_share)}</span></div></TableCell>
+                    <TableCell><div className="flex items-center gap-2.5"><div className="flex-1"><Meter value={e.registered_share} label={`${e.event} registered share`} /></div><span className="text-xs tabular-nums w-9 text-right">{fmtPct(e.registered_share)}</span></div></TableCell>
                     <TableCell className="text-right tabular-nums">{fmtNum(e.count)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{new Date(e.last_seen).toLocaleString()}</TableCell>
                   </TableRow>
@@ -173,18 +180,18 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
   return (
     <Panel title="Event stream">
       <Toolbar
-        left={<SearchInput value={search} onChange={setSearch} placeholder="Search loaded events…" />}
+        left={<SearchInput value={search} onChange={setSearch} label="Search loaded events" placeholder="Search loaded events…" />}
         center={
           <>
             <Select value={eventFilter || '__all'} onValueChange={(v) => setEventFilter(v === '__all' ? '' : v)}>
-              <SelectTrigger size="sm" className="w-44"><SelectValue placeholder="All events" /></SelectTrigger>
+              <SelectTrigger aria-label="Event filter" size="sm" className="w-44"><SelectValue placeholder="All events" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all">All events</SelectItem>
                 {observed.map((o) => <SelectItem key={o.event} value={o.event}>{o.event}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={range || '__all'} onValueChange={(v) => setRange(v === '__all' ? '' : v)}>
-              <SelectTrigger size="sm" className="w-32"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Date range" size="sm" className="w-32"><SelectValue /></SelectTrigger>
               <SelectContent>{DATE_PRESETS.map((d) => <SelectItem key={d.v || '__all'} value={d.v || '__all'}>{d.label}</SelectItem>)}</SelectContent>
             </Select>
             <Button variant="outline" size="sm" onClick={() => setAdding((a) => !a)}><Plus className="size-3.5" /> Property</Button>
@@ -193,7 +200,7 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
         right={
           <div className="flex h-9 rounded-md border overflow-hidden text-sm">
             {(['all', 'reg', 'wild'] as const).map((v) => (
-              <button key={v} onClick={() => setRegistered(v)}
+              <button key={v} type="button" aria-pressed={registered === v} onClick={() => setRegistered(v)}
                 className={cn('px-3 border-r last:border-r-0', registered === v ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>
                 {v === 'all' ? 'all' : v === 'reg' ? 'registered' : 'off-standard'}
               </button>
@@ -210,7 +217,7 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
           {actorFilter && <Chip label={`actor: ${actorFilter}`} onRemove={() => setActorFilter(undefined)} />}
           {range && <Chip label={DATE_PRESETS.find((d) => d.v === range)?.label ?? range} onRemove={() => setRange('')} />}
           {props.map((p, i) => <Chip key={i} label={`${p.property} ${OP_LABEL[p.op]}${p.value !== undefined ? ` ${p.value}` : ''}`} onRemove={() => setProps((arr) => arr.filter((_, j) => j !== i))} />)}
-          <button className="text-xs text-primary hover:underline" onClick={() => { setEventFilter(''); setActorFilter(undefined); setRange(''); setProps([]); }}>clear all</button>
+          <button type="button" className="min-h-6 text-xs text-primary hover:underline" onClick={() => { setEventFilter(''); setActorFilter(undefined); setRange(''); setProps([]); }}>clear all</button>
         </div>
       )}
 
@@ -241,7 +248,10 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
 function Chip({ label, onRemove }: { label: string; onRemove: () => void }) {
   return (
     <Badge variant="secondary" className="gap-1 pr-1 font-mono font-normal">
-      {label}<button onClick={onRemove} className="hover:text-foreground"><X className="size-3" /></button>
+      {label}
+      <button type="button" aria-label={`Remove ${label} filter`} onClick={onRemove} className="inline-flex size-6 items-center justify-center rounded-sm hover:text-foreground">
+        <X aria-hidden className="size-3" />
+      </button>
     </Badge>
   );
 }
@@ -259,12 +269,12 @@ function PropertyEditor({ onAdd, onCancel }: { onAdd: (f: SampleFilter) => void;
   return (
     <div className="flex items-end gap-2 px-5 py-3 border-b">
       <span className="text-xs text-muted-foreground mb-2">Where</span>
-      <Input className="w-40 h-9" placeholder="property" value={property} onChange={(e) => setProperty(e.target.value)} autoFocus />
+      <Input aria-label="Property name" className="w-40 h-9" placeholder="property" value={property} onChange={(e) => setProperty(e.target.value)} autoFocus />
       <Select value={op} onValueChange={(v) => setOp(v as FilterOp)}>
-        <SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label="Property operator" size="sm" className="w-28"><SelectValue /></SelectTrigger>
         <SelectContent>{OPS.map((o) => <SelectItem key={o} value={o}>{OP_LABEL[o]}</SelectItem>)}</SelectContent>
       </Select>
-      {needsValue && <Input className="w-40 h-9" placeholder="value" value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} />}
+      {needsValue && <Input aria-label="Property value" className="w-40 h-9" placeholder="value" value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} />}
       <Button size="sm" onClick={add} disabled={!property.trim()}>Add</Button>
       <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
     </div>
@@ -319,7 +329,7 @@ function Entities({ types }: { types: string[] }) {
   return (
     <Panel title="Entities">
       <Toolbar
-        left={<Select value={type} onValueChange={setType}><SelectTrigger size="sm" className="w-44"><SelectValue /></SelectTrigger><SelectContent>{types.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent></Select>}
+        left={<Select value={type} onValueChange={setType}><SelectTrigger aria-label="Entity type" size="sm" className="w-44"><SelectValue /></SelectTrigger><SelectContent>{types.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent></Select>}
         right={identity ? <span className="text-xs text-muted-foreground">click an id to open the person</span> : null}
       />
       {loading && <Loading />}

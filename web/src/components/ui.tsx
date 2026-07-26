@@ -3,7 +3,7 @@ import {
   Search, ChevronDown, MoreHorizontal, Copy, Eye, EyeOff, Download, Check, Loader2, X,
 } from '@/components/icons';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -85,7 +85,7 @@ export function Panel({ title, right, children }: { title?: ReactNode; right?: R
       {(title || right) && (
         <CardHeader className="flex flex-row items-center justify-between border-b py-3.5 px-5 [.border-b]:pb-3.5">
           {/* Heading is serif; any inline subtitle inside should pass font-sans. */}
-          {title ? <CardTitle className="serif text-lg font-normal">{title}</CardTitle> : <span />}
+          {title ? <h2 className="serif text-lg font-normal">{title}</h2> : <span />}
           {right}
         </CardHeader>
       )}
@@ -122,15 +122,19 @@ export function EmptyState({ headline, lead, action }: { headline: string; lead?
 }
 
 export function Loading({ what }: { what?: string }) {
-  return <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> {what ?? 'reading instrument…'}</div>;
+  return (
+    <div role="status" aria-live="polite" className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
+      <Loader2 aria-hidden className="size-4 animate-spin" /> {what ?? 'reading instrument…'}
+    </div>
+  );
 }
 
 export function ErrorNote({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">⚠ {children}</div>;
+  return <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">⚠ {children}</div>;
 }
 
 export function WarningNote({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">⚠ {children}</div>;
+  return <div role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">⚠ {children}</div>;
 }
 
 /** Keeps wide administrative tables usable inside Panels, including on mobile. */
@@ -138,11 +142,22 @@ export function TableScroll({ children, testId }: { children: ReactNode; testId?
   return <div className="overflow-x-auto" data-testid={testId}>{children}</div>;
 }
 
-export function Meter({ value }: { value: number }) {
+export function Meter({ value, label = 'Progress' }: { value: number; label?: string }) {
   const safe = Number.isFinite(value) ? value : 0; // never render width: NaN%
   const pct = Math.max(0, Math.min(1, safe)) * 100;
   const color = safe >= 0.99 ? 'bg-emerald-500' : safe >= 0.6 ? 'bg-amber-500' : 'bg-destructive';
-  return <div className="h-1.5 rounded-full bg-muted overflow-hidden"><div className={cn('h-full rounded-full', color)} style={{ width: `${pct}%` }} /></div>;
+  return (
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(pct)}
+      className="h-1.5 overflow-hidden rounded-full bg-muted"
+    >
+      <div className={cn('h-full rounded-full', color)} style={{ width: `${pct}%` }} />
+    </div>
+  );
 }
 
 // ===== toolbar / search / filters =====
@@ -157,11 +172,11 @@ export function Toolbar({ left, center, right }: { left?: ReactNode; center?: Re
   );
 }
 
-export function SearchInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+export function SearchInput({ value, onChange, placeholder, label = 'Search' }: { value: string; onChange: (v: string) => void; placeholder?: string; label?: string }) {
   return (
     <div className="relative min-w-0 w-full sm:min-w-56 sm:w-auto">
-      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
-      <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder ?? 'Search…'} className="pl-8 h-9" />
+      <Search aria-hidden className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+      <Input aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder ?? 'Search…'} className="pl-8 h-9" />
     </div>
   );
 }
@@ -175,10 +190,17 @@ export function FilterChips({ chips, onRemove, onClear }: { chips: Chip[]; onRem
       {chips.map((c) => (
         <Badge key={c.key} variant="secondary" className="gap-1 pr-1 font-normal">
           {c.label}
-          <button onClick={() => onRemove(c.key)} className="hover:text-foreground"><X className="size-3" /></button>
+          <button
+            type="button"
+            aria-label={`Remove ${c.label} filter`}
+            onClick={() => onRemove(c.key)}
+            className="inline-flex size-6 items-center justify-center rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <X aria-hidden className="size-3" />
+          </button>
         </Badge>
       ))}
-      <button className="text-xs text-primary hover:underline" onClick={onClear}>clear all</button>
+      <button type="button" className="min-h-6 text-xs text-primary hover:underline" onClick={onClear}>clear all</button>
     </div>
   );
 }
@@ -216,12 +238,12 @@ export function GroupBy({ value, onChange }: { value: string; onChange: (v: stri
   );
 }
 
-export function Overflow({ items }: { items: Array<{ label: string; onClick: () => void; danger?: boolean }> }) {
+export function Overflow({ items, label = 'More actions' }: { items: Array<{ label: string; onClick: () => void; danger?: boolean }>; label?: string }) {
   if (items.length === 0) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-7"><MoreHorizontal className="size-4" /></Button>
+        <Button variant="ghost" size="icon" className="size-7" aria-label={label}><MoreHorizontal aria-hidden className="size-4" /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {items.map((it, i) => (
@@ -282,7 +304,14 @@ export function DangerConfirm({ title, blastRadius, willDelete, willKeep, matchV
         <p className="text-destructive text-xs">This cannot be undone.</p>
         <div className="space-y-1.5">
           <label className="text-xs text-muted-foreground flex items-center gap-2">{matchLabel}
-            <code className="cursor-pointer rounded bg-muted px-1.5 py-0.5 text-primary" onClick={() => navigator.clipboard?.writeText(matchValue)}>{matchValue}</code>
+            <button
+              type="button"
+              aria-label={`Copy ${matchValue}`}
+              className="inline-flex min-h-6 items-center rounded bg-muted px-1.5 py-0.5 text-primary"
+              onClick={() => navigator.clipboard?.writeText(matchValue)}
+            >
+              <code>{matchValue}</code>
+            </button>
           </label>
           <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={matchValue} autoFocus />
         </div>
@@ -313,9 +342,9 @@ export function SecretReveal({ token, kind, onDone }: { token: string; kind: str
         </DialogHeader>
         <div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2">
           <code className="flex-1 break-all text-xs">{shown ? token : masked}</code>
-          <Button variant="outline" size="icon" className="size-8" onClick={() => setShown((s) => !s)}>{shown ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</Button>
-          <Button variant="outline" size="icon" className="size-8" onClick={copy}>{copied ? <Check className="size-4" /> : <Copy className="size-4" />}</Button>
-          <Button variant="outline" size="icon" className="size-8" onClick={download}><Download className="size-4" /></Button>
+          <Button variant="outline" size="icon" className="size-8" aria-label={shown ? 'Hide key' : 'Show key'} onClick={() => setShown((s) => !s)}>{shown ? <EyeOff aria-hidden className="size-4" /> : <Eye aria-hidden className="size-4" />}</Button>
+          <Button variant="outline" size="icon" className="size-8" aria-label={copied ? 'Key copied' : 'Copy key'} onClick={copy}>{copied ? <Check aria-hidden className="size-4" /> : <Copy aria-hidden className="size-4" />}</Button>
+          <Button variant="outline" size="icon" className="size-8" aria-label="Download key" onClick={download}><Download aria-hidden className="size-4" /></Button>
         </div>
         <DialogFooter><Button onClick={onDone}>Done</Button></DialogFooter>
       </DialogContent>

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { LayoutGrid, List, Database, GridView, KeyRound, Settings, SystemSettings, Target, PackageBox, Check, ChevronsUpDown, Menu, X, type PoolstatisIcon } from '@/components/icons';
 import { hostedAuthEnabled, useHostedAuth } from './oidc';
 import { useStore } from './store';
@@ -42,7 +42,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   ] },
   { label: 'System', items: [{ to: '/profile', Icon: Settings, label: 'Profile' }, { to: '/setup', Icon: Settings, label: 'Setup & MCP' }] },
 ];
-const TITLES: Record<string, string> = { '/': 'Projects', '/usage': 'Usage', '/profile': 'Profile', '/registry': 'Registry', '/measurement': 'Measurement', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/changes': 'Changes', '/decisions': 'Decisions', '/setup': 'Setup & MCP' };
+const TITLES: Record<string, string> = { '/': 'Projects', '/onboarding': 'Onboarding', '/usage': 'Usage', '/profile': 'Profile', '/registry': 'Registry', '/measurement': 'Measurement', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/changes': 'Changes', '/decisions': 'Decisions', '/setup': 'Setup & MCP' };
 const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' : TITLES[path] ?? 'Poolstatis');
 const isProjectScoped = (path: string) => path === '/' || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
 
@@ -67,6 +67,12 @@ function AdminApp() {
   return (
     <Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
       <div className="min-h-screen bg-background md:grid md:h-screen md:grid-cols-[232px_1fr]">
+        <a
+          href="#main-content"
+          className="fixed left-3 top-3 z-50 -translate-y-20 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-lg transition-transform focus:translate-y-0"
+        >
+          Skip to main content
+        </a>
         <MobileTopbar />
         <Sidebar />
         <MobileNavDrawer onNavigate={() => setMobileNavOpen(false)} />
@@ -205,9 +211,14 @@ function Main() {
   const { projects, project, setProject } = useStore();
   const title = titleFor(loc.pathname);
   const showProject = isProjectScoped(loc.pathname);
+  const reducedMotion = useReducedMotion();
+
+  useEffect(() => {
+    document.title = `${title} — Poolstatis`;
+  }, [title]);
 
   return (
-    <div className="min-h-0 md:h-screen md:overflow-y-auto">
+    <main id="main-content" tabIndex={-1} className="min-h-0 scroll-mt-28 outline-none md:h-screen md:overflow-y-auto">
       <div className="sticky top-14 z-10 flex min-h-14 items-center border-b bg-background/85 px-4 py-3 backdrop-blur-md md:top-0 md:px-8">
         <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">Poolstatis</span>
@@ -216,25 +227,36 @@ function Main() {
               <span className="text-muted-foreground/50">/</span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-7 max-w-full gap-1.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 max-w-full gap-1.5"
+                    aria-label={`Switch project. Current project: ${project}`}
+                  >
                     <span className="max-w-40 truncate md:max-w-none">{project}</span>
                     <ChevronsUpDown className="size-3 shrink-0" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
                   {projects.map((p) => (
-                    <DropdownMenuItem key={p.slug} onClick={() => setProject(p.slug)}>{p.slug}</DropdownMenuItem>
+                    <DropdownMenuItem key={p.slug} onClick={() => setProject(p.slug)}>
+                      {project === p.slug && <Check className="size-3.5" />}
+                      <span>{p.name}</span>
+                      <span className="ml-auto text-xs text-muted-foreground">{p.slug}</span>
+                    </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
             </>
           )}
           <span className="text-muted-foreground/50">/</span>
-          <span className="text-foreground">{title}</span>
+          <h1 className="text-sm font-medium text-foreground">{title}</h1>
         </div>
       </div>
       <motion.div className="max-w-6xl p-4 pb-20 md:p-8" key={loc.pathname}
-        initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
+        initial={reducedMotion ? false : { opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: reducedMotion ? 0 : 0.26, ease: 'easeOut' }}>
         <Routes>
           <Route path="/" element={<Projects />} />
           <Route path="/onboarding" element={<Onboarding />} />
@@ -253,12 +275,18 @@ function Main() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </motion.div>
-    </div>
+    </main>
   );
 }
 
 function Guarded({ children }: { children: ReactNode }) {
   const { project } = useStore();
-  if (!project) return <div className="flex flex-col items-center gap-2 py-14 text-center text-muted-foreground"><div className="serif text-xl text-foreground/70">No project selected</div><div>pick one on the Projects tab</div></div>;
+  if (!project) return (
+    <div className="flex flex-col items-center gap-3 py-14 text-center text-muted-foreground">
+      <div className="serif text-xl text-foreground/70">No project selected</div>
+      <div>Choose a project before opening this section.</div>
+      <Button asChild variant="outline"><NavLink to="/">Choose project</NavLink></Button>
+    </div>
+  );
   return <>{children}</>;
 }

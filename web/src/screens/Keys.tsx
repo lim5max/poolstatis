@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Loader2 } from '@/components/icons';
 import { useStore, useAsync } from '../store';
-import { Loading, ErrorNote, Panel, EmptyState, SecretReveal, Confirm, Overflow } from '../components/ui';
+import { Loading, ErrorNote, Panel, EmptyState, SecretReveal, Confirm, Overflow, TableScroll } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -27,7 +27,7 @@ export function Keys() {
       )}
       <Panel title={<>API keys <span className="font-sans text-muted-foreground text-sm font-normal ml-2">tokens are stored hashed — only the hash is kept</span></>}>
         {!data || data.length === 0 ? <EmptyState headline="No keys" lead="issue one above" /> : (
-          <Table>
+          <TableScroll><Table>
             <TableHeader><TableRow><TableHead>Kind</TableHead><TableHead>Token</TableHead><TableHead>Env</TableHead><TableHead>Label</TableHead><TableHead>Created</TableHead><TableHead>Status</TableHead><TableHead /></TableRow></TableHeader>
             <TableBody>
               {data.map((k) => (
@@ -38,11 +38,11 @@ export function Keys() {
                   <TableCell className="text-muted-foreground">{k.label ?? '—'}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{new Date(k.created_at).toLocaleDateString()}</TableCell>
                   <TableCell>{k.revoked_at ? <Badge variant="secondary" className="line-through opacity-70">revoked</Badge> : <Badge>active</Badge>}</TableCell>
-                  <TableCell className="text-right">{!k.revoked_at && <div className="opacity-0 group-hover:opacity-100 transition-opacity"><Overflow items={[{ label: 'Revoke key', onClick: () => setRevoking(k), danger: true }]} /></div>}</TableCell>
+                  <TableCell className="text-right">{!k.revoked_at && <div className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"><Overflow label={`${k.kind} key actions`} items={[{ label: 'Revoke key', onClick: () => setRevoking(k), danger: true }]} /></div>}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table></TableScroll>
         )}
       </Panel>
       {fresh && <SecretReveal token={fresh.token} kind={fresh.kind} onDone={() => setFresh(null)} />}
@@ -80,17 +80,17 @@ function IssueKey({ issue, onIssued }: {
       <div className="flex items-end gap-3.5 flex-wrap">
         <div className="space-y-1.5">
           <Label className="text-xs font-medium text-muted-foreground">Kind</Label>
-          <div className="flex rounded-md border overflow-hidden">
-            {(['ingest', 'secret'] as const).map((k) => <button key={k} className={`h-9 px-3 text-xs ${kind === k ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}`} onClick={() => setKind(k)}>{k} ({k === 'ingest' ? 'pk_' : 'sk_'})</button>)}
+          <div role="group" aria-label="Key kind" className="flex rounded-md border overflow-hidden">
+            {(['ingest', 'secret'] as const).map((k) => <button type="button" aria-pressed={kind === k} key={k} className={`h-9 px-3 text-xs ${kind === k ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}`} onClick={() => setKind(k)}>{k} ({k === 'ingest' ? 'pk_' : 'sk_'})</button>)}
           </div>
         </div>
         {kind === 'ingest' && (
           <div className="space-y-1.5">
             <Label className="text-xs font-medium text-muted-foreground">Env</Label>
-            <Select value={env} onValueChange={setEnv}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['prod', 'dev', 'staging'].map((e) => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent></Select>
+            <Select value={env} onValueChange={setEnv}><SelectTrigger aria-label="Key environment" className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['prod', 'dev', 'staging'].map((e) => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent></Select>
           </div>
         )}
-        <div className="flex-1 min-w-44 space-y-1.5"><Label className="text-xs font-medium text-muted-foreground">Label (opt)</Label><Input placeholder="e.g. web client" value={label} onChange={(e) => setLabel(e.target.value)} /></div>
+        <div className="flex-1 min-w-44 space-y-1.5"><Label htmlFor="api-key-label" className="text-xs font-medium text-muted-foreground">Label (opt)</Label><Input id="api-key-label" placeholder="e.g. web client" value={label} onChange={(e) => setLabel(e.target.value)} /></div>
         <Button onClick={submit} disabled={busy}>{busy ? <Loader2 className="size-4 animate-spin" /> : 'Issue key'}</Button>
       </div>
       <div className="text-xs text-muted-foreground mt-2.5">ingest keys (pk_) only write events; secret keys (sk_) read &amp; manage one project. Hosted admins can issue personal MCP tokens below.</div>
@@ -121,8 +121,8 @@ function IssuePersonalToken({ issue, onIssued }: {
     <Panel title="Issue personal MCP token">
       <div className="flex flex-wrap items-end gap-3.5">
         <div className="min-w-44 flex-1 space-y-1.5">
-          <Label className="text-xs font-medium text-muted-foreground">Label</Label>
-          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Codex laptop" />
+          <Label htmlFor="personal-token-label" className="text-xs font-medium text-muted-foreground">Label</Label>
+          <Input id="personal-token-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Codex laptop" />
         </div>
         <Button onClick={submit} disabled={busy}>{busy ? <Loader2 className="size-4 animate-spin" /> : 'Issue pt_ token'}</Button>
       </div>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { Loader2 } from '@/components/icons';
 import {
   hostedAuthConfig,
@@ -13,8 +13,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ErrorNote } from '../components/ui';
 
 export function Connect() {
+  useEffect(() => {
+    document.title = 'Connect — Poolstatis';
+  }, []);
   if (hostedAuthEnabled) return <HostedConnect />;
   return <TokenConnect />;
 }
@@ -51,7 +55,7 @@ function HostedConnect() {
       <Button className="h-10 w-full" onClick={signIn} disabled={isLoading || busy}>
         {isLoading || busy ? <Loader2 className="size-4 animate-spin" /> : isAuthenticated ? `Continue as ${user?.email ?? 'workspace user'}` : 'Continue to sign in'}
       </Button>
-      {(err || error) && <div className="mt-4 text-xs text-destructive">{err ?? error?.message}</div>}
+      {(err || error) && <div className="mt-4"><ErrorNote>{err ?? error?.message}</ErrorNote></div>}
     </ConnectShell>
   );
 }
@@ -85,26 +89,32 @@ function TokenConnect() {
       </p>
       <form onSubmit={submit} className="space-y-4">
         <div className="space-y-1.5">
-          <Label className="text-xs font-medium text-muted-foreground">Token</Label>
-          <Input type="password" placeholder="sk_... or pt_..." value={token} onChange={(e) => setToken(e.target.value)} autoFocus />
+          <Label htmlFor="connection-token" className="text-xs font-medium text-muted-foreground">Token</Label>
+          <Input id="connection-token" type="password" placeholder="sk_... or pt_..." value={token} onChange={(e) => setToken(e.target.value)} autoFocus />
         </div>
         <Button type="submit" className="w-full" disabled={busy || !token}>{busy ? <Loader2 className="size-4 animate-spin" /> : 'Connect'}</Button>
-        {err && <div className="text-destructive text-xs">{err}</div>}
+        {err && <ErrorNote>{err}</ErrorNote>}
       </form>
     </ConnectShell>
   );
 }
 
 function ConnectShell({ children }: { children: React.ReactNode }) {
+  const reducedMotion = useReducedMotion();
   return (
-    <div className="flex min-h-screen items-center justify-center p-6">
-      <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: 'easeOut' }} className="w-full max-w-md">
+    <main id="main-content" className="flex min-h-screen items-center justify-center p-6">
+      <motion.div
+        initial={reducedMotion ? false : { opacity: 0, y: 14 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: reducedMotion ? 0 : 0.4, ease: 'easeOut' }}
+        className="w-full max-w-md"
+      >
         <Card>
           <CardContent className="p-8">
             {children}
           </CardContent>
         </Card>
       </motion.div>
-    </div>
+    </main>
   );
 }
