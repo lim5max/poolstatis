@@ -46,7 +46,7 @@ for the client you use; the paste location depends on the host.
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "--dir", "/path/to/poolstatis-core", "mcp"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.1.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_…"
@@ -59,10 +59,9 @@ for the client you use; the paste location depends on the host.
 `--silent` is required — otherwise pnpm prints a banner to stdout and corrupts the
 stdio MCP protocol.
 
-The package is not registry-verified yet. Replace the path with an exact local
-Core checkout. Hosted deployments must keep this fallback while the runner is
-`publish_pending`; only a fresh registry install that passes initialize and
-tool-list smoke checks may enable the version-pinned public preset.
+`@poolstatis/mcp@0.1.0` passed a fresh registry install, initialize, tool-list,
+and project-scoped read smoke. Hosted deployments may enable this exact pin;
+future versions remain fail-closed until they pass the same checks.
 
 ### 2. Run the instrumentation skill
 

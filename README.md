@@ -104,7 +104,7 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "--dir", "/path/to/poolstatis-core", "mcp"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.1.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_..."
@@ -117,10 +117,9 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
 `--silent` is required because `pnpm` can print a banner to stdout, which breaks
 the stdio MCP protocol.
 
-The public package is not yet registry-verified. This fail-closed config executes
-the exact MCP server from a local Core checkout. Replace the path with that
-checkout; do not switch to the pinned registry preset until its fresh install
-passes initialize and tool-list smoke checks.
+The public runner is version-pinned so a hosted deploy cannot silently change
+its MCP runtime. `@poolstatis/mcp@0.1.0` passed a fresh registry install,
+initialize, tool-list, and project-scoped read smoke.
 
 Send product events through the ingest API:
 

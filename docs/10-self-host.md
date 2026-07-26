@@ -45,16 +45,15 @@ curl -X POST http://localhost:3300/i/v1/events \
 
 ## MCP setup
 
-Until the public package passes its registry smoke, execute the exact server from
-a local Core checkout:
+Run the version-pinned public MCP package:
 
 ```bash
 POOLSTATIS_URL=http://localhost:3300 \
 POOLSTATIS_TOKEN=pt_... \
-pnpm --silent --dir /path/to/poolstatis-core mcp
+pnpm dlx @poolstatis/mcp@0.1.0
 ```
 
-For an agent config, use the same checkout path:
+To execute the exact server from a local Core checkout instead, use:
 
 ```json
 {
