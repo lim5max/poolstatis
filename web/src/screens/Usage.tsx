@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ErrorNote, EmptyState, FieldLabel, Loading, Panel, TableScroll, WarningNote } from '../components/ui';
+import { EmptyState, FieldLabel, Loading, Panel, RecoverableError, TableScroll, WarningNote } from '../components/ui';
 import { useAsync, useStore } from '../store';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -58,7 +58,7 @@ export function Usage() {
   return (
     <div className="space-y-4">
       <Panel title="Usage ledger" right={<div className="space-y-1"><Label htmlFor="usage-period" className="text-xs text-muted-foreground">UTC month</Label><Input id="usage-period" aria-label="UTC month" type="month" value={period} onChange={(event) => setPeriod(event.target.value)} /></div>}>
-        {result.loading || (!usage && !result.error) ? <Loading what="Loading usage ledger…" /> : result.error ? <ErrorNote>{result.error}</ErrorNote> : usage && <LedgerRail usage={usage} />}
+        {result.loading || (!usage && !result.error) ? <Loading what="Loading usage ledger…" /> : result.error ? <RecoverableError onRetry={result.reload}>{result.error}</RecoverableError> : usage && <LedgerRail usage={usage} />}
       </Panel>
       {usage?.warnings.map((warning) => <WarningNote key={warning.threshold}>Warning threshold reached: {whole(warning.threshold)} events.</WarningNote>)}
       {usage && (usage.projects.length === 0 ? <Panel title="Stored events"><EmptyState headline={`No stored events in ${usage.period}`} lead="Accepted events will appear here after durable ingest." /></Panel> : <Panel title="Stored events" right={<span className="mono text-xs text-muted-foreground">{usage.meter}</span>}>

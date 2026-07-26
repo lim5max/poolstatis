@@ -128,7 +128,7 @@ jsonTool(
 
 jsonTool(
   'get_onboarding_status',
-  'Read evidence-backed setup gates and the first real decision result. This call also proves that the configured MCP client reached the project; copied configuration alone does not complete the agent gate.',
+  'Read evidence-backed setup gates and the first real decision result. This call persists an MCP-marked request and its time; it is last-use evidence, not heartbeat or transport attestation. Copied configuration alone does not complete the agent gate.',
   { project, env: z.string().default('prod') },
   wrap(async ({ project: slug, env }) => {
     await api('POST', `/api/v1/projects/${slug}/onboarding/observe-agent`, {

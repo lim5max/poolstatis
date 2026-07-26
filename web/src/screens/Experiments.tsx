@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Add, Loader2, Target } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { EmptyState, ErrorNote, Loading, Panel, fmtNum, fmtPct } from '../components/ui';
+import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, fmtNum, fmtPct } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,14 +20,14 @@ export function Experiments() {
   ]), [project]);
 
   if (loading) return <Loading what="reading feature delivery…" />;
-  if (error) return <ErrorNote>{error}</ErrorNote>;
+  if (error) return <RecoverableError onRetry={reload}>{error}</RecoverableError>;
   if (!data) return null;
   const [flags, experiments, metrics] = data;
 
   return (
     <div className="space-y-4">
       <Panel title="Feature delivery" right={<span className="text-xs text-muted-foreground">deterministic rollout + measured outcome</span>}>
-        <p className="max-w-3xl text-sm text-muted-foreground">A flag safely assigns a stable user to a variant. An experiment turns that assignment into a decision by measuring a registered metric only after the first exposure.</p>
+        <p className="max-w-3xl text-sm text-muted-foreground">Use flags for controlled rollout. Start an experiment only when its registered outcome metric and exposure are ready.</p>
       </Panel>
       <FlagForm flags={flags} onCreated={reload} />
       <FlagsTable flags={flags} onChanged={reload} />

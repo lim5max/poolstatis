@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Confirm, EmptyState, ErrorNote, FieldLabel, Loading, OneTimeTokenReveal, Panel, TableScroll, fmtRelative } from '../components/ui';
+import { Confirm, EmptyState, ErrorNote, FieldLabel, Loading, OneTimeTokenReveal, Panel, RecoverableError, TableScroll, fmtRelative } from '../components/ui';
 import { useAsync, useStore } from '../store';
 import { useHostedAuth } from '../oidc';
 
@@ -105,7 +105,7 @@ function HostedProfile() {
           <div className="min-w-0 flex-1 space-y-1.5"><Label htmlFor="token-label" className="text-xs text-muted-foreground">Label</Label><Input id="token-label" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Local MCP" /></div>
           <p className="text-xs text-muted-foreground">Tokens are shown in plaintext once, then remain masked.</p>
         </div>}
-        {tokens.loading ? <Loading what="Loading personal tokens…" /> : tokens.error ? <ErrorNote>{tokens.error}</ErrorNote> : tokens.data?.length === 0 ? <EmptyState headline="No personal tokens" lead="Create one for an MCP client or coding agent." /> : (
+        {tokens.loading ? <Loading what="Loading personal tokens…" /> : tokens.error ? <RecoverableError onRetry={tokens.reload}>{tokens.error}</RecoverableError> : tokens.data?.length === 0 ? <EmptyState headline="No personal tokens" lead="Create one for an MCP client or coding agent." /> : (
           <TableScroll testId="personal-tokens-scroll"><Table>
             <TableHeader><TableRow><TableHead>Token</TableHead><TableHead>Created</TableHead><TableHead>Last used</TableHead><TableHead>Status</TableHead><TableHead /></TableRow></TableHeader>
             <TableBody>{tokens.data?.map((token) => <TableRow key={token.id}>

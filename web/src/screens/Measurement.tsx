@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useAsync, useStore } from '../store';
-import { ErrorNote, Hint, Loading, Panel, Toolbar } from '../components/ui';
+import { ErrorNote, Hint, Loading, Panel, RecoverableError, Toolbar } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -46,15 +46,13 @@ export function Measurement() {
   }, [project, env]);
 
   if (audit.loading) return <Loading what="checking measurement trust…" />;
-  if (audit.error) return <ErrorNote>{audit.error}</ErrorNote>;
+  if (audit.error) return <RecoverableError onRetry={audit.reload}>{audit.error}</RecoverableError>;
   if (!audit.data) return null;
   const { properties, identity, sources, trust, contracts } = audit.data;
 
   return <div className="space-y-4">
     <Panel title="Measurement trust" right={<span className="text-xs text-muted-foreground">real evidence · last 30 days</span>}>
-      <p className="max-w-3xl text-sm text-muted-foreground">
-        Audit whether active metrics, actor identity and properties are safe inputs to a product decision. Poolstatis keeps the semantic definitions here; raw evidence stays in its native source.
-      </p>
+      <p className="max-w-3xl text-sm text-muted-foreground">Check whether active metrics have enough source, identity, and property evidence for a decision.</p>
     </Panel>
 
     <Panel>

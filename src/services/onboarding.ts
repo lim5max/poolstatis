@@ -124,16 +124,16 @@ export async function getOnboardingStatus(
     ),
     pool.query(
       `SELECT
-         EXISTS (
-           SELECT 1 FROM api_keys
+         (
+           SELECT max(created_at) FROM api_keys
            WHERE project_id = $1 AND kind = 'ingest' AND env = $2
              AND revoked_at IS NULL
-         ) AS native,
-         EXISTS (
-           SELECT 1 FROM source_connections
+         ) AS native_key_created_at,
+         (
+           SELECT max(verified_at) FROM source_connections
            WHERE project_id = $1 AND provider = 'posthog'
              AND status = 'verified'
-         ) AS posthog`,
+         ) AS posthog_verified_at`,
       [projectId, env],
     ),
     pool.query(
@@ -207,7 +207,9 @@ export async function getOnboardingStatus(
   ]);
 
   const projectRow = project.rows[0];
-  const sourceRow = source.rows[0] ?? { native: false, posthog: false };
+  const sourceRow = source.rows[0] ?? { native_key_created_at: null, posthog_verified_at: null };
+  const nativeSource = Boolean(sourceRow.native_key_created_at);
+  const posthogSource = Boolean(sourceRow.posthog_verified_at);
   const eventRow = event.rows[0] ?? { count: 0, last_seen: null };
   const metricRow = metric.rows[0];
   const queryRow = query.rows[0];
@@ -227,20 +229,34 @@ export async function getOnboardingStatus(
       'agent_connected',
       Boolean(agent.rows[0]),
       agent.rows[0] ?? {},
-      'No real MCP tool call has reached this project.',
-      'Connect the MCP client and call get_onboarding_status.',
+      'No MCP-marked onboarding request has reached this project.',
+      'Call get_onboarding_status through the configured MCP client.',
     ),
     gate(
       'data_source_connected',
-      Boolean(sourceRow.native || sourceRow.posthog),
-      { native: sourceRow.native, posthog: sourceRow.posthog },
+      nativeSource || posthogSource,
+      {
+        native: nativeSource,
+        posthog: posthogSource,
+        native_key_created_at: sourceRow.native_key_created_at ?? null,
+        posthog_verified_at: sourceRow.posthog_verified_at ?? null,
+      },
       'No native ingest key or verified PostHog source is connected.',
       'Issue a pk_ ingest key or configure and verify PostHog.',
     ),
     gate(
       'first_event_observed',
       Number(eventRow.count) > 0 || Boolean(queryRow?.source === 'posthog'),
-      { native_events: Number(eventRow.count), last_seen: eventRow.last_seen ?? null },
+      {
+        observation_source: Number(eventRow.count) > 0
+          ? 'native'
+          : queryRow?.source === 'posthog'
+            ? 'posthog'
+            : null,
+        native_events: Number(eventRow.count),
+        last_seen: eventRow.last_seen ?? null,
+        posthog_query_at: queryRow?.source === 'posthog' ? queryRow.created_at : null,
+      },
       'No real product observation has reached Poolstatis.',
       'Send a native event or run a verified PostHog query.',
     ),

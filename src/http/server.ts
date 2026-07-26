@@ -979,7 +979,7 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     if (req.headers['x-poolstatis-client'] !== 'mcp') {
       throw badRequest(
         'mcp_observation_required',
-        'agent connection is recorded only from a real MCP-originated call',
+        'agent use is recorded only from a request marked by the MCP transport',
         'call get_onboarding_status through the configured MCP client',
       );
     }
