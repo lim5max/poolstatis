@@ -254,10 +254,23 @@ function parseRunnerArgs(
 const packageStatus = import.meta.env.VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true'
   ? 'published'
   : 'publish_pending';
+const runnerArgs = parseRunnerArgs(
+  import.meta.env.VITE_POOLSTATIS_MCP_ARGS as string | undefined,
+  packageStatus,
+);
+if (packageStatus === 'published'
+    && (runnerArgs.length !== 3
+      || runnerArgs[0] !== '--silent'
+      || runnerArgs[1] !== 'dlx'
+      || runnerArgs[2] !== MCP_PACKAGE_SPEC)) {
+  throw new Error(
+    `VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true requires VITE_POOLSTATIS_MCP_ARGS to pin ${MCP_PACKAGE_SPEC}`,
+  );
+}
 
 export const MCP_RUNNER = {
   command: (import.meta.env.VITE_POOLSTATIS_MCP_COMMAND as string | undefined) ?? 'pnpm',
-  args: parseRunnerArgs(import.meta.env.VITE_POOLSTATIS_MCP_ARGS as string | undefined, packageStatus),
+  args: runnerArgs,
   packageStatus,
 };
 

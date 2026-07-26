@@ -51,6 +51,7 @@ separate repositories.
 | [docs/09-product-decision-loop.md](docs/09-product-decision-loop.md) | Contracts, releases, evidence, approvals, workers, actions, outbox, and decision memory |
 | [docs/10-self-host.md](docs/10-self-host.md) | Short Docker Compose self-hosting path |
 | [docs/11-repository-split.md](docs/11-repository-split.md) | System, site, and Cloud repository boundaries |
+| [docs/12-mcp-package-release.md](docs/12-mcp-package-release.md) | Public MCP package release and provenance gates |
 | [sdk/README.md](sdk/README.md) | `@poolstatis/sdk` client usage |
 | [.claude/skills/poolstatis-instrument](.claude/skills/poolstatis-instrument/SKILL.md) | Agent skill for product instrumentation |
 
@@ -103,7 +104,7 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.1.0"],
+      "args": ["--silent", "--dir", "/path/to/poolstatis-core", "mcp"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_..."
@@ -116,9 +117,10 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
 `--silent` is required because `pnpm` can print a banner to stdout, which breaks
 the stdio MCP protocol.
 
-The public runner is version-pinned so a hosted deploy cannot silently change
-its MCP runtime. A deploy must keep its package status at `publish_pending` and
-show the local Core fallback until this exact version passes a registry smoke.
+The public package is not yet registry-verified. This fail-closed config executes
+the exact MCP server from a local Core checkout. Replace the path with that
+checkout; do not switch to the pinned registry preset until its fresh install
+passes initialize and tool-list smoke checks.
 
 Send product events through the ingest API:
 

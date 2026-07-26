@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -94,8 +94,6 @@ beforeAll(async () => {
     'dist',
     'cli.js',
   );
-  await chmod(executable, 0o755);
-
   fixture = createServer((req, res) => {
     requests.push({
       method: req.method ?? '',

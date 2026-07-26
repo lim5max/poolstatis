@@ -194,6 +194,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const jwksUri = env.AUTH_JWKS_URI ?? (issuer ? new URL('.well-known/jwks.json', issuer).toString() : undefined);
   const packageStatus = env.POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true' ? 'published' : 'publish_pending';
+  const mcpArgs = parseArgs(env.POOLSTATIS_MCP_ARGS, packageStatus);
+  if (packageStatus === 'published'
+      && (mcpArgs.length !== 3
+        || mcpArgs[0] !== '--silent'
+        || mcpArgs[1] !== 'dlx'
+        || mcpArgs[2] !== MCP_PACKAGE_SPEC)) {
+    throw new Error(
+      `POOLSTATIS_MCP_PACKAGE_PUBLISHED=true requires POOLSTATIS_MCP_ARGS to pin ${MCP_PACKAGE_SPEC}`,
+    );
+  }
   const databasePoolMax = positiveInt(env.DATABASE_POOL_MAX, 10, 'DATABASE_POOL_MAX');
   const production = env.NODE_ENV === 'production';
   const corsOrigins = parseCorsOrigins(env.POOLSTATIS_CORS_ORIGINS, production);
@@ -355,7 +365,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     mcpRunner: {
       command: env.POOLSTATIS_MCP_COMMAND ?? 'pnpm',
-      args: parseArgs(env.POOLSTATIS_MCP_ARGS, packageStatus),
+      args: mcpArgs,
       packageStatus,
       note: packageStatus === 'published'
         ? `The configured MCP runner is pinned to ${MCP_PACKAGE_SPEC}.`

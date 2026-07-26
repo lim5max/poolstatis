@@ -93,8 +93,8 @@ into this system repo.
 
 ## Do not promise yet
 
-- An unpinned `@poolstatis/mcp` command or a hosted copy-paste preset whose exact
-  version has not passed a fresh registry smoke.
+- Any `@poolstatis/mcp` registry command or hosted copy-paste preset until the
+  exact published version has passed a fresh registry smoke.
 - Cloud availability before the waitlist intake and hosted app are live.
 - Billing enforcement before limits and metering are visible to users.
 - A dashboard product; Poolstatis stays headless and agent-first.

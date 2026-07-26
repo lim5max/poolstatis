@@ -45,6 +45,10 @@ describe('production protection config', () => {
       args: ['--silent', 'dlx', '@poolstatis/mcp@0.1.0'],
       packageStatus: 'published',
     });
+    expect(() => loadConfig({
+      POOLSTATIS_MCP_PACKAGE_PUBLISHED: 'true',
+      POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp',
+    })).toThrow('requires POOLSTATIS_MCP_ARGS to pin @poolstatis/mcp@0.1.0');
   });
 
   it('requires an explicit hosted opt-in before enforcing external organization policy', () => {
