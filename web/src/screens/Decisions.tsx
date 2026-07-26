@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { EmptyState, ErrorNote, Loading, Panel } from '../components/ui';
+import { EmptyState, ErrorNote, Loading, Panel, RecoverableError } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -23,10 +23,10 @@ export function Decisions() {
   const detail = useAsync(async () => selectedId ? client!.decision(project!, selectedId) : null, [project, selectedId, list.data]);
 
   if (list.loading) return <Loading what="reading decision revisions…" />;
-  if (list.error) return <ErrorNote>{list.error}</ErrorNote>;
+  if (list.error) return <RecoverableError onRetry={list.reload}>{list.error}</RecoverableError>;
   if (!list.data) return null;
   return <div className="space-y-4">
-    <Panel title="Decisions" right={<span className="text-xs text-muted-foreground">facts are immutable · approval is human</span>}><p className="max-w-3xl text-sm text-muted-foreground">Review the evidence behind an agent proposal, then approve, correct, or reject it with an explicit rationale. Directional decisions stay blocked when measurement trust is insufficient.</p></Panel>
+    <Panel title="Decisions" right={<span className="text-xs text-muted-foreground">facts are immutable · approval is human</span>}><p className="max-w-3xl text-sm text-muted-foreground">Approve, correct, or reject an agent proposal against its saved evidence.</p></Panel>
     {loop.error ? <ErrorNote>{loop.error}</ErrorNote> : loop.data && <ContinuousLoopSummary {...loop.data} />}
     {list.data.length === 0 ? <Panel><EmptyState headline="No proposed decisions" lead="evaluate an eligible release to create evidence" /></Panel> : <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
       <Panel title={<>Queue <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{list.data.length}</span></>}><div className="-m-2 space-y-1">{list.data.map((decision) => <button key={decision.id} type="button" onClick={() => setSelectedId(decision.id)} className={`w-full rounded-md p-3 text-left text-sm transition-colors ${selectedId === decision.id ? 'bg-accent' : 'hover:bg-muted/50'}`}><div className="flex items-center justify-between gap-2"><span className="font-medium">{decision.proposed_outcome}</span><DecisionStatus status={decision.status} /></div><div className="mt-1 truncate text-xs text-muted-foreground">release {decision.release_id.slice(0, 8)}</div></button>)}</div></Panel>

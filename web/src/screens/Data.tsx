@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Add as Plus, X } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import {
-  Loading, ErrorNote, Panel, EmptyState, Meter, Stat, Toolbar, SearchInput, RegBadge, fmtNum, fmtPct, fmtVal,
+  Loading, ErrorNote, RecoverableError, Panel, EmptyState, Meter, Stat, Toolbar, SearchInput, RegBadge, fmtNum, fmtPct, fmtVal,
 } from '../components/ui';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -34,7 +34,7 @@ export function Data() {
   const actorParam = params.get('distinct_id') ?? undefined;
   const schema = useAsync(() => client!.schema(project!, env), [project, env]);
   if (schema.loading) return <Loading what="reading data…" />;
-  if (schema.error) return <ErrorNote>{schema.error}</ErrorNote>;
+  if (schema.error) return <RecoverableError onRetry={schema.reload}>{schema.error}</RecoverableError>;
   if (!schema.data) return null;
 
   return (

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Add, GridView, Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { EmptyState, ErrorNote, Loading, Panel } from '../components/ui';
+import { EmptyState, ErrorNote, Loading, Panel, RecoverableError } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -15,11 +15,11 @@ export function Experience() {
     () => client!.experienceSurfaces(project!), [project],
   );
   if (loading) return <Loading what="reading browser experience…" />;
-  if (error) return <ErrorNote>{error}</ErrorNote>;
+  if (error) return <RecoverableError onRetry={reload}>{error}</RecoverableError>;
   if (!surfaces) return null;
   return <div className="space-y-4">
     <Panel title="Browser Experience" right={<span className="text-xs text-muted-foreground">consent-gated timeline + click map</span>}>
-      <p className="max-w-3xl text-sm text-muted-foreground">This optional module records labelled clicks, scroll milestones and coarse client errors for a declared surface. It never stores DOM snapshots, text, URL query strings, stacks or pointer paths. The map shows interaction, not eye tracking.</p>
+      <p className="max-w-3xl text-sm text-muted-foreground">Records labelled clicks, scroll milestones, and coarse client errors. It is not DOM replay or eye tracking.</p>
     </Panel>
     <SurfaceForm onCreated={reload} />
     <SurfacesTable surfaces={surfaces} onChanged={reload} />

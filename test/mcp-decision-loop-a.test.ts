@@ -65,6 +65,10 @@ describe('decision-loop trust MCP tools', () => {
       'verify_posthog',
       'get_posthog_schema',
     ]));
+    const onboardingTool = tools.tools.find((tool) => tool.name === 'get_onboarding_status');
+    expect(onboardingTool?.description).toContain('MCP-marked request');
+    expect(onboardingTool?.description).not.toContain('proves');
+    expect(onboardingTool?.description).not.toContain('connected');
 
     const onboarding = await client.callTool({
       name: 'get_onboarding_status',

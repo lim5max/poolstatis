@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { EmptyState, ErrorNote, Loading, Panel, Toolbar } from '../components/ui';
+import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, Toolbar } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import type { Decision, DecisionDetail, Release } from '../api/types';
@@ -33,12 +33,12 @@ export function Changes() {
   };
 
   if (audit.loading) return <Loading what="reading release evidence…" />;
-  if (audit.error) return <ErrorNote>{audit.error}</ErrorNote>;
+  if (audit.error) return <RecoverableError onRetry={audit.reload}>{audit.error}</RecoverableError>;
   if (!audit.data) return null;
   const { releases, decisions } = audit.data;
   return <div className="space-y-4">
     <Panel title="Changes" right={<span className="text-xs text-muted-foreground">release provenance → measured outcome</span>}>
-      <p className="max-w-3xl text-sm text-muted-foreground">Every deployed change stays attached to the contract revision, commit, observation window, and human decision that proved what happened.</p>
+      <p className="max-w-3xl text-sm text-muted-foreground">Each release keeps its contract, commit, observation window, and reviewed outcome together.</p>
     </Panel>
     <Panel>
       <Toolbar left={<span className="text-sm">Environment <code>{env}</code></span>} center={<Badge variant="outline">{releases.length} releases</Badge>} right={<Button variant="outline" size="sm" onClick={audit.reload}>Refresh evidence</Button>} />
