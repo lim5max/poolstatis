@@ -46,11 +46,15 @@ describe('browser experience surfaces and ingest', () => {
     expect(events.body.events).toEqual(expect.arrayContaining([
       expect.objectContaining({
         event: 'experience.element_clicked', session_id: 'session-1', registered: true,
-        properties: { surface: 'checkout', route: 'checkout', sequence: 2, label: 'pay_now', x: 0.25, y: 0.5 },
+        properties: expect.objectContaining({
+          surface: 'checkout', route: 'checkout', sequence: 2, label: 'pay_now', x: 0.25, y: 0.5,
+        }),
       }),
       expect.objectContaining({
         event: 'experience.client_error',
-        properties: { surface: 'checkout', route: 'checkout', sequence: 4, error_type: 'unhandled_rejection' },
+        properties: expect.objectContaining({
+          surface: 'checkout', route: 'checkout', sequence: 4, error_type: 'unhandled_rejection',
+        }),
       }),
     ]));
 

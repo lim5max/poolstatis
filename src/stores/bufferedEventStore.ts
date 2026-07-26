@@ -29,6 +29,8 @@ import type {
   StorableEvent,
   TrendPoint,
   TrendQuery,
+  VisualExperienceQuery,
+  VisualExperienceResult,
 } from './eventStore.js';
 
 export interface BufferedEventStoreOptions {
@@ -164,6 +166,10 @@ export class BufferedEventStore implements EventStore {
 
   experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]> {
     return this.inner.experienceSession(q);
+  }
+
+  visualExperience(q: VisualExperienceQuery): Promise<VisualExperienceResult> {
+    return this.inner.visualExperience(q);
   }
 
   sample(q: SampleQuery): Promise<RawEvent[]> {

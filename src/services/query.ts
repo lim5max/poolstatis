@@ -11,12 +11,14 @@ import type {
   RetentionQueryInput,
   StickinessQueryInput,
   TrendQueryInput,
+  VisualExperienceCompareInput,
+  VisualExperienceQueryInput,
 } from '../schemas.js';
 import { parseDateInput } from '../dates.js';
 import { badRequest } from '../errors.js';
 import { getFunnel, getMetric, type Metric } from './registry.js';
 import { countEntities, queryEntities } from './entities.js';
-import { getExperienceSurface } from './experience.js';
+import { getExactExperienceSnapshot, getExperienceSurface } from './experience.js';
 import { canonicalQueryKey, type QueryCache } from './queryCache.js';
 import type { PostHogAdapter } from './posthog.js';
 
@@ -75,11 +77,40 @@ export type QueryResult =
       surface: { key: string; name: string; purpose: string; status: 'active' | 'archived' };
       session_id: string;
       events: Array<{
-        timestamp: string; kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
+        timestamp: string; kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'section_exposed' | 'client_error';
         route: string; sequence: number; label?: string; x?: number; y?: number; depth?: number;
-        error_type?: 'error' | 'unhandled_rejection';
+        error_type?: 'error' | 'unhandled_rejection'; section?: string; top?: number;
       }>;
       summary: { page_views: number; clicks: number; max_scroll_depth: number; client_errors: number };
+      meta: QueryMeta;
+    }
+  | {
+      kind: 'visual_experience';
+      surface: { key: string; name: string; purpose: string; status: 'active' | 'archived' };
+      route: string;
+      version: string;
+      device: 'desktop' | 'mobile';
+      grid: number;
+      snapshot: Awaited<ReturnType<typeof getExactExperienceSnapshot>>;
+      summary: Awaited<ReturnType<EventStore['visualExperience']>>['summary'];
+      click_cells: Awaited<ReturnType<EventStore['visualExperience']>>['click_cells'];
+      click_labels: Awaited<ReturnType<EventStore['visualExperience']>>['click_labels'];
+      scroll_coverage: Awaited<ReturnType<EventStore['visualExperience']>>['scroll_coverage'];
+      sections: Awaited<ReturnType<EventStore['visualExperience']>>['sections'];
+      causality: string;
+      meta: QueryMeta;
+    }
+  | {
+      kind: 'visual_experience_compare';
+      baseline: Extract<QueryResult, { kind: 'visual_experience' }>;
+      comparison: Extract<QueryResult, { kind: 'visual_experience' }>;
+      delta: {
+        sessions: number;
+        clicks: number;
+        actors: number;
+        sections: Array<{ section: string; percentage_points: number }>;
+      };
+      causality: string;
       meta: QueryMeta;
     };
 
@@ -212,6 +243,10 @@ export class QueryService {
         return this.interactionMap(projectId, q, now);
       case 'experience_session':
         return this.experienceSession(projectId, q, now);
+      case 'visual_experience':
+        return this.visualExperience(projectId, q, now);
+      case 'visual_experience_compare':
+        return this.visualExperienceCompare(projectId, q, now);
     }
   }
 
@@ -621,6 +656,117 @@ export class QueryService {
         client_errors: events.filter((event) => event.kind === 'client_error').length,
       },
       meta: { computed_at: now.toISOString(), date_range: { from: from.toISOString(), to: to.toISOString() }, sampling: null, source: 'native' },
+    };
+  }
+
+  private async visualExperience(
+    projectId: string,
+    q: VisualExperienceQueryInput,
+    now: Date,
+  ): Promise<Extract<QueryResult, { kind: 'visual_experience' }>> {
+    const surface = await getExperienceSurface(this.pool, projectId, q.surface);
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const snapshot = await getExactExperienceSnapshot(
+      this.pool,
+      projectId,
+      {
+        surface: q.surface,
+        route: q.route,
+        env: q.env,
+        version: q.version,
+        device: q.device,
+      },
+      now,
+    );
+    const result = await this.eventStore.visualExperience({
+      projectId,
+      env: q.env,
+      surface: q.surface,
+      route: q.route,
+      version: q.version,
+      device: q.device,
+      ...(snapshot
+        ? {
+            viewportWidth: snapshot.viewport_width,
+            viewportHeight: snapshot.viewport_height,
+            documentWidth: snapshot.document_width,
+            documentHeight: snapshot.document_height,
+          }
+        : {}),
+      from,
+      to,
+      grid: q.grid,
+    });
+    return {
+      kind: 'visual_experience',
+      surface: { key: surface.key, name: surface.name, purpose: surface.purpose, status: surface.status },
+      route: q.route,
+      version: q.version,
+      device: q.device,
+      grid: q.grid,
+      snapshot,
+      ...result,
+      causality: 'Aggregated interaction evidence shows where observed sessions clicked or reached; it does not prove why users stopped or that a page change caused a difference.',
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        note: snapshot
+          ? 'Events match the snapshot viewport exactly. Accepted events may still exclude signals discarded by client consent and rate guards.'
+          : 'No immutable snapshot matches these route, version, device and env filters; events are not restricted to one viewport.',
+      },
+    };
+  }
+
+  private async visualExperienceCompare(
+    projectId: string,
+    q: VisualExperienceCompareInput,
+    now: Date,
+  ): Promise<Extract<QueryResult, { kind: 'visual_experience_compare' }>> {
+    const [baseline, comparison] = await Promise.all([
+      this.visualExperience(projectId, {
+        kind: 'visual_experience',
+        surface: q.surface,
+        route: q.route,
+        version: q.baseline.version,
+        device: q.baseline.device,
+        date_from: q.baseline.date_from,
+        date_to: q.baseline.date_to,
+        grid: q.grid,
+        env: q.env,
+      }, now),
+      this.visualExperience(projectId, {
+        kind: 'visual_experience',
+        surface: q.surface,
+        route: q.route,
+        version: q.comparison.version,
+        device: q.comparison.device,
+        date_from: q.comparison.date_from,
+        date_to: q.comparison.date_to,
+        grid: q.grid,
+        env: q.env,
+      }, now),
+    ]);
+    const baselineSections = new Map(baseline.sections.map((item) => [item.section, item.percentage]));
+    const comparisonSections = new Map(comparison.sections.map((item) => [item.section, item.percentage]));
+    const sectionKeys = [...new Set([...baselineSections.keys(), ...comparisonSections.keys()])].sort();
+    return {
+      kind: 'visual_experience_compare',
+      baseline,
+      comparison,
+      delta: {
+        sessions: comparison.summary.sessions - baseline.summary.sessions,
+        clicks: comparison.summary.clicks - baseline.summary.clicks,
+        actors: comparison.summary.actors - baseline.summary.actors,
+        sections: sectionKeys.map((section) => ({
+          section,
+          percentage_points: Number(((comparisonSections.get(section) ?? 0) - (baselineSections.get(section) ?? 0)).toFixed(2)),
+        })),
+      },
+      causality: 'This is a descriptive comparison across selected cohorts. Traffic mix, instrumentation, seasonality and concurrent changes can explain differences.',
+      meta: { computed_at: now.toISOString(), sampling: null, source: 'native' },
     };
   }
 }

@@ -17,6 +17,8 @@ import {
   assertHostedRuntimeDatabaseRole,
   prepareHostedOrganizationPolicies,
 } from '../services/accounts.js';
+import { LocalArtifactStore } from '../stores/artifactStore.js';
+import { startExperienceArtifactRetention } from '../services/experienceArtifactRetention.js';
 
 const config = loadConfig();
 const hostedPolicyRequired = config.auth?.requireOrganizationPolicy === true;
@@ -58,6 +60,7 @@ const app = buildServer(pool, {
   corsOrigins: config.corsOrigins,
   outboundPolicy: config.outboundPolicy,
   manageEventPartitions: !hostedPolicyRequired,
+  artifactDir: config.experienceArtifactDir,
   ...(config.connectorEncryptionKey
     ? { connectorEncryptionKey: config.connectorEncryptionKey }
     : {}),
@@ -69,6 +72,7 @@ let stopping = false;
 let retentionWorker: ReturnType<typeof startRetentionWorker> | null = null;
 let releaseMonitorWorker: ReturnType<typeof startReleaseMonitor> | null = null;
 let webhookOutboxWorker: ReturnType<typeof startWebhookOutbox> | null = null;
+let experienceArtifactRetention: ReturnType<typeof startExperienceArtifactRetention> | null = null;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let maintenanceTask: Promise<void> | null = null;
 
@@ -108,6 +112,20 @@ const prepareMaintenance = async (): Promise<void> => {
       },
       onError: (error) => console.error('retention worker failed', error),
       });
+      experienceArtifactRetention = startExperienceArtifactRetention(
+        maintenancePool,
+        new LocalArtifactStore(config.experienceArtifactDir),
+        {
+          intervalMs: config.retentionWorker.intervalMs,
+          batchSize: Math.min(config.retentionWorker.batchSize, 500),
+          onResult: (result) => {
+            if (result.snapshotsDeleted > 0 || result.artifactErrors > 0) {
+              console.log(JSON.stringify({ maintenance: 'experience-artifacts', ...result }));
+            }
+          },
+          onError: (error) => console.error('experience artifact retention failed', error),
+        },
+      );
     }
     if (config.releaseMonitor.enabled && !releaseMonitorWorker && !stopping) {
       const monitorContext = createContext(maintenancePool, {
@@ -177,6 +195,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     await retentionWorker?.stop();
     await releaseMonitorWorker?.stop();
     await webhookOutboxWorker?.stop();
+    await experienceArtifactRetention?.stop();
     await maintenancePool.end();
     await pool.end();
     process.exit(0);

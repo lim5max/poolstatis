@@ -283,7 +283,7 @@ export interface ExperienceSessionQuery {
 
 export interface ExperienceSessionEvent {
   timestamp: string;
-  kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
+  kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'section_exposed' | 'client_error';
   route: string;
   sequence: number;
   label?: string;
@@ -291,6 +291,47 @@ export interface ExperienceSessionEvent {
   y?: number;
   depth?: number;
   error_type?: 'error' | 'unhandled_rejection';
+  section?: string;
+  top?: number;
+}
+
+export interface VisualExperienceQuery {
+  projectId: string;
+  env: string;
+  surface: string;
+  route: string;
+  version: string;
+  device: 'desktop' | 'mobile';
+  viewportWidth?: number;
+  viewportHeight?: number;
+  documentWidth?: number;
+  documentHeight?: number;
+  from: Date;
+  to: Date;
+  grid: number;
+}
+
+export interface VisualExperienceResult {
+  summary: {
+    events: number;
+    page_views: number;
+    sessions: number;
+    actors: number;
+    clicks: number;
+    max_document_width: number;
+    max_document_height: number;
+  };
+  click_cells: Array<{ x: number; y: number; count: number; actors: number }>;
+  click_labels: Array<{ label: string; count: number; actors: number }>;
+  scroll_coverage: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+  sections: Array<{
+    section: string;
+    top: number;
+    sessions: number;
+    actors: number;
+    percentage: number;
+    dropoff_percentage: number;
+  }>;
 }
 
 /**
@@ -310,6 +351,7 @@ export interface EventStore {
   experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]>;
   interactionMap(q: InteractionMapQuery): Promise<InteractionMapResult>;
   experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]>;
+  visualExperience(q: VisualExperienceQuery): Promise<VisualExperienceResult>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;

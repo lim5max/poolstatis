@@ -451,7 +451,7 @@ function DangerZone({ slug, env }: { slug: string; env: string }) {
   const rows: Array<{ scope: 'events' | 'entities' | 'all'; t: string; d: string; del: string[] }> = [
     { scope: 'events', t: 'Purge event data', d: `Delete all events for the ${env} environment.`, del: [`all events (env: ${env})`, 'computed funnels & health'] },
     { scope: 'entities', t: 'Purge entities', d: `Delete all entity rows for the ${env} environment.`, del: [`all entities (env: ${env})`] },
-    { scope: 'all', t: 'Purge everything', d: `Delete all events AND entities for the ${env} environment.`, del: [`all events + entities (env: ${env})`] },
+    { scope: 'all', t: 'Purge everything', d: `Delete all events, entities and visual snapshots for the ${env} environment.`, del: [`all events + entities (env: ${env})`, 'visual snapshot metadata + image artifacts'] },
   ];
 
   return (
@@ -470,7 +470,7 @@ function DangerZone({ slug, env }: { slug: string; env: string }) {
           willDelete={action.del} willKeep={['metric & funnel definitions', 'API keys', 'entity-type schema']}
           matchValue={slug} matchLabel="Type the project slug to confirm" confirmLabel={action.title}
           onCancel={() => setAction(null)}
-          onConfirm={async () => { const res = await client!.purgeData(slug, { env, scope: action.scope, confirm_slug: slug }); setResult(`Purged ${env}: ${res.events_deleted} events, ${res.entities_deleted} entities removed.`); setAction(null); }} />
+          onConfirm={async () => { const res = await client!.purgeData(slug, { env, scope: action.scope, confirm_slug: slug }); setResult(`Purged ${env}: ${res.events_deleted} events, ${res.entities_deleted} entities, ${res.snapshots_deleted} visual snapshots removed.`); setAction(null); }} />
       )}
     </Card>
   );

@@ -15,12 +15,12 @@ import {
   concludeExperimentSchema, createExperimentSchema,
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
-  experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
+  experienceRouteRegistrationSchema, experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
   editDecisionSchema, measurementDeclarationSchema, posthogConnectionSchema, propertyDefinitionSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
   registerReleaseSchema, reviewDecisionSchema,
   retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
-  updateMetricSchema, updatePropertyDefinitionSchema,
+  updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
 } from '../schemas.js';
 import { INSTRUMENTATION_STANDARD } from './standard.js';
 
@@ -540,6 +540,35 @@ jsonTool(
   wrap(({ project: slug, key }) => api('POST', `/api/v1/projects/${slug}/experience/surfaces/${encodeURIComponent(key)}/archive`)),
 );
 
+jsonTool(
+  'register_experience_route',
+  'Register a safe canonical route key/path pattern under a Browser Experience surface. Query strings and hashes are refused.',
+  { project, surface: z.string(), route: experienceRouteRegistrationSchema },
+  wrap(({ project: slug, surface, route }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/experience/surfaces/${encodeURIComponent(surface)}/routes`,
+    route,
+  )),
+);
+
+jsonTool(
+  'list_visual_experience_versions',
+  'Enumerate project-scoped surfaces, canonical routes, immutable page/app versions and desktop/mobile snapshot metadata. Returns evidence references only, never image bytes.',
+  { project, surface: z.string().optional(), route: z.string().optional(), env: z.string().default('prod') },
+  wrap(async ({ project: slug, surface, route, env }) => {
+    const routeParams = new URLSearchParams();
+    if (surface) routeParams.set('surface', surface);
+    const snapshotParams = new URLSearchParams({ env });
+    if (surface) snapshotParams.set('surface', surface);
+    if (route) snapshotParams.set('route', route);
+    const [routes, snapshots] = await Promise.all([
+      api('GET', `/api/v1/projects/${slug}/experience/routes?${routeParams}`),
+      api('GET', `/api/v1/projects/${slug}/experience/snapshots?${snapshotParams}`),
+    ]);
+    return { routes: (routes as { routes: unknown }).routes, snapshots: (snapshots as { snapshots: unknown }).snapshots };
+  }),
+);
+
 // ===== Feature delivery =====
 
 jsonTool(
@@ -684,6 +713,20 @@ jsonTool(
   'Read the privacy-safe ordered interaction timeline for one known Browser Experience session. It contains only paths, stable labels, coordinates, scroll depth and coarse error type — never DOM/text.',
   { project, query: experienceSessionQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'experience_session', ...query })),
+);
+
+jsonTool(
+  'get_visual_experience_map',
+  'Return bounded aggregate click bins/labels, scroll coverage, named-section drop-off and safe snapshot evidence for one exact surface/route/version/device/period. This is descriptive interaction evidence, not session replay or causal proof.',
+  { project, query: visualExperienceQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'visual_experience', ...query })),
+);
+
+jsonTool(
+  'compare_visual_experience',
+  'Compare two bounded device/version/period cohorts for one route. Returns counts, percentages and percentage-point section deltas with explicit causality limits.',
+  { project, query: visualExperienceCompareSchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'visual_experience_compare', ...query })),
 );
 
 jsonTool(

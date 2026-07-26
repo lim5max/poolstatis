@@ -55,6 +55,9 @@ services:
       RETENTION_MAX_ROWS_PER_RUN: ${RETENTION_MAX_ROWS_PER_RUN:-100000}
       RETENTION_MAX_RUN_MS: ${RETENTION_MAX_RUN_MS:-5000}
       POOLSTATIS_MCP_PACKAGE_PUBLISHED: ${POOLSTATIS_MCP_PACKAGE_PUBLISHED:-false}
+      POOLSTATIS_EXPERIENCE_ARTIFACT_DIR: /var/lib/poolstatis/experience-artifacts
+    volumes:
+      - poolstatis_artifacts:/var/lib/poolstatis/experience-artifacts
     ports:
       - "${POOLSTATIS_API_PORT:-3300}:3300"
     healthcheck:
@@ -76,3 +79,4 @@ services:
 
 volumes:
   poolstatis_pgdata:
+  poolstatis_artifacts:

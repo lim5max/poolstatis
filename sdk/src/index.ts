@@ -36,12 +36,26 @@ export interface PoolstatisEvent {
   properties?: Record<string, unknown>;
 }
 
+export interface ExperienceEventContext {
+  distinct_id: string;
+  session_id: string;
+  route: string;
+  version: string;
+  device: 'desktop' | 'mobile';
+  viewport_width: number;
+  viewport_height: number;
+  document_width: number;
+  document_height: number;
+  sequence: number;
+}
+
 /** Narrow wire contract consumed by the optional Browser Experience module. */
 export type ExperienceCaptureEvent =
-  | { kind: 'page_viewed'; distinct_id: string; session_id: string; route: string; sequence: number }
-  | { kind: 'element_clicked'; distinct_id: string; session_id: string; route: string; sequence: number; label: string; x: number; y: number }
-  | { kind: 'scroll_depth'; distinct_id: string; session_id: string; route: string; sequence: number; depth: number }
-  | { kind: 'client_error'; distinct_id: string; session_id: string; route: string; sequence: number; error_type: 'error' | 'unhandled_rejection' };
+  | ({ kind: 'page_viewed' } & ExperienceEventContext)
+  | ({ kind: 'element_clicked'; label: string; x: number; y: number; viewport_x: number; viewport_y: number } & ExperienceEventContext)
+  | ({ kind: 'scroll_depth'; depth: number } & ExperienceEventContext)
+  | ({ kind: 'section_exposed'; section: string; top: number } & ExperienceEventContext)
+  | ({ kind: 'client_error'; error_type: 'error' | 'unhandled_rejection' } & ExperienceEventContext);
 
 export interface ExperienceCaptureBatch {
   surface: string;

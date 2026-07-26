@@ -113,6 +113,10 @@ list_experience_surfaces(project)
 archive_experience_surface(project, key)
 query_interaction_map(project, {surface, date_from, date_to?, grid?, env?})
 get_experience_session(project, {surface, session_id, date_from?, date_to?, limit?, env?})
+register_experience_route(project, {surface, route:{key,name,path_pattern}})
+list_visual_experience_versions(project, {surface?, route?, env?})
+get_visual_experience_map(project, {surface, route, version, device, date_from, date_to?, grid?, env?})
+compare_visual_experience(project, {surface, route, baseline, comparison, grid?, env?})
 ```
 
 Surface обязана иметь реальный `purpose`; без active surface SDK не примет
@@ -120,6 +124,10 @@ capture. Карта показывает нормализованные **кли
 Timeline содержит только developer-provided stable route key, stable label,
 координаты, scroll depth и тип клиентской ошибки — DOM, URL/path, текст, input
 values, stacks и network data в Poolstatis не отправляются.
+
+Visual map tools additionally return bounded click bins/labels, scroll coverage,
+named-section counts/percentages and immutable snapshot metadata. MCP never
+returns image bytes. Comparison output is descriptive, not a causal claim.
 
 ### Запросы (analysis-time)
 

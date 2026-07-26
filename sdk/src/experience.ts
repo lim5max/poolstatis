@@ -12,8 +12,15 @@ export interface BrowserExperienceClient {
 export interface BrowserExperienceEnvironment {
   innerWidth: number;
   innerHeight: number;
+  scrollX?: number;
   scrollY: number;
-  document: { documentElement: { scrollHeight: number } };
+  document: {
+    documentElement: { scrollHeight: number; scrollWidth?: number; clientWidth?: number };
+    querySelectorAll?(selector: string): ArrayLike<{
+      getAttribute(name: string): string | null;
+      getBoundingClientRect(): { top: number; bottom: number };
+    }>;
+  };
   addEventListener(type: string, listener: (event: any) => void): void;
   removeEventListener(type: string, listener: (event: any) => void): void;
 }
@@ -25,6 +32,10 @@ export interface BrowserExperienceOptions {
   distinctId: string | (() => string);
   /** A developer-provided safe route key such as `checkout`, never window.location.pathname. */
   route: string | (() => string);
+  /** Immutable app/page release id, for example a git SHA or deploy version. */
+  version?: string | (() => string);
+  /** Override responsive classification; defaults to mobile below 768 CSS px. */
+  device?: 'desktop' | 'mobile' | (() => 'desktop' | 'mobile');
   /** Explicit consent boundary. No listener is attached until this returns true. */
   hasConsent: () => boolean;
   /** Inject only for tests or non-window browser environments. */
@@ -33,6 +44,8 @@ export interface BrowserExperienceOptions {
   sessionId?: string;
   /** Memory cap across queued/retrying interaction events (default 1,000). */
   maxQueue?: number;
+  /** Client-side privacy/traffic guard (default 120 accepted signals/minute). */
+  maxEventsPerMinute?: number;
 }
 
 const MILESTONES = [25, 50, 75, 100] as const;
@@ -41,6 +54,7 @@ const LABEL = /^[a-z][a-z0-9_.:-]*$/;
 // keepalive budget when the same batch is retried during pagehide.
 const MAX_BATCH_EVENTS = 25;
 const DEFAULT_MAX_QUEUE = 1_000;
+const DEFAULT_MAX_EVENTS_PER_MINUTE = 120;
 const RETRY_DELAY_MS = 1_000;
 
 /**
@@ -52,7 +66,11 @@ export class BrowserExperience {
   private readonly browser: BrowserExperienceEnvironment;
   private readonly sessionId: string;
   private readonly maxQueue: number;
+  private readonly maxEventsPerMinute: number;
   private readonly milestones = new Set<number>();
+  private readonly exposedSections = new Set<string>();
+  private acceptedAt: number[] = [];
+  private maxDepth = 0;
   private readonly pending: ExperienceCaptureEvent[] = [];
   private readonly retryBatches: ExperienceCaptureBatch[] = [];
   private sequence = 0;
@@ -62,22 +80,29 @@ export class BrowserExperience {
   private flushing = false;
   private inFlightBatch: ExperienceCaptureBatch | null = null;
 
-  private readonly onClick = (event: { target?: unknown; clientX?: number; clientY?: number }) => {
+  private readonly onClick = (event: { target?: unknown; clientX?: number; clientY?: number; pageX?: number; pageY?: number }) => {
     const label = labelFor(event.target);
     if (!label) return;
     const base = this.common();
     if (!base) return;
-    const width = Math.max(1, this.browser.innerWidth);
-    const height = Math.max(1, this.browser.innerHeight);
+    const documentWidth = base.document_width;
+    const documentHeight = base.document_height;
+    const clientX = event.clientX ?? 0;
+    const clientY = event.clientY ?? 0;
+    const pageX = event.pageX ?? clientX + (this.browser.scrollX ?? 0);
+    const pageY = event.pageY ?? clientY + this.browser.scrollY;
     this.enqueue({
       kind: 'element_clicked', ...base, label,
-      x: clamp((event.clientX ?? 0) / width), y: clamp((event.clientY ?? 0) / height),
+      x: clamp(pageX / documentWidth), y: clamp(pageY / documentHeight),
+      viewport_x: clamp(clientX / base.viewport_width),
+      viewport_y: clamp(clientY / base.viewport_height),
     });
   };
 
   private readonly onScroll = () => {
     const maxScroll = this.browser.document.documentElement.scrollHeight - this.browser.innerHeight;
     const depth = maxScroll <= 0 ? 100 : Math.floor(clamp(this.browser.scrollY / maxScroll) * 100);
+    this.maxDepth = Math.max(this.maxDepth, depth);
     const newlyReached = MILESTONES.filter((milestone) => depth >= milestone && !this.milestones.has(milestone));
     if (newlyReached.length === 0) return;
     let base = this.common();
@@ -89,6 +114,7 @@ export class BrowserExperience {
       this.enqueue({ kind: 'scroll_depth', ...base, depth: milestone });
       firstMilestone = false;
     }
+    this.captureSections();
   };
 
   private readonly onError = () => {
@@ -102,6 +128,11 @@ export class BrowserExperience {
   };
 
   private readonly onPageHide = () => {
+    this.captureSections();
+    const base = this.common();
+    if (base && this.maxDepth > 0 && !this.milestones.has(this.maxDepth)) {
+      this.enqueue({ kind: 'scroll_depth', ...base, depth: this.maxDepth });
+    }
     void this.flush({ keepalive: true });
   };
 
@@ -111,6 +142,7 @@ export class BrowserExperience {
     this.browser = browser;
     this.sessionId = options.sessionId ?? opaqueId();
     this.maxQueue = Math.max(MAX_BATCH_EVENTS, options.maxQueue ?? DEFAULT_MAX_QUEUE);
+    this.maxEventsPerMinute = Math.max(1, options.maxEventsPerMinute ?? DEFAULT_MAX_EVENTS_PER_MINUTE);
   }
 
   /** Attach listeners once consent exists and record the initial route key. */
@@ -124,6 +156,7 @@ export class BrowserExperience {
     this.browser.addEventListener('pagehide', this.onPageHide);
     const base = this.common();
     if (base) this.enqueue({ kind: 'page_viewed', ...base });
+    this.captureSections();
     await this.flush();
   }
 
@@ -202,19 +235,39 @@ export class BrowserExperience {
     };
   }
 
-  private common(): Omit<ExperienceCaptureEvent, 'kind' | 'label' | 'x' | 'y' | 'depth' | 'error_type'> | null {
+  private common(): Omit<ExperienceCaptureEvent, 'kind' | 'label' | 'x' | 'y' | 'viewport_x' | 'viewport_y' | 'depth' | 'section' | 'top' | 'error_type'> | null {
     const route = typeof this.options.route === 'function' ? this.options.route() : this.options.route;
     if (!LABEL.test(route)) return null;
+    const version = typeof this.options.version === 'function' ? this.options.version() : this.options.version ?? 'unversioned';
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(version)) return null;
+    const viewportWidth = Math.max(1, Math.round(this.browser.innerWidth));
+    const viewportHeight = Math.max(1, Math.round(this.browser.innerHeight));
+    const documentWidth = Math.max(
+      viewportWidth,
+      Math.round(this.browser.document.documentElement.scrollWidth ?? this.browser.document.documentElement.clientWidth ?? viewportWidth),
+    );
+    const documentHeight = Math.max(viewportHeight, Math.round(this.browser.document.documentElement.scrollHeight));
+    const configuredDevice = typeof this.options.device === 'function' ? this.options.device() : this.options.device;
     return {
       distinct_id: typeof this.options.distinctId === 'function' ? this.options.distinctId() : this.options.distinctId,
       session_id: this.sessionId,
       route,
+      version,
+      device: configuredDevice ?? (viewportWidth < 768 ? 'mobile' : 'desktop'),
+      viewport_width: viewportWidth,
+      viewport_height: viewportHeight,
+      document_width: documentWidth,
+      document_height: documentHeight,
       sequence: ++this.sequence,
-    } as Omit<ExperienceCaptureEvent, 'kind' | 'label' | 'x' | 'y' | 'depth' | 'error_type'>;
+    } as Omit<ExperienceCaptureEvent, 'kind' | 'label' | 'x' | 'y' | 'viewport_x' | 'viewport_y' | 'depth' | 'section' | 'top' | 'error_type'>;
   }
 
   private enqueue(event: ExperienceCaptureEvent): void {
     if (!this.started || !this.options.hasConsent()) return;
+    const now = Date.now();
+    this.acceptedAt = this.acceptedAt.filter((timestamp) => timestamp > now - 60_000);
+    if (this.acceptedAt.length >= this.maxEventsPerMinute) return;
+    this.acceptedAt.push(now);
     while (this.totalQueuedEvents() >= this.maxQueue) {
       if (this.pending.length > 0) this.pending.shift();
       else this.retryBatches.pop();
@@ -253,6 +306,22 @@ export class BrowserExperience {
     this.pending.splice(0);
     this.retryBatches.splice(0);
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+  }
+
+  private captureSections(): void {
+    const sections = this.browser.document.querySelectorAll?.('[data-poolstatis-section]') ?? [];
+    for (let index = 0; index < sections.length; index += 1) {
+      const element = sections[index]!;
+      const section = element.getAttribute('data-poolstatis-section');
+      if (!section || !LABEL.test(section) || this.exposedSections.has(section)) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.bottom <= 0 || rect.top >= this.browser.innerHeight) continue;
+      const base = this.common();
+      if (!base) return;
+      this.exposedSections.add(section);
+      const absoluteTop = Math.max(0, rect.top + this.browser.scrollY);
+      this.enqueue({ kind: 'section_exposed', ...base, section, top: clamp(absoluteTop / base.document_height) });
+    }
   }
 }
 
