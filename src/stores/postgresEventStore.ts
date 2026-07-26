@@ -30,6 +30,8 @@ import type {
   StorableEvent,
   TrendPoint,
   TrendQuery,
+  VisualExperienceQuery,
+  VisualExperienceResult,
 } from './eventStore.js';
 import { andFilters, compileFilters, numericPropSql } from './filters.js';
 import { ApiError } from '../errors.js';
@@ -683,7 +685,7 @@ export class PostgresEventStore implements EventStore {
        FROM events
        WHERE project_id = $1 AND env = $2 AND session_id = $3
          AND event_source = 'experience'
-         AND event IN ('experience.page_viewed', 'experience.element_clicked', 'experience.scroll_depth', 'experience.client_error')
+         AND event IN ('experience.page_viewed', 'experience.element_clicked', 'experience.scroll_depth', 'experience.section_exposed', 'experience.client_error')
          AND properties->>'surface' = $4
          AND "timestamp" >= $5 AND "timestamp" < $6
        ORDER BY "timestamp", (properties->>'sequence')::int
@@ -705,6 +707,171 @@ export class PostgresEventStore implements EventStore {
       [projectId, env, surfaces],
     );
     return Object.fromEntries(rows.map((row) => [row.surface, row.last_capture_at.toISOString()]));
+  }
+
+  async visualExperience(q: VisualExperienceQuery): Promise<VisualExperienceResult> {
+    const params: unknown[] = [
+      q.projectId, q.env, q.surface, q.route, q.version, q.device, q.from, q.to,
+    ];
+    const viewportWhere = q.viewportWidth !== undefined && q.viewportHeight !== undefined
+      ? ` AND (properties->>'viewport_width')::int = $${params.push(q.viewportWidth)}
+          AND (properties->>'viewport_height')::int = $${params.push(q.viewportHeight)}`
+      : '';
+    const documentWhere = q.documentWidth !== undefined && q.documentHeight !== undefined
+      ? ` AND (properties->>'document_width')::int = $${params.push(q.documentWidth)}
+          AND (properties->>'document_height')::int = $${params.push(q.documentHeight)}`
+      : '';
+    const gridParam = `$${params.push(q.grid)}`;
+    const filterParams = params.slice(0, -1);
+    const where = `project_id = $1 AND env = $2 AND event_source = 'experience'
+      AND properties->>'surface' = $3 AND properties->>'route' = $4
+      AND properties->>'version' = $5 AND properties->>'device' = $6
+      AND "timestamp" >= $7 AND "timestamp" < $8${viewportWhere}${documentWhere}`;
+    const cohortCte = `WITH eligible AS (
+        SELECT * FROM events WHERE ${where}
+      ), page_sessions AS (
+        SELECT DISTINCT session_id,
+          poolstatis_resolve_actor(project_id, env, distinct_id) AS actor
+        FROM eligible
+        WHERE event = 'experience.page_viewed' AND session_id IS NOT NULL
+      ), cohort AS (
+        SELECT eligible.*
+        FROM eligible
+        JOIN page_sessions
+          ON page_sessions.session_id = eligible.session_id
+         AND page_sessions.actor = poolstatis_resolve_actor(
+           eligible.project_id,
+           eligible.env,
+           eligible.distinct_id
+         )
+      )`;
+    const [summary, cells, labels, scroll, sections] = await Promise.all([
+      this.pool.query<{
+        events: string; page_views: string; sessions: string; actors: string; clicks: string;
+        max_document_width: string | null; max_document_height: string | null;
+      }>(
+        `${cohortCte}
+         SELECT count(*)::int AS events,
+                count(*) FILTER (WHERE event = 'experience.page_viewed')::int AS page_views,
+                count(DISTINCT (
+                  session_id,
+                  poolstatis_resolve_actor(project_id, env, distinct_id)
+                ))::int AS sessions,
+                count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors,
+                count(*) FILTER (WHERE event = 'experience.element_clicked')::int AS clicks,
+                max((properties->>'document_width')::int) AS max_document_width,
+                max((properties->>'document_height')::int) AS max_document_height
+         FROM cohort`,
+        filterParams,
+      ),
+      this.pool.query<{ x: string; y: string; count: string; actors: string }>(
+        `${cohortCte}
+         SELECT least(${gridParam} - 1, floor((properties->>'x')::double precision * ${gridParam})::int) AS x,
+                least(${gridParam} - 1, floor((properties->>'y')::double precision * ${gridParam})::int) AS y,
+                count(*)::int AS count,
+                count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors
+         FROM cohort
+         WHERE event = 'experience.element_clicked'
+         GROUP BY 1, 2 ORDER BY count DESC, y, x LIMIT 4096`,
+        params,
+      ),
+      this.pool.query<{ label: string; count: string; actors: string }>(
+        `${cohortCte}
+         SELECT properties->>'label' AS label, count(*)::int AS count,
+                count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors
+         FROM cohort
+         WHERE event = 'experience.element_clicked'
+         GROUP BY 1 ORDER BY count DESC, label LIMIT 100`,
+        filterParams,
+      ),
+      this.pool.query<{ depth: string; sessions: string; actors: string; percentage: string }>(
+        `${cohortCte}, page_total AS (
+           SELECT count(*)::int AS sessions FROM page_sessions
+         ), maxima AS (
+           SELECT session_id,
+                  poolstatis_resolve_actor(project_id, env, distinct_id) AS actor,
+                  max((properties->>'depth')::int) AS max_depth
+           FROM cohort WHERE event = 'experience.scroll_depth'
+           GROUP BY session_id, poolstatis_resolve_actor(project_id, env, distinct_id)
+         )
+         SELECT d.depth,
+                (count(DISTINCT (m.session_id, m.actor))
+                  FILTER (WHERE m.session_id IS NOT NULL))::int AS sessions,
+                count(DISTINCT m.actor)::int AS actors,
+                CASE WHEN p.sessions = 0 THEN 0
+                     ELSE round(
+                       (count(DISTINCT (m.session_id, m.actor))
+                         FILTER (WHERE m.session_id IS NOT NULL))::numeric * 100 / p.sessions,
+                       2
+                     ) END AS percentage
+         FROM unnest(ARRAY[10,20,30,40,50,60,70,80,90,100]) AS d(depth)
+         CROSS JOIN page_total p
+         LEFT JOIN maxima m ON m.max_depth >= d.depth
+         GROUP BY d.depth, p.sessions ORDER BY d.depth`,
+        filterParams,
+      ),
+      this.pool.query<{
+        section: string; top: string; sessions: string; actors: string; percentage: string; dropoff_percentage: string;
+      }>(
+        `${cohortCte}, page_total AS (
+           SELECT count(*)::int AS sessions FROM page_sessions
+         )
+         SELECT properties->>'section' AS section,
+                min((properties->>'top')::double precision) AS top,
+                count(DISTINCT (
+                  session_id,
+                  poolstatis_resolve_actor(project_id, env, distinct_id)
+                ))::int AS sessions,
+                count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors,
+                CASE WHEN p.sessions = 0 THEN 0
+                     ELSE round(count(DISTINCT (
+                       session_id,
+                       poolstatis_resolve_actor(project_id, env, distinct_id)
+                     ))::numeric * 100 / p.sessions, 2) END AS percentage,
+                CASE WHEN p.sessions = 0 THEN 0
+                     ELSE round((1 - count(DISTINCT (
+                       session_id,
+                       poolstatis_resolve_actor(project_id, env, distinct_id)
+                     ))::numeric / p.sessions) * 100, 2) END AS dropoff_percentage
+         FROM cohort CROSS JOIN page_total p
+         WHERE event = 'experience.section_exposed'
+         GROUP BY properties->>'section', p.sessions
+         ORDER BY top, section LIMIT 200`,
+        filterParams,
+      ),
+    ]);
+    const total = summary.rows[0]!;
+    return {
+      summary: {
+        events: Number(total.events),
+        page_views: Number(total.page_views),
+        sessions: Number(total.sessions),
+        actors: Number(total.actors),
+        clicks: Number(total.clicks),
+        max_document_width: Number(total.max_document_width ?? 0),
+        max_document_height: Number(total.max_document_height ?? 0),
+      },
+      click_cells: cells.rows.map((row) => ({
+        x: Number(row.x), y: Number(row.y), count: Number(row.count), actors: Number(row.actors),
+      })),
+      click_labels: labels.rows.map((row) => ({
+        label: row.label, count: Number(row.count), actors: Number(row.actors),
+      })),
+      scroll_coverage: scroll.rows.map((row) => ({
+        depth: Number(row.depth),
+        sessions: Number(row.sessions),
+        actors: Number(row.actors),
+        percentage: Number(row.percentage),
+      })),
+      sections: sections.rows.map((row) => ({
+        section: row.section,
+        top: Number(row.top),
+        sessions: Number(row.sessions),
+        actors: Number(row.actors),
+        percentage: Number(row.percentage),
+        dropoff_percentage: Number(row.dropoff_percentage),
+      })),
+    };
   }
 
   async purge(projectId: string, env?: string, distinctId?: string): Promise<number> {
@@ -1131,6 +1298,9 @@ function toExperienceSessionEvent(
     return { ...base, kind: 'element_clicked', label: String(properties.label), x: Number(properties.x), y: Number(properties.y) };
   }
   if (row.event === 'experience.scroll_depth') return { ...base, kind: 'scroll_depth', depth: Number(properties.depth) };
+  if (row.event === 'experience.section_exposed') {
+    return { ...base, kind: 'section_exposed', section: String(properties.section), top: Number(properties.top) };
+  }
   if (row.event === 'experience.client_error') {
     return { ...base, kind: 'client_error', error_type: properties.error_type as 'error' | 'unhandled_rejection' };
   }

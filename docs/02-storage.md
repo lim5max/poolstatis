@@ -136,6 +136,11 @@ warm-cache identical trend — 2 542 req/s, p95 5.32 ms; HTTP errors 0. Это
   сохраняются до cutoff проекта, чтобы поздний retry Browser Experience не
   продублировал клики или сессию. Политика перечитывается и блокируется внутри
   каждого DELETE; `retention_months < 1` запрещён CHECK constraint.
+- Visual page bytes never live in `events` or PostgreSQL. Metadata is stored in
+  `experience_snapshots`; bytes use the `ArtifactStore` seam. Self-host mounts
+  `poolstatis_artifacts` at `POOLSTATIS_EXPERIENCE_ARTIFACT_DIR`. Back up the DB
+  and artifact volume together. Expired snapshots are removed by the retention
+  worker; an authenticated project route provides explicit per-snapshot purge.
 - Retention и Browser Experience индексы каждого event partition, а также
   metadata cleanup index, строятся через `CREATE INDEX CONCURRENTLY`; дочерние
   event-индексы attach-ятся к metadata-only parent. API начинает слушать до

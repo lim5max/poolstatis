@@ -32,7 +32,9 @@ import {
   concludeExperiment, createExperiment, getExperimentResults, listExperiments, startExperiment, updateExperiment,
 } from '../services/experiments.js';
 import {
-  archiveExperienceSurface, captureExperienceEvents, createExperienceSurface, listExperienceSurfaces,
+  archiveExperienceSurface, captureExperienceEvents, createExperienceSnapshot, createExperienceSurface,
+  deleteExperienceSnapshot, listExperienceRoutes, listExperienceSnapshots, listExperienceSurfaces,
+  purgeExperienceSnapshots, readExperienceSnapshot, registerExperienceRoute,
 } from '../services/experience.js';
 import { createActorLink, listActorLinks, revokeActorLink } from '../services/identity.js';
 import {
@@ -64,7 +66,7 @@ import {
 } from '../services/rateLimiter.js';
 import {
   deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
-  actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
+  actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
   createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
@@ -88,6 +90,8 @@ export interface ServerOptions {
   connectorEncryptionKey?: string;
   corsOrigins?: string[];
   outboundPolicy?: OutboundPolicyOptions;
+  artifactStore?: CreateContextOptions['artifactStore'];
+  artifactDir?: string;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -227,8 +231,13 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
     contextOptions.connectorEncryptionKey = options.connectorEncryptionKey;
   }
   if (options.outboundPolicy !== undefined) contextOptions.outboundPolicy = options.outboundPolicy;
+  if (options.artifactStore !== undefined) contextOptions.artifactStore = options.artifactStore;
+  if (options.artifactDir !== undefined) contextOptions.artifactDir = options.artifactDir;
   const ctx = createContext(pool, contextOptions);
-  const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
+  const app = Fastify({ logger: false });
+  app.addContentTypeParser(['image/png', 'image/webp'], { parseAs: 'buffer' }, (_req, body, done) => {
+    done(null, body);
+  });
   const rateLimiter = options.rateLimit === false || options.rateLimit === undefined
     ? null
     : new TenantRateLimiter(options.rateLimit);
@@ -724,6 +733,92 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     return surface;
   });
 
+  app.post('/api/v1/projects/:slug/experience/surfaces/:key/routes', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const route = await registerExperienceRoute(
+      ctx.pool,
+      project.id,
+      key,
+      experienceRouteRegistrationSchema.parse(req.body),
+    );
+    return reply.status(201).send(route);
+  });
+
+  app.get('/api/v1/projects/:slug/experience/routes', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { surface } = req.query as { surface?: string };
+    return { routes: await listExperienceRoutes(ctx.pool, project.id, surface) };
+  });
+
+  app.post('/api/v1/projects/:slug/experience/snapshots', {
+    bodyLimit: 6 * 1024 * 1024,
+  }, async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const query = req.query as Record<string, string | undefined>;
+    const meta = experienceSnapshotMetaSchema.parse({
+      surface: query.surface,
+      route: query.route,
+      version: query.version,
+      device: query.device,
+      env: query.env ?? req.auth.env,
+      release_hash: query.release_hash,
+      viewport_width: query.viewport_width ? Number(query.viewport_width) : undefined,
+      viewport_height: query.viewport_height ? Number(query.viewport_height) : undefined,
+      document_width: query.document_width ? Number(query.document_width) : undefined,
+      document_height: query.document_height ? Number(query.document_height) : undefined,
+      captured_at: query.captured_at,
+      retention_days: query.retention_days ? Number(query.retention_days) : undefined,
+    });
+    const mimeType = String(req.headers['content-type'] ?? '').split(';')[0]!;
+    if (!Buffer.isBuffer(req.body)) throw badRequest('snapshot_body_invalid', 'snapshot body must be raw PNG or WebP bytes');
+    return reply.status(201).send(await createExperienceSnapshot(
+      ctx.pool,
+      ctx.artifacts,
+      project.id,
+      meta,
+      mimeType,
+      req.body,
+    ));
+  });
+
+  app.get('/api/v1/projects/:slug/experience/snapshots', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { surface, route, env } = req.query as { surface?: string; route?: string; env?: string };
+    return {
+      snapshots: await listExperienceSnapshots(ctx.pool, project.id, {
+        ...(surface ? { surface } : {}),
+        ...(route ? { route } : {}),
+        ...(env ? { env } : {}),
+      }),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/experience/snapshots/:id/image', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const { snapshot, bytes } = await readExperienceSnapshot(ctx.pool, ctx.artifacts, project.id, id);
+    return reply
+      .header('content-type', snapshot.mime_type)
+      .header('content-length', String(snapshot.byte_size))
+      .header('cache-control', 'private, max-age=31536000, immutable')
+      .header('x-content-type-options', 'nosniff')
+      .send(bytes);
+  });
+
+  app.delete('/api/v1/projects/:slug/experience/snapshots/:id', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    await deleteExperienceSnapshot(ctx.pool, ctx.artifacts, project.id, id);
+    return reply.status(204).send();
+  });
+
   // ----- feature delivery -----
   app.post('/api/v1/projects/:slug/flags', async (req, reply) => {
     platform(req);
@@ -925,15 +1020,24 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     }
     let events_deleted = 0;
     let entities_deleted = 0;
+    let snapshots_deleted = 0;
     if (body.scope === 'events' || body.scope === 'all') {
       events_deleted = await ctx.eventStore.purge(project.id, body.env, body.distinct_id);
     }
     if (body.scope === 'entities' || body.scope === 'all') {
       entities_deleted = await deleteEntities(ctx.pool, project.id, body.env);
     }
+    if (body.scope === 'all') {
+      snapshots_deleted = await purgeExperienceSnapshots(
+        ctx.pool,
+        ctx.artifacts,
+        project.id,
+        body.env,
+      );
+    }
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
-    return { events_deleted, entities_deleted, env: body.env };
+    return { events_deleted, entities_deleted, snapshots_deleted, env: body.env };
   });
 
   app.post('/api/v1/projects/:slug/query', async (req) => {

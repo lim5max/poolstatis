@@ -35,6 +35,8 @@ describe('browser experience MCP tools', () => {
     expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
       'create_experience_surface', 'list_experience_surfaces', 'archive_experience_surface',
       'query_interaction_map', 'get_experience_session',
+      'register_experience_route', 'list_visual_experience_versions',
+      'get_visual_experience_map', 'compare_visual_experience',
     ]));
 
     const created = await client.callTool({
@@ -52,6 +54,7 @@ describe('browser experience MCP tools', () => {
       events: [
         { kind: 'page_viewed', distinct_id: 'actor-1', session_id: 'session-1', route: 'checkout', sequence: 1 },
         { kind: 'element_clicked', distinct_id: 'actor-1', session_id: 'session-1', route: 'checkout', sequence: 2, label: 'pay_now', x: 0.5, y: 0.25 },
+        { kind: 'section_exposed', distinct_id: 'actor-1', session_id: 'session-1', route: 'checkout', sequence: 3, section: 'payment', top: 0.4 },
       ],
     });
     expect(captured.status).toBe(200);
@@ -73,6 +76,52 @@ describe('browser experience MCP tools', () => {
     expect(session.isError).not.toBe(true);
     expect(session.structuredContent).toMatchObject({
       kind: 'experience_session', summary: { page_views: 1, clicks: 1 },
+    });
+    const versions = await client.callTool({
+      name: 'list_visual_experience_versions',
+      arguments: { project: env.projectSlug, surface: 'checkout', env: 'prod' },
+    });
+    expect(versions.isError).not.toBe(true);
+    expect(versions.structuredContent).toMatchObject({
+      routes: [expect.objectContaining({ surface_key: 'checkout', key: 'checkout' })],
+      snapshots: [],
+    });
+
+    const visual = await client.callTool({
+      name: 'get_visual_experience_map',
+      arguments: {
+        project: env.projectSlug,
+        query: {
+          surface: 'checkout', route: 'checkout', version: 'unversioned',
+          device: 'desktop', date_from: '-1d', env: 'prod', grid: 8,
+        },
+      },
+    });
+    expect(visual.isError).not.toBe(true);
+    expect(visual.structuredContent).toMatchObject({
+      kind: 'visual_experience',
+      summary: { page_views: 1, clicks: 1 },
+      sections: [{ section: 'payment', percentage: 100 }],
+      snapshot: null,
+    });
+
+    const compared = await client.callTool({
+      name: 'compare_visual_experience',
+      arguments: {
+        project: env.projectSlug,
+        query: {
+          surface: 'checkout',
+          route: 'checkout',
+          env: 'prod',
+          baseline: { version: 'unversioned', device: 'desktop', date_from: '-1d' },
+          comparison: { version: 'unversioned', device: 'desktop', date_from: '-1d' },
+        },
+      },
+    });
+    expect(compared.isError).not.toBe(true);
+    expect(compared.structuredContent).toMatchObject({
+      kind: 'visual_experience_compare',
+      delta: { sessions: 0, clicks: 0, actors: 0 },
     });
     const afterReads = await env.pool.query<{ quantity: string }>(
       `SELECT COALESCE(sum(quantity), 0)::bigint AS quantity FROM usage_ledger WHERE project_id = $1`, [env.projectId],

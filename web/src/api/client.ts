@@ -1,6 +1,6 @@
 import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken,
+  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 
 export class ApiError extends Error {
@@ -38,6 +38,29 @@ export class PoolstatisClient {
       throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
     }
     return json as T;
+  }
+
+  private async raw(method: string, path: string, body?: Blob): Promise<Response> {
+    const token = await this.bearer();
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(body ? { 'content-type': body.type } : {}),
+        },
+        ...(body ? { body } : {}),
+      });
+    } catch {
+      throw new ApiError('network', `cannot reach ${this.baseUrl || 'the server'} — is it running?`);
+    }
+    if (!res.ok) {
+      const json = await res.json().catch(() => null);
+      const e = (json as { error?: { code: string; message: string; hint?: string } } | null)?.error;
+      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
+    }
+    return res;
   }
 
   me() {
@@ -262,7 +285,7 @@ export class PoolstatisClient {
   }
 
   purgeData(slug: string, body: { env: string; scope: 'events' | 'entities' | 'all'; confirm_slug: string; distinct_id?: string }) {
-    return this.req<{ events_deleted: number; entities_deleted: number; env: string }>('POST', `/api/v1/projects/${slug}/data/purge`, body);
+    return this.req<{ events_deleted: number; entities_deleted: number; snapshots_deleted: number; env: string }>('POST', `/api/v1/projects/${slug}/data/purge`, body);
   }
 
   funnels(slug: string) {
@@ -319,7 +342,72 @@ export class PoolstatisClient {
     return this.req<{ surfaces: ExperienceSurface[] }>('GET', `/api/v1/projects/${slug}/experience/surfaces?env=${encodeURIComponent(env)}`).then((r) => r.surfaces);
   }
 
-  createExperienceSurface(slug: string, body: { key: string; name: string; purpose: string }) {
+  experienceRoutes(slug: string, surface?: string) {
+    const query = surface ? `?surface=${encodeURIComponent(surface)}` : '';
+    return this.req<{ routes: ExperienceRoute[] }>('GET', `/api/v1/projects/${slug}/experience/routes${query}`)
+      .then((response) => response.routes);
+  }
+
+  registerExperienceRoute(slug: string, surface: string, body: { key: string; name: string; path_pattern: string }) {
+    return this.req<ExperienceRoute>(
+      'POST',
+      `/api/v1/projects/${slug}/experience/surfaces/${encodeURIComponent(surface)}/routes`,
+      body,
+    );
+  }
+
+  experienceSnapshots(slug: string, filter: { surface?: string; route?: string; env?: string } = {}) {
+    const query = new URLSearchParams();
+    if (filter.surface) query.set('surface', filter.surface);
+    if (filter.route) query.set('route', filter.route);
+    if (filter.env) query.set('env', filter.env);
+    return this.req<{ snapshots: ExperienceSnapshot[] }>(
+      'GET',
+      `/api/v1/projects/${slug}/experience/snapshots${query.size ? `?${query}` : ''}`,
+    ).then((response) => response.snapshots);
+  }
+
+  async uploadExperienceSnapshot(
+    slug: string,
+    meta: {
+      surface: string; route: string; version: string; device: 'desktop' | 'mobile'; env: string;
+      release_hash: string; viewport_width: number; viewport_height: number;
+      document_width: number; document_height: number; captured_at: string; retention_days: number;
+    },
+    file: File,
+  ): Promise<ExperienceSnapshot> {
+    const query = new URLSearchParams(Object.entries(meta).map(([key, value]) => [key, String(value)]));
+    const response = await this.raw('POST', `/api/v1/projects/${slug}/experience/snapshots?${query}`, file);
+    return response.json() as Promise<ExperienceSnapshot>;
+  }
+
+  async experienceSnapshotImage(slug: string, id: string): Promise<string> {
+    const response = await this.raw('GET', `/api/v1/projects/${slug}/experience/snapshots/${encodeURIComponent(id)}/image`);
+    return URL.createObjectURL(await response.blob());
+  }
+
+  visualExperience(slug: string, body: {
+    surface: string; route: string; version: string; device: 'desktop' | 'mobile';
+    date_from: string; date_to?: string; grid?: number; env: string;
+  }) {
+    return this.req<VisualExperienceResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'visual_experience',
+      ...body,
+    });
+  }
+
+  compareVisualExperience(slug: string, body: {
+    surface: string; route: string; env: string; grid?: number;
+    baseline: { version: string; device: 'desktop' | 'mobile'; date_from: string; date_to?: string };
+    comparison: { version: string; device: 'desktop' | 'mobile'; date_from: string; date_to?: string };
+  }) {
+    return this.req<VisualExperienceCompareResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'visual_experience_compare',
+      ...body,
+    });
+  }
+
+  createExperienceSurface(slug: string, body: { key: string; name: string; purpose: string; route_pattern?: string }) {
     return this.req<ExperienceSurface>('POST', `/api/v1/projects/${slug}/experience/surfaces`, body);
   }
 

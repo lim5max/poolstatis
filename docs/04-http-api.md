@@ -90,19 +90,30 @@ surface:
     "distinct_id": "user_8a21",
     "session_id": "opaque-session-id",
     "route": "checkout",
+    "version": "2026.07.27-abc123",
+    "device": "desktop",
+    "viewport_width": 1440,
+    "viewport_height": 900,
+    "document_width": 1440,
+    "document_height": 3200,
     "sequence": 7,
     "label": "pay_now",
     "x": 0.62,
-    "y": 0.48
+    "y": 0.48,
+    "viewport_x": 0.62,
+    "viewport_y": 0.72
   }]
 }
 // → { "accepted": 1 }
 ```
 
-Допустимы только `page_viewed`, labelled `element_clicked`, `scroll_depth` и
-`client_error`. `route` — developer-provided stable key, а не URL/path. API
-откажет unknown/archived surface, invalid route key, duplicate fields и
-неразрешённые поля. `batch_id` обязателен и сохраняется на retry, поэтому
+Допустимы только `page_viewed`, labelled `element_clicked`, `scroll_depth`,
+`section_exposed` и `client_error`. `route` — registered developer-provided
+stable key, а не URL/path. Every signal carries a release `version`,
+desktop/mobile device and viewport/document dimensions. Click `x/y` are
+normalized document coordinates; `viewport_x/viewport_y` retain layout-relative
+position. API откажет unknown/archived surface, unregistered/invalid route key,
+duplicate fields и неразрешённые поля. `batch_id` обязателен и сохраняется на retry, поэтому
 потерянный HTTP response не удваивает карту. DOM, URL/path, текст, CSS
 selectors, input values, error stack/message и network data не являются частью
 этого контракта.
@@ -182,12 +193,22 @@ GET    /api/v1/projects/{slug}/experiments/{key}/results?env=prod
 POST   /api/v1/projects/{slug}/experience/surfaces
 GET    /api/v1/projects/{slug}/experience/surfaces
 POST   /api/v1/projects/{slug}/experience/surfaces/{key}/archive
+POST   /api/v1/projects/{slug}/experience/surfaces/{key}/routes
+GET    /api/v1/projects/{slug}/experience/routes
+POST   /api/v1/projects/{slug}/experience/snapshots
+GET    /api/v1/projects/{slug}/experience/snapshots
+GET    /api/v1/projects/{slug}/experience/snapshots/{id}/image
+DELETE /api/v1/projects/{slug}/experience/snapshots/{id}
 POST   /api/v1/projects/{slug}/query          ← единая точка Query DSL
 GET    /api/v1/projects/{slug}/events/sample
 GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+Snapshot upload metadata includes viewport and CSS-pixel document dimensions
+separately from the validated physical PNG/WebP width and height. Visual queries
+match all four layout dimensions before overlaying aggregate coordinates.
 
 Proof gates, actor-link semantics, property trust и точная capability matrix PostHog
 описаны в [09-product-decision-loop.md](09-product-decision-loop.md). `observe-agent`
@@ -239,6 +260,14 @@ summary. Оба запроса учитывают только события, �
 endpoint; generic `/i/v1/events` с похожим именем не попадает в эти результаты.
 Как и любой `pk_` write key, typed endpoint не является anti-fraud границей:
 доверяй данным как product telemetry, а не как доказательству действий пользователя.
+
+`kind: "visual_experience"` requires the exact
+`{surface,route,version,device,date_from,date_to?,grid?,env}` tuple and returns
+snapshot metadata, click cells/labels, scroll coverage, named-section
+reach/drop-off, counts, percentages and a causality caveat.
+`kind: "visual_experience_compare"` compares two device/version/period cohorts
+and returns count and percentage-point deltas. Snapshot upload is raw PNG/WebP;
+the API never fetches a caller-supplied URL.
 
 ## Query DSL
 

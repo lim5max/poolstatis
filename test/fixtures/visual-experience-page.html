@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Poolstatis visual map fixture</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #18211d; background: #f4f6f2; font: 16px/1.5 system-ui, sans-serif; }
+    header { display: flex; justify-content: space-between; padding: 24px 6vw; border-bottom: 1px solid #cad1ca; }
+    main { overflow: hidden; }
+    section { min-height: 720px; padding: 96px 8vw; border-bottom: 1px solid #cad1ca; }
+    h1, h2 { max-width: 760px; margin: 0; font-family: Georgia, serif; font-weight: 400; line-height: 1; }
+    h1 { font-size: clamp(54px, 8vw, 116px); }
+    h2 { font-size: clamp(42px, 6vw, 76px); }
+    p { max-width: 620px; color: #5b655f; }
+    a { display: inline-block; margin-top: 24px; padding: 14px 20px; color: white; background: #1f684c; text-decoration: none; }
+    .hero { background: radial-gradient(circle at 80% 20%, #d9e6dc, transparent 38%); }
+    .proof { min-height: 520px; background: #e9eee7; }
+    .workflow { background: linear-gradient(180deg, #f4f6f2, #dfe9e1); }
+    .final { min-height: 620px; color: #f4f6f2; background: #22362d; }
+    .final p { color: #c7d1cb; }
+    @media (max-width: 600px) {
+      header { padding: 18px 20px; }
+      section { min-height: 620px; padding: 72px 24px; }
+      h1 { font-size: 58px; }
+      h2 { font-size: 46px; }
+    }
+  </style>
+</head>
+<body>
+  <header><strong>Poolstatis</strong><span>Visual map fixture · release-a</span></header>
+  <main>
+    <section class="hero" data-poolstatis-section="hero">
+      <h1>See where the page loses intent.</h1>
+      <p>A deterministic page fixture for click intensity, scroll reach and named-section evidence.</p>
+      <a href="#workflow" data-poolstatis-label="hero.get_started">Get started</a>
+    </section>
+    <section class="proof" data-poolstatis-section="proof">
+      <h2>Evidence stays tied to the release.</h2>
+      <p>Desktop and mobile snapshots are separate immutable backgrounds.</p>
+    </section>
+    <section id="workflow" class="workflow" data-poolstatis-section="workflow">
+      <h2>Capture. Aggregate. Compare.</h2>
+      <p>No DOM, text, query strings, form values or pointer paths enter the analytics event.</p>
+      <a href="#final" data-poolstatis-label="workflow.open_mcp">Open MCP workflow</a>
+    </section>
+    <section id="final" class="final" data-poolstatis-section="final_cta">
+      <h2>Act on the block that actually drops.</h2>
+      <p>Counts and percentages remain available to humans and coding agents.</p>
+      <a href="#" data-poolstatis-label="final_cta.start">Start measuring</a>
+    </section>
+  </main>
+</body>
+</html>

@@ -94,6 +94,7 @@ const experience = new BrowserExperience({
   surface: 'checkout',
   distinctId: () => currentUser.id,
   route: () => 'checkout', // stable key; never pass window.location.pathname
+  version: import.meta.env.VITE_RELEASE_SHA,
   hasConsent: () => consent.has('product_analytics'),
 });
 
@@ -101,6 +102,15 @@ await experience.start();
 // <button data-poolstatis-label="pay_now">Pay now</button>
 // Call `experience.stop()` if consent is withdrawn or the app unmounts.
 ```
+
+For visual maps the module also sends desktop/mobile, viewport/document
+dimensions and normalized document click coordinates. Mark real blocks with
+`data-poolstatis-section="pricing"` and clickable targets with
+`data-poolstatis-label="pricing.choose_pro"`.
+
+The module does not collect the section's text or DOM. It sends one safe named
+exposure per section, batches at most 25 signals per request, and defaults to a
+120-signals/minute browser guard.
 
 The agent can use `query_interaction_map` for normalised click cells and
 `get_experience_session` for a known session id. These are interaction maps,

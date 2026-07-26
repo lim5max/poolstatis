@@ -32,6 +32,13 @@ const PARTITION_INDEXES: PartitionIndexSpec[] = [
     definition: `(project_id, env, (properties->>'surface'), "timestamp" DESC)
       WHERE event_source = 'experience'`,
   },
+  {
+    parent: 'events_visual_experience_lookup_idx',
+    childPrefix: 'ev_visual_exp',
+    definition: `(project_id, env, (properties->>'surface'), (properties->>'route'),
+      (properties->>'version'), (properties->>'device'), "timestamp" DESC)
+      WHERE event_source = 'experience'`,
+  },
 ];
 
 export interface RetentionIndexResult {

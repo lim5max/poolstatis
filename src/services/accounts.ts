@@ -340,6 +340,8 @@ export async function assertHostedDatabaseRoleSeparation(
     can_write_policy: boolean;
     can_read_migrations: boolean;
     can_write_migrations: boolean;
+    can_use_experience_routes: boolean;
+    can_use_experience_snapshots: boolean;
   }>(
     `SELECT
        current_user AS user_name,
@@ -370,7 +372,17 @@ export async function assertHostedDatabaseRoleSeparation(
          current_user,
          'schema_migrations',
          'INSERT,UPDATE,DELETE'
-       ) AS can_write_migrations`,
+       ) AS can_write_migrations,
+       has_table_privilege(current_user, 'experience_routes', 'SELECT')
+         AND has_table_privilege(current_user, 'experience_routes', 'INSERT')
+         AND has_table_privilege(current_user, 'experience_routes', 'UPDATE')
+         AND has_table_privilege(current_user, 'experience_routes', 'DELETE')
+         AS can_use_experience_routes,
+       has_table_privilege(current_user, 'experience_snapshots', 'SELECT')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'INSERT')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'UPDATE')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'DELETE')
+         AS can_use_experience_snapshots`,
   );
   const migration = migrationRows[0];
   const runtime = runtimeRows[0];
@@ -384,7 +396,9 @@ export async function assertHostedDatabaseRoleSeparation(
       || runtime.can_read_policy
       || runtime.can_write_policy
       || runtime.can_read_migrations
-      || runtime.can_write_migrations) {
+      || runtime.can_write_migrations
+      || !runtime.can_use_experience_routes
+      || !runtime.can_use_experience_snapshots) {
     throw new Error(
       'hosted database roles are not separated: use a deploy migrator with Core/activator ADMIN OPTION and a distinct poolstatis_core_runtime login without policy or migration-table access',
     );
@@ -404,6 +418,8 @@ export async function assertHostedRuntimeDatabaseRole(
     can_write_policy: boolean;
     can_read_migrations: boolean;
     can_write_migrations: boolean;
+    can_use_experience_routes: boolean;
+    can_use_experience_snapshots: boolean;
   }>(
     `SELECT
        pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS core_member,
@@ -430,7 +446,17 @@ export async function assertHostedRuntimeDatabaseRole(
          current_user,
          'schema_migrations',
          'INSERT,UPDATE,DELETE'
-       ) AS can_write_migrations`,
+       ) AS can_write_migrations,
+       has_table_privilege(current_user, 'experience_routes', 'SELECT')
+         AND has_table_privilege(current_user, 'experience_routes', 'INSERT')
+         AND has_table_privilege(current_user, 'experience_routes', 'UPDATE')
+         AND has_table_privilege(current_user, 'experience_routes', 'DELETE')
+         AS can_use_experience_routes,
+       has_table_privilege(current_user, 'experience_snapshots', 'SELECT')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'INSERT')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'UPDATE')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'DELETE')
+         AS can_use_experience_snapshots`,
   );
   const runtime = rows[0];
   if (!runtime
@@ -440,7 +466,9 @@ export async function assertHostedRuntimeDatabaseRole(
       || runtime.can_read_policy
       || runtime.can_write_policy
       || runtime.can_read_migrations
-      || runtime.can_write_migrations) {
+      || runtime.can_write_migrations
+      || !runtime.can_use_experience_routes
+      || !runtime.can_use_experience_snapshots) {
     throw new Error(
       'hosted runtime must use poolstatis_core_runtime without activation, policy-table, or schema-migration access',
     );

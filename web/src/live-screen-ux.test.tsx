@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Experience } from './screens/Experience';
@@ -22,7 +22,13 @@ const metric = {
 } as const;
 
 function store(client: Record<string, unknown>) {
-  return { client, project: 'alpha', env: 'prod' } as never;
+  return {
+    client,
+    project: 'alpha',
+    env: 'prod',
+    availableEnvs: ['prod'],
+    setEnv: vi.fn(),
+  } as never;
 }
 
 describe('live customer screen UX', () => {
@@ -126,27 +132,31 @@ describe('live customer screen UX', () => {
     expect(screen.getByText('Landing CTA example')).toBeInTheDocument();
   });
 
-  it('shows capture recency and keeps scroll maps behind the Visual Experience Maps boundary', async () => {
+  it('keeps customer capture recency while exposing the full Visual Experience setup', async () => {
     mockedStore.mockReturnValue(store({
       experienceSurfaces: vi.fn().mockResolvedValue([{
         id: 's1', key: 'checkout', name: 'Checkout', purpose: 'Understand checkout friction.',
         status: 'active', created_at: '2026-07-01', updated_at: '2026-07-01',
         last_capture_at: '2026-07-27T10:00:00.000Z',
       }]),
+      experienceRoutes: vi.fn().mockResolvedValue([]),
+      experienceSnapshots: vi.fn().mockResolvedValue([]),
       interactionMap: vi.fn().mockResolvedValue({
-        kind: 'interaction_map', surface: { key: 'checkout', name: 'Checkout', purpose: 'Understand checkout friction.', status: 'active' },
-        grid: 8, cells: [], labels: [],
+        kind: 'interaction_map',
+        surface: { key: 'checkout', name: 'Checkout', purpose: 'Understand checkout friction.', status: 'active' },
+        grid: 8,
+        cells: [{ x: 2, y: 3, count: 4, actors: 3 }],
+        labels: [{ label: 'checkout.submit', count: 4, actors: 3 }],
       }),
     }));
     render(<Experience />);
     expect(await screen.findByText(/Last accepted capture/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'View click / session scroll' })).toHaveAttribute('href', '#experience-evidence');
-    expect(screen.getByText(/does not expose a replay browser or captured page content/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Load evidence' }));
-    await waitFor(() => expect(screen.getByRole('tab', { name: 'Scroll evidence' })).toBeEnabled());
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Scroll evidence' }), { key: 'Enter' });
-    expect(screen.getByText('Cross-session scroll map is not available here')).toBeInTheDocument();
-    expect(screen.getByText(/Visual Experience Maps capability/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open Known session' })).toHaveAttribute('href', '#experience-session');
+    expect(screen.getByRole('link', { name: 'View click details' })).toHaveAttribute('href', '#experience-evidence');
+    expect(screen.getByText(/aggregate maps · no DOM replay/)).toBeInTheDocument();
+    expect(screen.getByText('Capture the first page version')).toBeInTheDocument();
+    expect(screen.getByText('Add a deploy snapshot')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load aggregate clicks' }));
+    expect(await screen.findByText('checkout.submit')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /4 accepted clicks/ })).toBeInTheDocument();
   });
 });

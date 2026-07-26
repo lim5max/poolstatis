@@ -115,6 +115,84 @@ export interface ExperienceSurface {
   last_capture_at?: string | null;
 }
 
+export interface ExperienceRoute {
+  id: string;
+  surface_key: string;
+  key: string;
+  name: string;
+  path_pattern: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExperienceSnapshot {
+  id: string;
+  surface_key: string;
+  route_key: string;
+  env: string;
+  version: string;
+  device: 'desktop' | 'mobile';
+  release_hash: string;
+  mime_type: 'image/png' | 'image/webp';
+  byte_size: number;
+  width: number;
+  height: number;
+  viewport_width: number;
+  viewport_height: number;
+  document_width: number;
+  document_height: number;
+  captured_at: string;
+  expires_at: string;
+  created_at: string;
+  evidence_ref: string;
+  stale: boolean;
+}
+
+export interface VisualExperienceResponse {
+  kind: 'visual_experience';
+  surface: Pick<ExperienceSurface, 'key' | 'name' | 'purpose' | 'status'>;
+  route: string;
+  version: string;
+  device: 'desktop' | 'mobile';
+  grid: number;
+  snapshot: ExperienceSnapshot | null;
+  summary: {
+    events: number;
+    page_views: number;
+    sessions: number;
+    actors: number;
+    clicks: number;
+    max_document_width: number;
+    max_document_height: number;
+  };
+  click_cells: Array<{ x: number; y: number; count: number; actors: number }>;
+  click_labels: Array<{ label: string; count: number; actors: number }>;
+  scroll_coverage: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+  sections: Array<{
+    section: string;
+    top: number;
+    sessions: number;
+    actors: number;
+    percentage: number;
+    dropoff_percentage: number;
+  }>;
+  causality: string;
+  meta: { computed_at: string; date_range: { from: string; to: string }; note?: string };
+}
+
+export interface VisualExperienceCompareResponse {
+  kind: 'visual_experience_compare';
+  baseline: VisualExperienceResponse;
+  comparison: VisualExperienceResponse;
+  delta: {
+    sessions: number;
+    clicks: number;
+    actors: number;
+    sections: Array<{ section: string; percentage_points: number }>;
+  };
+  causality: string;
+}
+
 export interface InteractionMapResponse {
   kind: 'interaction_map';
   surface: Pick<ExperienceSurface, 'key' | 'name' | 'purpose' | 'status'>;
@@ -141,7 +219,7 @@ export interface ExperienceSessionResponse {
   session_id: string;
   events: Array<{
     timestamp: string;
-    kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
+    kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'section_exposed' | 'client_error';
     route: string;
     sequence: number;
     label?: string;
@@ -149,6 +227,8 @@ export interface ExperienceSessionResponse {
     y?: number;
     depth?: number;
     error_type?: 'error' | 'unhandled_rejection';
+    section?: string;
+    top?: number;
   }>;
   summary: { page_views: number; clicks: number; max_scroll_depth: number; client_errors: number };
 }

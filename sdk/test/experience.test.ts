@@ -73,7 +73,10 @@ describe('BrowserExperience', () => {
     expect(batches.every((batch) => batch.surface === 'checkout')).toBe(true);
     expect(batches.flatMap((batch) => batch.events)).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'page_viewed', route: 'checkout', session_id: 'session-1', sequence: 1 }),
-      expect.objectContaining({ kind: 'element_clicked', label: 'pay_now', x: 0.25, y: 0.5, sequence: 2 }),
+      expect.objectContaining({
+        kind: 'element_clicked', label: 'pay_now', x: 0.25, y: 0.1667,
+        viewport_x: 0.25, viewport_y: 0.5, sequence: 2,
+      }),
       expect.objectContaining({ kind: 'scroll_depth', depth: 25, sequence: 3 }),
       expect.objectContaining({ kind: 'scroll_depth', depth: 50, sequence: 4 }),
       expect.objectContaining({ kind: 'scroll_depth', depth: 75, sequence: 5 }),
@@ -124,6 +127,70 @@ describe('BrowserExperience', () => {
     expect(batches.flatMap((batch) => batch.events)
       .filter((event) => event.kind === 'element_clicked')
       .map((event) => event.label)).toEqual(['pay_now', 'legacy_pay_now']);
+  });
+
+  it('captures named visible sections without reading DOM text', async () => {
+    const browser = new FakeWindow();
+    (browser.document as any).querySelectorAll = (selector: string) => {
+      expect(selector).toBe('[data-poolstatis-section]');
+      return [{
+        textContent: 'Private page copy must never leave the browser',
+        getAttribute: (name: string) => name === 'data-poolstatis-section' ? 'pricing' : null,
+        getBoundingClientRect: () => ({ top: 100, bottom: 400 }),
+      }];
+    };
+    const batches: Array<{ events: Array<Record<string, unknown>> }> = [];
+    const experience = new BrowserExperience({
+      client: { captureExperience: async (batch) => { batches.push(batch); } },
+      surface: 'marketing',
+      distinctId: 'actor-1',
+      route: 'home',
+      version: 'release-a',
+      hasConsent: () => true,
+      browser,
+      sessionId: 'session-1',
+    });
+
+    await experience.start();
+    await experience.flush();
+
+    expect(batches.flatMap((batch) => batch.events)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'section_exposed',
+        section: 'pricing',
+        top: 0.0667,
+        version: 'release-a',
+        device: 'desktop',
+      }),
+    ]));
+    expect(JSON.stringify(batches)).not.toContain('Private page copy');
+  });
+
+  it('bounds accepted capture signals per minute', async () => {
+    const browser = new FakeWindow();
+    const batches: Array<{ events: Array<Record<string, unknown>> }> = [];
+    const experience = new BrowserExperience({
+      client: { captureExperience: async (batch) => { batches.push(batch); } },
+      surface: 'checkout',
+      distinctId: 'actor-1',
+      route: 'checkout',
+      hasConsent: () => true,
+      browser,
+      sessionId: 'session-1',
+      maxEventsPerMinute: 2,
+    });
+
+    await experience.start();
+    for (let index = 0; index < 5; index += 1) {
+      browser.dispatch('click', {
+        target: { closest: () => ({ getAttribute: () => 'pay_now' }) },
+        clientX: 10,
+        clientY: 10,
+      });
+    }
+    await experience.flush();
+
+    expect(batches.flatMap((batch) => batch.events)).toHaveLength(2);
   });
 
   it('calls native-style Element.closest with the element as this', async () => {

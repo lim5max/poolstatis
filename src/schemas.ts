@@ -402,6 +402,10 @@ export const experienceSurfaceSchema = z.object({
   key: keySchema,
   name: z.string().trim().min(1),
   purpose: semanticText,
+  route_pattern: z.string().trim().min(1).max(200).regex(
+    /^\/[^?#]*$/,
+    'route_pattern must be a canonical path pattern without query or hash',
+  ).optional(),
 });
 
 export type CreateExperienceSurfaceInput = z.infer<typeof experienceSurfaceSchema>;
@@ -411,10 +415,31 @@ const experienceLabelSchema = z.string().trim().min(1).max(120).regex(
   'label must be a stable lowercase identifier, not captured page text',
 );
 const experienceRouteSchema = experienceLabelSchema.describe('a developer-provided stable route key, never a raw URL or path');
+const experienceVersionSchema = z.string().trim().min(1).max(120).regex(
+  /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/,
+  'version must be a stable release identifier',
+);
+const experienceDimensionSchema = z.number().int().min(1).max(50_000);
+export const experienceRouteRegistrationSchema = z.object({
+  key: experienceRouteSchema,
+  name: z.string().trim().min(1).max(120),
+  path_pattern: z.string().trim().min(1).max(200).regex(
+    /^\/[^?#]*$/,
+    'path_pattern must be canonical and must not contain a query string or hash',
+  ),
+}).strict();
+export type RegisterExperienceRouteInput = z.infer<typeof experienceRouteRegistrationSchema>;
+
 const experienceCommonSchema = z.object({
   distinct_id: z.string().min(1).max(200),
   session_id: z.string().min(1).max(200),
   route: experienceRouteSchema,
+  version: experienceVersionSchema.default('unversioned'),
+  device: z.enum(['desktop', 'mobile']).default('desktop'),
+  viewport_width: experienceDimensionSchema.default(1280),
+  viewport_height: experienceDimensionSchema.default(720),
+  document_width: experienceDimensionSchema.default(1280),
+  document_height: experienceDimensionSchema.default(720),
   sequence: z.number().int().min(0).max(1_000_000),
 });
 
@@ -423,8 +448,15 @@ export const experienceEventSchema = z.discriminatedUnion('kind', [
   experienceCommonSchema.extend({
     kind: z.literal('element_clicked'), label: experienceLabelSchema,
     x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
+    viewport_x: z.number().finite().min(0).max(1).optional(),
+    viewport_y: z.number().finite().min(0).max(1).optional(),
   }).strict(),
   experienceCommonSchema.extend({ kind: z.literal('scroll_depth'), depth: z.number().int().min(0).max(100) }).strict(),
+  experienceCommonSchema.extend({
+    kind: z.literal('section_exposed'),
+    section: experienceLabelSchema,
+    top: z.number().finite().min(0).max(1),
+  }).strict(),
   experienceCommonSchema.extend({ kind: z.literal('client_error'), error_type: z.enum(['error', 'unhandled_rejection']) }).strict(),
 ]);
 
@@ -435,6 +467,22 @@ export const experienceCaptureSchema = z.object({
 }).strict();
 
 export type ExperienceCaptureInput = z.infer<typeof experienceCaptureSchema>;
+
+export const experienceSnapshotMetaSchema = z.object({
+  surface: keySchema,
+  route: experienceRouteSchema,
+  version: experienceVersionSchema,
+  device: z.enum(['desktop', 'mobile']),
+  env: z.string().trim().min(1).max(40).default('prod'),
+  release_hash: experienceVersionSchema,
+  viewport_width: z.number().int().min(240).max(10_000),
+  viewport_height: z.number().int().min(240).max(10_000),
+  document_width: z.number().int().min(1).max(10_000),
+  document_height: z.number().int().min(1).max(50_000),
+  captured_at: z.string().datetime({ offset: true }),
+  retention_days: z.number().int().min(1).max(3650).default(90),
+}).strict();
+export type ExperienceSnapshotMetaInput = z.infer<typeof experienceSnapshotMetaSchema>;
 
 const experimentMetricKeysSchema = z.array(keySchema).max(5).default([]).superRefine((keys, ctx) => {
   const seen = new Set<string>();
@@ -738,6 +786,38 @@ export const experienceSessionQuerySchema = z.object({
   env: z.string().default('prod'),
 });
 
+export const visualExperienceQuerySchema = z.object({
+  kind: z.literal('visual_experience'),
+  surface: keySchema,
+  route: experienceRouteSchema,
+  version: experienceVersionSchema,
+  device: z.enum(['desktop', 'mobile']),
+  date_from: dateStr,
+  date_to: dateStr.nullable().optional(),
+  grid: z.number().int().min(4).max(64).default(24),
+  env: z.string().default('prod'),
+});
+
+export const visualExperienceCompareSchema = z.object({
+  kind: z.literal('visual_experience_compare'),
+  surface: keySchema,
+  route: experienceRouteSchema,
+  baseline: z.object({
+    version: experienceVersionSchema,
+    device: z.enum(['desktop', 'mobile']),
+    date_from: dateStr,
+    date_to: dateStr.nullable().optional(),
+  }).strict(),
+  comparison: z.object({
+    version: experienceVersionSchema,
+    device: z.enum(['desktop', 'mobile']),
+    date_from: dateStr,
+    date_to: dateStr.nullable().optional(),
+  }).strict(),
+  grid: z.number().int().min(4).max(64).default(24),
+  env: z.string().default('prod'),
+}).strict();
+
 export const purgeDataSchema = z.object({
   env: z.string().min(1),
   scope: z.enum(['events', 'entities', 'all']),
@@ -756,6 +836,8 @@ export const querySchema = z.discriminatedUnion('kind', [
   stickinessQuerySchema,
   interactionMapQuerySchema,
   experienceSessionQuerySchema,
+  visualExperienceQuerySchema,
+  visualExperienceCompareSchema,
 ]);
 
 export type TrendQueryInput = z.infer<typeof trendQuerySchema>;
@@ -766,4 +848,6 @@ export type LifecycleQueryInput = z.infer<typeof lifecycleQuerySchema>;
 export type StickinessQueryInput = z.infer<typeof stickinessQuerySchema>;
 export type InteractionMapQueryInput = z.infer<typeof interactionMapQuerySchema>;
 export type ExperienceSessionQueryInput = z.infer<typeof experienceSessionQuerySchema>;
+export type VisualExperienceQueryInput = z.infer<typeof visualExperienceQuerySchema>;
+export type VisualExperienceCompareInput = z.infer<typeof visualExperienceCompareSchema>;
 export type QueryInput = z.infer<typeof querySchema>;

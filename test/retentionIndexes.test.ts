@@ -44,10 +44,11 @@ describe('retention indexes', () => {
          'events_retention_idx',
          'events_experience_click_surface_time_idx',
          'events_experience_session_surface_time_idx',
-         'events_experience_surface_time_idx'
+         'events_experience_surface_time_idx',
+         'events_visual_experience_lookup_idx'
        )`,
     );
-    expect(families.rows).toHaveLength(4);
+    expect(families.rows).toHaveLength(5);
     for (const family of families.rows) {
       expect(family.valid, family.parent).toBe(true);
       expect(family.attached, family.parent).toBe(family.partitions);
