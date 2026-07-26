@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,8 +7,28 @@ import { Label } from '@/components/ui/label';
 
 const authOrigin = 'https://auth.poolstatis.xyz';
 const neutralFailure = 'The request could not be completed. Check the details and try again.';
+export const verificationContinueUrl = 'https://app.poolstatis.xyz/login';
 
 type ApiResult = Record<string, unknown>;
+type VerificationState =
+  | 'checking'
+  | 'verified'
+  | 'email_change_confirmed'
+  | 'email_changed'
+  | 'already_verified'
+  | 'already_used'
+  | 'invalid_or_expired'
+  | 'temporarily_unavailable';
+
+class AuthRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs: number | null,
+  ) {
+    super(neutralFailure);
+    this.name = 'AuthRequestError';
+  }
+}
 
 export function signedOAuthQuery(search: string): string | undefined {
   const params = new URLSearchParams(search);
@@ -54,7 +74,15 @@ async function authPost(path: string, body: Record<string, unknown>): Promise<Ap
     body: JSON.stringify(body),
   });
   const result = await response.json().catch(() => ({})) as ApiResult;
-  if (!response.ok) throw new Error(neutralFailure);
+  if (!response.ok) {
+    const retryAfter = Number(response.headers.get('retry-after'));
+    throw new AuthRequestError(
+      response.status,
+      Number.isFinite(retryAfter) && retryAfter >= 0 && retryAfter <= 5
+        ? retryAfter * 1_000
+        : null,
+    );
+  }
   return result;
 }
 
@@ -146,7 +174,11 @@ function AuthCard({
 function FormMessage({ error, message }: { error: string; message: string }) {
   if (!error && !message) return null;
   return (
-    <p role="status" className={error ? 'text-sm text-destructive' : 'text-sm text-emerald-400'}>
+    <p
+      role={error ? 'alert' : 'status'}
+      aria-live={error ? 'assertive' : 'polite'}
+      className={error ? 'text-sm text-destructive' : 'text-sm text-emerald-400'}
+    >
       {error || message}
     </p>
   );
@@ -323,6 +355,195 @@ function ResetPassword() {
   );
 }
 
+function verificationState(value: string | null): VerificationState | null {
+  if (
+    value === 'verified'
+    || value === 'email_change_confirmed'
+    || value === 'email_changed'
+    || value === 'already_verified'
+    || value === 'already_used'
+    || value === 'invalid_or_expired'
+  ) return value;
+  return null;
+}
+
+function ResendVerification() {
+  const [email, setEmail] = useState('');
+  const [pending, setPending] = useState(false);
+  const [outcome, setOutcome] = useState<'idle' | 'accepted' | 'throttled' | 'error'>('idle');
+  const outcomeRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (outcome !== 'idle') outcomeRef.current?.focus();
+  }, [outcome]);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (pending) return;
+    setPending(true);
+    setOutcome('idle');
+    void authPost('/send-verification-email', {
+      email,
+      callbackURL: safeAuthCallback('/verify'),
+    }).then(() => {
+      setEmail('');
+      setOutcome('accepted');
+    }).catch((error: unknown) => {
+      setOutcome(error instanceof AuthRequestError && error.status === 429 ? 'throttled' : 'error');
+    }).finally(() => setPending(false));
+  };
+  const message = outcome === 'accepted'
+    ? 'If an unverified account exists, a new verification email is on its way.'
+    : outcome === 'throttled'
+      ? 'Please wait before requesting another verification email.'
+      : outcome === 'error'
+        ? neutralFailure
+        : '';
+  return (
+    <form className="grid gap-4 border-t pt-5" onSubmit={submit}>
+      <p className="text-sm text-muted-foreground">
+        Enter the account email. The response is the same whether or not an account exists.
+      </p>
+      <Field id="verification-email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />
+      {message && (
+        <p
+          ref={outcomeRef}
+          tabIndex={-1}
+          role={outcome === 'error' ? 'alert' : 'status'}
+          aria-live={outcome === 'error' ? 'assertive' : 'polite'}
+          className={outcome === 'error' ? 'text-sm text-destructive' : 'text-sm text-emerald-400 outline-none'}
+        >
+          {message}
+        </p>
+      )}
+      <Button disabled={pending} type="submit">
+        {pending ? 'Sending…' : 'Send a new verification email'}
+      </Button>
+    </form>
+  );
+}
+
+function VerificationResult() {
+  const { search, hash } = useLocation();
+  const queryState = verificationState(new URLSearchParams(search).get('state'));
+  const token = useMemo(
+    () => new URLSearchParams(hash.replace(/^#/, '')).get('token') ?? '',
+    [hash],
+  );
+  const [state, setState] = useState<VerificationState>(
+    queryState ?? (token ? 'checking' : 'invalid_or_expired'),
+  );
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const exchangeStartedRef = useRef(false);
+
+  const exchangeVerification = () => {
+    setState('checking');
+    void (async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const result = await authPost('/poolstatis/verify-email', { token });
+          const next = verificationState(typeof result.state === 'string' ? result.state : null);
+          setState(next ?? 'invalid_or_expired');
+          return;
+        } catch (error) {
+          if (
+            error instanceof AuthRequestError
+            && error.status === 429
+          ) {
+            if (attempt < 2) {
+              await new Promise((resolve) => window.setTimeout(
+                resolve,
+                error.retryAfterMs ?? 1_000,
+              ));
+              continue;
+            }
+            setState('temporarily_unavailable');
+            return;
+          }
+          setState('invalid_or_expired');
+          return;
+        }
+      }
+    })();
+  };
+
+  useEffect(() => {
+    if (queryState || !token || exchangeStartedRef.current) return;
+    exchangeStartedRef.current = true;
+    window.history.replaceState({}, document.title, '/verify');
+    exchangeVerification();
+  }, [queryState, token]);
+
+  useEffect(() => {
+    if (state === 'checking') return;
+    headingRef.current?.focus();
+    if (state !== 'verified' && state !== 'email_changed') return;
+    const timer = window.setTimeout(() => {
+      window.location.assign(verificationContinueUrl);
+    }, 2_000);
+    return () => window.clearTimeout(timer);
+  }, [state]);
+
+  const content = {
+    verified: {
+      title: 'Email verified',
+      description: 'Your identity is confirmed. Redirecting you to Poolstatis…',
+    },
+    email_change_confirmed: {
+      title: 'Email change confirmed',
+      description: 'Check the new address to finish updating your Poolstatis account.',
+    },
+    email_changed: {
+      title: 'Email updated',
+      description: 'Your new address is verified. Redirecting you to Poolstatis…',
+    },
+    already_verified: {
+      title: 'Email already verified',
+      description: 'This account is already confirmed. You can continue to sign in.',
+    },
+    already_used: {
+      title: 'Verification link already used',
+      description: 'This one-time link cannot be used again. Sign in or request a fresh email if needed.',
+    },
+    invalid_or_expired: {
+      title: 'Verification link expired or invalid',
+      description: 'The link could not be accepted. Request a fresh email or return to sign in.',
+    },
+    temporarily_unavailable: {
+      title: 'Verification is temporarily unavailable',
+      description: 'Your link was not rejected. Wait a moment, then try the same link again.',
+    },
+  }[state === 'checking' ? 'invalid_or_expired' : state];
+
+  return (
+    <AuthCard
+      title={state === 'checking' ? 'Checking your verification link' : content.title}
+      description={state === 'checking' ? 'This will only take a moment.' : content.description}
+    >
+      {state === 'checking' ? (
+        <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
+          Verifying…
+        </p>
+      ) : (
+        <div className="grid gap-4">
+          <h2 ref={headingRef} tabIndex={-1} className="sr-only">{content.title}</h2>
+          <Button asChild>
+            <a href={verificationContinueUrl}>Continue to Poolstatis</a>
+          </Button>
+          {state === 'temporarily_unavailable' && (
+            <Button type="button" variant="outline" onClick={exchangeVerification}>
+              Try verification again
+            </Button>
+          )}
+          {(state === 'invalid_or_expired' || state === 'already_used') && <ResendVerification />}
+          <div className="flex justify-between gap-4 text-sm">
+            <Link className="text-muted-foreground hover:text-foreground" to="/login">Back to sign in</Link>
+            <Link className="text-muted-foreground hover:text-foreground" to="/signup">Create account</Link>
+          </div>
+        </div>
+      )}
+    </AuthCard>
+  );
+}
+
 function Consent() {
   const { search } = useLocation();
   const submission = useSubmission();
@@ -453,6 +674,7 @@ export function AuthPortal() {
   if (pathname === '/signup') content = <Signup />;
   else if (pathname === '/forgot') content = <ForgotPassword />;
   else if (pathname === '/reset') content = <ResetPassword />;
+  else if (pathname === '/verify') content = <VerificationResult />;
   else if (pathname === '/consent') content = <Consent />;
   else if (pathname === '/profile') content = <AccountProfile />;
   else content = <Login />;
