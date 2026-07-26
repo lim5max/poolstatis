@@ -48,7 +48,14 @@ describe('production protection config', () => {
     expect(() => loadConfig({
       POOLSTATIS_MCP_PACKAGE_PUBLISHED: 'true',
       POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp',
-    })).toThrow('requires POOLSTATIS_MCP_ARGS to pin @poolstatis/mcp@0.1.0');
+    })).toThrow('requires pnpm dlx pinned to @poolstatis/mcp@0.1.0');
+    expect(() => loadConfig({
+      POOLSTATIS_MCP_PACKAGE_PUBLISHED: 'true',
+      POOLSTATIS_MCP_COMMAND: 'node',
+    })).toThrow('requires pnpm dlx pinned to @poolstatis/mcp@0.1.0');
+    expect(() => loadConfig({
+      POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp@0.1.0',
+    })).toThrow('must be true before POOLSTATIS_MCP_ARGS can use @poolstatis/mcp');
   });
 
   it('requires an explicit hosted opt-in before enforcing external organization policy', () => {

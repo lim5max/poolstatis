@@ -194,14 +194,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const jwksUri = env.AUTH_JWKS_URI ?? (issuer ? new URL('.well-known/jwks.json', issuer).toString() : undefined);
   const packageStatus = env.POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true' ? 'published' : 'publish_pending';
+  const mcpCommand = env.POOLSTATIS_MCP_COMMAND ?? 'pnpm';
   const mcpArgs = parseArgs(env.POOLSTATIS_MCP_ARGS, packageStatus);
   if (packageStatus === 'published'
-      && (mcpArgs.length !== 3
+      && (mcpCommand !== 'pnpm'
+        || mcpArgs.length !== 3
         || mcpArgs[0] !== '--silent'
         || mcpArgs[1] !== 'dlx'
         || mcpArgs[2] !== MCP_PACKAGE_SPEC)) {
     throw new Error(
-      `POOLSTATIS_MCP_PACKAGE_PUBLISHED=true requires POOLSTATIS_MCP_ARGS to pin ${MCP_PACKAGE_SPEC}`,
+      `POOLSTATIS_MCP_PACKAGE_PUBLISHED=true requires pnpm dlx pinned to ${MCP_PACKAGE_SPEC}`,
+    );
+  }
+  if (packageStatus === 'publish_pending'
+      && mcpArgs.some((arg) => arg.includes('@poolstatis/mcp'))) {
+    throw new Error(
+      'POOLSTATIS_MCP_PACKAGE_PUBLISHED must be true before POOLSTATIS_MCP_ARGS can use @poolstatis/mcp',
     );
   }
   const databasePoolMax = positiveInt(env.DATABASE_POOL_MAX, 10, 'DATABASE_POOL_MAX');
@@ -364,7 +372,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       requestTimeoutMs: positiveInt(env.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000, 'WEBHOOK_REQUEST_TIMEOUT_MS', 60_000),
     },
     mcpRunner: {
-      command: env.POOLSTATIS_MCP_COMMAND ?? 'pnpm',
+      command: mcpCommand,
       args: mcpArgs,
       packageStatus,
       note: packageStatus === 'published'

@@ -251,28 +251,40 @@ function parseRunnerArgs(
   return trimmed.split(/\s+/);
 }
 
-const packageStatus = import.meta.env.VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true'
-  ? 'published'
-  : 'publish_pending';
-const runnerArgs = parseRunnerArgs(
-  import.meta.env.VITE_POOLSTATIS_MCP_ARGS as string | undefined,
-  packageStatus,
-);
-if (packageStatus === 'published'
-    && (runnerArgs.length !== 3
-      || runnerArgs[0] !== '--silent'
-      || runnerArgs[1] !== 'dlx'
-      || runnerArgs[2] !== MCP_PACKAGE_SPEC)) {
-  throw new Error(
-    `VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true requires VITE_POOLSTATIS_MCP_ARGS to pin ${MCP_PACKAGE_SPEC}`,
-  );
+export function resolveMcpRunner(env: {
+  VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED?: string;
+  VITE_POOLSTATIS_MCP_COMMAND?: string;
+  VITE_POOLSTATIS_MCP_ARGS?: string;
+}) {
+  const packageStatus = env.VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true'
+    ? 'published'
+    : 'publish_pending';
+  const command = env.VITE_POOLSTATIS_MCP_COMMAND ?? 'pnpm';
+  const args = parseRunnerArgs(env.VITE_POOLSTATIS_MCP_ARGS, packageStatus);
+  if (packageStatus === 'published'
+      && (command !== 'pnpm'
+        || args.length !== 3
+        || args[0] !== '--silent'
+        || args[1] !== 'dlx'
+        || args[2] !== MCP_PACKAGE_SPEC)) {
+    throw new Error(
+      `VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true requires pnpm dlx pinned to ${MCP_PACKAGE_SPEC}`,
+    );
+  }
+  if (packageStatus === 'publish_pending'
+      && args.some((arg) => arg.includes('@poolstatis/mcp'))) {
+    throw new Error(
+      'VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED must be true before VITE_POOLSTATIS_MCP_ARGS can use @poolstatis/mcp',
+    );
+  }
+  return { command, args, packageStatus };
 }
 
-export const MCP_RUNNER = {
-  command: (import.meta.env.VITE_POOLSTATIS_MCP_COMMAND as string | undefined) ?? 'pnpm',
-  args: runnerArgs,
-  packageStatus,
-};
+export const MCP_RUNNER = resolveMcpRunner(import.meta.env as {
+  VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED?: string;
+  VITE_POOLSTATIS_MCP_COMMAND?: string;
+  VITE_POOLSTATIS_MCP_ARGS?: string;
+});
 
 export function mcpServerConfig(command: string, args: string[], url: string, token: string): string {
   return JSON.stringify({

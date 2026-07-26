@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,12 +8,16 @@ import { execFile } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { MCP_PACKAGE_SPEC as CORE_MCP_PACKAGE_SPEC } from '../src/config.js';
+import { MCP_PACKAGE_SPEC as WEB_MCP_PACKAGE_SPEC } from '../web/src/mcpClients.js';
 
 const execFileAsync = promisify(execFile);
 const root = resolve(import.meta.dirname, '..');
 const safeToken = 'sk_0123456789abcdef';
 
 interface PackResult {
+  name: string;
+  version: string;
   filename: string;
   size: number;
   unpackedSize: number;
@@ -26,6 +30,7 @@ let executable: string;
 let cliModule: string;
 let fixture: Server;
 let fixtureUrl: string;
+let generatedPackDir: string | undefined;
 const requests: Array<{ method: string; url: string; authorization?: string; client?: string }> = [];
 
 async function connect(command: string, args: string[] = []) {
@@ -49,16 +54,33 @@ async function connect(command: string, args: string[] = []) {
 
 beforeAll(async () => {
   tempProject = await mkdtemp(join(tmpdir(), 'poolstatis-mcp-consumer-'));
-  const packDir = await mkdtemp(join(tmpdir(), 'poolstatis-mcp-pack-'));
-  const { stdout } = await execFileAsync(
-    'npm',
-    ['pack', '--json', '--pack-destination', packDir, './packages/mcp'],
-    { cwd: root, maxBuffer: 1024 * 1024 },
-  );
+  let stdout: string;
+  const suppliedTarball = process.env.POOLSTATIS_MCP_TARBALL;
+  const suppliedPackOutput = process.env.POOLSTATIS_MCP_PACK_OUTPUT;
+  if (suppliedTarball || suppliedPackOutput) {
+    if (!suppliedTarball || !suppliedPackOutput) {
+      throw new Error('POOLSTATIS_MCP_TARBALL and POOLSTATIS_MCP_PACK_OUTPUT must be set together');
+    }
+    tarball = resolve(suppliedTarball);
+    stdout = await readFile(resolve(suppliedPackOutput), 'utf8');
+  } else {
+    generatedPackDir = await mkdtemp(join(tmpdir(), 'poolstatis-mcp-pack-'));
+    const packed = await execFileAsync(
+      'npm',
+      ['pack', '--json', '--pack-destination', generatedPackDir, './packages/mcp'],
+      { cwd: root, maxBuffer: 1024 * 1024 },
+    );
+    stdout = packed.stdout;
+  }
   const jsonStart = stdout.lastIndexOf('\n[\n  {');
   if (jsonStart === -1) throw new Error(`npm pack did not return JSON: ${stdout.slice(-200)}`);
   const [pack] = JSON.parse(stdout.slice(jsonStart + 1)) as PackResult[];
-  tarball = join(packDir, pack.filename);
+  if (!tarball) {
+    if (!generatedPackDir) throw new Error('generated pack directory is unavailable');
+    tarball = join(generatedPackDir, pack.filename);
+  }
+  expect(`${pack.name}@${pack.version}`).toBe(CORE_MCP_PACKAGE_SPEC);
+  expect(`${pack.name}@${pack.version}`).toBe(WEB_MCP_PACKAGE_SPEC);
 
   const expectedFiles = [
     'LICENSE',
@@ -131,6 +153,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (fixture) await new Promise<void>((resolveClose) => fixture.close(() => resolveClose()));
+  if (tempProject) await rm(tempProject, { recursive: true, force: true });
+  if (generatedPackDir) await rm(generatedPackDir, { recursive: true, force: true });
 });
 
 describe('@poolstatis/mcp release artifact', () => {

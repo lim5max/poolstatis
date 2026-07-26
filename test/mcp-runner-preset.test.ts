@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MCP_RUNNER } from '../web/src/mcpClients.js';
+import { MCP_RUNNER, resolveMcpRunner } from '../web/src/mcpClients.js';
 
 describe('MCP runner preset', () => {
   it('does not advertise an unpublished registry package by default', () => {
@@ -11,5 +11,15 @@ describe('MCP runner preset', () => {
       'mcp',
     ]);
     expect(MCP_RUNNER.args.join(' ')).not.toContain('@poolstatis/mcp');
+  });
+
+  it('rejects status overrides that would bypass the pinned registry gate', () => {
+    expect(() => resolveMcpRunner({
+      VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED: 'true',
+      VITE_POOLSTATIS_MCP_COMMAND: 'node',
+    })).toThrow('requires pnpm dlx pinned to @poolstatis/mcp@0.1.0');
+    expect(() => resolveMcpRunner({
+      VITE_POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp@0.1.0',
+    })).toThrow('must be true before VITE_POOLSTATIS_MCP_ARGS can use @poolstatis/mcp');
   });
 });

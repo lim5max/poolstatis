@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -20,5 +21,13 @@ jobs:
       - run: corepack enable
       - run: corepack prepare pnpm@10.7.1 --activate
       - run: pnpm install --frozen-lockfile
-      - run: pnpm mcp:package:test
-      - run: npm publish ./packages/mcp --access public
+      - name: Pack, test, and publish one artifact
+        run: |
+          mkdir -p .release
+          MCP_VERSION=$(node -p "require('./packages/mcp/package.json').version")
+          MCP_TARBALL="$PWD/.release/poolstatis-mcp-$MCP_VERSION.tgz"
+          npm pack --json --pack-destination .release ./packages/mcp > .release/pack-output.txt
+          POOLSTATIS_MCP_TARBALL="$MCP_TARBALL" \
+          POOLSTATIS_MCP_PACK_OUTPUT="$PWD/.release/pack-output.txt" \
+            pnpm mcp:package:test
+          npm publish "$MCP_TARBALL" --access public
