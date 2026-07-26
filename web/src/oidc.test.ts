@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createHostedUserManager,
+  hostedAccessToken,
   hostedAuthScope,
   signoutHostedUser,
 } from './oidc';
+import type { User } from 'oidc-client-ts';
 
 describe('customer OIDC client policy', () => {
   beforeEach(() => {
@@ -40,5 +42,26 @@ describe('customer OIDC client policy', () => {
       },
     });
     expect(calls).toEqual(['signout']);
+  });
+
+  it('uses the callback user immediately without re-reading the in-memory user store', async () => {
+    const callbackUser = {
+      access_token: 'callback-access-token',
+      expired: false,
+    } as User;
+    const manager = {
+      getUser: async () => {
+        throw new Error('the callback user is not visible through the store yet');
+      },
+      signinSilent: async () => {
+        throw new Error('silent renewal is not needed');
+      },
+    };
+
+    await expect(hostedAccessToken(
+      manager,
+      callbackUser,
+      'https://api.poolstatis.xyz',
+    )).resolves.toBe('callback-access-token');
   });
 });

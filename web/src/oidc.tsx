@@ -73,6 +73,19 @@ export async function signoutHostedUser(
   await manager.signoutRedirect();
 }
 
+export async function hostedAccessToken(
+  manager: Pick<UserManager, 'getUser' | 'signinSilent'>,
+  callbackUser: User | null,
+  audience: string,
+): Promise<string> {
+  let current = callbackUser ?? await manager.getUser();
+  if (current?.expired && current.refresh_token) {
+    current = await manager.signinSilent({ resource: audience });
+  }
+  if (!current || current.expired) throw new Error('OIDC session is unavailable');
+  return current.access_token;
+}
+
 type HostedAuthState = {
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -139,15 +152,8 @@ function HostedAuthProvider({ children }: { children: ReactNode }) {
     await signoutHostedUser(manager);
   }, [manager]);
   const getToken = useCallback(async () => {
-    let current = await manager.getUser();
-    if (current?.expired && current.refresh_token) {
-      current = await manager.signinSilent({
-        resource: hostedAuthConfig.audience!,
-      });
-    }
-    if (!current || current.expired) throw new Error('OIDC session is unavailable');
-    return current.access_token;
-  }, [manager]);
+    return hostedAccessToken(manager, user, hostedAuthConfig.audience!);
+  }, [manager, user]);
 
   return (
     <HostedAuthContext.Provider value={{
