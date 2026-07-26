@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { PoolstatisClient } from './api/client';
 import type { AccountMe, KeyKind, ProjectWithStats } from './api/types';
+import { markHostedSessionConnected } from './oidc';
 
 const LS_KEY = 'poolstatis.conn';
 
@@ -105,6 +106,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setAccount(profile);
     setProjects(projectResponse.projects);
     setProjectState(projectResponse.projects[0]?.slug ?? null);
+    markHostedSessionConnected();
   }, []);
 
   const disconnect = useCallback(() => {

@@ -17,6 +17,9 @@ export const hostedAuthConfig = {
 };
 
 export const hostedAuthScope = 'openid profile email offline_access poolstatis:customer';
+export const hostedSessionMarkerKey = 'poolstatis.customer.sso';
+const hostedRestoreMarkerKey = 'poolstatis.customer.restore';
+const callbackPromises = new WeakMap<UserManager, Promise<User>>();
 export const hostedAuthEnabled = Boolean(
   hostedAuthConfig.authority === 'https://auth.poolstatis.xyz'
   && hostedAuthConfig.clientId
@@ -76,6 +79,70 @@ export async function signoutHostedUser(
   await manager.signoutRedirect();
 }
 
+export function markHostedSessionConnected(storage: Pick<Storage, 'setItem'> = localStorage): void {
+  storage.setItem(hostedSessionMarkerKey, 'connected');
+}
+
+export function clearHostedSessionMarkers(
+  persistentStorage: Pick<Storage, 'removeItem'> = localStorage,
+  flowStorage: Pick<Storage, 'removeItem'> = sessionStorage,
+): void {
+  persistentStorage.removeItem(hostedSessionMarkerKey);
+  flowStorage.removeItem(hostedRestoreMarkerKey);
+}
+
+export async function restoreHostedSession(
+  manager: Pick<UserManager, 'signinRedirect'>,
+  persistentStorage: Pick<Storage, 'getItem'>,
+  flowStorage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>,
+  audience: string,
+  returnTo: string,
+): Promise<boolean> {
+  if (
+    persistentStorage.getItem(hostedSessionMarkerKey) !== 'connected'
+    || flowStorage.getItem(hostedRestoreMarkerKey) === 'started'
+  ) return false;
+
+  flowStorage.setItem(hostedRestoreMarkerKey, 'started');
+  try {
+    await manager.signinRedirect({
+      resource: audience,
+      state: { returnTo },
+    });
+    return true;
+  } catch (error) {
+    flowStorage.removeItem(hostedRestoreMarkerKey);
+    throw error;
+  }
+}
+
+export function completeHostedSigninCallback(
+  manager: Pick<UserManager, 'signinRedirectCallback'>,
+): Promise<User> {
+  const keyedManager = manager as UserManager;
+  const existing = callbackPromises.get(keyedManager);
+  if (existing) return existing;
+  const callback = manager.signinRedirectCallback();
+  callbackPromises.set(keyedManager, callback);
+  return callback;
+}
+
+export function hostedReturnTo(state: unknown): string {
+  if (!state || typeof state !== 'object') return '/';
+  const returnTo = (state as { returnTo?: unknown }).returnTo;
+  if (
+    typeof returnTo !== 'string'
+    || !returnTo.startsWith('/')
+    || returnTo.startsWith('//')
+  ) return '/';
+  return returnTo;
+}
+
+export function replaceHostedRoute(browserWindow: Window, path: string): void {
+  browserWindow.history.replaceState({}, browserWindow.document.title, path);
+  browserWindow.dispatchEvent(new PopStateEvent('popstate'));
+}
+
 export async function hostedAccessToken(
   manager: Pick<UserManager, 'getUser' | 'signinSilent'>,
   callbackUser: User | null,
@@ -110,8 +177,17 @@ const disabledState: HostedAuthState = {
 };
 const HostedAuthContext = createContext<HostedAuthState>(disabledState);
 
-function HostedAuthProvider({ children }: { children: ReactNode }) {
-  const manager = useMemo(() => createHostedUserManager(), []);
+export function HostedAuthProvider({
+  children,
+  manager: providedManager,
+}: {
+  children: ReactNode;
+  manager?: UserManager;
+}) {
+  const manager = useMemo(
+    () => providedManager ?? createHostedUserManager(),
+    [providedManager],
+  );
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -123,17 +199,39 @@ function HostedAuthProvider({ children }: { children: ReactNode }) {
     manager.events.addUserLoaded(loaded);
     manager.events.addUserUnloaded(unloaded);
     void (async () => {
+      const query = new URLSearchParams(window.location.search);
+      const isCallback = query.has('state')
+        && (query.has('code') || query.has('error'));
       try {
-        const query = new URLSearchParams(window.location.search);
-        if (query.has('code') && query.has('state')) {
-          const callbackUser = await manager.signinRedirectCallback();
-          if (live) setUser(callbackUser);
-          window.history.replaceState({}, document.title, '/');
+        if (isCallback) {
+          try {
+            const callbackUser = await completeHostedSigninCallback(manager);
+            if (live) setUser(callbackUser);
+            replaceHostedRoute(window, hostedReturnTo(callbackUser.state));
+          } finally {
+            window.sessionStorage.removeItem(hostedRestoreMarkerKey);
+          }
         } else if (live) {
-          setUser(await manager.getUser());
+          const current = await manager.getUser();
+          setUser(current);
+          if (!current) {
+            await restoreHostedSession(
+              manager,
+              window.localStorage,
+              window.sessionStorage,
+              hostedAuthConfig.audience!,
+              window.location.pathname,
+            );
+          }
         }
       } catch (cause) {
-        if (live) setError(cause as Error);
+        if (isCallback) {
+          clearHostedSessionMarkers(window.localStorage, window.sessionStorage);
+          replaceHostedRoute(window, '/login');
+          if (live) setError(new Error('Sign-in could not be completed. Try again.'));
+        } else if (live) {
+          setError(cause as Error);
+        }
       } finally {
         if (live) setLoading(false);
       }
@@ -152,6 +250,7 @@ function HostedAuthProvider({ children }: { children: ReactNode }) {
     });
   }, [manager]);
   const logout = useCallback(async () => {
+    clearHostedSessionMarkers(window.localStorage, window.sessionStorage);
     await signoutHostedUser(manager);
   }, [manager]);
   const getToken = useCallback(async () => {

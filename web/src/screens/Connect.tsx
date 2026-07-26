@@ -20,9 +20,9 @@ export function Connect() {
   return <TokenConnect />;
 }
 
-function HostedConnect() {
+export function HostedConnect() {
   const { connectHosted } = useStore();
-  const { isAuthenticated, isLoading, login, user, error } = useHostedAuth();
+  const { isAuthenticated, isLoading, login, logout, user, error } = useHostedAuth();
   const getToken = useHostedToken();
   const attempted = useRef(false);
   const [err, setErr] = useState<string | null>(null);
@@ -38,6 +38,12 @@ function HostedConnect() {
   }, [connectHosted, getToken, isAuthenticated]);
 
   const signIn = () => login();
+  const recoverSession = () => {
+    attempted.current = false;
+    setErr(null);
+    void logout();
+  };
+  const needsReauthentication = Boolean(err && isAuthenticated);
 
   return (
     <ConnectShell>
@@ -49,8 +55,18 @@ function HostedConnect() {
       <p className="mt-2 mb-6 text-sm text-muted-foreground">
         Use hosted auth, then create an MCP token during onboarding. No database keys are needed in the browser.
       </p>
-      <Button className="h-10 w-full" onClick={signIn} disabled={isLoading || busy}>
-        {isLoading || busy ? <Loader2 className="size-4 animate-spin" /> : isAuthenticated ? `Continue as ${user?.email ?? 'workspace user'}` : 'Continue to sign in'}
+      <Button
+        className="h-10 w-full"
+        onClick={needsReauthentication ? recoverSession : signIn}
+        disabled={isLoading || busy}
+      >
+        {isLoading || busy
+          ? <Loader2 className="size-4 animate-spin" />
+          : needsReauthentication
+            ? 'Sign out and try again'
+            : isAuthenticated
+              ? `Continue as ${user?.email ?? 'workspace user'}`
+              : 'Continue to sign in'}
       </Button>
       {(err || error) && <div className="mt-4 text-xs text-destructive">{err ?? error?.message}</div>}
     </ConnectShell>

@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PoolstatisClient } from './api/client';
 import type { AccountMe, ProjectWithStats } from './api/types';
+import { hostedSessionMarkerKey } from './oidc';
 import { Profile } from './screens/Profile';
 import { StoreProvider, useStore } from './store';
 
@@ -67,5 +68,7 @@ describe('hosted StoreProvider connection', () => {
 
     await waitFor(() => expect(current).toMatchObject({ tokenKind: 'user', projectScope: 'org', projects, project: 'alpha' }));
     expect(listProjects).toHaveBeenCalledOnce();
+    expect(localStorage.getItem(hostedSessionMarkerKey)).toBe('connected');
+    expect(localStorage.getItem('poolstatis.conn')).toBeNull();
   });
 });
