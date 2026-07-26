@@ -23,6 +23,9 @@ describe('customer OIDC client policy', () => {
     expect(manager.settings.response_type).toBe('code');
     expect(manager.settings.scope).toBe(hostedAuthScope);
     expect(manager.settings.resource).toBe('https://api.poolstatis.xyz');
+    expect(manager.settings.extraTokenParams).toEqual({
+      resource: 'https://api.poolstatis.xyz',
+    });
     expect(manager.settings.automaticSilentRenew).toBe(false);
     expect(manager.settings.loadUserInfo).toBe(false);
     await manager.settings.userStore.set('access', 'secret-token');

@@ -53,6 +53,9 @@ export function createHostedUserManager(
     response_type: 'code',
     scope: hostedAuthScope,
     resource: config.audience!,
+    extraTokenParams: {
+      resource: config.audience!,
+    },
     automaticSilentRenew: false,
     monitorSession: false,
     loadUserInfo: false,
