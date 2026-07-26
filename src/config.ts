@@ -83,8 +83,15 @@ export function assertHostedApiCredentialBoundary(config: Config): void {
   }
 }
 
-function parseArgs(raw: string | undefined): string[] {
-  if (!raw?.trim()) return ['--silent', 'dlx', '@poolstatis/mcp'];
+export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.1.0';
+const LOCAL_MCP_ARGS = ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'];
+
+function parseArgs(raw: string | undefined, packageStatus: 'published' | 'publish_pending'): string[] {
+  if (!raw?.trim()) {
+    return packageStatus === 'published'
+      ? ['--silent', 'dlx', MCP_PACKAGE_SPEC]
+      : LOCAL_MCP_ARGS;
+  }
   const trimmed = raw.trim();
   if (trimmed.startsWith('[')) {
     const parsed = JSON.parse(trimmed) as unknown;
@@ -348,11 +355,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     mcpRunner: {
       command: env.POOLSTATIS_MCP_COMMAND ?? 'pnpm',
-      args: parseArgs(env.POOLSTATIS_MCP_ARGS),
+      args: parseArgs(env.POOLSTATIS_MCP_ARGS, packageStatus),
       packageStatus,
       note: packageStatus === 'published'
-        ? 'The configured MCP runner is marked published for this hosted deployment.'
-        : 'Publish or configure the MCP runner before treating this template as copy-paste ready.',
+        ? `The configured MCP runner is pinned to ${MCP_PACKAGE_SPEC}.`
+        : 'Registry install is disabled. Replace <path-to-poolstatis-core> with an exact local Core checkout path.',
     },
     auth: issuer && audience && jwksUri ? {
       issuer,

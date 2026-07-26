@@ -17,6 +17,7 @@
     "serve": "tsx src/cli/serve.ts",
     "mcp": "tsx src/cli/mcp.ts",
     "mcp:smoke": "tsx src/cli/mcpSmoke.ts",
+    "mcp:package:test": "vitest run test/mcp-package.test.ts",
     "load:smoke": "tsx src/cli/loadSmoke.ts",
     "retention:run": "tsx src/cli/retention.ts",
     "preflight:migration-023": "node dist/cli/preflightMigration023.js",

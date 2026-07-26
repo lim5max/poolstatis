@@ -46,7 +46,7 @@ for the client you use; the paste location depends on the host.
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.1.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_…"
@@ -59,9 +59,10 @@ for the client you use; the paste location depends on the host.
 `--silent` is required — otherwise pnpm prints a banner to stdout and corrupts the
 stdio MCP protocol.
 
-Until `@poolstatis/mcp` is published or the hosted deploy sets a real MCP runner,
-the UI should show this as a publish-ready template, not a verified copy-paste
-command.
+Hosted deployments must enable this pinned registry preset only after a fresh
+install passes initialize and tool-list smoke checks. While the deploy remains
+`publish_pending`, the UI shows an explicit local Core checkout fallback instead
+of the registry command.
 
 ### 2. Run the instrumentation skill
 

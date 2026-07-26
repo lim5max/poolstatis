@@ -103,7 +103,7 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.1.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_..."
@@ -116,9 +116,9 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
 `--silent` is required because `pnpm` can print a banner to stdout, which breaks
 the stdio MCP protocol.
 
-Until `@poolstatis/mcp` is published, treat the JSON above as the publish-ready
-template. Hosted deployments should expose copy-paste setup only after the real
-MCP runner command and arguments are configured.
+The public runner is version-pinned so a hosted deploy cannot silently change
+its MCP runtime. A deploy must keep its package status at `publish_pending` and
+show the local Core fallback until this exact version passes a registry smoke.
 
 Send product events through the ingest API:
 

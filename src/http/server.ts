@@ -238,9 +238,9 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   const publicUrl = (options.publicUrl ?? 'https://api.poolstatis.com').replace(/\/$/, '');
   const mcpRunner = options.mcpRunner ?? {
     command: 'pnpm',
-    args: ['--silent', 'dlx', '@poolstatis/mcp'],
+    args: ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'],
     packageStatus: 'publish_pending' as const,
-    note: 'Publish or configure the MCP runner before treating this template as copy-paste ready.',
+    note: 'Registry install is disabled. Replace <path-to-poolstatis-core> with an exact local Core checkout path.',
   };
   const corsOrigins = new Set(options.corsOrigins ?? []);
 

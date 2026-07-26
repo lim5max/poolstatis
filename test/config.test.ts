@@ -30,6 +30,23 @@ describe('production protection config', () => {
     expect(production.corsOrigins).toEqual([]);
   });
 
+  it('fails closed to the local Core runner until the pinned public MCP package is enabled', () => {
+    const pending = loadConfig({});
+    expect(pending.mcpRunner).toMatchObject({
+      command: 'pnpm',
+      args: ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'],
+      packageStatus: 'publish_pending',
+    });
+    expect(pending.mcpRunner.args.join(' ')).not.toContain('@poolstatis/mcp');
+
+    const published = loadConfig({ POOLSTATIS_MCP_PACKAGE_PUBLISHED: 'true' });
+    expect(published.mcpRunner).toMatchObject({
+      command: 'pnpm',
+      args: ['--silent', 'dlx', '@poolstatis/mcp@0.1.0'],
+      packageStatus: 'published',
+    });
+  });
+
   it('requires an explicit hosted opt-in before enforcing external organization policy', () => {
     const selfHost = loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',

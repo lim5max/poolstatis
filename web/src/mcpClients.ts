@@ -232,8 +232,17 @@ export function mcpClientById(id: McpClientId): McpClientProfile {
   return MCP_CLIENTS.find((client) => client.id === id) ?? MCP_CLIENTS[0]!;
 }
 
-function parseRunnerArgs(raw: string | undefined): string[] {
-  if (!raw?.trim()) return ['--silent', 'dlx', '@poolstatis/mcp'];
+export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.1.0';
+
+function parseRunnerArgs(
+  raw: string | undefined,
+  packageStatus: 'published' | 'publish_pending',
+): string[] {
+  if (!raw?.trim()) {
+    return packageStatus === 'published'
+      ? ['--silent', 'dlx', MCP_PACKAGE_SPEC]
+      : ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'];
+  }
   const trimmed = raw.trim();
   if (trimmed.startsWith('[')) {
     const parsed = JSON.parse(trimmed) as unknown;
@@ -242,12 +251,14 @@ function parseRunnerArgs(raw: string | undefined): string[] {
   return trimmed.split(/\s+/);
 }
 
+const packageStatus = import.meta.env.VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true'
+  ? 'published'
+  : 'publish_pending';
+
 export const MCP_RUNNER = {
   command: (import.meta.env.VITE_POOLSTATIS_MCP_COMMAND as string | undefined) ?? 'pnpm',
-  args: parseRunnerArgs(import.meta.env.VITE_POOLSTATIS_MCP_ARGS as string | undefined),
-  packageStatus: import.meta.env.VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true'
-    ? 'published'
-    : 'publish_pending',
+  args: parseRunnerArgs(import.meta.env.VITE_POOLSTATIS_MCP_ARGS as string | undefined, packageStatus),
+  packageStatus,
 };
 
 export function mcpServerConfig(command: string, args: string[], url: string, token: string): string {

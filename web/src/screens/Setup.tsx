@@ -89,7 +89,7 @@ export function Setup() {
         <p className="text-muted-foreground text-sm mb-3.5">Choose where Poolstatis should appear. The selected card controls the setup guide below; copy the full JSON when the host accepts JSON, or copy command/env separately for form-based settings.</p>
         {MCP_RUNNER.packageStatus !== 'published' && (
           <div className="mb-3.5 break-words rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 [&_code]:break-all">
-            MCP runner is not marked published for this deploy. Use the command below for this self-host build. Set <code>VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true</code> only after the public runner package exists.
+            Registry install is disabled for this deploy. The config below uses the exact local Core runner; replace <code>&lt;path-to-poolstatis-core&gt;</code> with its checkout path. Set <code>VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true</code> only after the pinned public package is verified.
           </div>
         )}
         <div className="mb-3.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">

@@ -133,7 +133,7 @@ export function Onboarding() {
             <p className="mb-3.5 text-sm text-muted-foreground">{selectedClient.pasteTarget}</p>
             {result.mcp.package_status !== 'published' && (
               <div className="mb-3.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-                MCP runner is publish-ready but not marked as published for this hosted deploy. {result.mcp.note}
+                Registry install is disabled for this deploy. {result.mcp.note}
               </div>
             )}
             <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
