@@ -133,6 +133,7 @@ GET    /api/v1/projects/{slug}/identity-links?env=prod
 POST   /api/v1/projects/{slug}/identity-links/{id}/revoke
 POST   /api/v1/projects/{slug}/properties
 POST   /api/v1/projects/{slug}/properties/acquisition-attribution
+POST   /api/v1/projects/{slug}/properties/browser-analytics
 GET    /api/v1/projects/{slug}/properties
 PATCH  /api/v1/projects/{slug}/properties/{scope}/{key}
 POST   /api/v1/projects/{slug}/measurement/trust
@@ -406,3 +407,8 @@ GET /api/v1/projects/{slug}/data-quality?env=prod&limit=50&since_days=30
   лимитера для глобальной квоты. Локальный слой остаётся обязательной защитой
   каждого процесса при сбое shared limiter.
 - Формат ошибок единый: `{ "error": { "code": "metric_key_taken", "message": "…", "hint": "…" } }` — `hint` пишется для агента-читателя.
+Для privacy-bounded web traffic используйте Query DSL
+`kind: "web_analytics"` с registry metric key, периодом и bounded dimensions
+`country|device|browser|os|language|timezone|source`. Ответ отдельно возвращает
+`visitors`, `sessions`, `page_views`, counts и page-view percentages; определения
+и privacy caveats входят в `meta`.

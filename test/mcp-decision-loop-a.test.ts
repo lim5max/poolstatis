@@ -61,6 +61,8 @@ describe('decision-loop trust MCP tools', () => {
       'register_property',
       'list_properties',
       'propose_acquisition_properties',
+      'propose_browser_analytics',
+      'query_web_analytics',
       'assess_measurement_trust',
       'update_property',
       'configure_posthog',
@@ -147,6 +149,33 @@ describe('decision-loop trust MCP tools', () => {
     expect(acquisition.structuredContent).toMatchObject({
       properties: expect.arrayContaining([expect.objectContaining({ key: '$utm_source', status: 'proposed' })]),
     });
+
+    const browser = await client.callTool({
+      name: 'propose_browser_analytics',
+      arguments: { project: env.projectSlug },
+    });
+    expect(browser.isError).not.toBe(true);
+    expect(browser.structuredContent).toMatchObject({
+      properties: expect.arrayContaining([expect.objectContaining({ key: '$country', status: 'proposed' })]),
+      metrics: expect.arrayContaining([expect.objectContaining({ key: 'web_page_views', status: 'proposed' })]),
+    });
+    const traffic = await client.callTool({
+      name: 'query_web_analytics',
+      arguments: {
+        project: env.projectSlug,
+        query: { metric: 'web_page_views', date_from: '-1d', dimensions: ['country', 'device'] },
+      },
+    });
+    expect(traffic.isError).not.toBe(true);
+    expect(traffic.structuredContent).toMatchObject({
+      kind: 'web_analytics',
+      summary: { visitors: 0, sessions: 0, page_views: 0 },
+      meta: { definitions: expect.any(Object), privacy: expect.stringContaining('Raw IP') },
+    });
+
+    const browserStandard = await client.readResource({ uri: 'poolstatis://standard/browser-analytics' });
+    expect(browserStandard.contents[0]).toMatchObject({ mimeType: 'text/markdown' });
+    expect((browserStandard.contents[0] as { text: string }).text).toContain('Visitors: unique query-time resolved actors');
 
     const configured = await client.callTool({
       name: 'configure_posthog',

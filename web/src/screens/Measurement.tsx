@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse } from '../api/types';
+import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse } from '../api/types';
 
 interface MetricTrustRow {
   metric: Metric;
@@ -88,6 +88,8 @@ export function Measurement() {
 
     <TrustOverview rows={trust} properties={properties.length} activeLinks={identity.links.filter((link) => link.status === 'active').length} onRefresh={audit.reload} />
 
+    <WebAnalyticsPanel metrics={trust.map((row) => row.metric)} env={env} onSetup={audit.reload} />
+
     <AcquisitionPanel metrics={trust.map((row) => row.metric)} env={env} />
 
     <ContractsPanel contracts={contracts} />
@@ -133,6 +135,72 @@ export function Measurement() {
         </div>)}
       </div>}
     </Panel>
+  </div>;
+}
+
+const webDimensions: WebAnalyticsDimension[] = ['country', 'device', 'browser', 'os', 'source'];
+
+function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: string; onSetup: () => void }) {
+  const { client, project } = useStore();
+  const metric = metrics.find((item) => item.key === 'web_page_views' && item.type === 'count');
+  const [period, setPeriod] = useState('30');
+  const [result, setResult] = useState<WebAnalyticsResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const setup = async () => {
+    setSetupBusy(true); setError(null);
+    try { await client!.proposeBrowserAnalytics(project!); onSetup(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'could not propose browser analytics'); }
+    finally { setSetupBusy(false); }
+  };
+  const run = async () => {
+    if (!metric) return;
+    setBusy(true); setError(null); setResult(null);
+    try {
+      setResult(await client!.webAnalytics(project!, {
+        metric: metric.key, date_from: `-${period}d`, dimensions: webDimensions, env,
+      }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'could not query web analytics');
+    } finally { setBusy(false); }
+  };
+  return <Panel title="Web analytics" right={<span className="text-xs text-muted-foreground">consented browser context · {env}</span>}>
+    <p className="max-w-3xl text-sm text-muted-foreground">
+      Visitors, sessions and page views stay separate. Country is server-derived; raw IP, full URLs, query strings and full user agents are not stored.
+    </p>
+    <div className="mt-4 flex flex-wrap items-end gap-2">
+      <div className="space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Period</label><Select value={period} onValueChange={(value) => { setPeriod(value); setResult(null); }}><SelectTrigger aria-label="Web analytics period" className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent></Select></div>
+      {metric
+        ? <Button onClick={run} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}Run traffic summary</Button>
+        : <Button variant="outline" onClick={setup} disabled={setupBusy}>{setupBusy ? 'Proposing…' : 'Propose browser analytics'}</Button>}
+    </div>
+    {!metric && <div className="mt-4"><EmptyState headline="Traffic summary unavailable" lead="propose the canonical bundle, review it in Registry, then activate web_page_views" /></div>}
+    {error && <div className="mt-4"><ErrorNote>{error}</ErrorNote></div>}
+    {result && result.summary.page_views === 0 && <div className="mt-4"><EmptyState headline="No page views in this window" lead="no zero was estimated; verify consent, SDK capture and the active page-view metric" /></div>}
+    {result && result.summary.page_views > 0 && <WebAnalyticsResults result={result} />}
+  </Panel>;
+}
+
+function WebAnalyticsResults({ result }: { result: WebAnalyticsResponse }) {
+  return <div className="mt-4 space-y-4" aria-live="polite">
+    <div className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-3">
+      {[
+        ['Visitors', result.summary.visitors, result.meta.definitions.visitors],
+        ['Sessions', result.summary.sessions, result.meta.definitions.sessions],
+        ['Page views', result.summary.page_views, result.meta.definitions.page_views],
+      ].map(([label, value, definition]) => <div key={String(label)} className="min-w-0 bg-card p-4"><div className="text-xs text-muted-foreground">{label}</div><div className="serif mt-1 text-2xl tabular-nums">{fmtNum(Number(value))}</div><p className="mt-1 text-xs text-muted-foreground">{definition}</p></div>)}
+    </div>
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {webDimensions.map((dimension) => <div key={dimension} className="min-w-0 rounded-md border">
+        <div className="border-b px-3 py-2 text-sm font-medium">{dimension}</div>
+        <div className="divide-y">{(result.breakdowns[dimension] ?? []).slice(0, 8).map((row) => <div key={row.value} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 px-3 py-2 text-sm">
+          <span className="truncate" title={row.value}>{row.value}</span>
+          <span className="tabular-nums">{fmtNum(row.page_views)}</span>
+          <span className="w-12 text-right text-xs text-muted-foreground">{row.percentage}%</span>
+        </div>)}</div>
+      </div>)}
+    </div>
   </div>;
 }
 

@@ -42,6 +42,8 @@ import {
   type PropertyDefinition,
 } from '../services/properties.js';
 import { proposeAcquisitionProperties } from '../services/acquisitionAttribution.js';
+import { proposeBrowserAnalyticsMetrics, proposeBrowserAnalyticsProperties } from '../services/browserAnalytics.js';
+import { UNKNOWN_COUNTRY_RESOLVER, type CountryResolver } from '../services/country.js';
 import { assessMeasurementTrust } from '../services/measurementTrust.js';
 import {
   applyDeclaration, diffDeclaration, exportDeclaration, getContract, listContracts,
@@ -93,6 +95,7 @@ export interface ServerOptions {
   outboundPolicy?: OutboundPolicyOptions;
   artifactStore?: CreateContextOptions['artifactStore'];
   artifactDir?: string;
+  countryResolver?: CountryResolver;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -236,6 +239,8 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   if (options.artifactDir !== undefined) contextOptions.artifactDir = options.artifactDir;
   const ctx = createContext(pool, contextOptions);
   const app = Fastify({ logger: false });
+  (app as FastifyInstance & { countryResolver?: CountryResolver }).countryResolver =
+    options.countryResolver ?? UNKNOWN_COUNTRY_RESOLVER;
   app.addContentTypeParser(['image/png', 'image/webp'], { parseAs: 'buffer' }, (_req, body, done) => {
     done(null, body);
   });
@@ -468,7 +473,12 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
     requireKind(req.auth, 'ingest');
     const project = await ingestProject(ctx, req.auth);
     const body = ingestEnvelopeSchema.parse(req.body);
-    const result = await ctx.ingest.processBatch(project, req.auth.env, body);
+    const country = (app as FastifyInstance & { countryResolver?: CountryResolver }).countryResolver
+      ?.resolve({
+        headers: req.headers as Record<string, string | string[] | undefined>,
+        ...(req.socket.remoteAddress ? { remoteAddress: req.socket.remoteAddress } : {}),
+      }) ?? 'unknown';
+    const result = await ctx.ingest.processBatch(project, req.auth.env, body, new Date(), { country });
     if (result.accepted > 0) ctx.query.invalidateProject(project.id);
     return reply.status(result.errors ? 207 : 200).send(result);
   });
@@ -1190,6 +1200,15 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await resolveProject(req);
     return {
       properties: await proposeAcquisitionProperties(ctx.pool, project.id, authOwner(req.auth)),
+    };
+  });
+
+  app.post('/api/v1/projects/:slug/properties/browser-analytics', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return {
+      properties: await proposeBrowserAnalyticsProperties(ctx.pool, project.id, authOwner(req.auth)),
+      metrics: await proposeBrowserAnalyticsMetrics(ctx.pool, project.id, authOwner(req.auth)),
     };
   });
 

@@ -19,6 +19,7 @@ import {
 } from '../services/accounts.js';
 import { LocalArtifactStore } from '../stores/artifactStore.js';
 import { startExperienceArtifactRetention } from '../services/experienceArtifactRetention.js';
+import { createTrustedProxyCountryResolver } from '../services/country.js';
 
 const config = loadConfig();
 const hostedPolicyRequired = config.auth?.requireOrganizationPolicy === true;
@@ -61,6 +62,9 @@ const app = buildServer(pool, {
   outboundPolicy: config.outboundPolicy,
   manageEventPartitions: !hostedPolicyRequired,
   artifactDir: config.experienceArtifactDir,
+  ...(config.browserCountry
+    ? { countryResolver: createTrustedProxyCountryResolver(config.browserCountry) }
+    : {}),
   ...(config.connectorEncryptionKey
     ? { connectorEncryptionKey: config.connectorEncryptionKey }
     : {}),

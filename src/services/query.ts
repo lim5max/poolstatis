@@ -13,6 +13,7 @@ import type {
   TrendQueryInput,
   VisualExperienceCompareInput,
   VisualExperienceQueryInput,
+  WebAnalyticsQueryInput,
 } from '../schemas.js';
 import { parseDateInput } from '../dates.js';
 import { badRequest } from '../errors.js';
@@ -22,8 +23,18 @@ import { getExactExperienceSnapshot, getExperienceSurface } from './experience.j
 import { canonicalQueryKey, type QueryCache } from './queryCache.js';
 import type { PostHogAdapter } from './posthog.js';
 import { assertRegisteredAcquisitionProperties } from './acquisitionAttribution.js';
+import { assertBrowserAnalyticsProperties } from './browserAnalytics.js';
 
 const SESSION_ATTRIBUTION_NOTE = 'Session landing attribution: this associates events with the tagged landing in the same browser session; it is not causal campaign credit.';
+const WEB_DIMENSIONS = {
+  country: { property: '$country', missingValue: 'unknown' },
+  device: { property: '$device_class', missingValue: 'unknown' },
+  browser: { property: '$browser_family', missingValue: 'unknown' },
+  os: { property: '$os_family', missingValue: 'unknown' },
+  language: { property: '$language', missingValue: 'unknown' },
+  timezone: { property: '$timezone', missingValue: 'unknown' },
+  source: { property: '$utm_source', missingValue: 'direct / unknown' },
+} as const;
 
 export interface QueryMeta {
   computed_at: string;
@@ -128,6 +139,17 @@ interface VisualCompareAgentContext {
 
 export type QueryResult =
   | { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value?: string }>; meta: QueryMeta }
+  | {
+      kind: 'web_analytics';
+      summary: { visitors: number; sessions: number; page_views: number };
+      breakdowns: Record<string, Array<{
+        value: string; visitors: number; sessions: number; page_views: number; percentage: number;
+      }>>;
+      meta: QueryMeta & {
+        definitions: { visitors: string; sessions: string; page_views: string };
+        privacy: string;
+      };
+    }
   | {
       kind: 'funnel';
       steps: Array<{
@@ -336,6 +358,8 @@ export class QueryService {
     switch (q.kind) {
       case 'trend':
         return this.trend(projectId, q, now);
+      case 'web_analytics':
+        return this.webAnalytics(projectId, q, now);
       case 'funnel':
         return this.funnel(projectId, q, now);
       case 'entities':
@@ -355,6 +379,76 @@ export class QueryService {
       case 'visual_experience_compare':
         return this.visualExperienceCompare(projectId, q, now);
     }
+  }
+
+  private async webAnalytics(projectId: string, q: WebAnalyticsQueryInput, now: Date): Promise<QueryResult> {
+    const metric = await getMetric(this.pool, projectId, q.metric);
+    if (metric.type !== 'count') {
+      throw badRequest(
+        'web_analytics_metric_invalid',
+        `metric "${q.metric}" must be a count metric`,
+        'register and activate a count metric whose source is the page.viewed event',
+      );
+    }
+    const source = metric.source as {
+      event: string;
+      filters?: PropertyFilter[];
+      data_source?: 'native' | 'posthog';
+    };
+    if (source.data_source === 'posthog') {
+      throw badRequest('web_analytics_source_invalid', 'web analytics currently requires native stored events');
+    }
+    if (source.event !== 'page.viewed') {
+      throw badRequest(
+        'web_analytics_metric_invalid',
+        `metric "${q.metric}" must source the canonical page.viewed event`,
+        'use the proposed web_page_views metric or an exactly compatible active replacement',
+      );
+    }
+    const dimensions = q.dimensions.map((key) => ({ key, ...WEB_DIMENSIONS[key] }));
+    const requestedProperties = [
+      ...q.filters.map((filter) => filter.property),
+      ...dimensions.map((dimension) => dimension.property),
+    ];
+    await assertBrowserAnalyticsProperties(this.pool, projectId, requestedProperties);
+    await assertRegisteredAcquisitionProperties(this.pool, projectId, requestedProperties);
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const result = await this.eventStore.webAnalytics({
+      projectId,
+      env: q.env,
+      event: source.event,
+      filters: [...(source.filters ?? []), ...q.filters],
+      from,
+      to,
+      dimensions,
+    });
+    const breakdowns = Object.fromEntries(Object.entries(result.breakdowns).map(([key, rows]) => [
+      key,
+      rows.map((row) => ({
+        ...row,
+        percentage: result.summary.page_views === 0
+          ? 0
+          : Math.round((row.page_views / result.summary.page_views) * 1_000) / 10,
+      })),
+    ]));
+    return {
+      kind: 'web_analytics',
+      summary: result.summary,
+      breakdowns,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        definitions: {
+          visitors: 'Unique resolved actors with page-view events; audited actor links deduplicate anonymous visitors after authentication.',
+          sessions: 'Distinct non-empty session_id values on page-view events; a session is not a visitor or authenticated user.',
+          page_views: 'Accepted stored page-view events; enrichment does not create additional billable events.',
+        },
+        privacy: 'Country is coarse server-side enrichment from a configured trusted proxy. Raw IP, full URL, query string, DOM text and full user agent are not stored.',
+      },
+    };
   }
 
   /** Resolve a registry metric to an event-based source, or fail with a teaching hint. */

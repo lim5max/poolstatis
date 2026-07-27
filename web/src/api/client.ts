@@ -1,6 +1,6 @@
 import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
+  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 
 export class ApiError extends Error {
@@ -124,6 +124,12 @@ export class PoolstatisClient {
     return this.req<{ properties: PropertyDefinition[] }>(
       'POST', `/api/v1/projects/${slug}/properties/acquisition-attribution`, {},
     ).then((response) => response.properties);
+  }
+
+  proposeBrowserAnalytics(slug: string) {
+    return this.req<{ properties: PropertyDefinition[]; metrics: Metric[] }>(
+      'POST', `/api/v1/projects/${slug}/properties/browser-analytics`, {},
+    );
   }
 
   sources(slug: string) {
@@ -436,6 +442,19 @@ export class PoolstatisClient {
   }) {
     return this.req<TrendResponse>('POST', `/api/v1/projects/${slug}/query`, {
       kind: 'trend', interval: 'day', filters: [], ...body,
+    });
+  }
+
+  webAnalytics(slug: string, body: {
+    metric: string;
+    date_from: string;
+    date_to?: string | null;
+    dimensions: WebAnalyticsDimension[];
+    filters?: SampleFilter[];
+    env: string;
+  }) {
+    return this.req<WebAnalyticsResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'web_analytics', filters: [], ...body,
     });
   }
 

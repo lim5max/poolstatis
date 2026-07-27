@@ -72,6 +72,31 @@ The `distinctId` must be a stable authenticated product id, never a generated
 session id. The evaluation request is an exposure event, so do not call it in a
 tight loop; a single shared `Poolstatis` client handles this automatically.
 
+## Browser Analytics Context (optional module)
+
+`@poolstatis/sdk/browser` adds consent-gated first-party visitors, 30-minute
+sessions, SPA-safe `page.viewed` events and coarse browser context. It never
+sends query strings, full URLs/referrers, DOM/text, full User-Agent or precise
+screen dimensions. The base SDK remains browser/Node neutral.
+
+```ts
+import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
+
+const browser = createBrowserAnalytics({
+  client: ph,
+  hasConsent: () => consent.has('product_analytics'),
+  subscribeConsent: (listener) => consent.onChange(listener),
+});
+browser.start();
+
+// After authentication, send this handoff to a trusted backend that calls the
+// audited Poolstatis actor-link API with an sk_/pt_ token.
+const actorLink = browser.identify(user.id);
+```
+
+See [Browser Analytics Context](../docs/13-browser-analytics.md) for reserved
+properties, country proxy configuration, definitions and rollout.
+
 ## Browser Experience (optional module)
 
 The `@poolstatis/sdk/experience` entrypoint is deliberately separate from the

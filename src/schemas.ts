@@ -709,6 +709,18 @@ export const trendQuerySchema = z.object({
   env: z.string().default('prod'),
 });
 
+export const webAnalyticsQuerySchema = z.object({
+  kind: z.literal('web_analytics'),
+  metric: keySchema,
+  date_from: dateStr,
+  date_to: dateStr.nullable().optional(),
+  filters: z.array(propertyFilterSchema).max(20).default([]),
+  dimensions: z.array(z.enum([
+    'country', 'device', 'browser', 'os', 'language', 'timezone', 'source',
+  ])).min(1).max(7).default(['country', 'device', 'source']),
+  env: z.string().default('prod'),
+});
+
 // funnel XOR steps is enforced in QueryService (zod .refine would break the
 // discriminated union below).
 export const funnelQuerySchema = z.object({
@@ -829,6 +841,7 @@ export type PurgeDataInput = z.infer<typeof purgeDataSchema>;
 
 export const querySchema = z.discriminatedUnion('kind', [
   trendQuerySchema,
+  webAnalyticsQuerySchema,
   funnelQuerySchema,
   entitiesQuerySchema,
   retentionQuerySchema,
@@ -841,6 +854,7 @@ export const querySchema = z.discriminatedUnion('kind', [
 ]);
 
 export type TrendQueryInput = z.infer<typeof trendQuerySchema>;
+export type WebAnalyticsQueryInput = z.infer<typeof webAnalyticsQuerySchema>;
 export type FunnelQueryInput = z.infer<typeof funnelQuerySchema>;
 export type EntitiesQueryInput = z.infer<typeof entitiesQuerySchema>;
 export type RetentionQueryInput = z.infer<typeof retentionQuerySchema>;

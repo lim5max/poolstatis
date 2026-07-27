@@ -304,6 +304,25 @@ export interface TrendResponse {
   };
 }
 
+export type WebAnalyticsDimension = 'country' | 'device' | 'browser' | 'os' | 'language' | 'timezone' | 'source';
+
+export interface WebAnalyticsResponse {
+  kind: 'web_analytics';
+  summary: { visitors: number; sessions: number; page_views: number };
+  breakdowns: Partial<Record<WebAnalyticsDimension, Array<{
+    value: string;
+    visitors: number;
+    sessions: number;
+    page_views: number;
+    percentage: number;
+  }>>>;
+  meta: {
+    computed_at: string;
+    definitions: { visitors: string; sessions: string; page_views: string };
+    privacy: string;
+  };
+}
+
 export interface ExperienceSessionResponse {
   kind: 'experience_session';
   surface: Pick<ExperienceSurface, 'key' | 'name' | 'purpose' | 'status'>;

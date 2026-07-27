@@ -73,6 +73,7 @@ export interface Config {
     requireOrganizationPolicy: boolean;
   } | null;
   corsOrigins: string[];
+  browserCountry: { header: string; trustedProxyCidrs: string[] } | null;
 }
 
 export function assertHostedApiCredentialBoundary(config: Config): void {
@@ -216,6 +217,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const databasePoolMax = positiveInt(env.DATABASE_POOL_MAX, 10, 'DATABASE_POOL_MAX');
   const production = env.NODE_ENV === 'production';
   const corsOrigins = parseCorsOrigins(env.POOLSTATIS_CORS_ORIGINS, production);
+  const countryHeader = env.POOLSTATIS_COUNTRY_HEADER?.trim().toLowerCase();
+  const trustedProxyCidrs = exactList(env.POOLSTATIS_TRUSTED_PROXY_CIDRS, 'POOLSTATIS_TRUSTED_PROXY_CIDRS');
+  if (Boolean(countryHeader) !== (trustedProxyCidrs.length > 0)) {
+    throw new Error('POOLSTATIS_COUNTRY_HEADER and POOLSTATIS_TRUSTED_PROXY_CIDRS must be configured together');
+  }
+  if (countryHeader && !/^[a-z0-9-]+$/.test(countryHeader)) {
+    throw new Error('POOLSTATIS_COUNTRY_HEADER must be a valid lowercase HTTP header name');
+  }
   const ingestBuffer = {
     maxEvents: positiveInt(
       env.INGEST_BUFFER_MAX_EVENTS,
@@ -398,5 +407,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       requireOrganizationPolicy,
     } : null,
     corsOrigins,
+    browserCountry: countryHeader ? { header: countryHeader, trustedProxyCidrs } : null,
   };
 }

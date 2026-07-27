@@ -32,6 +32,8 @@ import type {
   TrendQuery,
   VisualExperienceQuery,
   VisualExperienceResult,
+  WebAnalyticsQuery,
+  WebAnalyticsResult,
 } from './eventStore.js';
 import { andFilters, compileFilters, numericPropSql } from './filters.js';
 import { ApiError } from '../errors.js';
@@ -389,6 +391,44 @@ export class PostgresEventStore implements EventStore {
       value: Number(r.value ?? 0),
       breakdown_value: String(r.bv),
     }));
+  }
+
+  async webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult> {
+    const params: unknown[] = [q.projectId, q.env, q.event, q.from, q.to];
+    const filters = andFilters(q.filters, 'properties', params);
+    const where = `project_id = $1 AND env = $2 AND event = $3
+      AND "timestamp" >= $4 AND "timestamp" < $5${filters}`;
+    const counts = `count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS visitors,
+      count(DISTINCT session_id) FILTER (WHERE session_id IS NOT NULL)::int AS sessions,
+      count(*)::int AS page_views`;
+    const summaryRows = await this.pool.query(
+      `SELECT ${counts} FROM events WHERE ${where}`,
+      params,
+    );
+    const summary = {
+      visitors: Number(summaryRows.rows[0]?.visitors ?? 0),
+      sessions: Number(summaryRows.rows[0]?.sessions ?? 0),
+      page_views: Number(summaryRows.rows[0]?.page_views ?? 0),
+    };
+    const breakdowns: WebAnalyticsResult['breakdowns'] = {};
+    for (const dimension of q.dimensions) {
+      const dimensionParams = [...params, dimension.property, dimension.missingValue];
+      const propertyParam = dimensionParams.length - 1;
+      const missingParam = dimensionParams.length;
+      const rows = await this.pool.query(
+        `SELECT COALESCE(properties->>$${propertyParam}, $${missingParam}) AS value, ${counts}
+         FROM events WHERE ${where}
+         GROUP BY 1 ORDER BY page_views DESC, value ASC LIMIT 50`,
+        dimensionParams,
+      );
+      breakdowns[dimension.key] = rows.rows.map((row) => ({
+        value: String(row.value),
+        visitors: Number(row.visitors),
+        sessions: Number(row.sessions),
+        page_views: Number(row.page_views),
+      }));
+    }
+    return { summary, breakdowns };
   }
 
   async funnel(q: FunnelQuery): Promise<number[]> {

@@ -5,6 +5,7 @@ import { registeredEventNames } from './registry.js';
 import { recordWarnings, type WarningDelta } from './warnings.js';
 import { randomUUID } from 'node:crypto';
 import { validateAcquisitionProperties } from './acquisitionAttribution.js';
+import { validateAndEnrichBrowserProperties } from './browserAnalytics.js';
 
 const CLOCK_SKEW_FUTURE_MS = 5 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 30_000;
@@ -40,6 +41,7 @@ export class IngestService {
     env: string,
     batch: IngestEnvelope,
     now: Date = new Date(),
+    enrichment: { country: string } = { country: 'unknown' },
   ): Promise<IngestResult> {
     const rawEvents = batch.events;
     {
@@ -79,6 +81,12 @@ export class IngestService {
           // Do not retain the rejected payload: attribution must never turn a
           // raw URL into an observability log entry.
           bump('rejected', e.event, acquisitionError);
+          return;
+        }
+        const browserError = validateAndEnrichBrowserProperties(properties, e.session_id, enrichment.country);
+        if (browserError) {
+          errors.push({ index, message: browserError });
+          bump('rejected', e.event, browserError);
           return;
         }
 

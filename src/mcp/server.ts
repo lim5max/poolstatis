@@ -19,10 +19,10 @@ import {
   editDecisionSchema, measurementDeclarationSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
   registerReleaseSchema, reviewDecisionSchema,
-  retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
+  retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, webAnalyticsQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
   updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
 } from '../schemas.js';
-import { INSTRUMENTATION_STANDARD } from './standard.js';
+import { BROWSER_ANALYTICS_STANDARD, INSTRUMENTATION_STANDARD } from './standard.js';
 
 export interface McpConfig { baseUrl: string; token: string; }
 
@@ -190,6 +190,13 @@ jsonTool(
   'Idempotently propose the five reserved browser acquisition UTM event properties. They remain proposed until an owner explicitly reviews and trusts a definition for decision contracts.',
   { project },
   wrap(({ project: slug }) => api('POST', `/api/v1/projects/${slug}/properties/acquisition-attribution`, {})),
+);
+
+jsonTool(
+  'propose_browser_analytics',
+  'Idempotently propose the canonical privacy-bounded browser properties plus page-view and visitor metrics. Everything remains proposed until owner review.',
+  { project },
+  wrap(({ project: slug }) => api('POST', `/api/v1/projects/${slug}/properties/browser-analytics`, {})),
 );
 
 jsonTool(
@@ -681,6 +688,13 @@ jsonTool(
 );
 
 jsonTool(
+  'query_web_analytics',
+  'Return distinct visitors, sessions and page views plus count-and-percentage breakdowns by country, device, browser, OS, language, timezone or acquisition source. Definitions and privacy caveats are included.',
+  { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_analytics', ...query })),
+);
+
+jsonTool(
   'query_funnel',
   'Step-by-step conversion for a saved funnel (by key) or inline steps (registry metric keys).',
   { project, query: funnelQuerySchema.omit({ kind: true }) },
@@ -842,6 +856,14 @@ server.resource(
   'poolstatis://standard/instrumentation',
   async (uri) => ({
     contents: [{ uri: uri.href, mimeType: 'text/markdown', text: INSTRUMENTATION_STANDARD }],
+  }),
+);
+
+server.resource(
+  'browser-analytics-standard',
+  'poolstatis://standard/browser-analytics',
+  async (uri) => ({
+    contents: [{ uri: uri.href, mimeType: 'text/markdown', text: BROWSER_ANALYTICS_STANDARD }],
   }),
 );
 

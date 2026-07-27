@@ -1,0 +1,100 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { api, createTestEnv, type TestEnv } from './helpers.js';
+import { createTrustedProxyCountryResolver } from '../src/services/country.js';
+
+describe('web analytics query', () => {
+  let env: TestEnv;
+  let other: TestEnv;
+  beforeAll(async () => {
+    const countryResolver = createTrustedProxyCountryResolver({
+      header: 'x-edge-country',
+      trustedProxyCidrs: ['127.0.0.0/8', '::1/128'],
+    });
+    env = await createTestEnv({ countryResolver });
+    other = await createTestEnv({ countryResolver });
+    const proposed = await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/properties/browser-analytics`, {});
+    expect(proposed.status).toBe(200);
+    await api(env, env.secretToken, 'PATCH', `/api/v1/projects/${env.projectSlug}/metrics/web_page_views`, { status: 'active' });
+    await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/properties/acquisition-attribution`, {});
+  });
+  afterAll(async () => { await env.close(); await other.close(); });
+
+  async function ingest(country: string, events: Array<Record<string, unknown>>) {
+    return env.app.inject({
+      method: 'POST',
+      url: '/i/v1/events',
+      headers: { authorization: `Bearer ${env.ingestToken}`, 'x-edge-country': country },
+      payload: { events },
+    });
+  }
+
+  const page = (actor: string, session: string, path: string, source?: string) => ({
+    event: 'page.viewed',
+    distinct_id: actor,
+    session_id: session,
+    properties: {
+      $browser_context: '1', $page_path: path, $device_class: actor.includes('mobile') ? 'mobile' : 'desktop',
+      $browser_family: 'chrome', $os_family: 'linux', $language: 'en',
+      $timezone: 'UTC', $viewport_bucket: 'lg', $screen_bucket: 'lg',
+      ...(source ? { $utm_source: source } : {}),
+    },
+  });
+
+  it('keeps visitors, sessions and page views distinct and returns count plus percentage breakdowns', async () => {
+    expect((await ingest('US', [
+      page('visitor:one', 'session:1', '/', 'search'),
+      page('visitor:one', 'session:1', '/pricing', 'search'),
+      page('visitor:mobile', 'session:2', '/', 'social'),
+    ])).statusCode).toBe(200);
+    const linked = await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/identity-links`, {
+      source_distinct_id: 'visitor:one',
+      target_distinct_id: 'user:one',
+      env: 'prod',
+    });
+    expect(linked.status).toBe(201);
+    expect((await ingest('DE', [page('user:one', 'session:3', '/docs', 'search')])).statusCode).toBe(200);
+
+    const usageBeforeQuery = await env.pool.query(
+      `SELECT COALESCE(sum(quantity), 0)::int AS quantity
+       FROM usage_ledger
+       WHERE project_id = $1 AND env = 'prod' AND meter_key = 'events_stored'`,
+      [env.projectId],
+    );
+    expect(usageBeforeQuery.rows[0]?.quantity).toBe(4);
+
+    const result = await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/query`, {
+      kind: 'web_analytics',
+      metric: 'web_page_views',
+      date_from: '-1d',
+      dimensions: ['country', 'device', 'source'],
+      env: 'prod',
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.summary).toEqual({ visitors: 2, sessions: 3, page_views: 4 });
+    expect(result.body.breakdowns.country).toEqual([
+      { value: 'US', visitors: 2, sessions: 2, page_views: 3, percentage: 75 },
+      { value: 'DE', visitors: 1, sessions: 1, page_views: 1, percentage: 25 },
+    ]);
+    expect(result.body.breakdowns.device.map((row: { value: string; page_views: number }) => [row.value, row.page_views]))
+      .toEqual([['desktop', 3], ['mobile', 1]]);
+    expect(result.body.meta.definitions.visitors).toContain('resolved actors');
+    const usageAfterQuery = await env.pool.query(
+      `SELECT COALESCE(sum(quantity), 0)::int AS quantity
+       FROM usage_ledger
+       WHERE project_id = $1 AND env = 'prod' AND meter_key = 'events_stored'`,
+      [env.projectId],
+    );
+    expect(usageAfterQuery.rows[0]?.quantity).toBe(4);
+  });
+
+  it('isolates environment and tenant scopes', async () => {
+    const dev = await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/query`, {
+      kind: 'web_analytics', metric: 'web_page_views', date_from: '-1d', dimensions: ['country'], env: 'dev',
+    });
+    expect(dev.body.summary).toEqual({ visitors: 0, sessions: 0, page_views: 0 });
+    const crossTenant = await api(other, other.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/query`, {
+      kind: 'web_analytics', metric: 'web_page_views', date_from: '-1d', dimensions: ['country'],
+    });
+    expect(crossTenant.status).toBe(404);
+  });
+});

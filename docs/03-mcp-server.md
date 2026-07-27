@@ -12,6 +12,7 @@
 | URI | Содержание |
 |-----|------------|
 | `poolstatis://standard/instrumentation` | Стандарт инструментации: именование событий, обязательные свойства, какие метрики ставить по типу продукта. Версионируется. (Контент — этап 2.) |
+| `poolstatis://standard/browser-analytics` | Нормативные определения Visitors / Sessions / Page views, consent и privacy/GeoIP границы browser-модуля. |
 | `poolstatis://{project}/schema` | Живая схема проекта: метрики реестра, воронки, типы сущностей, фактические имена событий за 30 дней с пометкой registered/unregistered. |
 
 Схема как ресурс — ключевой UX-ход: агент получает полный контекст проекта одним чтением, без цепочки list-вызовов.
@@ -159,6 +160,7 @@ non-causal.
 
 ```
 query_trend(project, {metric, date_from, date_to?, interval, breakdown?, env?})
+query_web_analytics(project, {metric, date_from, date_to?, dimensions?, filters?, env?})
 query_funnel(project, {funnel | steps, date_from, date_to?, env?})
   // каждый step возвращает metric_key, purpose, category, actors и conversion_*
 query_retention(project, {start_metric, return_metric?, interval, periods, date_from, env?})

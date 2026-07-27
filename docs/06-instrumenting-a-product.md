@@ -242,3 +242,8 @@ Query kinds: `trend`, `funnel`, `entities`, `retention`, `lifecycle`, `stickines
 - [03-mcp-server.md](03-mcp-server.md) — every MCP tool.
 - [04-http-api.md](04-http-api.md) — ingest + query API reference.
 - [05-gap-analysis.md](05-gap-analysis.md) — what's built vs PostHog, and what's next.
+Для web analytics сначала прочитайте также
+`poolstatis://standard/browser-analytics`, затем вызовите
+`propose_browser_analytics`. Browser capture подключается только через отдельный
+`@poolstatis/sdk/browser` entrypoint и только после consent; base SDK не меняет
+поведение.

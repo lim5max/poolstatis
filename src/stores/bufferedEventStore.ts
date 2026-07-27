@@ -31,6 +31,8 @@ import type {
   TrendQuery,
   VisualExperienceQuery,
   VisualExperienceResult,
+  WebAnalyticsQuery,
+  WebAnalyticsResult,
 } from './eventStore.js';
 
 export interface BufferedEventStoreOptions {
@@ -138,6 +140,10 @@ export class BufferedEventStore implements EventStore {
 
   trend(q: TrendQuery): Promise<TrendPoint[]> {
     return this.inner.trend(q);
+  }
+
+  webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult> {
+    return this.inner.webAnalytics(q);
   }
 
   funnel(q: FunnelQuery): Promise<number[]> {

@@ -50,9 +50,12 @@ Avoid: \`Signup\`, \`user_signed_up_event\`, \`click\`, \`track\`, \`event1\`.
 ## 3. Required properties & identity
 
 1. **\`distinct_id\` MUST be a stable user id** from the product's auth system —
-   the same value every time that user acts. Never a per-session or random id.
-   (Until identity-merge ships, \`distinct_id\` *is* the actor: stability is
-   what makes retention, funnels and unique counts correct.)
+   the same value every time that user acts. Never use a session id as the actor.
+   The one supported anonymous exception is the consent-gated
+   \`@poolstatis/sdk/browser\` first-party visitor id: after authentication,
+   switch to the stable product user id and create the explicit audited actor
+   link returned by the browser module. Sessions remain separate in
+   \`session_id\`; query-time identity resolution preserves immutable events.
 2. **Money** goes in a numeric \`amount\` property, currency in \`currency\`:
    \`{ "amount": 49.0, "currency": "USD" }\`. Never bake the number into the event name.
 3. **Mutable state** (plan, role, lifecycle stage, seat count) belongs on the
@@ -217,4 +220,33 @@ Do not use temporary anonymous/session ids until actor identity merge ships.
 7. **Define funnels** (\`define_funnel\`) from the registered metrics, with goals.
 8. **Hand off**: ask the owner to activate the proposed metrics (or activate in
    the admin panel's Registry tab).
+`;
+
+export const BROWSER_ANALYTICS_STANDARD = `# Poolstatis Browser Analytics Context (v1)
+
+Browser Analytics is an optional browser-only SDK entrypoint. It does nothing before
+explicit consent. The base SDK remains browser and Node neutral.
+
+Definitions:
+- Visitors: unique query-time resolved actors with page-view events. Audited actor links
+  can join an opaque first-party visitor to a stable authenticated product user.
+- Sessions: distinct non-empty session_id values on page-view events. The default browser
+  inactivity timeout is 30 minutes.
+- Page views: accepted stored page.viewed events. Country/device enrichment never creates
+  another event and therefore does not change accepted stored-event billing semantics.
+
+Privacy boundary:
+- Captures pathname only, never query strings, fragments, full URLs, DOM, text or inputs.
+- Sends coarse device/browser/OS families, primary language, timezone, and coarse
+  viewport/screen buckets. It never sends full User-Agent, versions, precise dimensions,
+  canvas/fonts/hardware concurrency or other fingerprinting material.
+- Country is never inferred from locale. Core accepts a coarse ISO country only from a
+  configured directly trusted reverse proxy and otherwise records unknown. Raw IP is
+  neither stored nor returned. GeoIP can be wrong for VPNs, relays and mobile networks;
+  city and region are intentionally not collected.
+
+Use propose_browser_analytics before activation. Canonical properties and the web_page_views
+and web_visitors metrics start proposed. The owner reviews and activates them. Query with
+query_web_analytics using the page-view count metric; responses keep visitors, sessions and
+page views separate and return counts plus page-view percentages for requested dimensions.
 `;

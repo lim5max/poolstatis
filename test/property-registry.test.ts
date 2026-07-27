@@ -170,4 +170,24 @@ describe('property registry and measurement trust', () => {
     expect(setup.status).toBe(409);
     expect(setup.body.error.code).toBe('acquisition_property_conflict');
   });
+
+  test('rejects a noncanonical existing definition for reserved browser keys', async () => {
+    const malformed = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/properties',
+      { key: '$country', scope: 'event', value_type: 'string', purpose: 'A client supplied country inferred from browser locale.' },
+    );
+    expect(malformed.status).toBe(201);
+    const setup = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/properties/browser-analytics',
+      {},
+    );
+    expect(setup.status).toBe(409);
+    expect(setup.body.error.code).toBe('browser_property_conflict');
+  });
 });

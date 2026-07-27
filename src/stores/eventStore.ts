@@ -59,6 +59,27 @@ export interface TrendPoint {
   breakdown_value?: string;
 }
 
+export interface WebAnalyticsQuery {
+  projectId: string;
+  env: string;
+  event: string;
+  filters: PropertyFilter[];
+  from: Date;
+  to: Date;
+  dimensions: Array<{ key: string; property: string; missingValue: string }>;
+}
+
+export interface WebAnalyticsCounts {
+  visitors: number;
+  sessions: number;
+  page_views: number;
+}
+
+export interface WebAnalyticsResult {
+  summary: WebAnalyticsCounts;
+  breakdowns: Record<string, Array<WebAnalyticsCounts & { value: string }>>;
+}
+
 export interface FunnelStepQuery {
   event: string;
   filters: PropertyFilter[];
@@ -346,6 +367,7 @@ export interface EventStore {
   /** Returns `duplicate` when the batch was already durably appended. */
   appendIdempotent(batch: IdempotentAppend): Promise<AppendResult>;
   trend(q: TrendQuery): Promise<TrendPoint[]>;
+  webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult>;
   funnel(q: FunnelQuery): Promise<number[]>; // actor count per step
   retention(q: RetentionQuery): Promise<RetentionCohort[]>;
   lifecycle(q: IntervalActivityQuery): Promise<LifecyclePoint[]>;
