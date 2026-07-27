@@ -223,6 +223,25 @@ describe('@poolstatis/sdk/browser', () => {
     expect(analytics.visitorId).toBe('visitor:fresh');
   });
 
+  it('reports a stale readable session when account reset cannot overwrite session storage', () => {
+    const c = consent(true);
+    const f = fixture();
+    f.browser.sessionStorage = {
+      getItem: () => JSON.stringify({ id: 'session:stale', last: f.now() }),
+      setItem: () => { throw new DOMException('blocked', 'SecurityError'); },
+      removeItem: () => { throw new DOMException('blocked', 'SecurityError'); },
+    };
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      createId: () => 'fresh',
+    });
+    analytics.start();
+    expect(analytics.sessionId).toBe('session:stale');
+    expect(() => analytics.resetIdentity()).toThrow('stale session');
+    expect(analytics.sessionId).toBe('session:fresh');
+  });
+
   it('is importable in SSR without resolving browser globals', async () => {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
     Object.defineProperty(globalThis, 'window', { configurable: true, get: () => { throw new Error('window read'); } });

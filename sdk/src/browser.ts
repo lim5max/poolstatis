@@ -291,6 +291,17 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       if (persistedVisitor !== null && persistedVisitor !== visitorId) {
         throw new Error('browser identity rotated in memory but local storage kept a stale visitor; reload only after storage access is restored');
       }
+      const persistedSession = storageGet(browser.sessionStorage, SESSION_KEY);
+      if (persistedSession !== null) {
+        let persistedSessionId: string | null = null;
+        try {
+          const parsed = JSON.parse(persistedSession) as { id?: unknown };
+          persistedSessionId = typeof parsed.id === 'string' ? parsed.id : null;
+        } catch { /* malformed storage is stale by definition */ }
+        if (persistedSessionId !== sessionId) {
+          throw new Error('browser identity rotated in memory but session storage kept a stale session; reload only after storage access is restored');
+        }
+      }
     },
     get visitorId() { return visitorId; },
     get sessionId() { return sessionId; },

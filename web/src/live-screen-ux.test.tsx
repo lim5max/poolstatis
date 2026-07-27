@@ -131,7 +131,7 @@ describe('live customer screen UX', () => {
       },
       meta: {
         computed_at: '2026-07-27T00:00:00Z',
-        truncated_dimensions: [],
+        truncated_dimensions: ['country'],
         definitions: {
           visitors: 'Unique resolved actors.',
           sessions: 'Distinct session ids.',
@@ -160,6 +160,7 @@ describe('live customer screen UX', () => {
     expect(screen.getByText('75%')).toBeInTheDocument();
     expect(screen.getByText('60%')).toBeInTheDocument();
     expect(screen.getByText('Unique resolved actors.')).toBeInTheDocument();
+    expect(screen.getByText(/Showing top 8/)).toBeInTheDocument();
     expect(webAnalytics).toHaveBeenCalledWith('alpha', expect.objectContaining({
       metric: 'web_page_views', dimensions: ['country', 'device', 'browser', 'os', 'source'], env: 'prod',
     }));

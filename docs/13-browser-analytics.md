@@ -81,10 +81,11 @@ networks can make country inaccurate.
 Call `propose_browser_analytics` or
 `POST /api/v1/projects/{slug}/properties/browser-analytics`. It idempotently
 creates canonical properties plus proposed `web_page_views` and `web_visitors`
-metrics. The same atomic setup also creates the existing bounded UTM
+metrics. The same setup request also creates the existing bounded UTM
 definitions required by composed acquisition and the source breakdown.
 Conflicting meanings fail with `409`; the owner reviews and activates the
-bundle.
+bundle. Setup is idempotent but not transactional across the three registry
+groups; after resolving a conflict, repeat it to complete any partial bundle.
 
 `query_web_analytics` (Query DSL `kind: "web_analytics"`) references the
 page-view count metric and returns the three headline counts plus count and

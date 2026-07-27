@@ -104,4 +104,23 @@ describe('web analytics query', () => {
     });
     expect(crossTenant.status).toBe(404);
   });
+
+  it('reports bounded breakdown truncation instead of silently hiding the tail', async () => {
+    const events = Array.from({ length: 51 }, (_, index) => {
+      const event = page(`visitor:language:${index}`, `session:language:${index}`, `/language/${index}`);
+      event.properties.$language = `lang-${String(index).padStart(2, '0')}`;
+      return event;
+    });
+    expect((await ingest('US', events)).statusCode).toBe(200);
+    const result = await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/query`, {
+      kind: 'web_analytics',
+      metric: 'web_page_views',
+      date_from: '-1d',
+      dimensions: ['language'],
+      env: 'prod',
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.breakdowns.language).toHaveLength(50);
+    expect(result.body.meta.truncated_dimensions).toEqual(['language']);
+  });
 });
