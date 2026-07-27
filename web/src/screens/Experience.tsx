@@ -18,6 +18,8 @@ import type {
   VisualExperienceResponse,
 } from '../api/types';
 
+const MINIMUM_AGGREGATE_GRID_CLICKS = 10;
+
 export function Experience() {
   const { client, project, env, availableEnvs, setEnv } = useStore();
   const { data, error, loading, reload } = useAsync(
@@ -920,75 +922,89 @@ function AggregateClickEvidence({ surfaces, env }: { surfaces: ExperienceSurface
 
   const max = Math.max(1, ...(result?.cells.map((cell) => cell.count) ?? []));
   const cells = new Map(result?.cells.map((cell) => [`${cell.x}:${cell.y}`, cell]) ?? []);
+  const totalClicks = result?.cells.reduce((sum, cell) => sum + cell.count, 0) ?? 0;
+  const showGrid = totalClicks >= MINIMUM_AGGREGATE_GRID_CLICKS;
 
   return (
     <div id="experience-evidence" className="scroll-mt-4">
-      <Panel
-        title="Aggregate click details"
-        right={<span className="text-xs text-muted-foreground">snapshot optional · accepted events only</span>}
-      >
-        <p className="mb-3 text-xs text-muted-foreground">
-          This normalized grid remains available before a deploy snapshot exists. Use the versioned map above for layout-accurate decisions.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Select value={surface} onValueChange={(value) => { setSurface(value); reset(); }} disabled={surfaces.length === 0}>
-            <SelectTrigger aria-label="Aggregate click surface" className="h-9 min-w-44"><SelectValue placeholder="Choose surface" /></SelectTrigger>
-            <SelectContent>{surfaces.map((item) => <SelectItem key={item.key} value={item.key}>{item.name}</SelectItem>)}</SelectContent>
-          </Select>
-          <Select value={period} onValueChange={(value) => { setPeriod(value); reset(); }}>
-            <SelectTrigger aria-label="Aggregate click period" className="h-9 w-28"><SelectValue /></SelectTrigger>
-            <SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent>
-          </Select>
-          <Select value={grid} onValueChange={(value) => { setGrid(value); reset(); }}>
-            <SelectTrigger aria-label="Aggregate click grid" className="h-9 w-24"><SelectValue /></SelectTrigger>
-            <SelectContent>{['8', '16', '32'].map((value) => <SelectItem key={value} value={value}>{value} × {value}</SelectItem>)}</SelectContent>
-          </Select>
-          <Button onClick={load} disabled={!surface || busy}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <GridView className="size-4" />}
-            Load aggregate clicks
-          </Button>
-        </div>
-        {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
-        {result && result.cells.length === 0 && result.labels.length === 0 && (
-          <div className="mt-4"><EmptyState headline="No captured clicks" lead={`No accepted labelled click events in the last ${period} days.`} /></div>
-        )}
-        {result && (result.cells.length > 0 || result.labels.length > 0) && (
-          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
-            <div
-              role="img"
-              aria-label={`${result.cells.reduce((sum, cell) => sum + cell.count, 0)} accepted clicks across ${result.cells.length} occupied grid cells.`}
-              className="grid gap-0.5 rounded-md border bg-muted/20 p-3"
-              style={{ gridTemplateColumns: `repeat(${result.grid}, minmax(0, 1fr))` }}
-            >
-              {Array.from({ length: result.grid * result.grid }, (_, index) => {
-                const x = index % result.grid;
-                const y = Math.floor(index / result.grid);
-                const cell = cells.get(`${x}:${y}`);
-                return (
-                  <div
-                    key={`${x}:${y}`}
-                    aria-hidden="true"
-                    className="aspect-square rounded-sm bg-primary"
-                    style={{ opacity: cell ? Math.max(0.15, cell.count / max) : 0.04 }}
-                  />
-                );
-              })}
-            </div>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader><TableRow><TableHead>Label</TableHead><TableHead>Clicks</TableHead><TableHead>Actors</TableHead></TableRow></TableHeader>
-                <TableBody>{result.labels.map((label) => (
-                  <TableRow key={label.label}>
-                    <TableCell><code className="text-xs">{label.label}</code></TableCell>
-                    <TableCell>{fmtNum(label.count)}</TableCell>
-                    <TableCell>{fmtNum(label.actors)}</TableCell>
-                  </TableRow>
-                ))}</TableBody>
-              </Table>
-            </div>
+      <details className="rounded-xl border bg-card text-card-foreground shadow-sm">
+        <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center gap-2 px-5 py-3.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <span aria-hidden="true" className="text-muted-foreground">›</span>
+          <span className="serif text-base">Raw aggregate coordinates</span>
+          <span className="ml-auto text-xs text-muted-foreground">Fallback without page snapshot</span>
+        </summary>
+        <div className="border-t p-5">
+          <p className="mb-3 max-w-3xl text-xs text-muted-foreground">
+            Cells are normalized page coordinates, not a layout-accurate heatmap. They can mix layouts and devices unless filtered to one stable surface and period. Use the versioned page-backed map above for layout decisions.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Select value={surface} onValueChange={(value) => { setSurface(value); reset(); }} disabled={surfaces.length === 0}>
+              <SelectTrigger aria-label="Aggregate click surface" className="h-9 min-w-44"><SelectValue placeholder="Choose surface" /></SelectTrigger>
+              <SelectContent>{surfaces.map((item) => <SelectItem key={item.key} value={item.key}>{item.name}</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={period} onValueChange={(value) => { setPeriod(value); reset(); }}>
+              <SelectTrigger aria-label="Aggregate click period" className="h-9 w-28"><SelectValue /></SelectTrigger>
+              <SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={grid} onValueChange={(value) => { setGrid(value); reset(); }}>
+              <SelectTrigger aria-label="Aggregate click grid" className="h-9 w-24"><SelectValue /></SelectTrigger>
+              <SelectContent>{['8', '16', '32'].map((value) => <SelectItem key={value} value={value}>{value} × {value}</SelectItem>)}</SelectContent>
+            </Select>
+            <Button onClick={load} disabled={!surface || busy}>
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <GridView className="size-4" />}
+              Load aggregate clicks
+            </Button>
           </div>
-        )}
-      </Panel>
+          {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
+          {result && result.cells.length === 0 && result.labels.length === 0 && (
+            <div className="mt-4"><EmptyState headline="No captured clicks" lead={`No accepted labelled click events in the last ${period} days.`} /></div>
+          )}
+          {result && (result.cells.length > 0 || result.labels.length > 0) && (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,24rem)_18rem]">
+              {showGrid ? (
+                <div
+                  role="img"
+                  aria-label={`${totalClicks} accepted clicks across ${result.cells.length} occupied grid cells.`}
+                  className="grid max-w-sm gap-0.5 rounded-md border bg-muted/20 p-3"
+                  style={{ gridTemplateColumns: `repeat(${result.grid}, minmax(0, 1fr))` }}
+                >
+                  {Array.from({ length: result.grid * result.grid }, (_, index) => {
+                    const x = index % result.grid;
+                    const y = Math.floor(index / result.grid);
+                    const cell = cells.get(`${x}:${y}`);
+                    return (
+                      <div
+                        key={`${x}:${y}`}
+                        aria-hidden="true"
+                        className="aspect-square rounded-sm bg-primary"
+                        style={{ opacity: cell ? Math.max(0.15, cell.count / max) : 0.04 }}
+                      />
+                    );
+                  })}
+                </div>
+              ) : (
+                <div role="status" className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                  {totalClicks} clicks are too few for a meaningful coordinate grid. Use the labelled targets instead.
+                </div>
+              )}
+              {result.labels.length > 0 && (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Label</TableHead><TableHead>Clicks</TableHead><TableHead>Actors</TableHead></TableRow></TableHeader>
+                    <TableBody>{result.labels.map((label) => (
+                      <TableRow key={label.label}>
+                        <TableCell><code className="text-xs">{label.label}</code></TableCell>
+                        <TableCell>{fmtNum(label.count)}</TableCell>
+                        <TableCell>{fmtNum(label.actors)}</TableCell>
+                      </TableRow>
+                    ))}</TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </details>
     </div>
   );
 }

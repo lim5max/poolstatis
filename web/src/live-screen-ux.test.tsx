@@ -275,8 +275,14 @@ describe('live customer screen UX', () => {
     expect(screen.getByText(/aggregate maps · no DOM replay/)).toBeInTheDocument();
     expect(screen.getByText('Capture the first page version')).toBeInTheDocument();
     expect(screen.getByText('Add a deploy snapshot')).toBeInTheDocument();
+    const fallback = screen.getByText('Raw aggregate coordinates').closest('details');
+    expect(fallback).not.toBeNull();
+    expect(fallback).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Raw aggregate coordinates'));
     fireEvent.click(screen.getByRole('button', { name: 'Load aggregate clicks' }));
     expect(await screen.findByText('checkout.submit')).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: /4 accepted clicks/ })).toBeInTheDocument();
+    expect(screen.getByText(/4 clicks are too few for a meaningful coordinate grid/)).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /accepted clicks/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/can mix layouts and devices unless filtered/)).toBeInTheDocument();
   });
 });
