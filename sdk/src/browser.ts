@@ -82,6 +82,17 @@ const SESSION_KEY = 'poolstatis.browser.session';
 const SESSION_TIMEOUT_MS = 30 * 60_000;
 const reserved = new Set<string>(BROWSER_RESERVED_PROPERTIES);
 
+/** Remove the first-party anonymous visitor and session without starting capture. */
+export function clearBrowserAnalyticsIdentity(
+  browserLike?: Pick<BrowserLike, 'localStorage' | 'sessionStorage'>,
+): void {
+  const candidate = browserLike
+    ?? (globalThis as { window?: Pick<BrowserLike, 'localStorage' | 'sessionStorage'> }).window;
+  if (!candidate) return;
+  try { candidate.localStorage.removeItem(VISITOR_KEY); } catch { /* storage may be blocked */ }
+  try { candidate.sessionStorage.removeItem(SESSION_KEY); } catch { /* storage may be blocked */ }
+}
+
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.()
     ?? `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;

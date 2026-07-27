@@ -50,6 +50,11 @@ synchronously removes queued browser events, stored ids and navigation
 listeners. Policy selection changes only when collection may begin; it cannot
 add properties or expand the fixed capture allowlist.
 
+When a host loads an already-disabled preference or GPC state before creating
+the client, call `clearBrowserAnalyticsIdentity()` once. It removes an older
+first-party visitor/session without starting capture or resolving analytics
+transport.
+
 When collection is enabled, the module stores an opaque visitor id
 in first-party local storage and a 30-minute inactivity session in session
 storage. It captures the initial pathname and SPA history changes. Query
