@@ -12,6 +12,11 @@ export const BROWSER_RESERVED_PROPERTIES = [
   '$language', '$timezone', '$viewport_bucket', '$screen_bucket', '$country',
   ...ACQUISITION_UTM_KEYS, 'landing_path', 'referrer_origin',
 ] as const;
+export const BROWSER_OPTIONAL_CONTEXT_PROPERTIES = [
+  '$device_class', '$browser_family', '$os_family', '$language',
+  '$timezone', '$viewport_bucket', '$screen_bucket',
+] as const;
+export type BrowserOptionalContextProperty = typeof BROWSER_OPTIONAL_CONTEXT_PROPERTIES[number];
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 type HistoryMethod = (data: unknown, unused: string, url?: string | URL | null) => void;
@@ -45,6 +50,8 @@ interface BrowserAnalyticsBaseOptions {
   sessionTimeoutMs?: number;
   /** Map the pathname to a finite, non-sensitive product route vocabulary. */
   mapPagePath?: (pathname: string) => string;
+  /** Narrow the standard coarse context. Unknown properties are never emitted. */
+  contextProperties?: readonly BrowserOptionalContextProperty[];
   /** Compose the existing bounded UTM snapshot into the same session and page-view events. */
   captureAcquisition?: boolean;
 }
@@ -144,6 +151,9 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   let started = false;
   let stopConsent: (() => void) | null = null;
   let restoreHistory: (() => void) | null = null;
+  const contextProperties = new Set<BrowserOptionalContextProperty>(
+    options.contextProperties ?? BROWSER_OPTIONAL_CONTEXT_PROPERTIES,
+  );
 
   const resolveBrowser = () => options.browser
     ?? ((globalThis as { window?: BrowserLike }).window ?? null);
@@ -182,9 +192,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
 
   const context = (): Record<string, unknown> => {
     const ua = browser!.navigator.userAgent;
-    return {
-      $browser_context: BROWSER_CONTEXT_VERSION,
-      $page_path: currentPagePath(),
+    const optional: Record<BrowserOptionalContextProperty, unknown> = {
       $device_class: deviceClass(ua),
       $browser_family: browserFamily(ua),
       $os_family: osFamily(ua),
@@ -192,6 +200,16 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       $timezone: timezone(),
       $viewport_bucket: sizeBucket(browser!.innerWidth),
       $screen_bucket: sizeBucket(browser!.screen.width),
+    };
+    const selected = Object.fromEntries(
+      Object.entries(optional).filter(([key]) => (
+        contextProperties.has(key as BrowserOptionalContextProperty)
+      )),
+    );
+    return {
+      $browser_context: BROWSER_CONTEXT_VERSION,
+      $page_path: currentPagePath(),
+      ...selected,
     };
   };
 

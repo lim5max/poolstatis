@@ -92,6 +92,7 @@ const browser = createBrowserAnalytics({
   subscribeConsent: (listener) => consent.onChange(listener),
   captureAcquisition: true, // reuses the bounded attribution snapshot
   mapPagePath: (pathname) => publicRouteVocabulary(pathname),
+  contextProperties: ['$device_class', '$browser_family', '$os_family'],
 });
 browser.start();
 
@@ -110,6 +111,8 @@ Without callbacks it starts immediately; provide `hasConsent` and
 Use `mapPagePath` when public routes can contain user-provided slugs. Its
 finite result is used for both `$page_path` and `landing_path`; mapper failures
 fall back to `/other` instead of sending the raw path.
+`contextProperties` can only narrow the SDK's typed coarse context list.
+Unknown property names are ignored at runtime and cannot expand capture.
 
 Composed acquisition uses the same session and page-view event. Do not also
 start `createAttributionClient`, which is the acquisition-only alternative and

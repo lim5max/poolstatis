@@ -27,6 +27,7 @@ const browser = createBrowserAnalytics({
   subscribeConsent(listener) { return consent.subscribe(listener); },
   captureAcquisition: true,
   mapPagePath: (pathname) => publicRouteVocabulary(pathname),
+  contextProperties: ['$device_class', '$browser_family', '$os_family'],
 });
 
 browser.start();
@@ -66,6 +67,10 @@ If routes can contain customer or invitation slugs, provide `mapPagePath` and
 return a finite product-route vocabulary. The mapped path is used for both
 `$page_path` and `landing_path`; a mapper error falls back to `/other` and never
 falls back to the raw pathname.
+
+`contextProperties` can narrow the typed coarse dimension list. It cannot add
+custom fields: unknown names are ignored at runtime. The default preserves all
+documented coarse dimensions for existing integrations.
 
 Reserved context is bounded to device class, browser family, OS family, primary
 language, IANA timezone, coarse viewport/screen buckets and pathname. Full user
