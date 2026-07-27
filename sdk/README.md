@@ -104,6 +104,10 @@ const actorLink = browser.identify(user.id);
 browser.resetIdentity();
 ```
 
+If the host loads a persisted decline or GPC state before creating the client,
+call `clearBrowserAnalyticsIdentity()` to remove an older first-party
+visitor/session without starting capture.
+
 For a host-owned, reversible opt-out policy, set `consentPolicy: 'opt-out'`.
 Without callbacks it starts immediately; provide `hasConsent` and
 `subscribeConsent` when the host persists a Disable/Enable choice. Omitting

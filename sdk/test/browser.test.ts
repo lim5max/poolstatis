@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createBrowserAnalytics, type BrowserCaptureClient } from '../src/browser.js';
+import {
+  clearBrowserAnalyticsIdentity,
+  createBrowserAnalytics,
+  type BrowserCaptureClient,
+} from '../src/browser.js';
 import type { PoolstatisEvent } from '../src/index.js';
 
 function storage() {
@@ -115,6 +119,20 @@ describe('@poolstatis/sdk/browser', () => {
     analytics.start();
 
     expect(f.queued).toEqual([]);
+    expect(f.localStorage.getItem('poolstatis.browser.visitor')).toBeNull();
+    expect(f.sessionStorage.getItem('poolstatis.browser.session')).toBeNull();
+  });
+
+  it('explicitly clears persisted browser identity when a host starts disabled', () => {
+    const f = fixture();
+    f.localStorage.setItem('poolstatis.browser.visitor', 'visitor:seeded');
+    f.sessionStorage.setItem('poolstatis.browser.session', JSON.stringify({
+      id: 'session:seeded',
+      last: 1_000,
+    }));
+
+    clearBrowserAnalyticsIdentity(f.browser);
+
     expect(f.localStorage.getItem('poolstatis.browser.visitor')).toBeNull();
     expect(f.sessionStorage.getItem('poolstatis.browser.session')).toBeNull();
   });
