@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dirname, resolve } from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
@@ -20,8 +20,8 @@ let pool: pg.Pool;
 let app: FastifyInstance;
 let privateKey: CryptoKey | Uint8Array;
 let jwks: { keys: JWK[] };
-let secretClient: Client;
-let personalClient: Client;
+let secretClient: Client | undefined;
+let personalClient: Client | undefined;
 let packedDir: string;
 let alphaJwtToken: string;
 let personalTokenId: string;
@@ -122,7 +122,15 @@ beforeAll(async () => {
   await app.listen({ host: '127.0.0.1', port: 0 });
   packedDir = await mkdtemp(resolve(repoDir, '.poolstatis-mcp-packed-'));
   execFileSync('pnpm', ['--dir', resolve(repoDir, 'packages/mcp'), 'pack', '--pack-destination', packedDir]);
-  execFileSync('tar', ['-xzf', resolve(packedDir, 'poolstatis-mcp-0.1.0.tgz'), '-C', packedDir]);
+  const mcpPackage = JSON.parse(await readFile(resolve(repoDir, 'packages/mcp/package.json'), 'utf8')) as {
+    version: string;
+  };
+  execFileSync('tar', [
+    '-xzf',
+    resolve(packedDir, `poolstatis-mcp-${mcpPackage.version}.tgz`),
+    '-C',
+    packedDir,
+  ]);
   secretClient = await connectMcp(secret.body.token, 'mcp-tenant-secret-test');
   personalClient = await connectMcp(personal.body.token, 'mcp-tenant-personal-test', true);
 
@@ -132,16 +140,17 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await secretClient.close();
-  await personalClient.close();
-  await rm(packedDir, { recursive: true, force: true });
-  await app.close();
-  await pool.end();
+  await secretClient?.close();
+  await personalClient?.close();
+  if (packedDir) await rm(packedDir, { recursive: true, force: true });
+  await app?.close();
+  await pool?.end();
 });
 
 describe('MCP tenant isolation over stdio transport', () => {
   it('keeps a secret key on its exact project and an owner-bound personal token inside its organization', async () => {
     const projects = (globalThis as { mcpTenantProjects: { a: string; b: string; beta: string } }).mcpTenantProjects;
+    if (!secretClient || !personalClient) throw new Error('MCP clients were not initialized');
     const denied = await secretClient.callTool({ name: 'list_metrics', arguments: { project: projects.b } });
     expect(denied.isError).toBe(true);
     expect(denied.content[0]?.text).toContain('project_scope');

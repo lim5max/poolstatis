@@ -19,7 +19,7 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - run: corepack enable
-      - run: corepack prepare pnpm@10.7.1 --activate
+      - run: corepack prepare pnpm@10.13.1 --activate
       - run: pnpm install --frozen-lockfile
       - name: Pack, test, and publish one artifact
         run: |

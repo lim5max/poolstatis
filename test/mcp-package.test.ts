@@ -25,6 +25,7 @@ interface PackResult {
 }
 
 let tempProject: string;
+let dlxProject: string;
 let tarball: string;
 let executable: string;
 let cliModule: string;
@@ -33,12 +34,12 @@ let fixtureUrl: string;
 let generatedPackDir: string | undefined;
 const requests: Array<{ method: string; url: string; authorization?: string; client?: string }> = [];
 
-async function connect(command: string, args: string[] = []) {
+async function connect(command: string, args: string[] = [], cwd = tempProject) {
   const stderr: Buffer[] = [];
   const transport = new StdioClientTransport({
     command,
     args,
-    cwd: tempProject,
+    cwd,
     env: {
       PATH: process.env.PATH ?? '',
       POOLSTATIS_URL: fixtureUrl,
@@ -54,6 +55,7 @@ async function connect(command: string, args: string[] = []) {
 
 beforeAll(async () => {
   tempProject = await mkdtemp(join(tmpdir(), 'poolstatis-mcp-consumer-'));
+  dlxProject = await mkdtemp(join(tmpdir(), 'poolstatis-mcp-dlx-'));
   let stdout: string;
   const suppliedTarball = process.env.POOLSTATIS_MCP_TARBALL;
   const suppliedPackOutput = process.env.POOLSTATIS_MCP_PACK_OUTPUT;
@@ -116,7 +118,7 @@ beforeAll(async () => {
     'dist',
     'cli.js',
   );
-  fixture = createServer((req, res) => {
+  fixture = createServer(async (req, res) => {
     requests.push({
       method: req.method ?? '',
       url: req.url ?? '',
@@ -140,6 +142,61 @@ beforeAll(async () => {
       }));
       return;
     }
+    if (req.method === 'GET'
+        && req.url === '/api/v1/projects/safe-fixture/experience/routes?surface=checkout') {
+      res.end(JSON.stringify({
+        routes: [{ surface_key: 'checkout', key: 'checkout', path_pattern: '/checkout' }],
+      }));
+      return;
+    }
+    if (req.method === 'GET'
+        && req.url === '/api/v1/projects/safe-fixture/experience/snapshots?env=prod&surface=checkout&route=checkout') {
+      res.end(JSON.stringify({
+        snapshots: [{
+          surface_key: 'checkout',
+          route_key: 'checkout',
+          version: 'v2',
+          device: 'desktop',
+          storage_key: 'safe-fixture/checkout/v2/desktop.snapshot',
+        }],
+      }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/v1/projects/safe-fixture/query') {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { kind?: string };
+      if (body.kind === 'visual_experience') {
+        res.end(JSON.stringify({
+          kind: 'visual_experience',
+          project: 'safe-fixture',
+          surface: 'checkout',
+          route: 'checkout',
+          version: 'v2',
+          device: 'desktop',
+          summary: { sessions: 3, actors: 3, page_views: 3, clicks: 2 },
+          click_bins: [{ x: 2, y: 1, count: 2, percentage: 100 }],
+          sections: [{ section: 'checkout_form', sessions: 3, percentage: 100 }],
+          snapshot: { storage_key: 'safe-fixture/checkout/v2/desktop.snapshot' },
+          limitations: ['Descriptive aggregate evidence; not causal proof.'],
+        }));
+        return;
+      }
+      if (body.kind === 'visual_experience_compare') {
+        res.end(JSON.stringify({
+          kind: 'visual_experience_compare',
+          project: 'safe-fixture',
+          surface: 'checkout',
+          route: 'checkout',
+          baseline: { version: 'v1', device: 'desktop', summary: { sessions: 2, actors: 2, page_views: 2, clicks: 1 } },
+          comparison: { version: 'v2', device: 'desktop', summary: { sessions: 3, actors: 3, page_views: 3, clicks: 2 } },
+          delta: { sessions: 1, actors: 1, page_views: 1, clicks: 1 },
+          section_deltas: [{ section: 'checkout_form', percentage_points: 0 }],
+          limitations: ['Descriptive cohort comparison; not causal proof.'],
+        }));
+        return;
+      }
+    }
     res.statusCode = 404;
     res.end(JSON.stringify({ error: { code: 'not_found', message: 'fixture route not found' } }));
   });
@@ -154,6 +211,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (fixture) await new Promise<void>((resolveClose) => fixture.close(() => resolveClose()));
   if (tempProject) await rm(tempProject, { recursive: true, force: true });
+  if (dlxProject) await rm(dlxProject, { recursive: true, force: true });
   if (generatedPackDir) await rm(generatedPackDir, { recursive: true, force: true });
 });
 
@@ -192,10 +250,14 @@ describe('@poolstatis/mcp release artifact', () => {
   it('initializes, lists tools, and performs a project-scoped read against a safe fixture', async () => {
     const { client, stderr } = await connect(process.execPath, [cliModule]);
     try {
+      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.2.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'get_project_schema',
+        'list_visual_experience_versions',
+        'get_visual_experience_map',
+        'compare_visual_experience',
       ]));
       const result = await client.callTool({
         name: 'get_project_schema',
@@ -204,6 +266,60 @@ describe('@poolstatis/mcp release artifact', () => {
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toMatchObject({
         project: { slug: 'safe-fixture', name: 'Safe Fixture' },
+      });
+
+      const versions = await client.callTool({
+        name: 'list_visual_experience_versions',
+        arguments: {
+          project: 'safe-fixture',
+          surface: 'checkout',
+          route: 'checkout',
+          env: 'prod',
+        },
+      }, undefined, { timeout: 15_000 });
+      expect(versions.isError).not.toBe(true);
+      expect(versions.structuredContent).toMatchObject({
+        routes: [{ surface_key: 'checkout', key: 'checkout' }],
+        snapshots: [{ version: 'v2', device: 'desktop' }],
+      });
+
+      const visual = await client.callTool({
+        name: 'get_visual_experience_map',
+        arguments: {
+          project: 'safe-fixture',
+          query: {
+            surface: 'checkout',
+            route: 'checkout',
+            version: 'v2',
+            device: 'desktop',
+            date_from: '-7d',
+            env: 'prod',
+          },
+        },
+      }, undefined, { timeout: 15_000 });
+      expect(visual.isError).not.toBe(true);
+      expect(visual.structuredContent).toMatchObject({
+        kind: 'visual_experience',
+        summary: { sessions: 3, clicks: 2 },
+      });
+
+      const compared = await client.callTool({
+        name: 'compare_visual_experience',
+        arguments: {
+          project: 'safe-fixture',
+          query: {
+            surface: 'checkout',
+            route: 'checkout',
+            env: 'prod',
+            baseline: { version: 'v1', device: 'desktop', date_from: '-14d', date_to: '-8d' },
+            comparison: { version: 'v2', device: 'desktop', date_from: '-7d' },
+          },
+        },
+      }, undefined, { timeout: 15_000 });
+      expect(compared.isError).not.toBe(true);
+      expect(compared.structuredContent).toMatchObject({
+        kind: 'visual_experience_compare',
+        delta: { sessions: 1, clicks: 1 },
       });
     } finally {
       await client.close();
@@ -224,7 +340,7 @@ describe('@poolstatis/mcp release artifact', () => {
       `file:${tarball}`,
       'dlx',
       'poolstatis-mcp',
-    ]);
+    ], dlxProject);
     try {
       const tools = await client.listTools(undefined, { timeout: 30_000 });
       expect(tools.tools.length).toBeGreaterThan(20);

@@ -17,9 +17,9 @@ describe('MCP runner preset', () => {
     expect(() => resolveMcpRunner({
       VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED: 'true',
       VITE_POOLSTATIS_MCP_COMMAND: 'node',
-    })).toThrow('requires pnpm dlx pinned to @poolstatis/mcp@0.1.0');
+    })).toThrow('requires pnpm dlx pinned to @poolstatis/mcp@0.2.0');
     expect(() => resolveMcpRunner({
-      VITE_POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp@0.1.0',
+      VITE_POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp@0.2.0',
     })).toThrow('must be true before VITE_POOLSTATIS_MCP_ARGS can use @poolstatis/mcp');
   });
 });
