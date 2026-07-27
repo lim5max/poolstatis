@@ -7,6 +7,43 @@ const hostedTokenPolicy = {
 };
 
 describe('production protection config', () => {
+  it('supports mutually exclusive trusted-header and local-MMDB country modes', () => {
+    expect(loadConfig({
+      POOLSTATIS_COUNTRY_HEADER: 'cf-ipcountry',
+      POOLSTATIS_TRUSTED_PROXY_CIDRS: '10.0.0.0/8',
+    }).browserCountry).toEqual({
+      mode: 'trusted_header',
+      header: 'cf-ipcountry',
+      trustedProxyCidrs: ['10.0.0.0/8'],
+    });
+    expect(loadConfig({
+      POOLSTATIS_COUNTRY_MMDB_PATH: '/run/geoip/dbip-country-lite.mmdb',
+      POOLSTATIS_CLIENT_IP_HEADER: 'x-poolstatis-client-ip',
+      POOLSTATIS_TRUSTED_PROXY_CIDRS: '172.30.0.0/24',
+    }).browserCountry).toEqual({
+      mode: 'local_mmdb',
+      databasePath: '/run/geoip/dbip-country-lite.mmdb',
+      clientIpHeader: 'x-poolstatis-client-ip',
+      trustedProxyCidrs: ['172.30.0.0/24'],
+    });
+
+    expect(() => loadConfig({
+      POOLSTATIS_COUNTRY_MMDB_PATH: 'relative.mmdb',
+      POOLSTATIS_CLIENT_IP_HEADER: 'x-client-ip',
+      POOLSTATIS_TRUSTED_PROXY_CIDRS: '172.30.0.0/24',
+    })).toThrow('must be an absolute path');
+    expect(() => loadConfig({
+      POOLSTATIS_COUNTRY_MMDB_PATH: '/run/geoip/country.mmdb',
+      POOLSTATIS_TRUSTED_PROXY_CIDRS: '172.30.0.0/24',
+    })).toThrow('must be configured together');
+    expect(() => loadConfig({
+      POOLSTATIS_COUNTRY_HEADER: 'cf-ipcountry',
+      POOLSTATIS_COUNTRY_MMDB_PATH: '/run/geoip/country.mmdb',
+      POOLSTATIS_CLIENT_IP_HEADER: 'x-client-ip',
+      POOLSTATIS_TRUSTED_PROXY_CIDRS: '172.30.0.0/24',
+    })).toThrow('mutually exclusive');
+  });
+
   it('uses the approved hosted-claim namespace and safe CORS defaults', () => {
     const hosted = loadConfig({
       AUTH_JWT_ISSUER: 'https://issuer.example/',

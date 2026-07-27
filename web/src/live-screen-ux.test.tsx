@@ -139,6 +139,10 @@ describe('live customer screen UX', () => {
           page_views: 'Accepted stored page-view events.',
         },
         privacy: 'Raw IP is not stored.',
+        country_attribution: {
+          label: 'IP Geolocation by DB-IP',
+          url: 'https://db-ip.com',
+        },
       },
     });
     mockedStore.mockReturnValue(store({
@@ -159,6 +163,10 @@ describe('live customer screen UX', () => {
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('Page views')).toBeInTheDocument();
     expect(screen.getByText('75%')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'IP Geolocation by DB-IP' })).toHaveAttribute(
+      'href',
+      'https://db-ip.com',
+    );
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Device' }), { key: 'Enter' });
     expect(screen.getByText('60%')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Visitors' })).toBeInTheDocument();

@@ -259,9 +259,17 @@ function RankedDimensionExplorer({
         <h3 id="web-breakdown-title" className="text-sm font-medium">Breakdown</h3>
         <p className="mt-0.5 text-xs text-muted-foreground">Ranked by page views · share of all page views</p>
       </div>
-      <Hint label={result.meta.privacy}>
-        <button type="button" className="shrink-0 rounded-sm text-xs text-muted-foreground underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Privacy</button>
-      </Hint>
+      <div className="flex shrink-0 items-center gap-3">
+        {result.meta.country_attribution && <a
+          href={result.meta.country_attribution.url}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-sm text-xs text-muted-foreground underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >{result.meta.country_attribution.label}</a>}
+        <Hint label={result.meta.privacy}>
+          <button type="button" className="rounded-sm text-xs text-muted-foreground underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Privacy</button>
+        </Hint>
+      </div>
     </div>
     <Tabs value={dimension} onValueChange={onDimensionChange} className="min-w-0 gap-0">
       <div className="border-b p-3 sm:hidden">

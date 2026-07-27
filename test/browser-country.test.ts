@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTrustedProxyCountryResolver } from '../src/services/country.js';
+import {
+  createLocalMmdbCountryResolver,
+  createLocalMmdbCountryResolverFromReader,
+  createTrustedProxyCountryResolver,
+  DB_IP_ATTRIBUTION,
+} from '../src/services/country.js';
 import { api, createTestEnv, type TestEnv } from './helpers.js';
 
 describe('trusted proxy country enrichment', () => {
@@ -23,13 +28,134 @@ describe('trusted proxy country enrichment', () => {
   });
 });
 
+describe('local MMDB country enrichment', () => {
+  it('looks up one public client IP only behind the configured direct proxy', () => {
+    const lookups: string[] = [];
+    const resolver = createLocalMmdbCountryResolverFromReader({
+      databasePath: '/run/geoip/country.mmdb',
+      clientIpHeader: 'x-poolstatis-client-ip',
+      trustedProxyCidrs: ['172.30.0.0/24'],
+    }, {
+      metadata: { databaseType: 'DBIP-Country-Lite' },
+      get(address) {
+        lookups.push(address);
+        return { country: { iso_code: 'DE' } };
+      },
+    });
+
+    expect(resolver.attribution).toEqual(DB_IP_ATTRIBUTION);
+    expect(resolver.resolve({
+      remoteAddress: '172.30.0.8',
+      headers: { 'x-poolstatis-client-ip': '1.1.1.1', 'x-edge-country': 'US' },
+    })).toBe('DE');
+    expect(lookups).toEqual(['8.8.8.8', '1.1.1.1']);
+  });
+
+  it('fails closed before lookup for spoofed peers, chains, private IPs, and malformed values', () => {
+    let lookups = 0;
+    const resolver = createLocalMmdbCountryResolverFromReader({
+      databasePath: '/run/geoip/country.mmdb',
+      clientIpHeader: 'x-poolstatis-client-ip',
+      trustedProxyCidrs: ['172.30.0.0/24'],
+    }, {
+      metadata: { databaseType: 'DBIP-Country-Lite' },
+      get() {
+        lookups += 1;
+        return { country: { iso_code: 'US' } };
+      },
+    });
+    lookups = 0;
+    const resolve = (remoteAddress: string, value: string | string[]) => resolver.resolve({
+      remoteAddress,
+      headers: { 'x-poolstatis-client-ip': value, 'cf-ipcountry': 'US' },
+    });
+
+    expect(resolve('203.0.113.4', '1.1.1.1')).toBe('unknown');
+    expect(resolve('172.30.0.8', '1.1.1.1, 2.2.2.2')).toBe('unknown');
+    expect(resolve('172.30.0.8', ['1.1.1.1'])).toBe('unknown');
+    expect(resolve('172.30.0.8', '127.0.0.1')).toBe('unknown');
+    expect(resolve('172.30.0.8', '10.0.0.1')).toBe('unknown');
+    expect(resolve('172.30.0.8', 'not-an-ip')).toBe('unknown');
+    expect(lookups).toBe(0);
+  });
+
+  it('returns unknown for MMDB misses, failures, and invalid country codes', () => {
+    const options = {
+      databasePath: '/run/geoip/country.mmdb',
+      clientIpHeader: 'x-poolstatis-client-ip',
+      trustedProxyCidrs: ['172.30.0.0/24'],
+    };
+    const request = {
+      remoteAddress: '172.30.0.8',
+      headers: { 'x-poolstatis-client-ip': '1.1.1.1' },
+    };
+    const reader = (value: unknown) => {
+      let first = true;
+      return {
+        metadata: { databaseType: 'DBIP-Country-Lite' },
+        get() {
+          if (first) {
+            first = false;
+            return { country: { iso_code: 'US' } };
+          }
+          if (value instanceof Error) throw value;
+          return value;
+        },
+      };
+    };
+    expect(createLocalMmdbCountryResolverFromReader(options, reader(null)).resolve(request)).toBe('unknown');
+    expect(createLocalMmdbCountryResolverFromReader(
+      options,
+      reader({ country: { iso_code: 'USA' } }),
+    ).resolve(request)).toBe('unknown');
+    expect(createLocalMmdbCountryResolverFromReader(
+      options,
+      reader(new Error('corrupt lookup')),
+    ).resolve(request)).toBe('unknown');
+  });
+
+  it('rejects wrong-type and openable-but-invalid databases at startup', () => {
+    const options = {
+      databasePath: '/run/geoip/country.mmdb',
+      clientIpHeader: 'x-poolstatis-client-ip',
+      trustedProxyCidrs: ['172.30.0.0/24'],
+    };
+    expect(() => createLocalMmdbCountryResolverFromReader(options, {
+      metadata: { databaseType: 'GeoLite2-ASN' },
+      get: () => ({ country: { iso_code: 'US' } }),
+    })).toThrow('must have database type DBIP-Country-Lite');
+    expect(() => createLocalMmdbCountryResolverFromReader(options, {
+      metadata: { databaseType: 'DBIP-Country-Lite' },
+      get() {
+        throw new Error('openable but corrupt tree');
+      },
+    })).toThrow('country MMDB smoke lookup failed');
+    expect(() => createLocalMmdbCountryResolverFromReader(options, {
+      metadata: { databaseType: 'DBIP-Country-Lite' },
+      get: () => ({ country: { iso_code: 'USA' } }),
+    })).toThrow('country MMDB smoke lookup failed');
+  });
+
+  it('fails startup when the configured MMDB cannot be opened', async () => {
+    await expect(createLocalMmdbCountryResolver({
+      databasePath: '/definitely-missing/poolstatis-country.mmdb',
+      clientIpHeader: 'x-poolstatis-client-ip',
+      trustedProxyCidrs: ['172.30.0.0/24'],
+    })).rejects.toThrow('country MMDB could not be opened');
+  });
+});
+
 describe('browser country ingest privacy', () => {
   let env: TestEnv;
   beforeAll(async () => {
     env = await createTestEnv({
-      countryResolver: createTrustedProxyCountryResolver({
-        header: 'x-edge-country',
+      countryResolver: createLocalMmdbCountryResolverFromReader({
+        databasePath: '/run/geoip/country.mmdb',
+        clientIpHeader: 'x-poolstatis-client-ip',
         trustedProxyCidrs: ['127.0.0.0/8', '::1/128'],
+      }, {
+        metadata: { databaseType: 'DBIP-Country-Lite' },
+        get: () => ({ country: { iso_code: 'NL' } }),
       }),
     });
   });
@@ -41,7 +167,8 @@ describe('browser country ingest privacy', () => {
       url: '/i/v1/events',
       headers: {
         authorization: `Bearer ${env.ingestToken}`,
-        'x-edge-country': 'NL',
+        'x-poolstatis-client-ip': '1.1.1.1',
+        'x-edge-country': 'US',
       },
       payload: {
         events: [{
@@ -69,6 +196,7 @@ describe('browser country ingest privacy', () => {
     );
     expect(row.rows[0]?.properties.$country).toBe('NL');
     expect(JSON.stringify(row.rows[0])).not.toContain('127.0.0.1');
+    expect(JSON.stringify(row.rows[0])).not.toContain('1.1.1.1');
   });
 
   it('rejects a client-supplied country collision', async () => {

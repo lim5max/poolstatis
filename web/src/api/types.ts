@@ -321,6 +321,7 @@ export interface WebAnalyticsResponse {
     truncated_dimensions: WebAnalyticsDimension[];
     definitions: { visitors: string; sessions: string; page_views: string };
     privacy: string;
+    country_attribution?: { label: string; url: string };
   };
 }
 

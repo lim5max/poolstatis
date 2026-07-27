@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { api, createTestEnv, type TestEnv } from './helpers.js';
-import { createTrustedProxyCountryResolver } from '../src/services/country.js';
+import {
+  createLocalMmdbCountryResolverFromReader,
+  createTrustedProxyCountryResolver,
+  DB_IP_ATTRIBUTION,
+} from '../src/services/country.js';
 
 describe('web analytics query', () => {
   const countryResolver = createTrustedProxyCountryResolver({
@@ -41,6 +45,51 @@ describe('web analytics query', () => {
       $timezone: 'UTC', $viewport_bucket: 'lg', $screen_bucket: 'lg',
       ...(source ? { $utm_source: source } : {}),
     },
+  });
+
+  it('exposes required DB-IP attribution only when the local MMDB resolver is active', async () => {
+    const attributed = await createTestEnv({
+      countryResolver: createLocalMmdbCountryResolverFromReader({
+        databasePath: '/run/geoip/country.mmdb',
+        clientIpHeader: 'x-poolstatis-client-ip',
+        trustedProxyCidrs: ['127.0.0.0/8', '::1/128'],
+      }, {
+        metadata: { databaseType: 'DBIP-Country-Lite' },
+        get: () => ({ country: { iso_code: 'DE' } }),
+      }),
+    });
+    try {
+      expect((await api(
+        attributed,
+        attributed.secretToken,
+        'POST',
+        `/api/v1/projects/${attributed.projectSlug}/properties/browser-analytics`,
+        {},
+      )).status).toBe(200);
+      expect((await api(
+        attributed,
+        attributed.secretToken,
+        'PATCH',
+        `/api/v1/projects/${attributed.projectSlug}/metrics/web_page_views`,
+        { status: 'active' },
+      )).status).toBe(200);
+      const result = await api(
+        attributed,
+        attributed.secretToken,
+        'POST',
+        `/api/v1/projects/${attributed.projectSlug}/query`,
+        {
+          kind: 'web_analytics',
+          metric: 'web_page_views',
+          date_from: '-1d',
+          dimensions: ['country'],
+        },
+      );
+      expect(result.status).toBe(200);
+      expect(result.body.meta.country_attribution).toEqual(DB_IP_ATTRIBUTION);
+    } finally {
+      await attributed.close();
+    }
   });
 
   it('keeps anonymous visitors distinct until an explicit audited actor link exists', async () => {
@@ -167,6 +216,7 @@ describe('web analytics query', () => {
     expect(result.body.breakdowns.device.map((row: { value: string; page_views: number }) => [row.value, row.page_views]))
       .toEqual([['desktop', 3], ['mobile', 1]]);
     expect(result.body.meta.definitions.visitors).toContain('resolved actors');
+    expect(result.body.meta.country_attribution).toBeUndefined();
     const usageAfterQuery = await env.pool.query(
       `SELECT COALESCE(sum(quantity), 0)::int AS quantity
        FROM usage_ledger
