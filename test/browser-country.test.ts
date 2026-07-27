@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTrustedProxyCountryResolver } from '../src/services/country.js';
-import { createTestEnv, type TestEnv } from './helpers.js';
+import { api, createTestEnv, type TestEnv } from './helpers.js';
 
 describe('trusted proxy country enrichment', () => {
   const resolver = createTrustedProxyCountryResolver({
@@ -123,5 +123,55 @@ describe('browser country ingest privacy', () => {
       [env.projectId, ['visitor:pii-language', 'visitor:invalid-timezone']],
     );
     expect(stored.rows[0]?.count).toBe('0');
+  });
+});
+
+describe('country enrichment disabled by default', () => {
+  let env: TestEnv;
+  beforeAll(async () => {
+    env = await createTestEnv();
+  });
+  afterAll(() => env.close());
+
+  it('stores unknown when an untrusted client supplies an edge-looking header', async () => {
+    const response = await env.app.inject({
+      method: 'POST',
+      url: '/i/v1/events',
+      headers: {
+        authorization: `Bearer ${env.ingestToken}`,
+        'cf-ipcountry': 'US',
+        'x-forwarded-for': '203.0.113.10',
+      },
+      payload: {
+        events: [{
+          event: 'page.viewed',
+          distinct_id: 'visitor:untrusted-edge',
+          session_id: 'session:untrusted-edge',
+          properties: {
+            $browser_context: '1',
+            $page_path: '/',
+            $device_class: 'desktop',
+            $browser_family: 'other',
+            $os_family: 'other',
+            $language: 'en',
+            $timezone: 'UTC',
+            $viewport_bucket: 'lg',
+            $screen_bucket: 'lg',
+          },
+        }],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const sample = await api(
+      env,
+      env.secretToken,
+      'GET',
+      `/api/v1/projects/${env.projectSlug}/events/sample?event=page.viewed&env=prod&limit=1`,
+    );
+    expect(sample.status).toBe(200);
+    expect(sample.body.events).toHaveLength(1);
+    expect(sample.body.events[0]?.properties.$country).toBe('unknown');
+    expect(JSON.stringify(sample.body)).not.toContain('203.0.113.10');
   });
 });
