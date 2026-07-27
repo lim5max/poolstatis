@@ -36,17 +36,21 @@ async function docker(...args: string[]): Promise<string> {
 }
 
 async function waitForDatabase(databaseUrl: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 30_000;
   let lastError: unknown;
   while (Date.now() < deadline) {
-    const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+    const client = new pg.Client({
+      connectionString: databaseUrl,
+      connectionTimeoutMillis: 1_000,
+    });
     try {
-      await pool.query('SELECT 1');
-      await pool.end();
+      await client.connect();
+      await client.query('SELECT 1');
+      await client.end();
       return;
     } catch (error) {
       lastError = error;
-      await pool.end().catch(() => {});
+      await client.end().catch(() => {});
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
@@ -157,7 +161,7 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe(
-        '030_visual_experience_maps.sql',
+        '031_metric_taxonomy.sql',
       );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
@@ -182,6 +186,9 @@ describe('hosted policy migration role topology', () => {
       );
       await deploy.query(
         'SELECT poolstatis_prepare_visual_experience_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_metric_taxonomy_role_grants()',
       );
       await deploy.query(
         'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
@@ -267,6 +274,9 @@ describe('hosted policy migration role topology', () => {
       await expect(coreRuntime.query(
         'CREATE TABLE runtime_must_not_create_tables (id int)',
       )).rejects.toMatchObject({ code: '42501' });
+      await expect(coreRuntime.query(
+        'SELECT count(*)::int AS count FROM metric_categories',
+      )).resolves.toMatchObject({ rows: [{ count: 0 }] });
 
       const pair = await generateKeyPair('RS256');
       const publicJwk = await exportJWK(pair.publicKey);
@@ -386,7 +396,7 @@ describe('hosted policy migration role topology', () => {
       await deploy?.end().catch(() => {});
       await isolated.close();
     }
-  }, 60_000);
+  }, 90_000);
 
   it('keeps migration schema-only and fails explicit hosted preparation when roles were not bootstrapped', async () => {
     const isolated = await startIsolatedPostgres('negative');
@@ -435,7 +445,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '030_visual_experience_maps.sql',
+        last_migration: '031_metric_taxonomy.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -451,7 +461,7 @@ describe('hosted policy migration role topology', () => {
       await deploy?.end().catch(() => {});
       await isolated.close();
     }
-  }, 60_000);
+  }, 90_000);
 
   it('converts a CREATEROLE self-host database through explicit hosted preparation without replaying 027', async () => {
     const isolated = await startIsolatedPostgres('selfhost-createrole');
@@ -516,6 +526,7 @@ describe('hosted policy migration role topology', () => {
       );
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await selfHost.query('SELECT poolstatis_prepare_visual_experience_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_metric_taxonomy_role_grants()');
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(selfHost, new Date(), 12);
       await ensureRetentionIndexes(selfHost);
@@ -603,13 +614,28 @@ describe('hosted policy migration role topology', () => {
         'SELECT poolstatis_activate_organization_policy($1) AS activated',
         [organizationId],
       )).resolves.toMatchObject({ rows: [{ activated: true }] });
+      const projectProbe = await coreRuntime.connect();
+      try {
+        await projectProbe.query('BEGIN');
+        await projectProbe.query(
+          `INSERT INTO projects (org_id, slug, name)
+           VALUES ($1, 'taxonomy-trigger-probe', 'Taxonomy trigger probe')`,
+          [organizationId],
+        );
+        await projectProbe.query('ROLLBACK');
+      } catch (error) {
+        await projectProbe.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        projectProbe.release();
+      }
       const created = await app.inject({
         method: 'POST',
         url: '/api/v1/projects',
         headers: { authorization: `Bearer ${token}` },
         payload: { slug: 'converted-project', name: 'Converted project' },
       });
-      expect(created.statusCode).toBe(201);
+      expect(created.statusCode, created.body).toBe(201);
     } finally {
       await app?.close().catch(() => {});
       await cloudRuntime?.end().catch(() => {});
@@ -617,7 +643,7 @@ describe('hosted policy migration role topology', () => {
       await selfHost?.end().catch(() => {});
       await isolated.close();
     }
-  }, 60_000);
+  }, 90_000);
 
   it('keeps full self-host migration and startup available to a database owner without CREATEROLE', async () => {
     const isolated = await startIsolatedPostgres('selfhost');
@@ -643,7 +669,7 @@ describe('hosted policy migration role topology', () => {
       );
       const applied = await migrateWithEvidence(selfHost);
       expect(applied.at(-1)).toBe(
-        '030_visual_experience_maps.sql',
+        '031_metric_taxonomy.sql',
       );
       const topology = await selfHost.query<{
         superuser: boolean;
@@ -696,5 +722,5 @@ describe('hosted policy migration role topology', () => {
       await selfHost?.end().catch(() => {});
       await isolated.close();
     }
-  }, 60_000);
+  }, 90_000);
 });

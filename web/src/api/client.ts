@@ -1,5 +1,5 @@
 import type {
-  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricStatus, MetricUsage,
+  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage,
   PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 
@@ -266,6 +266,40 @@ export class PoolstatisClient {
   }
 
   // ---- registry ----
+  metricCategories(slug: string) {
+    return this.req<{ categories: MetricCategoryDefinition[] }>(
+      'GET',
+      `/api/v1/projects/${slug}/metric-categories`,
+    ).then((response) => response.categories);
+  }
+
+  createMetricCategory(slug: string, body: {
+    key: string; name: string; description: string; domain: 'custom'; color: string;
+  }) {
+    return this.req<MetricCategoryDefinition>(
+      'POST',
+      `/api/v1/projects/${slug}/metric-categories`,
+      body,
+    );
+  }
+
+  updateMetricCategory(slug: string, key: string, patch: {
+    name?: string; description?: string; color?: string;
+  }) {
+    return this.req<MetricCategoryDefinition>(
+      'PATCH',
+      `/api/v1/projects/${slug}/metric-categories/${key}`,
+      patch,
+    );
+  }
+
+  deleteMetricCategory(slug: string, key: string) {
+    return this.req<{ deleted: true; key: string }>(
+      'DELETE',
+      `/api/v1/projects/${slug}/metric-categories/${key}`,
+    );
+  }
+
   metrics(slug: string, filter: { status?: MetricStatus; category?: string } = {}) {
     const qs = new URLSearchParams();
     if (filter.status) qs.set('status', filter.status);
@@ -290,6 +324,13 @@ export class PoolstatisClient {
 
   setMetricTags(slug: string, key: string, tags: string[]) {
     return this.req<Metric>('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, { tags });
+  }
+
+  updateMetricTaxonomy(slug: string, key: string, patch: {
+    category: string | null;
+    tags: string[];
+  }) {
+    return this.req<Metric>('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, patch);
   }
 
   deleteMetric(slug: string, key: string) {

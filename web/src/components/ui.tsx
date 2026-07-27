@@ -10,11 +10,11 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import type { FunnelStep, MetricCategory, MetricStatus, MetricType } from '../api/types';
+import type { FunnelStep, MetricStatus, MetricType } from '../api/types';
 
 // ===== hint (tooltip) =====
 
@@ -28,28 +28,7 @@ export function Hint({ label, children }: { label: ReactNode; children: ReactNod
   );
 }
 
-// ===== category / status / type badges =====
-
-const CATEGORY_HINT: Record<MetricCategory, string> = {
-  acquisition: 'Acquisition — getting users in the door (signups, installs).',
-  activation: 'Activation — the first real value moment (the "aha").',
-  retention: 'Retention — users coming back.',
-  revenue: 'Revenue — money (checkouts, MRR-driving events).',
-  referral: 'Referral — users bringing users (invites, shares).',
-  quality: 'Quality — health/friction (errors, latency, failed actions).',
-};
-
-export function CategoryChip({ category }: { category: MetricCategory | null }) {
-  if (!category) return <span className="text-muted-foreground text-xs">—</span>;
-  const c = `var(--cat-${category})`;
-  return (
-    <Hint label={CATEGORY_HINT[category]}>
-      <span className="inline-flex items-center gap-1.5 text-xs cursor-help" style={{ color: c }}>
-        <span className="size-1.5 rounded-full" style={{ background: c }} />{category}
-      </span>
-    </Hint>
-  );
-}
+// ===== status / type badges =====
 
 const STATUS_HINT: Record<MetricStatus, string> = {
   proposed: 'Proposed — registered by an agent, not yet counting. Activate it to start matching events.',
@@ -192,24 +171,6 @@ export function FilterChips({ chips, onRemove, onClear }: { chips: Chip[]; onRem
   );
 }
 
-const CATEGORIES: MetricCategory[] = ['acquisition', 'activation', 'retention', 'revenue', 'referral', 'quality'];
-export function CategoryFilter({ selected, onToggle }: { selected: Set<string>; onToggle: (c: string) => void }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="h-9">{selected.size ? `Category · ${selected.size}` : 'Category'}<ChevronDown className="size-3.5" /></Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        {[...CATEGORIES, 'uncategorized'].map((c) => (
-          <DropdownMenuCheckboxItem key={c} checked={selected.has(c)} onCheckedChange={() => onToggle(c)} onSelect={(e) => e.preventDefault()}>
-            {c}
-          </DropdownMenuCheckboxItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 export function GroupBy({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <DropdownMenu>
@@ -230,7 +191,7 @@ export function Overflow({ items }: { items: Array<{ label: string; onClick: () 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-7"><MoreHorizontal className="size-4" /></Button>
+        <Button variant="ghost" size="icon" className="size-7" aria-label="More actions"><MoreHorizontal className="size-4" /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {items.map((it, i) => (

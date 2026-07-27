@@ -106,9 +106,8 @@ CREATE TABLE metrics (
   key         text NOT NULL,        -- 'checkout_conversion', стабильный id для API/MCP
   name        text NOT NULL,        -- человекочитаемое имя
   purpose     text NOT NULL,        -- ЗАЧЕМ собирается — обязательное, непустое
-  category    text CHECK (category IN
-                ('acquisition','activation','retention','revenue','referral','quality')),
-  tags        text[] NOT NULL DEFAULT '{}',  -- free-form open facet (feature, north-star, …)
+  category    text,                -- project-scoped purpose key; NULL = uncategorized
+  tags        text[] NOT NULL DEFAULT '{}',  -- open facet; prefer surface:checkout etc.
   type        text NOT NULL CHECK (type IN
                 ('count',          -- сколько раз произошло событие
                  'unique_actors',  -- сколько уникальных distinct_id
@@ -124,6 +123,26 @@ CREATE TABLE metrics (
   UNIQUE (project_id, key)
 );
 ```
+
+`metric_categories` хранит project-scoped определения: `key`, `name`, `description`,
+`domain` (`product|business|technical|custom`), `color`, `is_system`. Составной FK
+`metrics(project_id, category) → metric_categories(project_id, key)` не даёт
+сослаться на категорию другого tenant. Системные определения неизменяемы и
+засеваются для существующих и новых проектов; custom-объекты можно создавать и
+редактировать, а удалить — только пока на них не ссылаются метрики.
+
+Системная библиотека:
+
+- product: `acquisition`, `activation`, `adoption`, `engagement`, `retention`,
+  `referral`, `satisfaction`;
+- business: `revenue`, `cost`, `efficiency`;
+- technical: `quality`, `reliability`, `performance`, `delivery`, `security`,
+  `data_quality`.
+
+Категория отвечает **зачем** существует метрика. Namespaced tags (`surface:*`,
+`component:*`, `channel:*`, `capability:*`) отвечают **где/что**, а funnel с
+обязательным `goal` — **какой путь**. Поэтому feature или экран не становятся
+отдельной категорией. Старые plain tags и `category = NULL` остаются валидными.
 
 Поле `source` — что физически считаем:
 

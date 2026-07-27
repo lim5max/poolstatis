@@ -9,17 +9,19 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly hint?: string,
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 
-  toBody(): { error: { code: string; message: string; hint?: string } } {
+  toBody(): { error: { code: string; message: string; hint?: string; details?: Record<string, unknown> } } {
     return {
       error: {
         code: this.code,
         message: this.message,
         ...(this.hint ? { hint: this.hint } : {}),
+        ...(this.details ? { details: this.details } : {}),
       },
     };
   }

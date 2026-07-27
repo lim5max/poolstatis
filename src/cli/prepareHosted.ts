@@ -29,6 +29,9 @@ if (process.argv.includes('--help')) {
     await migrationPool.query(
       'SELECT poolstatis_prepare_visual_experience_role_grants()',
     );
+    await migrationPool.query(
+      'SELECT poolstatis_prepare_metric_taxonomy_role_grants()',
+    );
     await ensureRollingEventPartitions(migrationPool, new Date(), 12);
     if (!await rollingEventPartitionsReady(migrationPool, new Date(), 12)) {
       throw new Error('rolling event partitions are not ready');

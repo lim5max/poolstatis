@@ -173,6 +173,10 @@ POST   /api/v1/projects/{slug}/webhooks
 GET    /api/v1/projects/{slug}/webhooks
 POST   /api/v1/projects/{slug}/webhooks/{id}/test
 GET    /api/v1/projects/{slug}/webhook-deliveries
+GET    /api/v1/projects/{slug}/metric-categories
+POST   /api/v1/projects/{slug}/metric-categories
+PATCH  /api/v1/projects/{slug}/metric-categories/{key}
+DELETE /api/v1/projects/{slug}/metric-categories/{key}
 POST   /api/v1/projects/{slug}/metrics
 PATCH  /api/v1/projects/{slug}/metrics/{key}
 POST   /api/v1/projects/{slug}/metrics/{key}/deprecate
@@ -207,6 +211,18 @@ GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+Category CRUD работает только в scope проекта. Создавать можно только
+`domain: "custom"`; system definitions неизменяемы (`409
+system_metric_category`). Удаление используемой custom-категории возвращает
+`409 metric_category_in_use` и `details.metric_count`. Metric create/update
+проверяет category в том же проекте и возвращает `400 unknown_metric_category`.
+`GET .../schema` также возвращает `metric_categories`, включая definitions,
+цвет, domain, `is_system` и usage count.
+
+Категория — purpose axis (**зачем**), namespaced tags — feature/surface axis
+(**где/что**), funnel — journey axis. `NULL`/uncategorized и старые plain tags
+остаются обратно совместимыми.
 
 Snapshot upload metadata includes viewport and CSS-pixel document dimensions
 separately from the validated physical PNG/WebP width and height. Visual queries

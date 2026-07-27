@@ -31,7 +31,14 @@ get_project_schema(project)          → то же, что ресурс schema (
 ```
 register_metric(project, {key, name, purpose, category, tags?, type, source})
   → {id, status: 'proposed'}
-  // purpose обязателен; tags — свободные метки (фича/north-star), нормализуются (lowercase, dedupe)
+  // category = зачем; namespaced tags = где/что; funnel = путь
+  // category берётся из definitions проекта; NULL остаётся совместимым uncategorized
+
+list_metric_categories(project)
+create_metric_category(project, {key, name, description, domain:'custom', color})
+update_metric_category(project, key, {name?, description?, color?})
+delete_metric_category(project, key)
+  // system definitions locked; referenced custom category returns 409
 
 update_metric(project, key, patch)   // включая активацию {status:'active'} и tags
 deprecate_metric(project, key, reason)

@@ -19,6 +19,9 @@ import {
   defineFunnel, deleteFunnel, deleteMetric, deprecateMetric, listFunnels, listMetrics,
   registerEntityType, registerMetric, updateMetric,
 } from '../services/registry.js';
+import {
+  createMetricCategory, deleteMetricCategory, listMetricCategories, updateMetricCategory,
+} from '../services/metricCategories.js';
 import { deleteEntities, getIdentityEntity, upsertEntities } from '../services/entities.js';
 import { createInsight, listInsights, setInsightStatus } from '../services/insights.js';
 import { clearIngestWarnings, listIngestWarnings, type WarningKind } from '../services/warnings.js';
@@ -70,7 +73,7 @@ import {
 import {
   deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
   actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
-  querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
+  createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
   createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
 } from '../schemas.js';
@@ -919,6 +922,42 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
     return reply.status(201).send(metric);
+  });
+
+  app.get('/api/v1/projects/:slug/metric-categories', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { categories: await listMetricCategories(ctx.pool, project.id) };
+  });
+
+  app.post('/api/v1/projects/:slug/metric-categories', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const category = await createMetricCategory(
+      ctx.pool,
+      project.id,
+      createMetricCategorySchema.parse(req.body),
+    );
+    return reply.status(201).send(category);
+  });
+
+  app.patch('/api/v1/projects/:slug/metric-categories/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return updateMetricCategory(
+      ctx.pool,
+      project.id,
+      key,
+      updateMetricCategorySchema.parse(req.body),
+    );
+  });
+
+  app.delete('/api/v1/projects/:slug/metric-categories/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return { deleted: true, ...await deleteMetricCategory(ctx.pool, project.id, key) };
   });
 
   app.patch('/api/v1/projects/:slug/metrics/:key', async (req) => {

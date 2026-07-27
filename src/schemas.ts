@@ -48,7 +48,7 @@ const eventName = z
 
 const semanticText = z.string().trim().min(10, 'write a real sentence — this field feeds the insights layer');
 
-const keySchema = z
+export const keySchema = z
   .string()
   .min(1)
   .max(100)
@@ -523,9 +523,31 @@ export const concludeExperimentSchema = z.object({
 
 // ===== Metric registry =====
 
-export const metricCategorySchema = z.enum([
-  'acquisition', 'activation', 'retention', 'revenue', 'referral', 'quality',
-]);
+export const metricCategorySchema = keySchema;
+
+const metricCategoryColorSchema = z.string()
+  .trim()
+  .regex(/^#[0-9a-fA-F]{6}$/, 'color must be #RRGGBB')
+  .transform((value) => value.toUpperCase());
+
+export const createMetricCategorySchema = z.object({
+  key: keySchema,
+  name: z.string().trim().min(1).max(200),
+  description: semanticText,
+  domain: z.literal('custom').default('custom'),
+  color: metricCategoryColorSchema,
+}).strict();
+export type CreateMetricCategoryInput = z.infer<typeof createMetricCategorySchema>;
+
+export const updateMetricCategorySchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  description: semanticText.optional(),
+  color: metricCategoryColorSchema.optional(),
+}).strict().refine(
+  (patch) => Object.keys(patch).length > 0,
+  { message: 'at least one editable field is required' },
+);
+export type UpdateMetricCategoryInput = z.infer<typeof updateMetricCategorySchema>;
 
 const eventSourceBase = z.object({
   event: eventName,

@@ -1,7 +1,17 @@
 // Mirrors the Platform API response shapes (src/http/server.ts + services).
 
-export type MetricCategory =
-  | 'acquisition' | 'activation' | 'retention' | 'revenue' | 'referral' | 'quality';
+export type MetricCategory = string;
+
+export interface MetricCategoryDefinition {
+  id: string;
+  key: string;
+  name: string;
+  description: string;
+  domain: 'product' | 'business' | 'technical' | 'custom';
+  color: string;
+  is_system: boolean;
+  metric_count: number;
+}
 
 export type MetricType = 'count' | 'unique_actors' | 'value' | 'conversion' | 'state';
 export type MetricStatus = 'proposed' | 'active' | 'deprecated';
@@ -370,6 +380,7 @@ export interface ProjectSchema {
   project: { slug: string; name: string };
   env: string;
   metrics: Metric[];
+  metric_categories: MetricCategoryDefinition[];
   funnels: Funnel[];
   entity_types: EntityType[];
   observed_events_30d: ObservedEvent[];

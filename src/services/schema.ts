@@ -4,6 +4,7 @@ import { listActorLinks } from './identity.js';
 import { listSourceConnections } from './posthog.js';
 import { listPropertyDefinitions } from './properties.js';
 import { listEntityTypes, listFunnels, listMetrics } from './registry.js';
+import { listMetricCategories } from './metricCategories.js';
 
 /**
  * The live project schema: everything an agent needs to reason about a
@@ -16,8 +17,9 @@ export async function getProjectSchema(
   project: { id: string; slug: string; name: string },
   env: string,
 ): Promise<Record<string, unknown>> {
-  const [metrics, funnels, entityTypes, observedEvents, properties, actorLinks, sources] = await Promise.all([
+  const [metrics, metricCategories, funnels, entityTypes, observedEvents, properties, actorLinks, sources] = await Promise.all([
     listMetrics(pool, project.id),
+    listMetricCategories(pool, project.id),
     listFunnels(pool, project.id),
     listEntityTypes(pool, project.id),
     eventStore.eventNames(project.id, env, 30),
@@ -29,6 +31,7 @@ export async function getProjectSchema(
     project: { slug: project.slug, name: project.name },
     env,
     metrics,
+    metric_categories: metricCategories,
     funnels,
     entity_types: entityTypes,
     observed_events_30d: observedEvents,

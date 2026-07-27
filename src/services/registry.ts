@@ -7,6 +7,7 @@ import {
   type UpdateMetricInput,
 } from '../schemas.js';
 import { ApiError, badRequest, notFound } from '../errors.js';
+import { assertMetricCategory } from './metricCategories.js';
 
 export interface Metric {
   id: string;
@@ -46,6 +47,7 @@ export async function registerMetric(
   owner: string | null,
 ): Promise<Metric> {
   const source = metricSourceSchemas[input.type].parse(input.source);
+  await assertMetricCategory(pool, projectId, input.category);
   await assertMetricSourceConnection(pool, projectId, input.type, source);
   if (input.type === 'state') {
     const { entity_type } = source as { entity_type: string };
@@ -90,6 +92,9 @@ export async function updateMetric(
   patch: UpdateMetricInput,
 ): Promise<Metric> {
   const existing = await getMetric(pool, projectId, key);
+  if (patch.category !== undefined) {
+    await assertMetricCategory(pool, projectId, patch.category);
+  }
   if ((patch as { status?: string }).status === 'deprecated') {
     throw badRequest(
       'use_deprecate_metric',

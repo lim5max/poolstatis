@@ -88,30 +88,33 @@ Funnel steps and the retention/lifecycle/stickiness query types require
 
 ---
 
-## 5. Categories & the north star
+## 5. Metric taxonomy & the north star
 
-Tag each metric with one AARRR category (or \`quality\`):
+The three taxonomy axes are independent:
 
-- **acquisition** — getting users in the door (signups, installs).
-- **activation** — the first real value moment (the "aha"). Usually the most
-  important thing to instrument well.
-- **retention** — coming back (active users, repeat actions).
-- **revenue** — money (checkouts, MRR-driving events).
-- **referral** — users bringing users (invites, shares).
-- **quality** — health/friction (errors, latency, failed actions).
+- Category answers **why** the metric exists. Choose a project definition returned
+  by \`get_project_schema\` or \`list_metric_categories\`.
+- Prefer **namespaced tags** for where and what:
+  \`surface:checkout\`, \`component:payment-form\`, \`channel:telegram\`,
+  \`capability:voice\`. Existing plain tags remain valid.
+- Funnels answer **which journey** is measured. Do not create journey-specific
+  or per-feature categories.
+
+The system library is grouped by purpose domain:
+
+- **Product:** \`acquisition\`, \`activation\`, \`adoption\`, \`engagement\`,
+  \`retention\`, \`referral\`, \`satisfaction\`.
+- **Business:** \`revenue\`, \`cost\`, \`efficiency\`.
+- **Technical:** \`quality\`, \`reliability\`, \`performance\`, \`delivery\`,
+  \`security\`, \`data_quality\`.
+
+System category semantics are locked. Create a custom category only when the
+metric's purpose cannot be expressed by that library. A null category remains
+readable as \`uncategorized\`, but new work should reconcile it when the purpose
+is known.
 
 Pick **one north-star metric** the whole product optimises, and make sure the
 funnel from acquisition → that metric is fully instrumented.
-
-### Tags (the open facet)
-
-The 6 categories are the curated funnel-stage facet. For everything else, add
-free-form **tags** (lowercased, multiple per metric) — most usefully the
-**product feature** a metric belongs to (\`checkout\`, \`search\`, \`onboarding\`),
-plus labels like \`north-star\`, \`performance\`, \`b2b\`. Tags are how a client
-later groups/segments metrics ("show me all checkout metrics") without a rigid
-enum. Pass \`tags\` to \`register_metric\`/\`update_metric\`. Prefer tagging every
-metric with its feature.
 
 ---
 

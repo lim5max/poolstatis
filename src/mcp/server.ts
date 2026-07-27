@@ -13,6 +13,7 @@ import {
   actorLinkSchema,
   applyMeasurementDeclarationSchema,
   concludeExperimentSchema, createExperimentSchema,
+  createMetricCategorySchema,
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
   experienceRouteRegistrationSchema, experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
@@ -20,7 +21,7 @@ import {
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
   registerReleaseSchema, reviewDecisionSchema,
   retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, webAnalyticsQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
-  updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
+  updateMetricCategorySchema, updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
 } from '../schemas.js';
 import { BROWSER_ANALYTICS_STANDARD, INSTRUMENTATION_STANDARD } from './standard.js';
 
@@ -454,8 +455,47 @@ jsonTool(
 // ===== Registry (design-time) =====
 
 jsonTool(
+  'list_metric_categories',
+  'List this project’s metric purpose categories and definitions before registering metrics. Category answers why; namespaced tags answer where/what; funnels represent journeys.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/metric-categories`)),
+);
+
+jsonTool(
+  'create_metric_category',
+  'Create a project custom purpose category only when the system library cannot express why the metric exists. Do not create categories for features, surfaces, buttons, or journeys; use namespaced tags and funnels.',
+  { project, category: createMetricCategorySchema },
+  wrap(({ project: slug, category }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/metric-categories`,
+    category,
+  )),
+);
+
+jsonTool(
+  'update_metric_category',
+  'Update the name, description, or color of a project custom category. System category semantics and all category keys are immutable.',
+  { project, key: z.string(), patch: updateMetricCategorySchema },
+  wrap(({ project: slug, key, patch }) => api(
+    'PATCH',
+    `/api/v1/projects/${slug}/metric-categories/${key}`,
+    patch,
+  )),
+);
+
+jsonTool(
+  'delete_metric_category',
+  'Delete an unused project custom category. System categories are locked and referenced categories return metric_category_in_use.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api(
+    'DELETE',
+    `/api/v1/projects/${slug}/metric-categories/${key}`,
+  )),
+);
+
+jsonTool(
   'register_metric',
-  'Register a metric in the project registry. `purpose` must be a real sentence — what decision does this metric inform? New metrics start as status=proposed; the project owner activates them.',
+  'Register a metric in the project registry. Read list_metric_categories first: category is why, namespaced tags are where/what, and funnels are journeys. `purpose` must be a real sentence. New metrics start as status=proposed.',
   { project, metric: registerMetricSchema },
   wrap(({ project: slug, metric }) => api('POST', `/api/v1/projects/${slug}/metrics`, metric)),
 );

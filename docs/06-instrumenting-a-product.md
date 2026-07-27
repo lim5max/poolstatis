@@ -70,7 +70,8 @@ In your **product's** repo (with the MCP connected), invoke the
 just ask: *"instrument this app with Poolstatis."* The agent will:
 
 1. read `poolstatis://standard/instrumentation` and `get_project_schema`,
-2. pick a north-star metric + activation funnel for your product type,
+2. choose category definitions from the project schema, then pick a north-star
+   metric + activation funnel for your product type,
 3. `register_metric` each (as `proposed`) with a real `purpose`,
 4. add tracking calls to your code,
 5. verify with `sample_events`, and
@@ -80,6 +81,10 @@ just ask: *"instrument this app with Poolstatis."* The agent will:
 
 Open the admin **Registry** tab → metrics arrive as `proposed` → click **activate**
 on the ones you want counted. (Or `update_metric` with `{status:"active"}` via MCP.)
+The **Categories** tab shows the grouped Product/Business/Technical system
+library and project custom definitions. Edit metric taxonomy with a purpose
+category and namespaced tags such as `surface:checkout`; represent journeys as
+funnels, not feature-specific categories.
 When a metric is replaced, use `deprecate_metric` with a real reason instead of
 hard-deleting it; future agents need that context.
 
