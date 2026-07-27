@@ -16,6 +16,9 @@ describe('trusted proxy country enrichment', () => {
   it('fails closed for spoofed, malformed, or unavailable headers', () => {
     expect(resolver.resolve({ remoteAddress: '203.0.113.10', headers: { 'cf-ipcountry': 'US' } })).toBe('unknown');
     expect(resolver.resolve({ remoteAddress: '10.2.3.4', headers: { 'cf-ipcountry': 'USA' } })).toBe('unknown');
+    expect(resolver.resolve({ remoteAddress: '10.2.3.4', headers: { 'cf-ipcountry': 'ZZ' } })).toBe('unknown');
+    expect(resolver.resolve({ remoteAddress: '10.2.3.4', headers: { 'cf-ipcountry': 'AA' } })).toBe('unknown');
+    expect(resolver.resolve({ remoteAddress: '10.2.3.4', headers: { 'cf-ipcountry': 'XX' } })).toBe('unknown');
     expect(resolver.resolve({ remoteAddress: '10.2.3.4', headers: { 'x-forwarded-for': '198.51.100.2' } })).toBe('unknown');
   });
 });
@@ -86,5 +89,39 @@ describe('browser country ingest privacy', () => {
     });
     expect(response.statusCode).toBe(207);
     expect(response.json().errors[0].message).toContain('server-derived');
+  });
+
+  it('rejects PII-shaped languages and malformed timezones before storage', async () => {
+    const browserProperties = {
+      $browser_context: '1', $page_path: '/', $device_class: 'desktop',
+      $browser_family: 'other', $os_family: 'other',
+      $viewport_bucket: 'lg', $screen_bucket: 'lg',
+    };
+    const response = await env.app.inject({
+      method: 'POST',
+      url: '/i/v1/events',
+      headers: { authorization: `Bearer ${env.ingestToken}` },
+      payload: {
+        events: [
+          {
+            event: 'page.viewed', distinct_id: 'visitor:pii-language', session_id: 'session:pii-language',
+            properties: { ...browserProperties, $language: 'person@example.com', $timezone: 'UTC' },
+          },
+          {
+            event: 'page.viewed', distinct_id: 'visitor:invalid-timezone', session_id: 'session:invalid-timezone',
+            properties: { ...browserProperties, $language: 'en', $timezone: 'Internal/CustomerSecret' },
+          },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(207);
+    expect(response.json().errors).toHaveLength(2);
+    const stored = await env.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM events
+       WHERE project_id = $1 AND distinct_id = ANY($2::text[])`,
+      [env.projectId, ['visitor:pii-language', 'visitor:invalid-timezone']],
+    );
+    expect(stored.rows[0]?.count).toBe('0');
   });
 });

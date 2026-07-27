@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import { ApiError, badRequest } from '../errors.js';
+import { isIsoAlpha2Country } from './country.js';
 import { createPropertyDefinition, listPropertyDefinitions, type PropertyDefinition } from './properties.js';
 import { listMetrics, registerMetric, type Metric } from './registry.js';
 
@@ -167,6 +168,21 @@ export async function assertBrowserAnalyticsProperties(
   }
 }
 
+function isPrimaryBrowserLanguage(value: string): boolean {
+  return value === 'unknown' || /^[a-z]{2,3}$/.test(value);
+}
+
+function isIanaTimezone(value: string): boolean {
+  if (value === 'unknown') return true;
+  if (!/^[A-Za-z_+-]+(?:\/[A-Za-z_+-]+){0,2}$/.test(value)) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function validateAndEnrichBrowserProperties(
   properties: Record<string, unknown>,
   sessionId: string | undefined,
@@ -188,11 +204,19 @@ export function validateAndEnrichBrowserProperties(
     }
     if (spec.enum_values && !spec.enum_values.includes(value)) return `${key} has an unsupported value`;
   }
+  if (!isPrimaryBrowserLanguage(properties.$language as string)) {
+    return '$language must be a normalized primary language or unknown';
+  }
+  if (!isIanaTimezone(properties.$timezone as string)) {
+    return '$timezone must be a recognized IANA timezone or unknown';
+  }
   const path = properties.$page_path as string;
   if (!path.startsWith('/') || path.includes('?') || path.includes('#')) {
     return '$page_path must be a pathname only, without query string or fragment';
   }
-  if (!/^(unknown|[A-Z]{2})$/.test(country)) return 'resolved country must be unknown or ISO alpha-2';
+  if (country !== 'unknown' && !isIsoAlpha2Country(country)) {
+    return 'resolved country must be unknown or ISO alpha-2';
+  }
   properties.$country = country;
   return null;
 }

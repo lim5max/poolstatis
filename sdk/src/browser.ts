@@ -107,6 +107,11 @@ function timezone(): string {
   }
 }
 
+function primaryLanguage(value: string): string {
+  const language = (value.split('-')[0] || '').toLowerCase();
+  return /^[a-z]{2,3}$/.test(language) ? language : 'unknown';
+}
+
 export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   const now = options.now ?? Date.now;
   const createId = options.createId ?? randomId;
@@ -154,7 +159,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       $device_class: deviceClass(ua),
       $browser_family: browserFamily(ua),
       $os_family: osFamily(ua),
-      $language: (browser!.navigator.language.split('-')[0] || 'unknown').toLowerCase().slice(0, 8),
+      $language: primaryLanguage(browser!.navigator.language),
       $timezone: timezone(),
       $viewport_bucket: sizeBucket(browser!.innerWidth),
       $screen_bucket: sizeBucket(browser!.screen.width),
