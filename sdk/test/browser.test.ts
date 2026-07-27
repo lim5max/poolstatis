@@ -297,6 +297,36 @@ describe('@poolstatis/sdk/browser', () => {
     expect(JSON.stringify(f.queued)).not.toContain('token');
   });
 
+  it('lets a host narrow coarse context without expanding the fixed allowlist', () => {
+    const c = consent(true);
+    const f = fixture();
+    const analytics = createBrowserAnalytics({
+      client: f.client,
+      browser: f.browser,
+      hasConsent: c.hasConsent,
+      subscribeConsent: c.subscribeConsent,
+      contextProperties: [
+        '$device_class',
+        '$browser_family',
+        '$os_family',
+        'private_value',
+      ] as never,
+      createId: () => 'narrowed',
+    });
+
+    analytics.start();
+
+    expect(f.queued[0]?.properties).toMatchObject({
+      $device_class: 'mobile',
+      $browser_family: 'safari',
+      $os_family: 'ios',
+    });
+    expect(f.queued[0]?.properties).not.toHaveProperty('$language');
+    expect(f.queued[0]?.properties).not.toHaveProperty('$timezone');
+    expect(f.queued[0]?.properties).not.toHaveProperty('$viewport_bucket');
+    expect(f.queued[0]?.properties).not.toHaveProperty('private_value');
+  });
+
   it('rotates in memory and reports a stale readable visitor when storage cannot be overwritten', () => {
     const c = consent(true);
     const f = fixture();
