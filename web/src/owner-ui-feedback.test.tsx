@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -17,6 +17,7 @@ vi.mock('./oidc', async (importOriginal) => ({
 }));
 
 const mockedStore = vi.mocked(useStore);
+configure({ asyncUtilTimeout: 5000 });
 
 const surface = {
   id: 'surface-1',
@@ -100,15 +101,27 @@ const visualResult = {
   meta: { computed_at: '2026-07-27T09:01:00.000Z', date_range: { from: '2026-06-27', to: '2026-07-27' } },
 } as const;
 
-function experienceStore() {
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function experienceStore(clientOverrides: Record<string, unknown> = {}) {
   return {
     client: {
       experienceSurfaces: vi.fn().mockResolvedValue([surface]),
       experienceRoutes: vi.fn().mockResolvedValue([route]),
       experienceSnapshots: vi.fn().mockResolvedValue([mobileSnapshot, desktopSnapshot]),
       visualExperience: vi.fn().mockResolvedValue(visualResult),
+      compareVisualExperience: vi.fn(),
       experienceSnapshotImage: vi.fn().mockResolvedValue('blob:mobile-snapshot'),
       interactionMap: vi.fn(),
+      ...clientOverrides,
     },
     project: 'poolstatis-xyz',
     env: 'prod',
@@ -122,6 +135,10 @@ describe('owner UI feedback regressions', () => {
     vi.clearAllMocks();
     localStorage.clear();
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    Object.defineProperty(HTMLElement.prototype, 'hasPointerCapture', { configurable: true, value: () => false });
+    Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', { configurable: true, value: vi.fn() });
+    Object.defineProperty(HTMLElement.prototype, 'releasePointerCapture', { configurable: true, value: vi.fn() });
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
   });
 
   it('shows a mobile capture at its viewport width inside a scrollable evidence frame', async () => {
@@ -131,8 +148,84 @@ describe('owner UI feedback regressions', () => {
     await screen.findByRole('img', { name: /mobile/ });
     const viewport = screen.getByTestId('visual-snapshot-viewport');
     expect(viewport).toHaveClass('h-96', 'overflow-auto');
+    expect(viewport).toHaveAttribute('tabindex', '0');
+    expect(viewport).toHaveAttribute('role', 'region');
+    expect(viewport).toHaveClass('focus-visible:ring-2');
     expect(screen.getByTestId('visual-snapshot-canvas')).toHaveStyle({ width: 'min(100%, 390px)' });
     expect(screen.getByText('Mobile viewport · 390 × 844')).toBeInTheDocument();
+  });
+
+  it('keeps the newest exact-device response when requests finish out of order', async () => {
+    const mobileRequest = deferred<typeof visualResult>();
+    const desktopResult = {
+      ...visualResult,
+      device: 'desktop',
+      snapshot: desktopSnapshot,
+      summary: {
+        ...visualResult.summary,
+        max_document_width: 1440,
+        max_document_height: 8676,
+      },
+    } as const;
+    const desktopRequest = deferred<typeof desktopResult>();
+    const visualExperience = vi.fn()
+      .mockImplementationOnce(() => mobileRequest.promise)
+      .mockImplementationOnce(() => desktopRequest.promise);
+    mockedStore.mockReturnValue(experienceStore({ visualExperience }) as never);
+    render(<Experience />);
+
+    await waitFor(() => expect(visualExperience).toHaveBeenCalledTimes(1));
+    const deviceSelect = screen.getAllByRole('combobox')[4]!;
+    fireEvent.keyDown(deviceSelect, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'desktop' }));
+    await waitFor(() => expect(visualExperience).toHaveBeenCalledTimes(2));
+
+    await act(async () => desktopRequest.resolve(desktopResult));
+    expect(await screen.findByText('Desktop viewport · 1440 × 900')).toBeInTheDocument();
+    expect(screen.getByTestId('visual-snapshot-canvas')).toHaveStyle({ width: 'min(100%, 1440px)' });
+
+    await act(async () => mobileRequest.resolve(visualResult));
+    expect(screen.getByText('Desktop viewport · 1440 × 900')).toBeInTheDocument();
+    expect(screen.queryByText('Mobile viewport · 390 × 844')).not.toBeInTheDocument();
+  });
+
+  it('discards a pending comparison when the selected evidence tuple changes', async () => {
+    const desktopResult = {
+      ...visualResult,
+      device: 'desktop',
+      snapshot: desktopSnapshot,
+    } as const;
+    const comparisonRequest = deferred<{
+      kind: 'visual_experience_compare';
+      baseline: typeof visualResult;
+      comparison: typeof desktopResult;
+      delta: { sessions: number; clicks: number; actors: number; sections: [] };
+      causality: string;
+    }>();
+    const visualExperience = vi.fn()
+      .mockResolvedValueOnce(visualResult)
+      .mockResolvedValueOnce(desktopResult);
+    const compareVisualExperience = vi.fn(() => comparisonRequest.promise);
+    mockedStore.mockReturnValue(experienceStore({ visualExperience, compareVisualExperience }) as never);
+    render(<Experience />);
+
+    await screen.findByText('Mobile viewport · 390 × 844');
+    fireEvent.click(screen.getByRole('button', { name: 'Compare with desktop' }));
+    await waitFor(() => expect(compareVisualExperience).toHaveBeenCalledTimes(1));
+
+    const deviceSelect = screen.getAllByRole('combobox')[4]!;
+    fireEvent.keyDown(deviceSelect, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'desktop' }));
+    expect(await screen.findByText('Desktop viewport · 1440 × 900')).toBeInTheDocument();
+
+    await act(async () => comparisonRequest.resolve({
+      kind: 'visual_experience_compare',
+      baseline: visualResult,
+      comparison: desktopResult,
+      delta: { sessions: 3, clicks: 0, actors: 0, sections: [] },
+      causality: 'Comparison fixture.',
+    }));
+    expect(screen.queryByText(/Compared with/)).not.toBeInTheDocument();
   });
 
   it('keeps evidence notes below the screenshot and names the exact comparison target', async () => {
