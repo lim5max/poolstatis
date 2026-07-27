@@ -70,9 +70,17 @@ CREATE TRIGGER projects_seed_metric_categories
 
 CREATE OR REPLACE FUNCTION poolstatis_protect_metric_category_semantics()
 RETURNS trigger AS $protect_metric_category_semantics$
+DECLARE
+  parent_project_exists boolean;
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    IF OLD.is_system THEN
+    -- A parent project is already invisible when PostgreSQL runs its child
+    -- ON DELETE CASCADE. Direct category deletion still sees the project.
+    EXECUTE format(
+      'SELECT EXISTS (SELECT 1 FROM %I.projects WHERE id = $1)',
+      TG_TABLE_SCHEMA
+    ) INTO parent_project_exists USING OLD.project_id;
+    IF OLD.is_system AND parent_project_exists THEN
       RAISE EXCEPTION 'system metric category semantics are immutable' USING ERRCODE = '55000';
     END IF;
     RETURN OLD;

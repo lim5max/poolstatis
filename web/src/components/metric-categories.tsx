@@ -43,6 +43,8 @@ const DOMAINS: Array<{
   { key: 'custom', label: 'Custom', description: 'Project-only semantics that the stable system library cannot express.' },
 ];
 
+export const UNCATEGORIZED_CATEGORY_FILTER = '\0uncategorized';
+
 export function CategorySelector({
   categories,
   value,
@@ -127,8 +129,8 @@ export function MetricCategoryFilter({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-80 min-w-64 overflow-y-auto">
         <DropdownMenuCheckboxItem
-          checked={selected.has('uncategorized')}
-          onCheckedChange={() => onToggle('uncategorized')}
+          checked={selected.has(UNCATEGORIZED_CATEGORY_FILTER)}
+          onCheckedChange={() => onToggle(UNCATEGORIZED_CATEGORY_FILTER)}
           onSelect={(event) => event.preventDefault()}
         >
           <span>
@@ -318,9 +320,11 @@ function CategoryRow({
           <span className="font-medium">{category.name}</span>
           <span className="font-mono text-xs text-muted-foreground">{category.key}</span>
           {category.is_system && (
-            <Badge variant="secondary" className="gap-1">
-              <KeyRound className="size-3" />Locked
-            </Badge>
+            <Hint label="System categories are locked because their keys and purpose semantics are shared across projects.">
+              <Badge variant="secondary" className="cursor-help gap-1">
+                <KeyRound className="size-3" />Locked
+              </Badge>
+            </Hint>
           )}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">{category.description}</p>
@@ -386,7 +390,7 @@ function CategoryFormDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onCancel()}>
-      <DialogContent aria-describedby={undefined}>
+      <DialogContent aria-describedby={undefined} className="max-h-dvh overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="serif font-normal text-xl">{title}</DialogTitle>
           <DialogDescription>
@@ -402,11 +406,16 @@ function CategoryFormDialog({
               onChange={(event) => setKey(event.target.value.toLowerCase())}
               placeholder="governance"
               disabled={Boolean(initial)}
-              autoFocus
+              autoFocus={!initial}
             />
           </Field>
           <Field label="Name">
-            <Input aria-label="Name" value={name} onChange={(event) => setName(event.target.value)} />
+            <Input
+              aria-label="Name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              autoFocus={Boolean(initial)}
+            />
           </Field>
           <Field label="Description">
             <textarea

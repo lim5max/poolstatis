@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { useState } from 'react';
+import { fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
+import { useState, type PropsWithChildren, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CategorySelector,
@@ -7,6 +7,12 @@ import {
   MetricCategoryFilter,
 } from './components/metric-categories';
 import type { MetricCategoryDefinition } from './api/types';
+import { TooltipProvider } from './components/ui/tooltip';
+
+const TooltipWrapper = ({ children }: PropsWithChildren) => (
+  <TooltipProvider>{children}</TooltipProvider>
+);
+const render = (ui: ReactNode) => testingRender(ui, { wrapper: TooltipWrapper });
 
 const categories: MetricCategoryDefinition[] = [
   {
@@ -160,6 +166,49 @@ describe('metric taxonomy admin', () => {
       domain: 'custom',
       color: '#6D5BD0',
     });
+  });
+
+  it('edits custom semantics with focus on Name and keeps a failed delete open', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onDelete = vi.fn()
+      .mockRejectedValueOnce(new Error('metric category "governance" is referenced by 1 metric(s)'))
+      .mockResolvedValueOnce(undefined);
+    render(
+      <MetricCategoriesPanel
+        categories={categories}
+        onCreate={vi.fn()}
+        onUpdate={onUpdate}
+        onDelete={onDelete}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Governance' }));
+    const editDialog = screen.getByRole('dialog', { name: 'Edit Governance' });
+    expect(within(editDialog).getByLabelText('Name')).toHaveFocus();
+    expect(editDialog).toHaveClass('max-h-dvh', 'overflow-y-auto');
+    fireEvent.change(within(editDialog).getByLabelText('Name'), {
+      target: { value: 'Policy governance' },
+    });
+    fireEvent.change(within(editDialog).getByLabelText('Color'), {
+      target: { value: '#2457c5' },
+    });
+    fireEvent.click(within(editDialog).getByRole('button', { name: 'Save category' }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith('governance', {
+      name: 'Policy governance',
+      description: 'Measures policy outcomes outside the stable system library.',
+      color: '#2457C5',
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Governance' }));
+    const deleteDialog = screen.getByRole('dialog', { name: 'Delete Governance?' });
+    fireEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete category' }));
+    expect(await within(deleteDialog).findByRole('alert')).toHaveTextContent('referenced by 1 metric');
+    expect(screen.getByRole('dialog', { name: 'Delete Governance?' })).toBeInTheDocument();
+    fireEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete category' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Delete Governance?' })).not.toBeInTheDocument();
+    });
+    expect(onDelete).toHaveBeenCalledTimes(2);
   });
 
   it('renders loading, error, and empty states without a desktop-only layout', () => {

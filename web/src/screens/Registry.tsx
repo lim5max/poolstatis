@@ -12,6 +12,7 @@ import {
   MetricCategoriesPanel,
   MetricCategoryChip,
   MetricCategoryFilter,
+  UNCATEGORIZED_CATEGORY_FILTER,
   type CustomMetricCategoryInput,
 } from '../components/metric-categories';
 import { Card } from '@/components/ui/card';
@@ -118,7 +119,7 @@ function MetricsTable({
     const q = search.trim().toLowerCase();
     const rows = metrics.filter((m) => {
       if (q && !`${m.name} ${m.key} ${m.purpose} ${(m.tags ?? []).join(' ')}`.toLowerCase().includes(q)) return false;
-      if (cats.size && !(m.category ? cats.has(m.category) : cats.has('uncategorized'))) return false;
+      if (cats.size && !(m.category ? cats.has(m.category) : cats.has(UNCATEGORIZED_CATEGORY_FILTER))) return false;
       if (statuses.size && !statuses.has(m.status)) return false;
       if (tagSel.size && !(m.tags ?? []).some((t) => tagSel.has(t))) return false;
       return true;
@@ -134,12 +135,17 @@ function MetricsTable({
   const groups = useMemo(() => groupRows(filtered, groupBy), [filtered, groupBy]);
   const toggle = (set: Set<string>, setter: (s: Set<string>) => void, v: string) => { const n = new Set(set); n.has(v) ? n.delete(v) : n.add(v); setter(n); };
   const chips: Chip[] = [
-    ...[...cats].map((c) => ({ key: `cat:${c}`, label: c })),
+    ...[...cats].map((c) => ({
+      key: `cat:${c}`,
+      label: c === UNCATEGORIZED_CATEGORY_FILTER ? 'Uncategorized' : c,
+    })),
     ...[...statuses].map((s) => ({ key: `st:${s}`, label: s })),
     ...[...tagSel].map((t) => ({ key: `tag:${t}`, label: `#${t}` })),
   ];
   const removeChip = (k: string) => {
-    const [kind, v] = k.split(':') as [string, string];
+    const separator = k.indexOf(':');
+    const kind = k.slice(0, separator);
+    const v = k.slice(separator + 1);
     if (kind === 'cat') toggle(cats, setCats, v); else if (kind === 'st') toggle(statuses, setStatuses, v); else toggle(tagSel, setTagSel, v);
   };
 

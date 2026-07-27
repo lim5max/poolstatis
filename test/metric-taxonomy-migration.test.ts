@@ -123,4 +123,23 @@ describe('migration 031 metric taxonomy upgrade', () => {
        WHERE project_id = '00000000-0000-0000-0000-000000000101' AND key = 'quality'`,
     )).rejects.toMatchObject({ code: '55000' });
   });
+
+  it('allows system categories to follow an intentional project cascade', async () => {
+    const projectId = '00000000-0000-0000-0000-000000000303';
+    const client = await pool.connect();
+    try {
+      await client.query(`SET search_path TO ${schema}, public`);
+      await client.query(`INSERT INTO projects (id, name) VALUES ($1, 'Deleted project')`, [projectId]);
+      await expect(client.query('DELETE FROM projects WHERE id = $1', [projectId])).resolves.toMatchObject({
+        rowCount: 1,
+      });
+      const categories = await client.query<{ count: number }>(
+        'SELECT count(*)::int AS count FROM metric_categories WHERE project_id = $1',
+        [projectId],
+      );
+      expect(categories.rows[0]?.count).toBe(0);
+    } finally {
+      client.release();
+    }
+  });
 });

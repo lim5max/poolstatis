@@ -32,13 +32,22 @@ const definitions = [
 const schema = {
   project: { slug: 'alpha', name: 'Alpha' },
   env: 'prod',
-  metrics: [{
-    id: 'm1', key: 'activated_users', name: 'Activated users',
-    purpose: 'Measure people who receive meaningful product value.',
-    category: 'activation', tags: ['surface:onboarding'], type: 'unique_actors',
-    source: { event: 'onboarding.completed' }, status: 'active',
-    owner: null, deprecation_reason: null, deprecated_at: null,
-  }],
+  metrics: [
+    {
+      id: 'm1', key: 'activated_users', name: 'Activated users',
+      purpose: 'Measure people who receive meaningful product value.',
+      category: 'activation', tags: ['surface:onboarding'], type: 'unique_actors',
+      source: { event: 'onboarding.completed' }, status: 'active',
+      owner: null, deprecation_reason: null, deprecated_at: null,
+    },
+    {
+      id: 'm2', key: 'api_reliability', name: 'API reliability',
+      purpose: 'Measure continuity of the public API service.',
+      category: 'reliability', tags: ['surface:checkout'], type: 'count',
+      source: { event: 'api.requested' }, status: 'active',
+      owner: null, deprecation_reason: null, deprecated_at: null,
+    },
+  ],
   metric_categories: definitions,
   funnels: [],
   entity_types: [],
@@ -83,7 +92,9 @@ describe('Registry metric taxonomy', () => {
     expect(await screen.findByRole('tab', { name: 'Categories · 3' })).toBeInTheDocument();
     expect(screen.getByText('Activation')).toBeInTheDocument();
 
-    const actions = screen.getByRole('button', { name: 'More actions' });
+    const activatedRow = screen.getByText('Activated users').closest('tr');
+    expect(activatedRow).not.toBeNull();
+    const actions = within(activatedRow!).getByRole('button', { name: 'More actions' });
     actions.focus();
     fireEvent.keyDown(actions, { key: 'Enter', code: 'Enter' });
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit category & tags' }));
@@ -132,5 +143,33 @@ describe('Registry metric taxonomy', () => {
       color: '#6D5BD0',
     }));
     expect(schemaCall).toHaveBeenCalledTimes(2);
+  });
+
+  it('filters actual registry rows and removes a namespaced tag chip intact', async () => {
+    render(
+      <TooltipProvider>
+        <MemoryRouter><Registry /></MemoryRouter>
+      </TooltipProvider>,
+    );
+
+    expect(await screen.findByText('Activated users')).toBeInTheDocument();
+    expect(screen.getByText('API reliability')).toBeInTheDocument();
+    const categoryFilter = screen.getByRole('button', { name: 'Category' });
+    categoryFilter.focus();
+    fireEvent.keyDown(categoryFilter, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Reliability/ }));
+    expect(screen.queryByText('Activated users')).not.toBeInTheDocument();
+    expect(screen.getByText('API reliability')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape', code: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+
+    const tagFilter = screen.getByRole('button', { name: 'Tags' });
+    tagFilter.focus();
+    fireEvent.keyDown(tagFilter, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: '#surface:checkout' }));
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape', code: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Remove #surface:checkout filter' }));
+    expect(screen.queryByRole('button', { name: 'Remove #surface:checkout filter' })).not.toBeInTheDocument();
   });
 });

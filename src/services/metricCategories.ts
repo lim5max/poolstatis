@@ -114,18 +114,21 @@ export async function deleteMetricCategory(
   const existing = await getMetricCategory(pool, projectId, key);
   if (existing.is_system) throw systemCategoryConflict(key);
   if (existing.metric_count > 0) {
-    throw new ApiError(
-      409,
-      'metric_category_in_use',
-      `metric category "${key}" is referenced by ${existing.metric_count} metric(s)`,
-      'move or clear those metric categories before deleting this custom category',
-      { metric_count: existing.metric_count },
-    );
+    throw categoryInUse(key, existing.metric_count);
   }
-  const { rowCount } = await pool.query(
-    'DELETE FROM metric_categories WHERE project_id = $1 AND key = $2 AND is_system = false',
-    [projectId, key],
-  );
+  let rowCount: number | null;
+  try {
+    ({ rowCount } = await pool.query(
+      'DELETE FROM metric_categories WHERE project_id = $1 AND key = $2 AND is_system = false',
+      [projectId, key],
+    ));
+  } catch (error) {
+    if (isForeignKeyViolation(error)) {
+      const current = await getMetricCategory(pool, projectId, key);
+      throw categoryInUse(key, current.metric_count);
+    }
+    throw error;
+  }
   if (!rowCount) throw notFound('metric_category');
   return { key };
 }
@@ -156,7 +159,22 @@ function systemCategoryConflict(key: string): ApiError {
   );
 }
 
+function categoryInUse(key: string, metricCount: number): ApiError {
+  return new ApiError(
+    409,
+    'metric_category_in_use',
+    `metric category "${key}" is referenced by ${metricCount} metric(s)`,
+    'move or clear those metric categories before deleting this custom category',
+    { metric_count: metricCount },
+  );
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === 'object' && error !== null
     && (error as { code?: string }).code === '23505';
+}
+
+function isForeignKeyViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null
+    && (error as { code?: string }).code === '23503';
 }

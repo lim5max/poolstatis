@@ -163,7 +163,14 @@ export function FilterChips({ chips, onRemove, onClear }: { chips: Chip[]; onRem
       {chips.map((c) => (
         <Badge key={c.key} variant="secondary" className="gap-1 pr-1 font-normal">
           {c.label}
-          <button onClick={() => onRemove(c.key)} className="hover:text-foreground"><X className="size-3" /></button>
+          <button
+            type="button"
+            aria-label={`Remove ${c.label} filter`}
+            onClick={() => onRemove(c.key)}
+            className="hover:text-foreground"
+          >
+            <X className="size-3" />
+          </button>
         </Badge>
       ))}
       <button className="text-xs text-primary hover:underline" onClick={onClear}>clear all</button>
