@@ -46,7 +46,7 @@ for the client you use; the paste location depends on the host.
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.1.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.2.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_…"
@@ -59,7 +59,7 @@ for the client you use; the paste location depends on the host.
 `--silent` is required — otherwise pnpm prints a banner to stdout and corrupts the
 stdio MCP protocol.
 
-`@poolstatis/mcp@0.1.0` passed a fresh registry install, initialize, tool-list,
+`@poolstatis/mcp@0.2.0` passed a fresh registry install, initialize, tool-list,
 and project-scoped read smoke. Hosted deployments may enable this exact pin;
 future versions remain fail-closed until they pass the same checks.
 

@@ -104,7 +104,7 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.1.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.2.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_..."
@@ -118,7 +118,7 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
 the stdio MCP protocol.
 
 The public runner is version-pinned so a hosted deploy cannot silently change
-its MCP runtime. `@poolstatis/mcp@0.1.0` passed a fresh registry install,
+its MCP runtime. `@poolstatis/mcp@0.2.0` passed a fresh registry install,
 initialize, tool-list, and project-scoped read smoke.
 
 Send product events through the ingest API:

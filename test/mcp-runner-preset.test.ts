@@ -1,5 +1,15 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MCP_RUNNER, resolveMcpRunner } from '../web/src/mcpClients.js';
+
+const activeRunnerDocs = [
+  'README.md',
+  'docs/03-mcp-server.md',
+  'docs/05-gap-analysis.md',
+  'docs/06-instrumenting-a-product.md',
+  'docs/10-self-host.md',
+];
 
 describe('MCP runner preset', () => {
   it('does not advertise an unpublished registry package by default', () => {
@@ -21,5 +31,16 @@ describe('MCP runner preset', () => {
     expect(() => resolveMcpRunner({
       VITE_POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp@0.2.0',
     })).toThrow('must be true before VITE_POOLSTATIS_MCP_ARGS can use @poolstatis/mcp');
+  });
+
+  it('keeps active install docs on the exact verified public runner', () => {
+    for (const relativePath of activeRunnerDocs) {
+      const content = readFileSync(resolve(import.meta.dirname, '..', relativePath), 'utf8');
+      expect(content, relativePath).toContain('@poolstatis/mcp@0.2.0');
+      expect(content, relativePath).not.toContain('@poolstatis/mcp@0.1.0');
+      expect(content, relativePath).not.toMatch(
+        /pnpm dlx @poolstatis\/mcp(?!@0\.2\.0)/,
+      );
+    }
   });
 });
