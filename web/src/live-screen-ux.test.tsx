@@ -6,6 +6,7 @@ import { Experiments } from './screens/Experiments';
 import { Measurement } from './screens/Measurement';
 import { Registry } from './screens/Registry';
 import { useStore } from './store';
+import { TooltipProvider } from './components/ui/tooltip';
 
 vi.mock('./store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./store')>()),
@@ -81,7 +82,7 @@ describe('live customer screen UX', () => {
       trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
       exportContracts: vi.fn(),
     }));
-    render(<MemoryRouter><Measurement /></MemoryRouter>);
+    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
     expect(await screen.findByText('1 untrusted')).toBeInTheDocument();
     expect(screen.getByText('0 observations')).toBeInTheDocument();
     expect(screen.queryByText('No accepted events.')).not.toBeInTheDocument();
@@ -105,7 +106,7 @@ describe('live customer screen UX', () => {
       }),
       trend, exportContracts: vi.fn(),
     }));
-    render(<MemoryRouter><Measurement /></MemoryRouter>);
+    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Acquisition / UTM');
     fireEvent.click(screen.getByRole('button', { name: 'Run UTM report' }));
     await screen.findByText('google');
@@ -151,19 +152,87 @@ describe('live customer screen UX', () => {
       trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
       webAnalytics,
     }));
-    render(<MemoryRouter><Measurement /></MemoryRouter>);
+    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Web analytics');
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
     expect(await screen.findByText('Visitors')).toBeInTheDocument();
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('Page views')).toBeInTheDocument();
     expect(screen.getByText('75%')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Device' }), { key: 'Enter' });
     expect(screen.getByText('60%')).toBeInTheDocument();
-    expect(screen.getByText('Unique resolved actors.')).toBeInTheDocument();
-    expect(screen.getByText(/Showing top 8/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Visitors' })).toBeInTheDocument();
+    expect(screen.getByText(/Showing 1 of 1 returned groups/)).toBeInTheDocument();
     expect(webAnalytics).toHaveBeenCalledWith('alpha', expect.objectContaining({
       metric: 'web_page_views', dimensions: ['country', 'device', 'browser', 'os', 'source'], env: 'prod',
     }));
+  });
+
+  it('bounds 100+ dimension values behind one searchable ranked explorer', async () => {
+    const webMetric = {
+      ...metric,
+      id: 'web-many', key: 'web_page_views', name: 'Web page views',
+      source: { event: 'page.viewed' },
+    };
+    const longSource = `partner-${'very-long-source-label-'.repeat(12)}`;
+    const sourceCount = 1_020;
+    const pageViews = sourceCount * (sourceCount + 1) / 2;
+    const sources = Array.from({ length: sourceCount }, (_, index) => ({
+      value: index === sourceCount - 1 ? longSource : `source-${String(index).padStart(4, '0')}`,
+      visitors: index + 1,
+      sessions: index + 1,
+      page_views: index + 1,
+      percentage: Math.round(((index + 1) / pageViews) * 1_000) / 10,
+    }));
+    mockedStore.mockReturnValue(store({
+      properties: vi.fn().mockResolvedValue([]), actorLinks: vi.fn().mockResolvedValue({ links: [], audit: [] }),
+      sources: vi.fn().mockResolvedValue([]), metrics: vi.fn().mockResolvedValue([webMetric]),
+      contracts: vi.fn().mockResolvedValue([]), exportContracts: vi.fn(),
+      measurementTrust: vi.fn().mockResolvedValue({
+        status: 'trusted', primary_metric: { key: webMetric.key, purpose: webMetric.purpose, category: 'acquisition', observed_events: pageViews, observed_actors: sourceCount, registered_coverage: 1 },
+        identity: { distinct_id_coverage: 1, raw_actors: sourceCount, resolved_actors: sourceCount }, properties: [], blockers: [], warnings: [],
+      }),
+      trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
+      webAnalytics: vi.fn().mockResolvedValue({
+        kind: 'web_analytics',
+        summary: { visitors: sourceCount, sessions: sourceCount, page_views: pageViews },
+        breakdowns: {
+          country: [{ value: 'unknown', visitors: sourceCount, sessions: sourceCount, page_views: pageViews, percentage: 100 }],
+          device: [], browser: [], os: [], source: sources,
+        },
+        meta: {
+          computed_at: '2026-07-27T00:00:00Z',
+          truncated_dimensions: ['source'],
+          definitions: {
+            visitors: 'Unique resolved actors.',
+            sessions: 'Distinct session ids.',
+            page_views: 'Accepted stored page-view events.',
+          },
+          privacy: 'Raw IP is not stored.',
+        },
+      }),
+    }));
+    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    await screen.findByText('Web analytics');
+    fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
+    expect(await screen.findByText('Unknown')).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Source' }), { key: 'Enter' });
+    expect(screen.getByRole('tabpanel')).toBeInTheDocument();
+    let rankedList = screen.getByRole('list', { name: 'Source ranked by page views' });
+    expect(within(rankedList).getAllByRole('listitem')).toHaveLength(8);
+    expect(within(rankedList).getByTitle(longSource)).toBeInTheDocument();
+    expect(screen.getByText(/42 more returned/)).toBeInTheDocument();
+    expect(screen.getByText(/at least 1 more beyond the top 50/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View all' }));
+    rankedList = screen.getByRole('list', { name: 'Source ranked by page views' });
+    expect(rankedList).toHaveClass('max-h-96', 'overflow-y-auto');
+    expect(within(rankedList).getAllByRole('listitem')).toHaveLength(50);
+    const search = screen.getByRole('textbox', { name: 'Search source groups' });
+    fireEvent.change(search, { target: { value: 'very-long-source' } });
+    expect(within(rankedList).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(rankedList).getByTitle(longSource)).toHaveClass('truncate');
   });
 
   it('keeps feature and experiment forms behind task-oriented actions', async () => {

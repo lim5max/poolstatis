@@ -105,9 +105,9 @@ describe('web analytics query', () => {
     expect(crossTenant.status).toBe(404);
   });
 
-  it('reports bounded breakdown truncation instead of silently hiding the tail', async () => {
+  it('keeps 100+ breakdown groups bounded and reports truncation instead of silently hiding the tail', async () => {
     const events = Array.from(
-      { length: 51 },
+      { length: 101 },
       (_, index) => page(
         `visitor:source:${index}`,
         `session:source:${index}`,
