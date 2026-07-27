@@ -74,8 +74,11 @@ tight loop; a single shared `Poolstatis` client handles this automatically.
 
 ## Browser Analytics Context (optional module)
 
-`@poolstatis/sdk/browser` adds consent-gated first-party visitors, 30-minute
-sessions, SPA-safe `page.viewed` events and coarse browser context. It never
+`@poolstatis/sdk/browser` adds policy-gated first-party visitors, 30-minute
+sessions, SPA-safe `page.viewed` events and coarse browser context. The
+backward-compatible default is `opt-in`; `opt-out` must be selected explicitly,
+and `external` delegates the decision to a host CMP. Global Privacy Control
+always disables collection. It never
 sends query strings, full URLs/referrers, DOM/text, full User-Agent or precise
 screen dimensions. The base SDK remains browser/Node neutral.
 
@@ -84,6 +87,7 @@ import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
 
 const browser = createBrowserAnalytics({
   client: ph,
+  consentPolicy: 'external',
   hasConsent: () => consent.has('product_analytics'),
   subscribeConsent: (listener) => consent.onChange(listener),
   captureAcquisition: true, // reuses the bounded attribution snapshot
@@ -97,6 +101,11 @@ const actorLink = browser.identify(user.id);
 // On logout/account switch, rotate visitor + session before another identify.
 browser.resetIdentity();
 ```
+
+For a host-owned, reversible opt-out policy, set `consentPolicy: 'opt-out'`.
+Without callbacks it starts immediately; provide `hasConsent` and
+`subscribeConsent` when the host persists a Disable/Enable choice. Omitting
+`consentPolicy` keeps the existing opt-in contract and requires both callbacks.
 
 Composed acquisition uses the same session and page-view event. Do not also
 start `createAttributionClient`, which is the acquisition-only alternative and

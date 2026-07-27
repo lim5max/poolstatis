@@ -20,7 +20,7 @@ export interface BrowserLike {
   location: { pathname: string; href: string };
   document: { referrer: string };
   history: { pushState: HistoryMethod; replaceState: HistoryMethod };
-  navigator: { userAgent: string; language: string };
+  navigator: { userAgent: string; language: string; globalPrivacyControl?: boolean };
   screen: { width: number; height: number };
   innerWidth: number;
   innerHeight: number;
@@ -35,10 +35,10 @@ export interface BrowserCaptureClient {
   discardQueuedEvents(predicate: (event: PoolstatisEvent) => boolean): void;
 }
 
-export interface BrowserAnalyticsOptions {
+export type BrowserConsentPolicy = 'opt-in' | 'opt-out' | 'external';
+
+interface BrowserAnalyticsBaseOptions {
   client: BrowserCaptureClient;
-  hasConsent: () => boolean;
-  subscribeConsent: (listener: () => void) => () => void;
   browser?: BrowserLike;
   now?: () => number;
   createId?: () => string;
@@ -46,6 +46,22 @@ export interface BrowserAnalyticsOptions {
   /** Compose the existing bounded UTM snapshot into the same session and page-view events. */
   captureAcquisition?: boolean;
 }
+
+type HostConsent = {
+  hasConsent: () => boolean;
+  subscribeConsent: (listener: () => void) => () => void;
+};
+
+/**
+ * Consent is integration-controlled. Existing integrations remain opt-in by
+ * default; opt-out is an explicit host choice, and external delegates the
+ * decision to a CMP or another host-owned consent source.
+ */
+export type BrowserAnalyticsOptions = BrowserAnalyticsBaseOptions & (
+  | ({ consentPolicy?: 'opt-in' } & HostConsent)
+  | ({ consentPolicy: 'opt-out' } & Partial<HostConsent>)
+  | ({ consentPolicy: 'external' } & HostConsent)
+);
 
 export interface ActorLinkHandoff {
   source_distinct_id: string;
@@ -129,6 +145,17 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
 
   const resolveBrowser = () => options.browser
     ?? ((globalThis as { window?: BrowserLike }).window ?? null);
+
+  const hostAllowsCollection = (): boolean => {
+    if (options.consentPolicy === 'opt-out') return options.hasConsent?.() ?? true;
+    return options.hasConsent();
+  };
+
+  const collectionAllowed = (): boolean => {
+    if (!hostAllowsCollection()) return false;
+    const candidate = browser ?? resolveBrowser();
+    return candidate?.navigator.globalPrivacyControl !== true;
+  };
 
   const storageGet = (storage: StorageLike, key: string): string | null => {
     try { return storage.getItem(key); } catch { return null; }
@@ -219,7 +246,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   };
 
   const capture = (event: string, properties: Record<string, unknown> = {}) => {
-    if (!options.hasConsent() || !browser || !visitorId || !actorId) return;
+    if (!collectionAllowed() || !browser || !visitorId || !actorId) return;
     for (const key of Object.keys(properties)) {
       if (reserved.has(key)) throw new Error(`property ${key} is reserved by @poolstatis/sdk/browser`);
     }
@@ -233,7 +260,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   };
 
   const pageViewed = () => {
-    if (!options.hasConsent() || !browser || !visitorId || !actorId) return;
+    if (!collectionAllowed() || !browser || !visitorId || !actorId) return;
     ensureActiveSession();
     const path = boundedPath(browser!.location.pathname);
     if (path === lastPath) return;
@@ -257,7 +284,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   };
 
   const start = () => {
-    if (!options.hasConsent() || started) return;
+    if (!collectionAllowed() || started) return;
     browser = resolveBrowser();
     if (!browser) return;
     ensureIdentity();
@@ -266,10 +293,10 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     pageViewed();
   };
 
-  stopConsent = options.subscribeConsent(() => {
-    if (options.hasConsent()) start();
+  stopConsent = options.subscribeConsent?.(() => {
+    if (collectionAllowed()) start();
     else clear();
-  });
+  }) ?? null;
 
   return {
     start,
@@ -286,7 +313,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       if (!browser) return;
       storageRemove(browser.localStorage, VISITOR_KEY);
       storageRemove(browser.sessionStorage, SESSION_KEY);
-      if (!options.hasConsent()) {
+      if (!collectionAllowed()) {
         visitorId = null; sessionId = null; actorId = null; lastActivity = null;
         lastPath = null; acquisitionProperties = null;
         return;
@@ -296,7 +323,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       storageSet(browser.localStorage, VISITOR_KEY, visitorId);
       sessionId = null; lastActivity = null;
       lastPath = null; acquisitionProperties = null;
-      if (started && options.hasConsent()) rotateSession(now());
+      if (started && collectionAllowed()) rotateSession(now());
       const persistedVisitor = storageGet(browser.localStorage, VISITOR_KEY);
       if (persistedVisitor !== null && persistedVisitor !== visitorId) {
         throw new Error('browser identity rotated in memory but local storage kept a stale visitor; reload only after storage access is restored');
