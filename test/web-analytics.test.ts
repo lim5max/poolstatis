@@ -3,13 +3,13 @@ import { api, createTestEnv, type TestEnv } from './helpers.js';
 import { createTrustedProxyCountryResolver } from '../src/services/country.js';
 
 describe('web analytics query', () => {
+  const countryResolver = createTrustedProxyCountryResolver({
+    header: 'x-edge-country',
+    trustedProxyCidrs: ['127.0.0.0/8', '::1/128'],
+  });
   let env: TestEnv;
   let other: TestEnv;
   beforeAll(async () => {
-    const countryResolver = createTrustedProxyCountryResolver({
-      header: 'x-edge-country',
-      trustedProxyCidrs: ['127.0.0.0/8', '::1/128'],
-    });
     env = await createTestEnv({ countryResolver });
     other = await createTestEnv({ countryResolver });
     const proposed = await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/properties/browser-analytics`, {});
@@ -41,6 +41,88 @@ describe('web analytics query', () => {
       $timezone: 'UTC', $viewport_bucket: 'lg', $screen_bucket: 'lg',
       ...(source ? { $utm_source: source } : {}),
     },
+  });
+
+  it('keeps anonymous visitors distinct until an explicit audited actor link exists', async () => {
+    const isolated = await createTestEnv({ countryResolver });
+    try {
+      expect((await api(
+        isolated,
+        isolated.secretToken,
+        'POST',
+        `/api/v1/projects/${isolated.projectSlug}/properties/browser-analytics`,
+        {},
+      )).status).toBe(200);
+      expect((await api(
+        isolated,
+        isolated.secretToken,
+        'PATCH',
+        `/api/v1/projects/${isolated.projectSlug}/metrics/web_page_views`,
+        { status: 'active' },
+      )).status).toBe(200);
+
+      const stored = await isolated.app.inject({
+        method: 'POST',
+        url: '/i/v1/events',
+        headers: {
+          authorization: `Bearer ${isolated.ingestToken}`,
+          'x-edge-country': 'US',
+        },
+        payload: {
+          events: [
+            page('anonymous:one', 'session:one', '/'),
+            page('anonymous:two', 'session:two', '/pricing'),
+          ],
+        },
+      });
+      expect(stored.statusCode).toBe(200);
+
+      const beforeLink = await api(
+        isolated,
+        isolated.secretToken,
+        'POST',
+        `/api/v1/projects/${isolated.projectSlug}/query`,
+        {
+          kind: 'web_analytics',
+          metric: 'web_page_views',
+          date_from: '-1d',
+          dimensions: ['country'],
+          env: 'prod',
+        },
+      );
+      expect(beforeLink.status).toBe(200);
+      expect(beforeLink.body.summary).toEqual({ visitors: 2, sessions: 2, page_views: 2 });
+
+      expect((await api(
+        isolated,
+        isolated.secretToken,
+        'POST',
+        `/api/v1/projects/${isolated.projectSlug}/identity-links`,
+        {
+          source_distinct_id: 'anonymous:one',
+          target_distinct_id: 'anonymous:two',
+          env: 'prod',
+        },
+      )).status).toBe(201);
+
+      const afterLink = await api(
+        isolated,
+        isolated.secretToken,
+        'POST',
+        `/api/v1/projects/${isolated.projectSlug}/query`,
+        {
+          kind: 'web_analytics',
+          metric: 'web_page_views',
+          date_from: '-1d',
+          dimensions: ['country'],
+          env: 'prod',
+        },
+      );
+      expect(afterLink.status).toBe(200);
+      expect(afterLink.body.summary).toEqual({ visitors: 1, sessions: 2, page_views: 2 });
+    } finally {
+      await isolated.close();
+    }
   });
 
   it('keeps visitors, sessions and page views distinct and returns count plus percentage breakdowns', async () => {
