@@ -131,6 +131,7 @@ describe('live customer screen UX', () => {
       },
       meta: {
         computed_at: '2026-07-27T00:00:00Z',
+        truncated_dimensions: [],
         definitions: {
           visitors: 'Unique resolved actors.',
           sessions: 'Distinct session ids.',

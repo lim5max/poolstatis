@@ -78,6 +78,7 @@ export interface WebAnalyticsCounts {
 export interface WebAnalyticsResult {
   summary: WebAnalyticsCounts;
   breakdowns: Record<string, Array<WebAnalyticsCounts & { value: string }>>;
+  truncatedDimensions: string[];
 }
 
 export interface FunnelStepQuery {

@@ -146,6 +146,7 @@ export type QueryResult =
         value: string; visitors: number; sessions: number; page_views: number; percentage: number;
       }>>;
       meta: QueryMeta & {
+        truncated_dimensions: string[];
         definitions: { visitors: string; sessions: string; page_views: string };
         privacy: string;
       };
@@ -450,6 +451,7 @@ export class QueryService {
         date_range: { from: from.toISOString(), to: to.toISOString() },
         sampling: null,
         source: 'native',
+        truncated_dimensions: result.truncatedDimensions,
         definitions: {
           visitors: 'Unique resolved actors with page-view events; audited actor links deduplicate anonymous visitors after authentication.',
           sessions: 'Distinct non-empty session_id values on page-view events; a session is not a visitor or authenticated user.',

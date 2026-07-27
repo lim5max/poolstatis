@@ -318,6 +318,7 @@ export interface WebAnalyticsResponse {
   }>>>;
   meta: {
     computed_at: string;
+    truncated_dimensions: WebAnalyticsDimension[];
     definitions: { visitors: string; sessions: string; page_views: string };
     privacy: string;
   };

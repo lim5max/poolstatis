@@ -411,6 +411,7 @@ export class PostgresEventStore implements EventStore {
       page_views: Number(summaryRows.rows[0]?.page_views ?? 0),
     };
     const breakdowns: WebAnalyticsResult['breakdowns'] = {};
+    const truncatedDimensions: string[] = [];
     for (const dimension of q.dimensions) {
       const dimensionParams = [...params, dimension.property, dimension.missingValue];
       const propertyParam = dimensionParams.length - 1;
@@ -418,17 +419,18 @@ export class PostgresEventStore implements EventStore {
       const rows = await this.pool.query(
         `SELECT COALESCE(properties->>$${propertyParam}, $${missingParam}) AS value, ${counts}
          FROM events WHERE ${where}
-         GROUP BY 1 ORDER BY page_views DESC, value ASC LIMIT 50`,
+         GROUP BY 1 ORDER BY page_views DESC, value ASC LIMIT 51`,
         dimensionParams,
       );
-      breakdowns[dimension.key] = rows.rows.map((row) => ({
+      if (rows.rows.length > 50) truncatedDimensions.push(dimension.key);
+      breakdowns[dimension.key] = rows.rows.slice(0, 50).map((row) => ({
         value: String(row.value),
         visitors: Number(row.visitors),
         sessions: Number(row.sessions),
         page_views: Number(row.page_views),
       }));
     }
-    return { summary, breakdowns };
+    return { summary, breakdowns, truncatedDimensions };
   }
 
   async funnel(q: FunnelQuery): Promise<number[]> {

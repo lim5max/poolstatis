@@ -250,8 +250,9 @@ Privacy boundary:
   the browser entrypoint's composed acquisition option; do not also run the attribution
   page-view owner or each navigation would intentionally emit two billable events.
 
-Use propose_browser_analytics before activation. Canonical properties and the web_page_views
-and web_visitors metrics start proposed. The owner reviews and activates them. Query with
+Use propose_browser_analytics before activation. Canonical browser and bounded UTM
+properties plus the web_page_views and web_visitors metrics start proposed. The owner
+reviews and activates them. Query with
 query_web_analytics using the page-view count metric; responses keep visitors, sessions and
 page views separate and return counts plus page-view percentages for requested dimensions.
 `;

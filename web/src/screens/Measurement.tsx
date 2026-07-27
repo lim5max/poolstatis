@@ -192,14 +192,21 @@ function WebAnalyticsResults({ result }: { result: WebAnalyticsResponse }) {
       ].map(([label, value, definition]) => <div key={String(label)} className="min-w-0 bg-card p-4"><div className="text-xs text-muted-foreground">{label}</div><div className="serif mt-1 text-2xl tabular-nums">{fmtNum(Number(value))}</div><p className="mt-1 text-xs text-muted-foreground">{definition}</p></div>)}
     </div>
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {webDimensions.map((dimension) => <div key={dimension} className="min-w-0 rounded-md border">
-        <div className="border-b px-3 py-2 text-sm font-medium">{dimension}</div>
-        <div className="divide-y">{(result.breakdowns[dimension] ?? []).slice(0, 8).map((row) => <div key={row.value} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 px-3 py-2 text-sm">
-          <span className="truncate" title={row.value}>{row.value}</span>
-          <span className="tabular-nums">{fmtNum(row.page_views)}</span>
-          <span className="w-12 text-right text-xs text-muted-foreground">{row.percentage}%</span>
-        </div>)}</div>
-      </div>)}
+      {webDimensions.map((dimension) => {
+        const rows = result.breakdowns[dimension] ?? [];
+        const clipped = rows.length > 8 || result.meta.truncated_dimensions.includes(dimension);
+        return <div key={dimension} className="min-w-0 rounded-md border">
+          <div className="border-b px-3 py-2 text-sm font-medium">{dimension}</div>
+          <div className="divide-y">{rows.slice(0, 8).map((row) => <div key={row.value} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 px-3 py-2 text-sm">
+            <span className="truncate" title={row.value}>{row.value}</span>
+            <span className="tabular-nums">{fmtNum(row.page_views)}</span>
+            <span className="w-12 text-right text-xs text-muted-foreground">{row.percentage}%</span>
+          </div>)}</div>
+          {clipped && <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+            Showing top 8; percentages use all page views, so displayed rows may not sum to 100%.
+          </p>}
+        </div>;
+      })}
     </div>
   </div>;
 }

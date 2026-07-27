@@ -128,8 +128,8 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   const storageGet = (storage: StorageLike, key: string): string | null => {
     try { return storage.getItem(key); } catch { return null; }
   };
-  const storageSet = (storage: StorageLike, key: string, value: string): void => {
-    try { storage.setItem(key, value); } catch { /* in-memory capture remains available */ }
+  const storageSet = (storage: StorageLike, key: string, value: string): boolean => {
+    try { storage.setItem(key, value); return true; } catch { return false; }
   };
   const storageRemove = (storage: StorageLike, key: string): void => {
     try { storage.removeItem(key); } catch { /* storage may be blocked by the browser */ }
@@ -279,12 +279,18 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     },
     resetIdentity(): void {
       if (!browser) return;
-      options.client.discardQueuedEvents((event) => event.properties?.$browser_context === BROWSER_CONTEXT_VERSION);
       storageRemove(browser.localStorage, VISITOR_KEY);
       storageRemove(browser.sessionStorage, SESSION_KEY);
-      visitorId = null; sessionId = null; actorId = null; lastActivity = null;
+      visitorId = `visitor:${createId()}`;
+      actorId = visitorId;
+      storageSet(browser.localStorage, VISITOR_KEY, visitorId);
+      sessionId = null; lastActivity = null;
       lastPath = null; acquisitionProperties = null;
-      if (started && options.hasConsent()) ensureIdentity();
+      if (started && options.hasConsent()) rotateSession(now());
+      const persistedVisitor = storageGet(browser.localStorage, VISITOR_KEY);
+      if (persistedVisitor !== null && persistedVisitor !== visitorId) {
+        throw new Error('browser identity rotated in memory but local storage kept a stale visitor; reload only after storage access is restored');
+      }
     },
     get visitorId() { return visitorId; },
     get sessionId() { return sessionId; },

@@ -1206,9 +1206,13 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/api/v1/projects/:slug/properties/browser-analytics', async (req) => {
     platform(req);
     const project = await resolveProject(req);
+    const actor = authOwner(req.auth);
     return {
-      properties: await proposeBrowserAnalyticsProperties(ctx.pool, project.id, authOwner(req.auth)),
-      metrics: await proposeBrowserAnalyticsMetrics(ctx.pool, project.id, authOwner(req.auth)),
+      properties: [
+        ...await proposeBrowserAnalyticsProperties(ctx.pool, project.id, actor),
+        ...await proposeAcquisitionProperties(ctx.pool, project.id, actor),
+      ],
+      metrics: await proposeBrowserAnalyticsMetrics(ctx.pool, project.id, actor),
     };
   });
 

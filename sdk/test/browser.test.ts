@@ -165,7 +165,9 @@ describe('@poolstatis/sdk/browser', () => {
     expect(analytics.sessionId).not.toBe(firstSession);
     expect(f.queued.at(-1)?.session_id).toBe(analytics.sessionId);
 
+    const queuedBeforeReset = [...f.queued];
     analytics.resetIdentity();
+    expect(f.queued).toEqual(queuedBeforeReset);
     expect(analytics.visitorId).not.toBe(firstVisitor);
     const secondLink = analytics.identify('user-two');
     expect(secondLink.source_distinct_id).toBe(analytics.visitorId);
@@ -199,6 +201,26 @@ describe('@poolstatis/sdk/browser', () => {
     });
     expect(JSON.stringify(f.queued)).not.toContain('private');
     expect(JSON.stringify(f.queued)).not.toContain('/private/path');
+  });
+
+  it('rotates in memory and reports a stale readable visitor when storage cannot be overwritten', () => {
+    const c = consent(true);
+    const f = fixture();
+    const stickyStorage = {
+      getItem: (key: string) => key === 'poolstatis.browser.visitor' ? 'visitor:stale' : null,
+      setItem: () => { throw new DOMException('blocked', 'SecurityError'); },
+      removeItem: () => { throw new DOMException('blocked', 'SecurityError'); },
+    };
+    f.browser.localStorage = stickyStorage;
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      createId: () => 'fresh',
+    });
+    analytics.start();
+    expect(analytics.visitorId).toBe('visitor:stale');
+    expect(() => analytics.resetIdentity()).toThrow('stale visitor');
+    expect(analytics.visitorId).toBe('visitor:fresh');
   });
 
   it('is importable in SSR without resolving browser globals', async () => {

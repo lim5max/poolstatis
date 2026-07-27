@@ -14,8 +14,11 @@ describe('web analytics query', () => {
     other = await createTestEnv({ countryResolver });
     const proposed = await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/properties/browser-analytics`, {});
     expect(proposed.status).toBe(200);
+    expect(proposed.body.properties).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: '$browser_context' }),
+      expect.objectContaining({ key: '$utm_source' }),
+    ]));
     await api(env, env.secretToken, 'PATCH', `/api/v1/projects/${env.projectSlug}/metrics/web_page_views`, { status: 'active' });
-    await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/properties/acquisition-attribution`, {});
   });
   afterAll(async () => { await env.close(); await other.close(); });
 

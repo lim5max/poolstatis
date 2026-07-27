@@ -54,7 +54,10 @@ queued browser events, stored ids and navigation listeners.
 Call `resetIdentity()` on logout or before switching accounts on a shared
 browser. It rotates both the visitor and session before another user is
 identified, preventing cross-account actor links. The next explicit page view
-or SPA navigation is captured under the new identity.
+or SPA navigation is captured under the new identity. Already queued events
+keep their original valid identity. If browser storage is readable but refuses
+the replacement, reset rotates the in-memory identity and throws an explicit
+stale-storage error so the product does not silently reload the old visitor.
 
 ## Country
 
@@ -78,14 +81,18 @@ networks can make country inaccurate.
 Call `propose_browser_analytics` or
 `POST /api/v1/projects/{slug}/properties/browser-analytics`. It idempotently
 creates canonical properties plus proposed `web_page_views` and `web_visitors`
-metrics. Conflicting meanings fail with `409`; the owner reviews and activates
-the bundle.
+metrics. The same atomic setup also creates the existing bounded UTM
+definitions required by composed acquisition and the source breakdown.
+Conflicting meanings fail with `409`; the owner reviews and activates the
+bundle.
 
 `query_web_analytics` (Query DSL `kind: "web_analytics"`) references the
 page-view count metric and returns the three headline counts plus count and
 page-view percentage breakdowns for country, device, browser, OS, language,
 timezone and source. Reads remain project/environment isolated and use the
-`EventStore` seam.
+`EventStore` seam. Responses name any dimension truncated beyond the bounded
+top 50; the customer UI shows the top 8 and labels that percentages still use
+all page views.
 
 Enrichment changes only properties of an accepted event. It emits no extra
 event, so `events_stored` billing remains the count of accepted non-system
