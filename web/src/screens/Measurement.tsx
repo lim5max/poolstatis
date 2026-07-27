@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Loader2 } from '@/components/icons';
+import { ChevronDown, ChevronRight, Loader2, Search } from '@/components/icons';
 import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, Hint, Loading, Panel, RecoverableError, fmtNum } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse } from '../api/types';
 
 interface MetricTrustRow {
@@ -139,6 +141,17 @@ export function Measurement() {
 }
 
 const webDimensions: WebAnalyticsDimension[] = ['country', 'device', 'browser', 'os', 'source'];
+const webDimensionLabels: Record<WebAnalyticsDimension, string> = {
+  country: 'Country',
+  device: 'Device',
+  browser: 'Browser',
+  os: 'OS',
+  language: 'Language',
+  timezone: 'Timezone',
+  source: 'Source',
+};
+const collapsedBreakdownRows = 8;
+const maxBreakdownRows = 50;
 
 function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: string; onSetup: () => void }) {
   const { client, project } = useStore();
@@ -166,9 +179,7 @@ function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: 
     } finally { setBusy(false); }
   };
   return <Panel title="Web analytics" right={<span className="text-xs text-muted-foreground">consented browser context · {env}</span>}>
-    <p className="max-w-3xl text-sm text-muted-foreground">
-      Visitors, sessions and page views stay separate. Country is server-derived; raw IP, full URLs, query strings and full user agents are not stored.
-    </p>
+    <p className="max-w-3xl text-sm text-muted-foreground">How many visited, where they came from, and what they used.</p>
     <div className="mt-4 flex flex-wrap items-end gap-2">
       <div className="space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Period</label><Select value={period} onValueChange={(value) => { setPeriod(value); setResult(null); }}><SelectTrigger aria-label="Web analytics period" className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent></Select></div>
       {metric
@@ -177,38 +188,145 @@ function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: 
     </div>
     {!metric && <div className="mt-4"><EmptyState headline="Traffic summary unavailable" lead="propose the canonical bundle, review it in Registry, then activate web_page_views" /></div>}
     {error && <div className="mt-4"><ErrorNote>{error}</ErrorNote></div>}
+    {busy && <div className="mt-4"><Loading what="loading traffic summary…" /></div>}
     {result && result.summary.page_views === 0 && <div className="mt-4"><EmptyState headline="No page views in this window" lead="no zero was estimated; verify consent, SDK capture and the active page-view metric" /></div>}
     {result && result.summary.page_views > 0 && <WebAnalyticsResults result={result} />}
   </Panel>;
 }
 
 function WebAnalyticsResults({ result }: { result: WebAnalyticsResponse }) {
+  const [dimension, setDimension] = useState<WebAnalyticsDimension>('country');
+  const [expanded, setExpanded] = useState(false);
+  const [search, setSearch] = useState('');
+  const selectDimension = (value: string) => {
+    setDimension(value as WebAnalyticsDimension);
+    setExpanded(false);
+    setSearch('');
+  };
   return <div className="mt-4 space-y-4" aria-live="polite">
     <div className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-3">
       {[
         ['Visitors', result.summary.visitors, result.meta.definitions.visitors],
         ['Sessions', result.summary.sessions, result.meta.definitions.sessions],
         ['Page views', result.summary.page_views, result.meta.definitions.page_views],
-      ].map(([label, value, definition]) => <div key={String(label)} className="min-w-0 bg-card p-4"><div className="text-xs text-muted-foreground">{label}</div><div className="serif mt-1 text-2xl tabular-nums">{fmtNum(Number(value))}</div><p className="mt-1 text-xs text-muted-foreground">{definition}</p></div>)}
+      ].map(([label, value, definition]) => <div key={String(label)} className="min-w-0 bg-card p-4">
+        <Hint label={definition}>
+          <button type="button" className="rounded-sm text-xs text-muted-foreground underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{label}</button>
+        </Hint>
+        <div className="serif mt-1 text-2xl tabular-nums">{fmtNum(Number(value))}</div>
+      </div>)}
     </div>
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {webDimensions.map((dimension) => {
-        const rows = result.breakdowns[dimension] ?? [];
-        const clipped = rows.length > 8 || result.meta.truncated_dimensions.includes(dimension);
-        return <div key={dimension} className="min-w-0 rounded-md border">
-          <div className="border-b px-3 py-2 text-sm font-medium">{dimension}</div>
-          <div className="divide-y">{rows.slice(0, 8).map((row) => <div key={row.value} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 px-3 py-2 text-sm">
-            <span className="truncate" title={row.value}>{row.value}</span>
-            <span className="tabular-nums">{fmtNum(row.page_views)}</span>
-            <span className="w-12 text-right text-xs text-muted-foreground">{row.percentage}%</span>
-          </div>)}</div>
-          {clipped && <p className="border-t px-3 py-2 text-xs text-muted-foreground">
-            Showing top 8; percentages use all page views, so displayed rows may not sum to 100%.
-          </p>}
-        </div>;
-      })}
-    </div>
+    <RankedDimensionExplorer
+      result={result}
+      dimension={dimension}
+      expanded={expanded}
+      search={search}
+      onDimensionChange={selectDimension}
+      onExpandedChange={setExpanded}
+      onSearchChange={setSearch}
+    />
   </div>;
+}
+
+function RankedDimensionExplorer({
+  result, dimension, expanded, search, onDimensionChange, onExpandedChange, onSearchChange,
+}: {
+  result: WebAnalyticsResponse;
+  dimension: WebAnalyticsDimension;
+  expanded: boolean;
+  search: string;
+  onDimensionChange: (value: string) => void;
+  onExpandedChange: (value: boolean) => void;
+  onSearchChange: (value: string) => void;
+}) {
+  const sourceRows = result.breakdowns[dimension] ?? [];
+  const rows = [...sourceRows]
+    .sort((left, right) => right.page_views - left.page_views || left.value.localeCompare(right.value))
+    .slice(0, maxBreakdownRows);
+  const truncated = result.meta.truncated_dimensions.includes(dimension) || sourceRows.length > maxBreakdownRows;
+  const canExpand = rows.length > collapsedBreakdownRows;
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const visibleRows = (expanded ? rows : rows.slice(0, collapsedBreakdownRows))
+    .filter((row) => !normalizedSearch || row.value.toLocaleLowerCase().includes(normalizedSearch));
+  const returnedTail = Math.max(0, rows.length - collapsedBreakdownRows);
+  const resultLabel = expanded
+    ? `${visibleRows.length} of ${rows.length} returned groups`
+    : `${Math.min(collapsedBreakdownRows, rows.length)} of ${rows.length} returned groups`;
+
+  return <section className="min-w-0 overflow-hidden rounded-md border" aria-labelledby="web-breakdown-title">
+    <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
+      <div className="min-w-0">
+        <h3 id="web-breakdown-title" className="text-sm font-medium">Breakdown</h3>
+        <p className="mt-0.5 text-xs text-muted-foreground">Ranked by page views · share of all page views</p>
+      </div>
+      <Hint label={result.meta.privacy}>
+        <button type="button" className="shrink-0 rounded-sm text-xs text-muted-foreground underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Privacy</button>
+      </Hint>
+    </div>
+    <Tabs value={dimension} onValueChange={onDimensionChange} className="min-w-0 gap-0">
+      <div className="border-b p-3 sm:hidden">
+        <Select value={dimension} onValueChange={onDimensionChange}>
+          <SelectTrigger aria-label="Breakdown dimension" className="w-full"><SelectValue /></SelectTrigger>
+          <SelectContent>{webDimensions.map((item) => <SelectItem key={item} value={item}>{webDimensionLabels[item]}</SelectItem>)}</SelectContent>
+        </Select>
+      </div>
+      <div className="hidden min-w-0 border-b px-3 pt-2 sm:block">
+        <TabsList variant="line" aria-label="Breakdown dimension" className="grid h-10 w-full grid-cols-5">
+          {webDimensions.map((item) => <TabsTrigger key={item} value={item}>{webDimensionLabels[item]}</TabsTrigger>)}
+        </TabsList>
+      </div>
+      <TabsContent value={dimension} className="mt-0">
+      {expanded && rows.length > 12 && <div className="border-b p-3">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          aria-label={`Search ${webDimensionLabels[dimension].toLowerCase()} groups`}
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder={`Search ${rows.length} returned groups`}
+          className="pl-8"
+        />
+      </div>
+    </div>}
+    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground" aria-hidden="true">
+      <span>{webDimensionLabels[dimension]}</span><span>Views</span><span className="w-12 text-right">Share</span>
+    </div>
+    {rows.length === 0 ? <div className="px-4 py-10 text-center text-sm text-muted-foreground" role="status">No {webDimensionLabels[dimension].toLowerCase()} data in this window.</div>
+      : visibleRows.length === 0 ? <div className="px-4 py-10 text-center text-sm text-muted-foreground" role="status">No matching groups.</div>
+        : <div
+          className={expanded ? 'max-h-96 divide-y overflow-y-auto overscroll-contain' : 'divide-y'}
+          tabIndex={expanded ? 0 : undefined}
+          role="list"
+          aria-label={`${webDimensionLabels[dimension]} ranked by page views`}
+        >
+          {visibleRows.map((row) => {
+            const label = row.value.trim() && row.value.toLocaleLowerCase() !== 'unknown' ? row.value : 'Unknown';
+            const percentage = Number.isFinite(row.percentage)
+              ? Math.max(0, Math.min(100, row.percentage))
+              : 0;
+            return <div key={row.value} className="relative isolate grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] gap-3 overflow-hidden px-4 py-2.5 text-sm" role="listitem">
+              <div className="absolute inset-y-1 left-0 -z-10 rounded-r-sm bg-primary/10" style={{ width: `${percentage}%` }} aria-hidden="true" />
+              <span className="min-w-0 truncate font-medium" title={label}>{label}</span>
+              <span className="tabular-nums">{fmtNum(row.page_views)}</span>
+              <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{percentage}%</span>
+              <span className="sr-only">{fmtNum(row.visitors)} visitors, {fmtNum(row.sessions)} sessions</span>
+            </div>;
+          })}
+        </div>}
+    <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t px-4 py-3">
+      <p className="min-w-0 text-xs text-muted-foreground">
+        Showing {resultLabel}
+        {!expanded && returnedTail > 0 ? ` · ${returnedTail} more returned` : ''}
+        {truncated ? ` · at least 1 more beyond the top ${maxBreakdownRows}` : ''}
+      </p>
+      {canExpand && <Button variant="outline" size="sm" onClick={() => {
+        onExpandedChange(!expanded);
+        if (expanded) onSearchChange('');
+      }}>{expanded ? 'Show top 8' : 'View all'}</Button>}
+    </div>
+      </TabsContent>
+    </Tabs>
+  </section>;
 }
 
 function TrustOverview({ rows, properties, activeLinks, onRefresh }: {
