@@ -76,7 +76,10 @@ Merge-семантика: присланные ключи перезаписыв
 
 ### POST /i/v1/experience/events
 
-Optional Browser Experience SDK использует этот endpoint после явного consent.
+Optional Browser Experience SDK использует этот endpoint только когда
+host-controlled policy разрешает сбор. Browser Analytics поддерживает
+явные `opt-in` (default), `opt-out` и `external`/CMP-managed режимы; это не
+расширяет фиксированный privacy-safe allowlist.
 Сначала platform token создаёт active surface с `key`, `name` и `purpose`;
 ingest key затем отправляет только типизированные interaction events для этой
 surface:

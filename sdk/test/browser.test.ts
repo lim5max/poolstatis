@@ -53,6 +53,7 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
     navigator: {
       userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1',
       language: 'en-US',
+      globalPrivacyControl: false,
     },
     screen: { width: 390, height: 844 },
     innerWidth: 390,
@@ -74,6 +75,71 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
 }
 
 describe('@poolstatis/sdk/browser', () => {
+  it('keeps opt-in as the default and starts opt-out without a host consent callback', () => {
+    const defaultConsent = consent(false);
+    const optIn = fixture();
+    createBrowserAnalytics({
+      client: optIn.client,
+      browser: optIn.browser,
+      hasConsent: defaultConsent.hasConsent,
+      subscribeConsent: defaultConsent.subscribeConsent,
+      createId: () => 'opt-in',
+    }).start();
+    expect(optIn.queued).toEqual([]);
+
+    const optOut = fixture();
+    createBrowserAnalytics({
+      client: optOut.client,
+      browser: optOut.browser,
+      consentPolicy: 'opt-out',
+      createId: (() => { let id = 0; return () => `opt-out-${++id}`; })(),
+    }).start();
+    expect(optOut.queued).toHaveLength(1);
+    expect(optOut.queued[0]).toMatchObject({
+      event: 'page.viewed',
+      distinct_id: 'visitor:opt-out-1',
+      session_id: 'session:opt-out-2',
+    });
+  });
+
+  it('fails closed for Global Privacy Control in every policy mode', () => {
+    const f = fixture();
+    f.browser.navigator.globalPrivacyControl = true;
+    const analytics = createBrowserAnalytics({
+      client: f.client,
+      browser: f.browser,
+      consentPolicy: 'opt-out',
+      createId: () => 'never-created',
+    });
+
+    analytics.start();
+
+    expect(f.queued).toEqual([]);
+    expect(f.localStorage.getItem('poolstatis.browser.visitor')).toBeNull();
+    expect(f.sessionStorage.getItem('poolstatis.browser.session')).toBeNull();
+  });
+
+  it('uses host-managed state for external consent and drops queued data on withdrawal', () => {
+    const external = consent(false);
+    const f = fixture();
+    const analytics = createBrowserAnalytics({
+      client: f.client,
+      browser: f.browser,
+      consentPolicy: 'external',
+      hasConsent: external.hasConsent,
+      subscribeConsent: external.subscribeConsent,
+      createId: () => 'external',
+    });
+
+    analytics.start();
+    expect(f.queued).toEqual([]);
+    external.set(true);
+    expect(f.queued).toHaveLength(1);
+    external.set(false);
+    expect(f.queued).toEqual([]);
+    expect(f.localStorage.getItem('poolstatis.browser.visitor')).toBeNull();
+  });
+
   it('waits for consent, persists one visitor, rotates inactive sessions, and tracks SPA paths only', () => {
     const c = consent(false);
     const first = fixture();

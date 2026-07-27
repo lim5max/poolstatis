@@ -1,6 +1,6 @@
 # Browser Analytics Context
 
-`@poolstatis/sdk/browser` is an optional consent-gated layer over the neutral
+`@poolstatis/sdk/browser` is an optional policy-gated layer over the neutral
 `@poolstatis/sdk` transport.
 
 - Visitors are unique query-time resolved actors with `page.viewed` events.
@@ -22,6 +22,7 @@ import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
 const transport = createClient({ url, ingestKey });
 const browser = createBrowserAnalytics({
   client: transport,
+  consentPolicy: 'external',
   hasConsent: () => consent.analytics,
   subscribeConsent(listener) { return consent.subscribe(listener); },
   captureAcquisition: true,
@@ -32,7 +33,22 @@ browser.track('signup.started');
 const link = browser.identify(user.id); // send link to your trusted backend
 ```
 
-No browser state is read before consent. The module stores an opaque visitor id
+Consent policy belongs to the integrating product:
+
+- `opt-in` is the backward-compatible default. Both consent callbacks are
+  required, and no browser state is read before the host grants consent.
+- `opt-out` is an explicit host choice. It starts immediately when callbacks
+  are omitted; a host with a reversible preference supplies the same callbacks
+  and returns `false` after Disable.
+- `external` requires both callbacks and delegates the decision to a CMP or
+  another host-owned source.
+
+Global Privacy Control disables collection in every mode. A withdrawal
+synchronously removes queued browser events, stored ids and navigation
+listeners. Policy selection changes only when collection may begin; it cannot
+add properties or expand the fixed capture allowlist.
+
+When collection is enabled, the module stores an opaque visitor id
 in first-party local storage and a 30-minute inactivity session in session
 storage. It captures the initial pathname and SPA history changes. Query
 strings, fragments, full URLs, DOM, page text, form values and referrer paths
@@ -48,8 +64,7 @@ pathname and referrer origin.
 Reserved context is bounded to device class, browser family, OS family, primary
 language, IANA timezone, coarse viewport/screen buckets and pathname. Full user
 agent, browser/OS versions, precise dimensions, hardware concurrency, canvas,
-fonts and other fingerprinting inputs are not sent. Consent revocation removes
-queued browser events, stored ids and navigation listeners.
+fonts and other fingerprinting inputs are not sent.
 
 Call `resetIdentity()` on logout or before switching accounts on a shared
 browser. It rotates both the visitor and session before another user is
@@ -107,7 +122,8 @@ No database migration is required.
 2. Configure trusted proxy country settings, or accept `unknown`.
 3. Propose, review and activate the canonical registry bundle.
 4. Upgrade the SDK and import only `@poolstatis/sdk/browser`.
-5. Gate `start()` on consent and wire the authenticated actor-link handoff.
+5. Choose and document the host's policy. Keep the default `opt-in`, explicitly
+   select `opt-out`, or integrate an `external` CMP; wire Disable/withdrawal.
 6. Verify prod/dev separately through `query_web_analytics`.
 
 Older SDK/base-SDK users are unchanged. Attribution remains a separate
