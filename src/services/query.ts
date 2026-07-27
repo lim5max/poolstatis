@@ -24,6 +24,7 @@ import { canonicalQueryKey, type QueryCache } from './queryCache.js';
 import type { PostHogAdapter } from './posthog.js';
 import { assertRegisteredAcquisitionProperties } from './acquisitionAttribution.js';
 import { assertBrowserAnalyticsProperties } from './browserAnalytics.js';
+import type { CountryResolver } from './country.js';
 
 const SESSION_ATTRIBUTION_NOTE = 'Session landing attribution: this associates events with the tagged landing in the same browser session; it is not causal campaign credit.';
 const WEB_DIMENSIONS = {
@@ -149,6 +150,7 @@ export type QueryResult =
         truncated_dimensions: string[];
         definitions: { visitors: string; sessions: string; page_views: string };
         privacy: string;
+        country_attribution?: NonNullable<CountryResolver['attribution']>;
       };
     }
   | {
@@ -250,6 +252,7 @@ export class QueryService {
     private readonly eventStore: EventStore,
     private readonly cache?: QueryCache,
     private readonly posthog?: PostHogAdapter,
+    private readonly countryAttribution?: CountryResolver['attribution'],
   ) {}
 
   async run(projectId: string, q: QueryInput, now: Date = new Date()): Promise<QueryResult> {
@@ -458,6 +461,7 @@ export class QueryService {
           page_views: 'Accepted stored page-view events; enrichment does not create additional billable events.',
         },
         privacy: 'Country is coarse server-side enrichment from a configured trusted proxy. Raw IP, full URL, query string, DOM text and full user agent are not stored.',
+        ...(this.countryAttribution ? { country_attribution: this.countryAttribution } : {}),
       },
     };
   }

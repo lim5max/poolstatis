@@ -240,6 +240,9 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   if (options.outboundPolicy !== undefined) contextOptions.outboundPolicy = options.outboundPolicy;
   if (options.artifactStore !== undefined) contextOptions.artifactStore = options.artifactStore;
   if (options.artifactDir !== undefined) contextOptions.artifactDir = options.artifactDir;
+  if (options.countryResolver?.attribution !== undefined) {
+    contextOptions.countryAttribution = options.countryResolver.attribution;
+  }
   const ctx = createContext(pool, contextOptions);
   const app = Fastify({ logger: false });
   (app as FastifyInstance & { countryResolver?: CountryResolver }).countryResolver =

@@ -73,7 +73,10 @@ export interface Config {
     requireOrganizationPolicy: boolean;
   } | null;
   corsOrigins: string[];
-  browserCountry: { header: string; trustedProxyCidrs: string[] } | null;
+  browserCountry:
+    | { mode: 'trusted_header'; header: string; trustedProxyCidrs: string[] }
+    | { mode: 'local_mmdb'; databasePath: string; clientIpHeader: string; trustedProxyCidrs: string[] }
+    | null;
 }
 
 export function assertHostedApiCredentialBoundary(config: Config): void {
@@ -218,12 +221,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const production = env.NODE_ENV === 'production';
   const corsOrigins = parseCorsOrigins(env.POOLSTATIS_CORS_ORIGINS, production);
   const countryHeader = env.POOLSTATIS_COUNTRY_HEADER?.trim().toLowerCase();
+  const countryMmdbPath = env.POOLSTATIS_COUNTRY_MMDB_PATH?.trim();
+  const clientIpHeader = env.POOLSTATIS_CLIENT_IP_HEADER?.trim().toLowerCase();
   const trustedProxyCidrs = exactList(env.POOLSTATIS_TRUSTED_PROXY_CIDRS, 'POOLSTATIS_TRUSTED_PROXY_CIDRS');
-  if (Boolean(countryHeader) !== (trustedProxyCidrs.length > 0)) {
-    throw new Error('POOLSTATIS_COUNTRY_HEADER and POOLSTATIS_TRUSTED_PROXY_CIDRS must be configured together');
+  if (countryHeader && (countryMmdbPath || clientIpHeader)) {
+    throw new Error('trusted country-header and local MMDB country modes are mutually exclusive');
   }
   if (countryHeader && !/^[a-z0-9-]+$/.test(countryHeader)) {
     throw new Error('POOLSTATIS_COUNTRY_HEADER must be a valid lowercase HTTP header name');
+  }
+  if (clientIpHeader && !/^[a-z0-9-]+$/.test(clientIpHeader)) {
+    throw new Error('POOLSTATIS_CLIENT_IP_HEADER must be a valid lowercase HTTP header name');
+  }
+  if (countryMmdbPath && !countryMmdbPath.startsWith('/')) {
+    throw new Error('POOLSTATIS_COUNTRY_MMDB_PATH must be an absolute path');
+  }
+  const trustedHeaderMode = Boolean(countryHeader);
+  const localMmdbMode = Boolean(countryMmdbPath || clientIpHeader);
+  if ((trustedHeaderMode || localMmdbMode) !== (trustedProxyCidrs.length > 0)) {
+    throw new Error('country enrichment and POOLSTATIS_TRUSTED_PROXY_CIDRS must be configured together');
+  }
+  if (localMmdbMode && (!countryMmdbPath || !clientIpHeader)) {
+    throw new Error('POOLSTATIS_COUNTRY_MMDB_PATH and POOLSTATIS_CLIENT_IP_HEADER must be configured together');
   }
   const ingestBuffer = {
     maxEvents: positiveInt(
@@ -407,6 +426,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       requireOrganizationPolicy,
     } : null,
     corsOrigins,
-    browserCountry: countryHeader ? { header: countryHeader, trustedProxyCidrs } : null,
+    browserCountry: countryHeader
+      ? { mode: 'trusted_header', header: countryHeader, trustedProxyCidrs }
+      : countryMmdbPath && clientIpHeader
+        ? { mode: 'local_mmdb', databasePath: countryMmdbPath, clientIpHeader, trustedProxyCidrs }
+        : null,
   };
 }

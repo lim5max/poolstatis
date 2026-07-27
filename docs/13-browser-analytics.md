@@ -61,9 +61,11 @@ stale-storage error so the product does not silently reload the old visitor.
 
 ## Country
 
-Country is never inferred from locale or timezone. Core accepts ISO alpha-2
-country only from a configured header when the direct socket peer is in an
-explicit trusted proxy CIDR:
+Country is never inferred from locale or timezone. Core supports two mutually
+exclusive trusted modes.
+
+For a proxy that already derives a country value, Core accepts ISO alpha-2
+only when the direct socket peer is in an explicit trusted proxy CIDR:
 
 ```dotenv
 POOLSTATIS_COUNTRY_HEADER=cf-ipcountry
@@ -75,6 +77,31 @@ headers and never persists or returns the socket IP. Configure this only when
 the reverse proxy derives the header from its own local GeoIP database. City
 and region are unsupported. VPNs, privacy relays, corporate gateways and mobile
 networks can make country inaccurate.
+
+For a direct-VPS deployment, Core can instead read a local MaxMind-format
+country database:
+
+```dotenv
+POOLSTATIS_COUNTRY_MMDB_PATH=/run/geoip/dbip-country-lite.mmdb
+POOLSTATIS_CLIENT_IP_HEADER=x-poolstatis-client-ip
+POOLSTATIS_TRUSTED_PROXY_CIDRS=172.30.0.0/24
+```
+
+The direct peer must still be an allowlisted proxy. The configured client-IP
+header must contain exactly one public address; proxy chains, arrays, private,
+reserved, loopback, link-local and malformed addresses fail closed to
+`unknown` before lookup. The address exists only in request memory and is
+never added to an event, response, or log. Startup requires the exact
+`DBIP-Country-Lite` database type plus a valid known-address smoke lookup.
+A configured missing, wrong-type, or openable-but-invalid MMDB aborts startup
+so an operator cannot mistake a broken resolver for working country coverage.
+
+DB-IP Lite Country is a no-account monthly MMDB source under CC BY 4.0. Pin
+the dated download and published checksum, install it read-only out of band,
+and restart Core to load the replacement. When this resolver is active,
+Web analytics responses and UI include the required
+`IP Geolocation by DB-IP` attribution link. Do not download the database from
+the request path.
 
 ## Registry, query and billing
 
@@ -104,11 +131,17 @@ events.
 No database migration is required.
 
 1. Deploy Core/customer admin from the reviewed SHA.
-2. Configure trusted proxy country settings, or accept `unknown`.
+2. Configure exactly one reviewed trusted-proxy country mode, or accept
+   `unknown`. A shared proxy without fixed source CIDRs and an authoritative
+   client-IP contract is not eligible for local-MMDB mode.
 3. Propose, review and activate the canonical registry bundle.
 4. Upgrade the SDK and import only `@poolstatis/sdk/browser`.
 5. Gate `start()` on consent and wire the authenticated actor-link handoff.
 6. Verify prod/dev separately through `query_web_analytics`.
+
+The Core source contains `query_web_analytics`, but a public MCP package must
+be independently released and smoke-tested before Setup may promise that
+tool. GeoIP rollout does not publish or alter the MCP package.
 
 Older SDK/base-SDK users are unchanged. Attribution remains a separate
 entrypoint for acquisition-only instrumentation; Browser Experience remains
