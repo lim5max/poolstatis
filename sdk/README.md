@@ -91,6 +91,7 @@ const browser = createBrowserAnalytics({
   hasConsent: () => consent.has('product_analytics'),
   subscribeConsent: (listener) => consent.onChange(listener),
   captureAcquisition: true, // reuses the bounded attribution snapshot
+  mapPagePath: (pathname) => publicRouteVocabulary(pathname),
 });
 browser.start();
 
@@ -106,6 +107,9 @@ For a host-owned, reversible opt-out policy, set `consentPolicy: 'opt-out'`.
 Without callbacks it starts immediately; provide `hasConsent` and
 `subscribeConsent` when the host persists a Disable/Enable choice. Omitting
 `consentPolicy` keeps the existing opt-in contract and requires both callbacks.
+Use `mapPagePath` when public routes can contain user-provided slugs. Its
+finite result is used for both `$page_path` and `landing_path`; mapper failures
+fall back to `/other` instead of sending the raw path.
 
 Composed acquisition uses the same session and page-view event. Do not also
 start `createAttributionClient`, which is the acquisition-only alternative and

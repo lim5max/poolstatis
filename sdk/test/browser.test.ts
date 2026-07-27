@@ -272,6 +272,31 @@ describe('@poolstatis/sdk/browser', () => {
     expect(JSON.stringify(f.queued)).not.toContain('/private/path');
   });
 
+  it('applies a host finite page mapper to page and landing paths', () => {
+    const c = consent(true);
+    const f = fixture();
+    f.setPath('/invite/customer-42?token=secret&utm_source=search');
+    const analytics = createBrowserAnalytics({
+      client: f.client,
+      browser: f.browser,
+      hasConsent: c.hasConsent,
+      subscribeConsent: c.subscribeConsent,
+      captureAcquisition: true,
+      mapPagePath: (pathname) => pathname === '/' ? '/' : '/other',
+      createId: () => 'mapped',
+    });
+
+    analytics.start();
+
+    expect(f.queued[0]?.properties).toMatchObject({
+      $page_path: '/other',
+      landing_path: '/other',
+      $utm_source: 'search',
+    });
+    expect(JSON.stringify(f.queued)).not.toContain('customer-42');
+    expect(JSON.stringify(f.queued)).not.toContain('token');
+  });
+
   it('rotates in memory and reports a stale readable visitor when storage cannot be overwritten', () => {
     const c = consent(true);
     const f = fixture();

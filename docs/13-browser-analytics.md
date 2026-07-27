@@ -26,6 +26,7 @@ const browser = createBrowserAnalytics({
   hasConsent: () => consent.analytics,
   subscribeConsent(listener) { return consent.subscribe(listener); },
   captureAcquisition: true,
+  mapPagePath: (pathname) => publicRouteVocabulary(pathname),
 });
 
 browser.start();
@@ -60,6 +61,11 @@ the same page-view event. Do not run `createAttributionClient` beside this
 browser module: both own page views and would intentionally create two
 billable events. The composed mode stores only allowlisted UTM values, landing
 pathname and referrer origin.
+
+If routes can contain customer or invitation slugs, provide `mapPagePath` and
+return a finite product-route vocabulary. The mapped path is used for both
+`$page_path` and `landing_path`; a mapper error falls back to `/other` and never
+falls back to the raw pathname.
 
 Reserved context is bounded to device class, browser family, OS family, primary
 language, IANA timezone, coarse viewport/screen buckets and pathname. Full user
