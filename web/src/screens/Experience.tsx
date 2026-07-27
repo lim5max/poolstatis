@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Add, GridView, Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, Stat, fmtNum } from '../components/ui';
@@ -132,12 +132,17 @@ function VisualExplorer({
   const [busy, setBusy] = useState(false);
   const [compareBusy, setCompareBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loadRequestRef = useRef(0);
+  const compareRequestRef = useRef(0);
 
   const versions = [...new Set(routeSnapshots.map((item) => item.version))];
   const devices = [...new Set(routeSnapshots.filter((item) => item.version === version).map((item) => item.device))];
   const routeOptions = routes.filter((item) => item.surface_key === surface);
   const comparisonTarget = routeSnapshots.find((item) => item.version === version && item.device !== device)
     ?? routeSnapshots.find((item) => item.version !== version);
+  const evidenceIdentity = `${surface}\u0000${route}\u0000${version}\u0000${device}\u0000${period}\u0000${env}`;
+  const evidenceIdentityRef = useRef(evidenceIdentity);
+  evidenceIdentityRef.current = evidenceIdentity;
 
   useEffect(() => {
     const next = snapshots.find((item) => item.surface_key === surface);
@@ -163,11 +168,15 @@ function VisualExplorer({
 
   const load = async () => {
     if (!surface || !route || !version) return;
+    const requestId = ++loadRequestRef.current;
+    const requestIdentity = evidenceIdentity;
+    ++compareRequestRef.current;
     setBusy(true);
+    setCompareBusy(false);
     setError(null);
     setComparison(null);
     try {
-      setResult(await client!.visualExperience(project!, {
+      const nextResult = await client!.visualExperience(project!, {
         surface,
         route,
         version,
@@ -175,27 +184,40 @@ function VisualExplorer({
         date_from: period,
         env,
         grid: 24,
-      }));
+      });
+      if (loadRequestRef.current === requestId && evidenceIdentityRef.current === requestIdentity) {
+        setResult(nextResult);
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not load visual evidence.');
-      setResult(null);
+      if (loadRequestRef.current === requestId && evidenceIdentityRef.current === requestIdentity) {
+        setError(caught instanceof Error ? caught.message : 'Could not load visual evidence.');
+        setResult(null);
+      }
     } finally {
-      setBusy(false);
+      if (loadRequestRef.current === requestId && evidenceIdentityRef.current === requestIdentity) {
+        setBusy(false);
+      }
     }
   };
 
   useEffect(() => {
     void load();
+    return () => {
+      ++loadRequestRef.current;
+      ++compareRequestRef.current;
+    };
     // The selected evidence tuple is the request identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [surface, route, version, device, period, env]);
 
   const compare = async () => {
     if (!comparisonTarget) return;
+    const requestId = ++compareRequestRef.current;
+    const requestIdentity = evidenceIdentity;
     setCompareBusy(true);
     setError(null);
     try {
-      setComparison(await client!.compareVisualExperience(project!, {
+      const nextComparison = await client!.compareVisualExperience(project!, {
         surface,
         route,
         env,
@@ -206,11 +228,18 @@ function VisualExplorer({
           device: comparisonTarget.device,
           date_from: period,
         },
-      }));
+      });
+      if (compareRequestRef.current === requestId && evidenceIdentityRef.current === requestIdentity) {
+        setComparison(nextComparison);
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not compare visual evidence.');
+      if (compareRequestRef.current === requestId && evidenceIdentityRef.current === requestIdentity) {
+        setError(caught instanceof Error ? caught.message : 'Could not compare visual evidence.');
+      }
     } finally {
-      setCompareBusy(false);
+      if (compareRequestRef.current === requestId && evidenceIdentityRef.current === requestIdentity) {
+        setCompareBusy(false);
+      }
     }
   };
 
@@ -359,7 +388,9 @@ function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode
         {imageUrl && (
           <div
             data-testid="visual-snapshot-viewport"
-            className="h-96 overflow-auto overscroll-contain bg-muted p-3"
+            className="h-96 overflow-auto overscroll-contain bg-muted p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            role="region"
+            tabIndex={0}
             aria-label={`Scrollable ${result.device} page snapshot`}
           >
             <div
