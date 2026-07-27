@@ -136,6 +136,8 @@ function VisualExplorer({
   const versions = [...new Set(routeSnapshots.map((item) => item.version))];
   const devices = [...new Set(routeSnapshots.filter((item) => item.version === version).map((item) => item.device))];
   const routeOptions = routes.filter((item) => item.surface_key === surface);
+  const comparisonTarget = routeSnapshots.find((item) => item.version === version && item.device !== device)
+    ?? routeSnapshots.find((item) => item.version !== version);
 
   useEffect(() => {
     const next = snapshots.find((item) => item.surface_key === surface);
@@ -189,9 +191,7 @@ function VisualExplorer({
   }, [surface, route, version, device, period, env]);
 
   const compare = async () => {
-    const alternative = routeSnapshots.find((item) => item.version === version && item.device !== device)
-      ?? routeSnapshots.find((item) => item.version !== version);
-    if (!alternative) return;
+    if (!comparisonTarget) return;
     setCompareBusy(true);
     setError(null);
     try {
@@ -201,7 +201,11 @@ function VisualExplorer({
         env,
         grid: 24,
         baseline: { version, device, date_from: period },
-        comparison: { version: alternative.version, device: alternative.device, date_from: period },
+        comparison: {
+          version: comparisonTarget.version,
+          device: comparisonTarget.device,
+          date_from: period,
+        },
       }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not compare visual evidence.');
@@ -218,7 +222,7 @@ function VisualExplorer({
           ? <span className="text-xs text-amber-700">Snapshot may be stale</span>
           : <span className="text-xs text-muted-foreground">Exact version + layout</span>}
       >
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-6">
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
         <Filter label="Surface">
           <Select value={surface} onValueChange={setSurface}>
             <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
@@ -253,15 +257,30 @@ function VisualExplorer({
             </SelectContent>
           </Select>
         </Filter>
-        <div className="flex items-end">
-          <Button variant="outline" className="w-full" onClick={compare} disabled={compareBusy || routeSnapshots.length < 2}>
-            {compareBusy ? <Loader2 className="size-4 animate-spin" /> : <GridView className="size-4" />}
-            Compare
-          </Button>
-        </div>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-3 flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-muted-foreground">
+          {comparisonTarget
+            ? (
+              <>
+                Current: {device} · Comparison: {comparisonTarget.device}
+                {comparisonTarget.version === version ? ' on the same version' : ` on ${comparisonTarget.version}`}
+              </>
+            )
+            : 'Add another device or version snapshot to compare layouts.'}
+        </p>
+        <Button variant="outline" onClick={compare} disabled={compareBusy || !comparisonTarget}>
+          {compareBusy ? <Loader2 className="size-4 animate-spin" /> : <GridView className="size-4" />}
+          {comparisonTarget?.version === version
+            ? `Compare with ${comparisonTarget.device}`
+            : comparisonTarget
+              ? 'Compare versions'
+              : 'Compare unavailable'}
+        </Button>
+      </div>
+
+      <div className="mt-3">
         <Tabs value={mode} onValueChange={(value) => setMode(value as 'clicks' | 'scroll')}>
           <TabsList>
             <TabsTrigger value="clicks">Click intensity</TabsTrigger>
@@ -326,18 +345,28 @@ function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode
         <Stat label="Last section" value={`${result.sections.at(-1)?.percentage ?? 0}%`} sub={result.sections.at(-1)?.section ?? 'No section evidence'} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="overflow-hidden rounded-md border bg-muted/30">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 text-xs text-muted-foreground">
-            <span>
-              image {result.snapshot.width} × {result.snapshot.height}px · document {result.snapshot.document_width} × {result.snapshot.document_height} · viewport {result.snapshot.viewport_width} × {result.snapshot.viewport_height}
-            </span>
-            <span className="font-mono">{result.snapshot.release_hash}</span>
-          </div>
-          {imageError && <div className="p-5"><ErrorNote>{imageError}</ErrorNote></div>}
-          {!imageUrl && !imageError && <Loading what="loading immutable snapshot…" />}
-          {imageUrl && (
-            <div className="relative mx-auto max-w-5xl bg-background">
+      <div className="overflow-hidden rounded-md border bg-muted/30">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">
+            {result.device === 'mobile' ? 'Mobile' : 'Desktop'} viewport · {result.snapshot.viewport_width} × {result.snapshot.viewport_height}
+          </span>
+          <span>
+            full page {result.snapshot.document_width} × {result.snapshot.document_height} · <code>{result.snapshot.release_hash}</code>
+          </span>
+        </div>
+        {imageError && <div className="p-5"><ErrorNote>{imageError}</ErrorNote></div>}
+        {!imageUrl && !imageError && <Loading what="loading immutable snapshot…" />}
+        {imageUrl && (
+          <div
+            data-testid="visual-snapshot-viewport"
+            className="h-96 overflow-auto overscroll-contain bg-muted p-3"
+            aria-label={`Scrollable ${result.device} page snapshot`}
+          >
+            <div
+              data-testid="visual-snapshot-canvas"
+              className="relative mx-auto bg-background shadow-sm"
+              style={{ width: `min(100%, ${result.snapshot.viewport_width}px)` }}
+            >
               <img
                 src={imageUrl}
                 alt={`${result.surface.name}, ${result.route}, ${result.version}, ${result.device}`}
@@ -384,26 +413,35 @@ function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode
                   <span className="absolute left-2 top-1 rounded-sm bg-background/90 px-1.5 py-0.5 font-mono text-xs">
                     {section.section} · {section.percentage}%
                   </span>
-                </span>
-              ))}
+                  </span>
+                ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
+      </div>
 
-        <div className="space-y-4">
+      <div data-testid="visual-evidence-notes" className="grid gap-3 rounded-md border bg-muted/20 p-4 md:grid-cols-2">
+        <div className="min-w-0">
           <div>
             <div className="mb-2 text-xs font-medium text-muted-foreground">Labelled targets</div>
             {!hasSignals
               ? <p className="text-sm text-muted-foreground">No accepted signals match this exact version and device.</p>
-              : result.click_labels.map((item) => (
-                <div key={item.label} className="flex items-center justify-between gap-2 border-b py-2 text-sm">
-                  <code className="truncate text-xs">{item.label}</code>
-                  <span className="shrink-0 tabular-nums text-muted-foreground">{item.count} · {item.actors}</span>
+              : (
+                <div className="flex flex-wrap gap-2">
+                  {result.click_labels.map((item) => (
+                    <span key={item.label} className="inline-flex max-w-full items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs">
+                      <code className="truncate">{item.label}</code>
+                      <span className="shrink-0 tabular-nums text-muted-foreground">{item.count} · {item.actors}</span>
+                    </span>
+                  ))}
                 </div>
-              ))}
+              )}
           </div>
-          <p className="text-xs leading-relaxed text-muted-foreground">{result.causality}</p>
         </div>
+        <details className="rounded-md border bg-background px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium">How to read this evidence</summary>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{result.causality}</p>
+        </details>
       </div>
 
       <SectionDropoff sections={result.sections} total={result.summary.sessions} />

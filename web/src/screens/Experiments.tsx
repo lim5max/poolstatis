@@ -130,9 +130,69 @@ function FlagsTable({ flags, onChanged }: { flags: FeatureFlag[]; onChanged: () 
     finally { setBusy(null); }
   };
   return <Panel title={<>Feature flags <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{flags.length}</span></>}>
-    {flags.length === 0 ? <EmptyState headline="No feature flags" lead="create a draft before deploying guarded code" /> : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Flag</TableHead><TableHead>Purpose</TableHead><TableHead>Allocation</TableHead><TableHead>Status</TableHead><TableHead /></TableRow></TableHeader><TableBody>{flags.map((flag) => <TableRow key={flag.id}><TableCell><div className="font-medium">{flag.name}</div><code className="text-xs text-muted-foreground">{flag.key}</code></TableCell><TableCell className="max-w-sm text-xs text-muted-foreground">{flag.purpose}</TableCell><TableCell><div className="flex flex-wrap gap-1">{flag.variants.map((variant) => <Badge key={variant.key} variant="outline" className="font-mono text-xs">{variant.key} {variant.rollout_percentage}%</Badge>)}</div></TableCell><TableCell><FlagStatus status={flag.status} /></TableCell><TableCell className="text-right">{busy === flag.key ? <Loader2 className="inline size-4 animate-spin" /> : flag.status === 'draft' ? <Button size="sm" onClick={() => change(flag.key, 'activate')}>Activate</Button> : flag.status === 'active' ? <Button variant="outline" size="sm" onClick={() => change(flag.key, 'archive')}>Archive</Button> : <span className="text-xs text-muted-foreground">immutable</span>}</TableCell></TableRow>)}</TableBody></Table></div>}
+    {flags.length === 0
+      ? <EmptyState headline="No feature flags" lead="create a draft before deploying guarded code" />
+      : (
+        <div className="divide-y rounded-md border">
+          {flags.map((flag) => (
+            <FlagCard
+              key={flag.id}
+              flag={flag}
+              busy={busy === flag.key}
+              onChange={change}
+            />
+          ))}
+        </div>
+      )}
     {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
   </Panel>;
+}
+
+function FlagCard({
+  flag,
+  busy,
+  onChange,
+}: {
+  flag: FeatureFlag;
+  busy: boolean;
+  onChange: (key: string, action: 'activate' | 'archive') => void;
+}) {
+  return (
+    <article
+      aria-label={flag.name}
+      className="grid min-w-0 gap-4 p-4 md:grid-cols-2 xl:grid-cols-5"
+    >
+      <div className="min-w-0">
+        <div className="text-xs text-muted-foreground">Flag</div>
+        <div className="mt-1 font-medium">{flag.name}</div>
+        <code className="mt-1 block break-all text-xs text-muted-foreground">{flag.key}</code>
+      </div>
+      <div className="min-w-0 xl:col-span-2">
+        <div className="text-xs text-muted-foreground">Purpose</div>
+        <p className="mt-1 break-words text-sm leading-relaxed">{flag.purpose}</p>
+      </div>
+      <div className="min-w-0">
+        <div className="text-xs text-muted-foreground">Allocation</div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {flag.variants.map((variant) => (
+            <Badge key={variant.key} variant="outline" className="max-w-full font-mono text-xs">
+              <span className="truncate">{variant.key}</span> {variant.rollout_percentage}%
+            </Badge>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-start justify-between gap-3 md:justify-end xl:flex-col xl:items-end">
+        <FlagStatus status={flag.status} />
+        {busy
+          ? <Loader2 className="size-4 animate-spin" />
+          : flag.status === 'draft'
+            ? <Button size="sm" onClick={() => onChange(flag.key, 'activate')}>Activate</Button>
+            : flag.status === 'active'
+              ? <Button variant="outline" size="sm" onClick={() => onChange(flag.key, 'archive')}>Archive</Button>
+              : <span className="text-xs text-muted-foreground">immutable</span>}
+      </div>
+    </article>
+  );
 }
 
 function ExperimentForm({ flags, metrics, onCreated }: { flags: FeatureFlag[]; metrics: Metric[]; onCreated: () => void }) {

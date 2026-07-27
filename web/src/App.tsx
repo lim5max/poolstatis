@@ -123,13 +123,12 @@ function AdminApp() {
 function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   return (
     <aside className="hidden min-h-0 flex-col border-r bg-sidebar py-4 md:flex" aria-label="Primary navigation">
-      <div className={cn('flex items-start pb-3', collapsed ? 'flex-col items-center gap-2 px-2' : 'justify-between gap-2 px-4')}>
+      <div className={cn('flex items-center pb-3', collapsed ? 'flex-col gap-2 px-2' : 'justify-between gap-2 px-4')}>
         <div className={cn('min-w-0', collapsed && 'flex justify-center')}>
           <div className={cn('brand-wordmark flex items-center gap-2.5 text-2xl', collapsed && 'justify-center')}>
             <img className="size-8 shrink-0" src="/poolstatis-logo.svg" alt="" />
             {!collapsed && <span>Poolstatis</span>}
           </div>
-          {!collapsed && <div className="mt-1 text-xs text-muted-foreground">Customer admin</div>}
         </div>
         <Button
           variant="ghost"
@@ -176,12 +175,11 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
       <DialogTitle className="sr-only">Navigation</DialogTitle>
       <DialogDescription className="sr-only">Navigate between Poolstatis admin sections.</DialogDescription>
       <aside className="flex min-h-full flex-col py-4">
-        <div className="flex items-start justify-between gap-3 px-5 pb-4">
+        <div className="flex items-center justify-between gap-3 px-5 pb-4">
           <div className="min-w-0">
             <div className="brand-wordmark flex items-center gap-2.5 text-2xl">
               <img className="size-8 shrink-0" src="/poolstatis-logo.svg" alt="" /> Poolstatis
             </div>
-            <div className="mt-1 text-xs text-muted-foreground">Customer admin</div>
           </div>
           <DialogClose asChild>
             <Button variant="ghost" size="icon-sm" aria-label="Close navigation">
