@@ -43,6 +43,8 @@ interface BrowserAnalyticsBaseOptions {
   now?: () => number;
   createId?: () => string;
   sessionTimeoutMs?: number;
+  /** Map the pathname to a finite, non-sensitive product route vocabulary. */
+  mapPagePath?: (pathname: string) => string;
   /** Compose the existing bounded UTM snapshot into the same session and page-view events. */
   captureAcquisition?: boolean;
 }
@@ -182,7 +184,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     const ua = browser!.navigator.userAgent;
     return {
       $browser_context: BROWSER_CONTEXT_VERSION,
-      $page_path: boundedPath(browser!.location.pathname),
+      $page_path: currentPagePath(),
       $device_class: deviceClass(ua),
       $browser_family: browserFamily(ua),
       $os_family: osFamily(ua),
@@ -194,9 +196,21 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   };
 
   const updateAcquisition = () => {
-    acquisitionProperties = options.captureAcquisition && browser && sessionId
-      ? (({ session_id: _sessionId, ...snapshot }) => snapshot)(snapshotFromBrowser(browser, sessionId))
-      : null;
+    if (!options.captureAcquisition || !browser || !sessionId) {
+      acquisitionProperties = null;
+      return;
+    }
+    const { session_id: _sessionId, ...snapshot } = snapshotFromBrowser(browser, sessionId);
+    acquisitionProperties = { ...snapshot, landing_path: currentPagePath() };
+  };
+
+  const currentPagePath = (): string => {
+    if (!browser) return '/other';
+    try {
+      return boundedPath(options.mapPagePath?.(browser.location.pathname) ?? browser.location.pathname);
+    } catch {
+      return '/other';
+    }
   };
 
   const persistSession = () => {
@@ -262,7 +276,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   const pageViewed = () => {
     if (!collectionAllowed() || !browser || !visitorId || !actorId) return;
     ensureActiveSession();
-    const path = boundedPath(browser!.location.pathname);
+    const path = currentPagePath();
     if (path === lastPath) return;
     lastPath = path;
     capture(BROWSER_PAGE_VIEW_EVENT);
