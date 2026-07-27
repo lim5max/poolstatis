@@ -24,6 +24,7 @@ const browser = createBrowserAnalytics({
   client: transport,
   hasConsent: () => consent.analytics,
   subscribeConsent(listener) { return consent.subscribe(listener); },
+  captureAcquisition: true,
 });
 
 browser.start();
@@ -37,11 +38,23 @@ storage. It captures the initial pathname and SPA history changes. Query
 strings, fragments, full URLs, DOM, page text, form values and referrer paths
 are never captured.
 
+`captureAcquisition: true` composes the existing
+`@poolstatis/sdk/attribution` bounded UTM snapshot into the same session and
+the same page-view event. Do not run `createAttributionClient` beside this
+browser module: both own page views and would intentionally create two
+billable events. The composed mode stores only allowlisted UTM values, landing
+pathname and referrer origin.
+
 Reserved context is bounded to device class, browser family, OS family, primary
 language, IANA timezone, coarse viewport/screen buckets and pathname. Full user
 agent, browser/OS versions, precise dimensions, hardware concurrency, canvas,
 fonts and other fingerprinting inputs are not sent. Consent revocation removes
 queued browser events, stored ids and navigation listeners.
+
+Call `resetIdentity()` on logout or before switching accounts on a shared
+browser. It rotates both the visitor and session before another user is
+identified, preventing cross-account actor links. The next explicit page view
+or SPA navigation is captured under the new identity.
 
 ## Country
 
@@ -89,8 +102,10 @@ No database migration is required.
 5. Gate `start()` on consent and wire the authenticated actor-link handoff.
 6. Verify prod/dev separately through `query_web_analytics`.
 
-Older SDK/base-SDK users are unchanged. Attribution and Browser Experience stay
-separate entrypoints.
+Older SDK/base-SDK users are unchanged. Attribution remains a separate
+entrypoint for acquisition-only instrumentation; Browser Experience remains
+separate. Use the browser module's composed acquisition option when one event
+needs both traffic context and source.
 
 ## Official comparison
 

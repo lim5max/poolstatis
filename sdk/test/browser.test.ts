@@ -34,15 +34,20 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
   const localStorage = shared?.localStorage ?? storage();
   const sessionStorage = shared?.sessionStorage ?? storage();
   const listeners = new Map<string, Set<() => void>>();
-  let pathname = '/welcome';
+  let clock = now;
+  let href = 'https://example.test/welcome';
   const browser = {
-    location: { get pathname() { return pathname; } },
+    location: {
+      get pathname() { return new URL(href).pathname; },
+      get href() { return href; },
+    },
+    document: { referrer: 'https://publisher.test/private/path?secret=1' },
     history: {
       pushState(_data: unknown, _unused: string, url?: string | URL | null) {
-        if (url) pathname = new URL(String(url), 'https://example.test').pathname;
+        if (url) href = new URL(String(url), href).href;
       },
       replaceState(_data: unknown, _unused: string, url?: string | URL | null) {
-        if (url) pathname = new URL(String(url), 'https://example.test').pathname;
+        if (url) href = new URL(String(url), href).href;
       },
     },
     navigator: {
@@ -60,7 +65,12 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
     },
     removeEventListener(type: string, listener: () => void) { listeners.get(type)?.delete(listener); },
   };
-  return { client, queued, browser, localStorage, sessionStorage, setPath: (value: string) => { pathname = value; }, now: () => now };
+  return {
+    client, queued, browser, localStorage, sessionStorage,
+    setPath: (value: string) => { href = new URL(value, href).href; },
+    advance: (milliseconds: number) => { clock += milliseconds; },
+    now: () => clock,
+  };
 }
 
 describe('@poolstatis/sdk/browser', () => {
@@ -135,6 +145,60 @@ describe('@poolstatis/sdk/browser', () => {
     expect(b.visitorId).toBe(visitor);
     expect(b.sessionId).not.toBe(session);
     expect(b.sessionId).toBe('session:rotated');
+  });
+
+  it('rotates an idle session inside a live SPA and resets identity between product users', () => {
+    const c = consent(true);
+    const f = fixture();
+    let id = 0;
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      createId: () => `id-${++id}`,
+    });
+    analytics.start();
+    const firstVisitor = analytics.visitorId;
+    const firstSession = analytics.sessionId;
+    analytics.identify('user-one');
+    f.advance(31 * 60_000);
+    f.browser.history.pushState({}, '', '/after-idle');
+    expect(analytics.sessionId).not.toBe(firstSession);
+    expect(f.queued.at(-1)?.session_id).toBe(analytics.sessionId);
+
+    analytics.resetIdentity();
+    expect(analytics.visitorId).not.toBe(firstVisitor);
+    const secondLink = analytics.identify('user-two');
+    expect(secondLink.source_distinct_id).toBe(analytics.visitorId);
+    expect(secondLink.target_distinct_id).toBe('user-two');
+  });
+
+  it('composes the existing bounded acquisition snapshot into one page view and tolerates blocked storage', () => {
+    const c = consent(true);
+    const f = fixture();
+    f.setPath('/welcome?utm_source=search&utm_campaign=launch&private=drop');
+    const blockedStorage = {
+      getItem: () => { throw new DOMException('blocked', 'SecurityError'); },
+      setItem: () => { throw new DOMException('blocked', 'SecurityError'); },
+      removeItem: () => { throw new DOMException('blocked', 'SecurityError'); },
+    };
+    f.browser.localStorage = blockedStorage;
+    f.browser.sessionStorage = blockedStorage;
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      captureAcquisition: true,
+      createId: (() => { let id = 0; return () => `id-${++id}`; })(),
+    });
+    expect(() => analytics.start()).not.toThrow();
+    expect(f.queued).toHaveLength(1);
+    expect(f.queued[0]?.properties).toMatchObject({
+      $utm_source: 'search',
+      $utm_campaign: 'launch',
+      landing_path: '/welcome',
+      referrer_origin: 'https://publisher.test',
+    });
+    expect(JSON.stringify(f.queued)).not.toContain('private');
+    expect(JSON.stringify(f.queued)).not.toContain('/private/path');
   });
 
   it('is importable in SSR without resolving browser globals', async () => {

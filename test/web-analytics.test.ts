@@ -41,6 +41,10 @@ describe('web analytics query', () => {
   });
 
   it('keeps visitors, sessions and page views distinct and returns count plus percentage breakdowns', async () => {
+    const legacy = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{ event: 'page.viewed', distinct_id: 'legacy-manual', session_id: 'legacy-session' }],
+    });
+    expect(legacy.status).toBe(200);
     expect((await ingest('US', [
       page('visitor:one', 'session:1', '/', 'search'),
       page('visitor:one', 'session:1', '/pricing', 'search'),
@@ -60,7 +64,7 @@ describe('web analytics query', () => {
        WHERE project_id = $1 AND env = 'prod' AND meter_key = 'events_stored'`,
       [env.projectId],
     );
-    expect(usageBeforeQuery.rows[0]?.quantity).toBe(4);
+    expect(usageBeforeQuery.rows[0]?.quantity).toBe(5);
 
     const result = await api(env, env.secretToken, 'POST', `/api/v1/projects/${env.projectSlug}/query`, {
       kind: 'web_analytics',
@@ -84,7 +88,7 @@ describe('web analytics query', () => {
        WHERE project_id = $1 AND env = 'prod' AND meter_key = 'events_stored'`,
       [env.projectId],
     );
-    expect(usageAfterQuery.rows[0]?.quantity).toBe(4);
+    expect(usageAfterQuery.rows[0]?.quantity).toBe(5);
   });
 
   it('isolates environment and tenant scopes', async () => {

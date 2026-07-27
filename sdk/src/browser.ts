@@ -1,17 +1,24 @@
 import type { PoolstatisEvent } from './index.js';
+import {
+  ACQUISITION_UTM_KEYS,
+  snapshotFromBrowser,
+  type AttributionSnapshot,
+} from './attribution.js';
 
 export const BROWSER_CONTEXT_VERSION = '1';
 export const BROWSER_PAGE_VIEW_EVENT = 'page.viewed';
 export const BROWSER_RESERVED_PROPERTIES = [
   '$browser_context', '$page_path', '$device_class', '$browser_family', '$os_family',
   '$language', '$timezone', '$viewport_bucket', '$screen_bucket', '$country',
+  ...ACQUISITION_UTM_KEYS, 'landing_path', 'referrer_origin',
 ] as const;
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 type HistoryMethod = (data: unknown, unused: string, url?: string | URL | null) => void;
 
 export interface BrowserLike {
-  location: { pathname: string };
+  location: { pathname: string; href: string };
+  document: { referrer: string };
   history: { pushState: HistoryMethod; replaceState: HistoryMethod };
   navigator: { userAgent: string; language: string };
   screen: { width: number; height: number };
@@ -36,6 +43,8 @@ export interface BrowserAnalyticsOptions {
   now?: () => number;
   createId?: () => string;
   sessionTimeoutMs?: number;
+  /** Compose the existing bounded UTM snapshot into the same session and page-view events. */
+  captureAcquisition?: boolean;
 }
 
 export interface ActorLinkHandoff {
@@ -106,7 +115,9 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   let visitorId: string | null = null;
   let sessionId: string | null = null;
   let actorId: string | null = null;
+  let lastActivity: number | null = null;
   let lastPath: string | null = null;
+  let acquisitionProperties: Omit<AttributionSnapshot, 'session_id'> | null = null;
   let started = false;
   let stopConsent: (() => void) | null = null;
   let restoreHistory: (() => void) | null = null;
@@ -114,11 +125,24 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   const resolveBrowser = () => options.browser
     ?? ((globalThis as { window?: BrowserLike }).window ?? null);
 
+  const storageGet = (storage: StorageLike, key: string): string | null => {
+    try { return storage.getItem(key); } catch { return null; }
+  };
+  const storageSet = (storage: StorageLike, key: string, value: string): void => {
+    try { storage.setItem(key, value); } catch { /* in-memory capture remains available */ }
+  };
+  const storageRemove = (storage: StorageLike, key: string): void => {
+    try { storage.removeItem(key); } catch { /* storage may be blocked by the browser */ }
+  };
+
   const clear = () => {
     options.client.discardQueuedEvents((event) => event.properties?.$browser_context === BROWSER_CONTEXT_VERSION);
-    browser?.localStorage.removeItem(VISITOR_KEY);
-    browser?.sessionStorage.removeItem(SESSION_KEY);
-    visitorId = null; sessionId = null; actorId = null; lastPath = null; started = false;
+    if (browser) {
+      storageRemove(browser.localStorage, VISITOR_KEY);
+      storageRemove(browser.sessionStorage, SESSION_KEY);
+    }
+    visitorId = null; sessionId = null; actorId = null; lastActivity = null;
+    lastPath = null; acquisitionProperties = null; started = false;
     restoreHistory?.(); restoreHistory = null;
   };
 
@@ -137,39 +161,75 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     };
   };
 
+  const updateAcquisition = () => {
+    acquisitionProperties = options.captureAcquisition && browser && sessionId
+      ? (({ session_id: _sessionId, ...snapshot }) => snapshot)(snapshotFromBrowser(browser, sessionId))
+      : null;
+  };
+
+  const persistSession = () => {
+    if (browser && sessionId && lastActivity !== null) {
+      storageSet(browser.sessionStorage, SESSION_KEY, JSON.stringify({ id: sessionId, last: lastActivity }));
+    }
+  };
+
+  const rotateSession = (time: number) => {
+    sessionId = `session:${createId()}`;
+    lastActivity = time;
+    lastPath = null;
+    updateAcquisition();
+    persistSession();
+  };
+
   const ensureIdentity = () => {
-    visitorId = browser!.localStorage.getItem(VISITOR_KEY);
+    visitorId = storageGet(browser!.localStorage, VISITOR_KEY);
     if (!visitorId) {
       visitorId = `visitor:${createId()}`;
-      browser!.localStorage.setItem(VISITOR_KEY, visitorId);
+      storageSet(browser!.localStorage, VISITOR_KEY, visitorId);
     }
-    const raw = browser!.sessionStorage.getItem(SESSION_KEY);
+    const raw = storageGet(browser!.sessionStorage, SESSION_KEY);
     let saved: { id?: string; last?: number } | null = null;
     try { saved = raw ? JSON.parse(raw) as { id?: string; last?: number } : null; } catch { saved = null; }
-    if (!saved?.id || typeof saved.last !== 'number' || now() - saved.last > timeout) {
-      sessionId = `session:${createId()}`;
+    const time = now();
+    if (!saved?.id || typeof saved.last !== 'number' || time - saved.last > timeout) {
+      rotateSession(time);
     } else {
       sessionId = saved.id;
+      lastActivity = saved.last;
+      updateAcquisition();
+      persistSession();
     }
-    browser!.sessionStorage.setItem(SESSION_KEY, JSON.stringify({ id: sessionId, last: now() }));
     actorId ??= visitorId;
   };
 
+  const ensureActiveSession = (): boolean => {
+    const time = now();
+    const rotated = !sessionId || lastActivity === null || time - lastActivity > timeout;
+    if (rotated) rotateSession(time);
+    else {
+      lastActivity = time;
+      persistSession();
+    }
+    return rotated;
+  };
+
   const capture = (event: string, properties: Record<string, unknown> = {}) => {
-    if (!options.hasConsent() || !browser || !visitorId || !sessionId || !actorId) return;
+    if (!options.hasConsent() || !browser || !visitorId || !actorId) return;
     for (const key of Object.keys(properties)) {
       if (reserved.has(key)) throw new Error(`property ${key} is reserved by @poolstatis/sdk/browser`);
     }
-    browser.sessionStorage.setItem(SESSION_KEY, JSON.stringify({ id: sessionId, last: now() }));
+    ensureActiveSession();
     options.client.capture({
       event,
       distinct_id: actorId,
-      session_id: sessionId,
-      properties: { ...properties, ...context() },
+      session_id: sessionId!,
+      properties: { ...properties, ...(acquisitionProperties ?? {}), ...context() },
     });
   };
 
   const pageViewed = () => {
+    if (!options.hasConsent() || !browser || !visitorId || !actorId) return;
+    ensureActiveSession();
     const path = boundedPath(browser!.location.pathname);
     if (path === lastPath) return;
     lastPath = path;
@@ -216,6 +276,15 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       if (!target || target.length > 200) throw new Error('user id must be 1..200 characters');
       actorId = target;
       return { source_distinct_id: visitorId, target_distinct_id: target };
+    },
+    resetIdentity(): void {
+      if (!browser) return;
+      options.client.discardQueuedEvents((event) => event.properties?.$browser_context === BROWSER_CONTEXT_VERSION);
+      storageRemove(browser.localStorage, VISITOR_KEY);
+      storageRemove(browser.sessionStorage, SESSION_KEY);
+      visitorId = null; sessionId = null; actorId = null; lastActivity = null;
+      lastPath = null; acquisitionProperties = null;
+      if (started && options.hasConsent()) ensureIdentity();
     },
     get visitorId() { return visitorId; },
     get sessionId() { return sessionId; },

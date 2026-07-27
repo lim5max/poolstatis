@@ -105,6 +105,9 @@ const BROWSER_METRICS = [
     type: 'unique_actors' as const,
   },
 ] as const;
+const BROWSER_METRIC_FILTERS = [
+  { property: '$browser_context', op: 'eq' as const, value: '1' },
+];
 
 export async function proposeBrowserAnalyticsMetrics(
   pool: pg.Pool,
@@ -116,10 +119,11 @@ export async function proposeBrowserAnalyticsMetrics(
   for (const spec of BROWSER_METRICS) {
     const metric = existing.get(spec.key);
     if (metric) {
-      const source = metric.source as { event?: string; data_source?: string };
+      const source = metric.source as { event?: string; data_source?: string; filters?: unknown[] };
       if (metric.name !== spec.name || metric.purpose !== spec.purpose || metric.type !== spec.type
         || metric.category !== 'acquisition' || source.event !== 'page.viewed'
-        || (source.data_source ?? 'native') !== 'native') {
+        || (source.data_source ?? 'native') !== 'native'
+        || JSON.stringify(source.filters ?? []) !== JSON.stringify(BROWSER_METRIC_FILTERS)) {
         throw new ApiError(
           409,
           'browser_metric_conflict',
@@ -134,7 +138,7 @@ export async function proposeBrowserAnalyticsMetrics(
       ...spec,
       category: 'acquisition',
       tags: ['browser-analytics'],
-      source: { event: 'page.viewed', filters: [], data_source: 'native' },
+      source: { event: 'page.viewed', filters: BROWSER_METRIC_FILTERS, data_source: 'native' },
     }, actor));
   }
   return result;

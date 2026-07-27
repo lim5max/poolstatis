@@ -405,6 +405,15 @@ export class QueryService {
         'use the proposed web_page_views metric or an exactly compatible active replacement',
       );
     }
+    const hasBrowserContextFilter = source.filters?.some((filter) =>
+      filter.property === '$browser_context' && filter.op === 'eq' && filter.value === '1');
+    if (!hasBrowserContextFilter) {
+      throw badRequest(
+        'web_analytics_metric_invalid',
+        `metric "${q.metric}" must filter $browser_context = "1"`,
+        'use the canonical web_page_views metric so legacy or manual page.viewed events are excluded',
+      );
+    }
     const dimensions = q.dimensions.map((key) => ({ key, ...WEB_DIMENSIONS[key] }));
     const requestedProperties = [
       ...q.filters.map((filter) => filter.property),

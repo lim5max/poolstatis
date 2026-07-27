@@ -86,13 +86,21 @@ const browser = createBrowserAnalytics({
   client: ph,
   hasConsent: () => consent.has('product_analytics'),
   subscribeConsent: (listener) => consent.onChange(listener),
+  captureAcquisition: true, // reuses the bounded attribution snapshot
 });
 browser.start();
 
 // After authentication, send this handoff to a trusted backend that calls the
 // audited Poolstatis actor-link API with an sk_/pt_ token.
 const actorLink = browser.identify(user.id);
+
+// On logout/account switch, rotate visitor + session before another identify.
+browser.resetIdentity();
 ```
+
+Composed acquisition uses the same session and page-view event. Do not also
+start `createAttributionClient`, which is the acquisition-only alternative and
+owns its own page views.
 
 See [Browser Analytics Context](../docs/13-browser-analytics.md) for reserved
 properties, country proxy configuration, definitions and rollout.

@@ -234,6 +234,8 @@ Definitions:
   inactivity timeout is 30 minutes.
 - Page views: accepted stored page.viewed events. Country/device enrichment never creates
   another event and therefore does not change accepted stored-event billing semantics.
+- Canonical web queries include only events marked $browser_context = "1"; legacy/manual
+  page.viewed events are not silently mixed into the consented browser population.
 
 Privacy boundary:
 - Captures pathname only, never query strings, fragments, full URLs, DOM, text or inputs.
@@ -244,6 +246,9 @@ Privacy boundary:
   configured directly trusted reverse proxy and otherwise records unknown. Raw IP is
   neither stored nor returned. GeoIP can be wrong for VPNs, relays and mobile networks;
   city and region are intentionally not collected.
+- Use resetIdentity on logout/account switch. For combined UTM + browser context, enable
+  the browser entrypoint's composed acquisition option; do not also run the attribution
+  page-view owner or each navigation would intentionally emit two billable events.
 
 Use propose_browser_analytics before activation. Canonical properties and the web_page_views
 and web_visitors metrics start proposed. The owner reviews and activates them. Query with
