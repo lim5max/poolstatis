@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client';
 
@@ -55,5 +56,79 @@ describe('hosted connection recovery', () => {
     await waitFor(() => expect(auth.logout).toHaveBeenCalledOnce());
     expect(auth.login).not.toHaveBeenCalled();
     expect(store.connectHosted).toHaveBeenCalledOnce();
+  });
+
+  it('keeps auth actions hidden while initial auth state is unresolved', () => {
+    auth.isAuthenticated = false;
+    auth.isLoading = true;
+
+    render(<HostedConnect />);
+
+    expect(screen.getByTestId('auth-boot-shell')).toBeInTheDocument();
+    expect(screen.queryByText('Sign in to your workspace.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue to sign in' })).not.toBeInTheDocument();
+    expect(store.connectHosted).not.toHaveBeenCalled();
+  });
+
+  it('transitions atomically from unknown auth to authenticated workspace bootstrap', async () => {
+    auth.isAuthenticated = false;
+    auth.isLoading = true;
+    store.connectHosted.mockImplementation(() => new Promise(() => {}));
+    const view = render(<HostedConnect />);
+
+    auth.isAuthenticated = true;
+    auth.isLoading = false;
+    view.rerender(<HostedConnect />);
+
+    expect(screen.getByTestId('auth-boot-shell')).toBeInTheDocument();
+    expect(screen.queryByText('Sign in to your workspace.')).not.toBeInTheDocument();
+    await waitFor(() => expect(store.connectHosted).toHaveBeenCalledOnce());
+  });
+
+  it('shows sign in only after auth resolves unauthenticated', () => {
+    auth.isAuthenticated = false;
+    auth.isLoading = true;
+    const view = render(<HostedConnect />);
+
+    auth.isLoading = false;
+    view.rerender(<HostedConnect />);
+
+    expect(screen.queryByTestId('auth-boot-shell')).not.toBeInTheDocument();
+    expect(screen.getByText('Sign in to your workspace.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to sign in' })).toBeEnabled();
+  });
+
+  it('keeps a deep-link restore neutral while the hosted workspace request is pending', async () => {
+    window.history.replaceState({}, '', '/experience');
+    store.connectHosted.mockImplementation(() => new Promise(() => {}));
+
+    render(<HostedConnect />);
+
+    expect(screen.getByTestId('auth-boot-shell')).toBeInTheDocument();
+    expect(screen.queryByText('Sign in to your workspace.')).not.toBeInTheDocument();
+    await waitFor(() => expect(store.connectHosted).toHaveBeenCalledOnce());
+    expect(window.location.pathname).toBe('/experience');
+  });
+
+  it('shows a recovery state instead of auth copy after a network timeout', async () => {
+    store.connectHosted.mockRejectedValueOnce(new Error('request timed out'));
+
+    render(<HostedConnect />);
+
+    await screen.findByText('Workspace could not be restored.');
+    expect(screen.getByText('request timed out')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    expect(screen.queryByText('Sign in to your workspace.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue to sign in' })).not.toBeInTheDocument();
+  });
+
+  it('runs one workspace bootstrap under StrictMode', async () => {
+    store.connectHosted.mockImplementation(() => new Promise(() => {}));
+
+    render(<StrictMode><HostedConnect /></StrictMode>);
+
+    await waitFor(() => expect(store.connectHosted).toHaveBeenCalledOnce());
+    expect(screen.getByTestId('auth-boot-shell')).toBeInTheDocument();
+    expect(screen.queryByText('Sign in to your workspace.')).not.toBeInTheDocument();
   });
 });

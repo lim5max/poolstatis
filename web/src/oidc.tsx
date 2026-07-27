@@ -202,20 +202,23 @@ export function HostedAuthProvider({
       const query = new URLSearchParams(window.location.search);
       const isCallback = query.has('state')
         && (query.has('code') || query.has('error'));
+      let redirecting = false;
       try {
         if (isCallback) {
           try {
             const callbackUser = await completeHostedSigninCallback(manager);
-            if (live) setUser(callbackUser);
+            if (!live) return;
+            setUser(callbackUser);
             replaceHostedRoute(window, hostedReturnTo(callbackUser.state));
           } finally {
             window.sessionStorage.removeItem(hostedRestoreMarkerKey);
           }
-        } else if (live) {
+        } else {
           const current = await manager.getUser();
+          if (!live) return;
           setUser(current);
           if (!current) {
-            await restoreHostedSession(
+            redirecting = await restoreHostedSession(
               manager,
               window.localStorage,
               window.sessionStorage,
@@ -225,15 +228,16 @@ export function HostedAuthProvider({
           }
         }
       } catch (cause) {
+        if (!live) return;
         if (isCallback) {
           clearHostedSessionMarkers(window.localStorage, window.sessionStorage);
           replaceHostedRoute(window, '/login');
-          if (live) setError(new Error('Sign-in could not be completed. Try again.'));
-        } else if (live) {
+          setError(new Error('Sign-in could not be completed. Try again.'));
+        } else {
           setError(cause as Error);
         }
       } finally {
-        if (live) setLoading(false);
+        if (live && !redirecting) setLoading(false);
       }
     })();
     return () => {

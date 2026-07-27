@@ -150,6 +150,45 @@ describe('customer OIDC client policy', () => {
     expect(flow.size).toBe(0);
   });
 
+  it('keeps auth unresolved after an SSO restore redirect starts under StrictMode', async () => {
+    localStorage.setItem(hostedSessionMarkerKey, 'connected');
+    const manager = {
+      events: {
+        addUserLoaded: vi.fn(),
+        addUserUnloaded: vi.fn(),
+        removeUserLoaded: vi.fn(),
+        removeUserUnloaded: vi.fn(),
+      },
+      getUser: vi.fn().mockResolvedValue(null),
+      signinRedirect: vi.fn().mockResolvedValue(undefined),
+      signinRedirectCallback: vi.fn(),
+      signoutRedirect: vi.fn(),
+      signinSilent: vi.fn(),
+    } as unknown as UserManager;
+
+    function LoadingProbe() {
+      const auth = useHostedAuth();
+      return createElement(
+        'output',
+        null,
+        auth.isLoading ? 'auth unresolved' : 'auth resolved unauthenticated',
+      );
+    }
+
+    render(createElement(
+      StrictMode,
+      null,
+      createElement(HostedAuthProvider, {
+        manager,
+        children: createElement(LoadingProbe),
+      }),
+    ));
+
+    await waitFor(() => expect(manager.signinRedirect).toHaveBeenCalledOnce());
+    expect(screen.getByText('auth unresolved')).toBeInTheDocument();
+    expect(screen.queryByText('auth resolved unauthenticated')).not.toBeInTheDocument();
+  });
+
   it('consumes a callback once under StrictMode and restores its safe route', async () => {
     window.history.replaceState({}, '', '/?code=callback&state=flow');
     const callbackUser = {

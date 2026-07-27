@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Loader2 } from '@/components/icons';
 import {
@@ -22,53 +22,94 @@ export function Connect() {
 
 export function HostedConnect() {
   const { connectHosted } = useStore();
-  const { isAuthenticated, isLoading, login, logout, user, error } = useHostedAuth();
+  const { isAuthenticated, isLoading, login, logout, error } = useHostedAuth();
   const getToken = useHostedToken();
   const attempted = useRef(false);
   const [err, setErr] = useState<string | null>(null);
+  const [needsReauthentication, setNeedsReauthentication] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (!isAuthenticated || attempted.current) return;
+  const connectWorkspace = useCallback(() => {
+    if (attempted.current) return;
     attempted.current = true;
+    setErr(null);
+    setNeedsReauthentication(false);
     setBusy(true);
-    connectHosted({ baseUrl: hostedAuthConfig.apiUrl, getToken })
-      .catch((ex) => setErr(hostedConnectionError(ex)))
+    void connectHosted({ baseUrl: hostedAuthConfig.apiUrl, getToken })
+      .catch((ex) => {
+        setErr(hostedConnectionError(ex));
+        setNeedsReauthentication(hostedConnectionNeedsReauthentication(ex));
+      })
       .finally(() => setBusy(false));
-  }, [connectHosted, getToken, isAuthenticated]);
+  }, [connectHosted, getToken]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      connectWorkspace();
+      return;
+    }
+    attempted.current = false;
+    setBusy(false);
+    setErr(null);
+    setNeedsReauthentication(false);
+  }, [connectWorkspace, isAuthenticated]);
 
   const signIn = () => login();
-  const recoverSession = () => {
+  const signOutAndRetry = () => {
     attempted.current = false;
     setErr(null);
     void logout();
   };
-  const needsReauthentication = Boolean(err && isAuthenticated);
+  const retryConnection = () => {
+    attempted.current = false;
+    connectWorkspace();
+  };
+
+  if (isLoading || (isAuthenticated && !err)) {
+    return <AuthBootShell />;
+  }
+
+  if (isAuthenticated && err) {
+    return (
+      <ConnectShell>
+        <Brand />
+        <h1 className="serif text-3xl">Workspace could not be restored.</h1>
+        <p className="mt-2 mb-6 text-sm text-muted-foreground">
+          Your identity is still protected. Retry the workspace connection or sign in again if the session has expired.
+        </p>
+        <Button
+          className="h-10 w-full"
+          onClick={needsReauthentication ? signOutAndRetry : retryConnection}
+          disabled={busy}
+        >
+          {busy
+            ? <Loader2 className="size-4 animate-spin" />
+            : needsReauthentication
+              ? 'Sign out and try again'
+              : 'Try again'}
+        </Button>
+        <div className="mt-4 text-xs text-destructive" role="alert">{err}</div>
+      </ConnectShell>
+    );
+  }
 
   return (
     <ConnectShell>
-      <div className="mb-4 flex items-center gap-2.5">
-        <img className="size-6" src="/poolstatis-logo.svg" alt="" />
-        <span className="text-xs font-medium text-muted-foreground">Poolstatis · Hosted admin</span>
-      </div>
+      <Brand />
       <h1 className="serif text-3xl">Sign in to your workspace.</h1>
       <p className="mt-2 mb-6 text-sm text-muted-foreground">
         Use hosted auth, then create an MCP token during onboarding. No database keys are needed in the browser.
       </p>
       <Button
         className="h-10 w-full"
-        onClick={needsReauthentication ? recoverSession : signIn}
-        disabled={isLoading || busy}
+        onClick={signIn}
+        disabled={busy}
       >
-        {isLoading || busy
+        {busy
           ? <Loader2 className="size-4 animate-spin" />
-          : needsReauthentication
-            ? 'Sign out and try again'
-            : isAuthenticated
-              ? `Continue as ${user?.email ?? 'workspace user'}`
-              : 'Continue to sign in'}
+          : 'Continue to sign in'}
       </Button>
-      {(err || error) && <div className="mt-4 text-xs text-destructive">{err ?? error?.message}</div>}
+      {error && <div className="mt-4 text-xs text-destructive" role="alert">{error.message}</div>}
     </ConnectShell>
   );
 }
@@ -83,6 +124,57 @@ export function hostedConnectionError(error: unknown): string {
     }
   }
   return error instanceof Error ? error.message : 'The hosted sign-in could not be completed.';
+}
+
+function hostedConnectionNeedsReauthentication(error: unknown): boolean {
+  return error instanceof ApiError
+    && (error.status === 401 || error.code === 'authentication_failed');
+}
+
+function Brand() {
+  return (
+    <div className="mb-4 flex items-center gap-2.5">
+      <img className="size-6" src="/poolstatis-logo.svg" alt="" />
+      <span className="text-xs font-medium text-muted-foreground">Poolstatis · Hosted admin</span>
+    </div>
+  );
+}
+
+export function AuthBootShell() {
+  return (
+    <div
+      className="flex min-h-screen bg-background p-4 md:p-6"
+      data-testid="auth-boot-shell"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <div className="mx-auto grid w-full max-w-6xl flex-1 overflow-hidden rounded-xl border bg-card/20 md:grid-cols-[232px_1fr]">
+        <div className="hidden border-r bg-sidebar/70 p-5 md:block">
+          <div className="brand-wordmark flex items-center gap-2.5 text-xl text-foreground">
+            <img className="size-7" src="/poolstatis-logo.svg" alt="" />
+            <span>Poolstatis</span>
+          </div>
+          <div className="mt-10 space-y-3" aria-hidden="true">
+            <div className="h-8 rounded-md bg-muted/70" />
+            <div className="h-8 rounded-md bg-muted/50" />
+            <div className="h-8 rounded-md bg-muted/40" />
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-col">
+          <div className="flex h-14 items-center gap-2.5 border-b px-4 md:hidden">
+            <img className="size-7" src="/poolstatis-logo.svg" alt="" />
+            <span className="brand-wordmark text-xl">Poolstatis</span>
+          </div>
+          <div className="flex flex-1 items-center justify-center p-6">
+            <div className="flex max-w-sm items-center gap-3 text-sm text-muted-foreground" role="status">
+              <Loader2 className="size-4 shrink-0 animate-spin" />
+              <span>Restoring your workspace…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function TokenConnect() {
