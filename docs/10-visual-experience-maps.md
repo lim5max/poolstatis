@@ -120,9 +120,20 @@ Version discovery is bounded to 500 routes and 500 snapshot metadata rows per
 project-scoped request. MCP never returns image bytes; `evidence_ref` is an
 opaque reference for a later authenticated metadata/image request.
 
-Outputs are structured and bounded. MCP returns snapshot metadata/evidence ids,
-never image bytes or captured personal data. The exact same project-scoped REST
-queries power the admin UI.
+Outputs are structured and bounded. Each map includes an `agent_context` with
+the purpose-tagged surface/route/version/device scope, sample sizes, explicit
+section order, the five largest adjacent-section drop-offs, safe-label click
+share, scroll reach, snapshot freshness/coverage, evidence references,
+data-quality caveats and two deterministic next actions. Comparison adds
+baseline/comparison sample sizes, count deltas, the five largest absolute
+section percentage-point changes and exact map follow-ups for both cohorts.
+
+The semantic summary is derived only from the returned aggregates. It never
+generates a cause or returns DOM, page text, form values, image bytes or PII.
+Every map and comparison repeats an explicit non-causal caveat; consent,
+rate-guard, missing-label, missing-section and missing/stale-snapshot limits are
+reported instead of silently treated as complete data. The exact same
+project-scoped REST queries power MCP and the admin UI.
 
 ## `poolstatis.xyz` landing handoff
 

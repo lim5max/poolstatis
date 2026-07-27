@@ -178,7 +178,40 @@ beforeAll(async () => {
           click_bins: [{ x: 2, y: 1, count: 2, percentage: 100 }],
           sections: [{ section: 'checkout_form', sessions: 3, percentage: 100 }],
           snapshot: { storage_key: 'safe-fixture/checkout/v2/desktop.snapshot' },
-          limitations: ['Descriptive aggregate evidence; not causal proof.'],
+          agent_context: {
+            scope: {
+              surface: 'checkout',
+              route: 'checkout',
+              version: 'v2',
+              device: 'desktop',
+              purpose: 'Find checkout friction without collecting page content.',
+            },
+            sample_size: { events: 8, sessions: 3, actors: 3, page_views: 3, clicks: 2 },
+            section_order: ['checkout_form'],
+            largest_section_dropoffs: [],
+            click_concentration: [{ label: 'checkout.pay', count: 2, actors: 2, percentage_of_all_clicks: 100 }],
+            scroll_reach: [{ depth: 100, sessions: 2, actors: 2, percentage: 66.67 }],
+            snapshot_coverage: {
+              status: 'fresh',
+              exact_viewport_match: true,
+              snapshot_id: 'snapshot-v2',
+              evidence_ref: 'poolstatis://experience/snapshots/snapshot-v2',
+            },
+            evidence_refs: [{
+              type: 'experience_snapshot',
+              id: 'snapshot-v2',
+              evidence_ref: 'poolstatis://experience/snapshots/snapshot-v2',
+            }],
+            data_quality: {
+              status: 'ok',
+              caveats: ['This evidence is descriptive and non-causal.'],
+            },
+            suggested_next_actions: [
+              { action: 'list_versions', tool: 'list_visual_experience_versions' },
+              { action: 'compare_explicit_cohorts', tool: 'compare_visual_experience' },
+            ],
+          },
+          causality: 'Descriptive aggregate evidence; not causal proof.',
         }));
         return;
       }
@@ -191,8 +224,32 @@ beforeAll(async () => {
           baseline: { version: 'v1', device: 'desktop', summary: { sessions: 2, actors: 2, page_views: 2, clicks: 1 } },
           comparison: { version: 'v2', device: 'desktop', summary: { sessions: 3, actors: 3, page_views: 3, clicks: 2 } },
           delta: { sessions: 1, actors: 1, page_views: 1, clicks: 1 },
-          section_deltas: [{ section: 'checkout_form', percentage_points: 0 }],
-          limitations: ['Descriptive cohort comparison; not causal proof.'],
+          agent_context: {
+            sample_sizes: {
+              baseline: { events: 5, sessions: 2, actors: 2, page_views: 2, clicks: 1 },
+              comparison: { events: 8, sessions: 3, actors: 3, page_views: 3, clicks: 2 },
+            },
+            largest_section_changes: [{
+              section: 'checkout_form',
+              baseline_percentage: 100,
+              comparison_percentage: 100,
+              percentage_points: 0,
+            }],
+            evidence_refs: [{
+              type: 'experience_snapshot',
+              id: 'snapshot-v2',
+              evidence_ref: 'poolstatis://experience/snapshots/snapshot-v2',
+            }],
+            data_quality: {
+              status: 'ok',
+              caveats: ['Descriptive cohort comparison; not causal proof.'],
+            },
+            suggested_next_actions: [
+              { action: 'inspect_baseline_map', tool: 'get_visual_experience_map' },
+              { action: 'inspect_comparison_map', tool: 'get_visual_experience_map' },
+            ],
+          },
+          causality: 'Descriptive cohort comparison; not causal proof.',
         }));
         return;
       }
@@ -301,6 +358,26 @@ describe('@poolstatis/mcp release artifact', () => {
       expect(visual.structuredContent).toMatchObject({
         kind: 'visual_experience',
         summary: { sessions: 3, clicks: 2 },
+        agent_context: {
+          scope: {
+            surface: 'checkout',
+            route: 'checkout',
+            version: 'v2',
+            device: 'desktop',
+            purpose: 'Find checkout friction without collecting page content.',
+          },
+          sample_size: { sessions: 3, actors: 3, page_views: 3, clicks: 2 },
+          section_order: ['checkout_form'],
+          click_concentration: [{ label: 'checkout.pay', percentage_of_all_clicks: 100 }],
+          scroll_reach: [{ depth: 100, percentage: 66.67 }],
+          snapshot_coverage: { status: 'fresh', exact_viewport_match: true },
+          evidence_refs: [{ type: 'experience_snapshot', id: 'snapshot-v2' }],
+          data_quality: { status: 'ok' },
+          suggested_next_actions: [
+            { action: 'list_versions', tool: 'list_visual_experience_versions' },
+            { action: 'compare_explicit_cohorts', tool: 'compare_visual_experience' },
+          ],
+        },
       });
 
       const compared = await client.callTool({
@@ -319,7 +396,20 @@ describe('@poolstatis/mcp release artifact', () => {
       expect(compared.isError).not.toBe(true);
       expect(compared.structuredContent).toMatchObject({
         kind: 'visual_experience_compare',
-        delta: { sessions: 1, clicks: 1 },
+        delta: { page_views: 1, sessions: 1, clicks: 1 },
+        agent_context: {
+          sample_sizes: {
+            baseline: { sessions: 2, actors: 2, page_views: 2, clicks: 1 },
+            comparison: { sessions: 3, actors: 3, page_views: 3, clicks: 2 },
+          },
+          largest_section_changes: [{ section: 'checkout_form', percentage_points: 0 }],
+          evidence_refs: [{ id: 'snapshot-v2' }],
+          data_quality: { status: 'ok' },
+          suggested_next_actions: [
+            { action: 'inspect_baseline_map', tool: 'get_visual_experience_map' },
+            { action: 'inspect_comparison_map', tool: 'get_visual_experience_map' },
+          ],
+        },
       });
     } finally {
       await client.close();

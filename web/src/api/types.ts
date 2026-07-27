@@ -176,6 +176,54 @@ export interface VisualExperienceResponse {
     percentage: number;
     dropoff_percentage: number;
   }>;
+  agent_context: {
+    scope: {
+      surface: string;
+      route: string;
+      version: string;
+      device: 'desktop' | 'mobile';
+      purpose: string;
+    };
+    sample_size: {
+      events: number;
+      page_views: number;
+      sessions: number;
+      actors: number;
+      clicks: number;
+    };
+    section_order: string[];
+    largest_section_dropoffs: Array<{
+      from_section: string;
+      to_section: string;
+      lost_sessions: number;
+      percentage_points: number;
+    }>;
+    click_concentration: Array<{
+      label: string;
+      count: number;
+      actors: number;
+      percentage_of_all_clicks: number;
+    }>;
+    scroll_reach: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+    snapshot_coverage: {
+      status: 'fresh' | 'stale' | 'missing';
+      exact_viewport_match: boolean;
+      snapshot_id: string | null;
+      evidence_ref: string | null;
+      captured_at: string | null;
+      expires_at: string | null;
+      age_seconds: number | null;
+    };
+    evidence_refs: Array<{ type: 'experience_snapshot'; id: string; evidence_ref: string }>;
+    data_quality: { status: 'ok' | 'limited' | 'empty'; caveats: string[] };
+    suggested_next_actions: Array<{
+      action: 'list_versions' | 'compare_explicit_cohorts';
+      tool: 'list_visual_experience_versions' | 'compare_visual_experience';
+      reason: string;
+      known_parameters: Record<string, unknown>;
+      requires: string[];
+    }>;
+  };
   causality: string;
   meta: { computed_at: string; date_range: { from: string; to: string }; note?: string };
 }
@@ -185,10 +233,33 @@ export interface VisualExperienceCompareResponse {
   baseline: VisualExperienceResponse;
   comparison: VisualExperienceResponse;
   delta: {
+    events: number;
+    page_views: number;
     sessions: number;
     clicks: number;
     actors: number;
     sections: Array<{ section: string; percentage_points: number }>;
+  };
+  agent_context: {
+    scope: { surface: string; route: string; purpose: string };
+    sample_sizes: {
+      baseline: VisualExperienceResponse['agent_context']['sample_size'];
+      comparison: VisualExperienceResponse['agent_context']['sample_size'];
+    };
+    largest_section_changes: Array<{
+      section: string;
+      baseline_percentage: number;
+      comparison_percentage: number;
+      percentage_points: number;
+    }>;
+    evidence_refs: Array<{ type: 'experience_snapshot'; id: string; evidence_ref: string }>;
+    data_quality: { status: 'ok' | 'limited' | 'empty'; caveats: string[] };
+    suggested_next_actions: Array<{
+      action: 'inspect_baseline_map' | 'inspect_comparison_map';
+      tool: 'get_visual_experience_map';
+      reason: string;
+      query: Record<string, unknown>;
+    }>;
   };
   causality: string;
 }

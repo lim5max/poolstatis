@@ -125,9 +125,15 @@ Timeline содержит только developer-provided stable route key, stab
 координаты, scroll depth и тип клиентской ошибки — DOM, URL/path, текст, input
 values, stacks и network data в Poolstatis не отправляются.
 
-Visual map tools additionally return bounded click bins/labels, scroll coverage,
-named-section counts/percentages and immutable snapshot metadata. MCP never
-returns image bytes. Comparison output is descriptive, not a causal claim.
+Visual map tools additionally return an agent-ready `agent_context`: the
+purpose-tagged scope, sample sizes, ordered section labels, counts and
+percentages, largest adjacent-section drop-offs, safe-label click concentration,
+scroll reach, snapshot freshness/coverage, evidence references, explicit
+data-quality caveats and deterministic next actions. Comparison includes count
+and section percentage-point deltas plus exact follow-up map queries for both
+cohorts. MCP never returns DOM, page text, form values, image bytes or PII and
+never invents a cause; comparison output is explicitly descriptive and
+non-causal.
 
 ### Запросы (analysis-time)
 

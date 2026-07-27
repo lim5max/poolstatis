@@ -103,6 +103,23 @@ describe('browser experience MCP tools', () => {
       summary: { page_views: 1, clicks: 1 },
       sections: [{ section: 'payment', percentage: 100 }],
       snapshot: null,
+      agent_context: {
+        scope: {
+          surface: 'checkout',
+          route: 'checkout',
+          version: 'unversioned',
+          device: 'desktop',
+          purpose: 'Understand why buyers hesitate before payment.',
+        },
+        click_concentration: [{
+          label: 'pay_now',
+          count: 1,
+          percentage_of_all_clicks: 100,
+        }],
+        snapshot_coverage: { status: 'missing', exact_viewport_match: false },
+        evidence_refs: [],
+        data_quality: { status: 'limited' },
+      },
     });
 
     const compared = await client.callTool({
@@ -121,7 +138,20 @@ describe('browser experience MCP tools', () => {
     expect(compared.isError).not.toBe(true);
     expect(compared.structuredContent).toMatchObject({
       kind: 'visual_experience_compare',
-      delta: { sessions: 0, clicks: 0, actors: 0 },
+      delta: { events: 0, page_views: 0, sessions: 0, clicks: 0, actors: 0 },
+      agent_context: {
+        sample_sizes: {
+          baseline: { page_views: 1, sessions: 1, actors: 1, clicks: 1 },
+          comparison: { page_views: 1, sessions: 1, actors: 1, clicks: 1 },
+        },
+        largest_section_changes: [{ section: 'payment', percentage_points: 0 }],
+        evidence_refs: [],
+        data_quality: { status: 'limited' },
+        suggested_next_actions: [
+          expect.objectContaining({ action: 'inspect_baseline_map', tool: 'get_visual_experience_map' }),
+          expect.objectContaining({ action: 'inspect_comparison_map', tool: 'get_visual_experience_map' }),
+        ],
+      },
     });
     const afterReads = await env.pool.query<{ quantity: string }>(
       `SELECT COALESCE(sum(quantity), 0)::bigint AS quantity FROM usage_ledger WHERE project_id = $1`, [env.projectId],

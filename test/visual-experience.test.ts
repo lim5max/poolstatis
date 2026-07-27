@@ -111,6 +111,22 @@ describe('visual experience maps', () => {
         {
           kind: 'page_viewed',
           ...common,
+          distinct_id: 'actor-2',
+          session_id: 'session-2',
+          sequence: 1,
+        },
+        {
+          kind: 'section_exposed',
+          ...common,
+          distinct_id: 'actor-2',
+          session_id: 'session-2',
+          sequence: 2,
+          section: 'hero',
+          top: 0,
+        },
+        {
+          kind: 'page_viewed',
+          ...common,
           session_id: 'session-other-viewport',
           viewport_width: 1024,
           document_width: 1024,
@@ -161,7 +177,7 @@ describe('visual experience maps', () => {
         },
       ],
     });
-    expect(captured).toMatchObject({ status: 200, body: { accepted: 11 } });
+    expect(captured).toMatchObject({ status: 200, body: { accepted: 13 } });
 
     const map = await api(env, env.secretToken, 'POST', `${P()}/query`, {
       kind: 'visual_experience',
@@ -177,16 +193,60 @@ describe('visual experience maps', () => {
     expect(map.body).toMatchObject({
       kind: 'visual_experience',
       snapshot: { id: snapshotBody.id, release_hash: 'abc123' },
-      summary: { page_views: 1, sessions: 1, actors: 1, clicks: 1 },
+      summary: { page_views: 2, sessions: 2, actors: 2, clicks: 1 },
       click_cells: [{ x: 4, y: 1, count: 1, actors: 1 }],
       click_labels: [{ label: 'hero.get_started', count: 1, actors: 1 }],
       sections: [
-        { section: 'hero', sessions: 1, percentage: 100, dropoff_percentage: 0 },
-        { section: 'features', sessions: 1, percentage: 100, dropoff_percentage: 0 },
+        { section: 'hero', sessions: 2, percentage: 100, dropoff_percentage: 0 },
+        { section: 'features', sessions: 1, percentage: 50, dropoff_percentage: 50 },
       ],
+      agent_context: {
+        scope: {
+          surface: 'marketing',
+          route: 'marketing',
+          version: 'release-a',
+          device: 'desktop',
+          purpose: 'Find which landing sections lose qualified visitors.',
+        },
+        sample_size: { events: 7, page_views: 2, sessions: 2, actors: 2, clicks: 1 },
+        section_order: ['hero', 'features'],
+        largest_section_dropoffs: [{
+          from_section: 'hero',
+          to_section: 'features',
+          lost_sessions: 1,
+          percentage_points: 50,
+        }],
+        click_concentration: [{
+          label: 'hero.get_started',
+          count: 1,
+          actors: 1,
+          percentage_of_all_clicks: 100,
+        }],
+        snapshot_coverage: {
+          status: 'fresh',
+          exact_viewport_match: true,
+          evidence_ref: `poolstatis://experience/snapshots/${snapshotBody.id}`,
+        },
+        evidence_refs: [{
+          type: 'experience_snapshot',
+          id: snapshotBody.id,
+          evidence_ref: `poolstatis://experience/snapshots/${snapshotBody.id}`,
+        }],
+        data_quality: {
+          status: 'ok',
+          caveats: expect.arrayContaining([
+            expect.stringContaining('consent'),
+            expect.stringContaining('descriptive'),
+          ]),
+        },
+        suggested_next_actions: [
+          expect.objectContaining({ action: 'list_versions', tool: 'list_visual_experience_versions' }),
+          expect.objectContaining({ action: 'compare_explicit_cohorts', tool: 'compare_visual_experience' }),
+        ],
+      },
     });
     expect(map.body.scroll_coverage).toEqual(expect.arrayContaining([
-      { depth: 80, sessions: 1, actors: 1, percentage: 100 },
+      { depth: 80, sessions: 1, actors: 1, percentage: 50 },
       { depth: 90, sessions: 0, actors: 0, percentage: 0 },
     ]));
     expect(map.body.causality).toContain('does not prove');
@@ -277,7 +337,7 @@ describe('visual experience maps', () => {
       grid: 8,
     });
     expect(devMap.body.summary.page_views).toBe(1);
-    expect(prodMap.body.summary.page_views).toBe(1);
+    expect(prodMap.body.summary.page_views).toBe(2);
     expect(devMap.body.snapshot).toBeNull();
     expect(prodMap.body.snapshot).not.toBeNull();
   });
@@ -315,7 +375,7 @@ describe('visual experience maps', () => {
     });
     expect(purged).toMatchObject({
       status: 200,
-      body: { events_deleted: 11, snapshots_deleted: 1, env: 'prod' },
+      body: { events_deleted: 13, snapshots_deleted: 1, env: 'prod' },
     });
     const missing = await env.app.inject({
       method: 'GET',

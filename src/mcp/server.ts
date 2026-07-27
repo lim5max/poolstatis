@@ -717,14 +717,14 @@ jsonTool(
 
 jsonTool(
   'get_visual_experience_map',
-  'Return bounded aggregate click bins/labels, scroll coverage, named-section drop-off and safe snapshot evidence for one exact surface/route/version/device/period. This is descriptive interaction evidence, not session replay or causal proof.',
+  'Explain one bounded surface/route/version/device/period using purpose, sample sizes, ordered safe section labels, counts and percentages, largest section-to-section drop-offs, safe-label click concentration, scroll reach, snapshot freshness/coverage, evidence references, data-quality caveats and deterministic next actions. Returns aggregates only: never DOM, page text, input values, image bytes or PII. Evidence is descriptive and non-causal.',
   { project, query: visualExperienceQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'visual_experience', ...query })),
 );
 
 jsonTool(
   'compare_visual_experience',
-  'Compare two bounded device/version/period cohorts for one route. Returns counts, percentages and percentage-point section deltas with explicit causality limits.',
+  'Compare two explicit bounded version/device/period cohorts for one purpose-tagged route. Returns both sample sizes, count deltas, section percentage-point changes, snapshot evidence/freshness, data-quality caveats and deterministic map follow-ups. It never invents causes or returns DOM, page text, input values, image bytes or PII; all differences are descriptive and non-causal.',
   { project, query: visualExperienceCompareSchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'visual_experience_compare', ...query })),
 );

@@ -30,6 +30,86 @@ export interface QueryMeta {
   source?: 'native' | 'posthog';
 }
 
+interface VisualEvidenceRef {
+  type: 'experience_snapshot';
+  id: string;
+  evidence_ref: string;
+}
+
+interface VisualAgentContext {
+  scope: {
+    surface: string;
+    route: string;
+    version: string;
+    device: 'desktop' | 'mobile';
+    purpose: string;
+  };
+  sample_size: {
+    events: number;
+    page_views: number;
+    sessions: number;
+    actors: number;
+    clicks: number;
+  };
+  section_order: string[];
+  largest_section_dropoffs: Array<{
+    from_section: string;
+    to_section: string;
+    lost_sessions: number;
+    percentage_points: number;
+  }>;
+  click_concentration: Array<{
+    label: string;
+    count: number;
+    actors: number;
+    percentage_of_all_clicks: number;
+  }>;
+  scroll_reach: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+  snapshot_coverage: {
+    status: 'fresh' | 'stale' | 'missing';
+    exact_viewport_match: boolean;
+    snapshot_id: string | null;
+    evidence_ref: string | null;
+    captured_at: string | null;
+    expires_at: string | null;
+    age_seconds: number | null;
+  };
+  evidence_refs: VisualEvidenceRef[];
+  data_quality: {
+    status: 'ok' | 'limited' | 'empty';
+    caveats: string[];
+  };
+  suggested_next_actions: Array<{
+    action: 'list_versions' | 'compare_explicit_cohorts';
+    tool: 'list_visual_experience_versions' | 'compare_visual_experience';
+    reason: string;
+    known_parameters: Record<string, unknown>;
+    requires: string[];
+  }>;
+}
+
+interface VisualCompareAgentContext {
+  scope: { surface: string; route: string; purpose: string };
+  sample_sizes: {
+    baseline: VisualAgentContext['sample_size'];
+    comparison: VisualAgentContext['sample_size'];
+  };
+  largest_section_changes: Array<{
+    section: string;
+    baseline_percentage: number;
+    comparison_percentage: number;
+    percentage_points: number;
+  }>;
+  evidence_refs: VisualEvidenceRef[];
+  data_quality: VisualAgentContext['data_quality'];
+  suggested_next_actions: Array<{
+    action: 'inspect_baseline_map' | 'inspect_comparison_map';
+    tool: 'get_visual_experience_map';
+    reason: string;
+    query: Omit<VisualExperienceQueryInput, 'kind'>;
+  }>;
+}
+
 export type QueryResult =
   | { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value?: string }>; meta: QueryMeta }
   | {
@@ -97,6 +177,7 @@ export type QueryResult =
       click_labels: Awaited<ReturnType<EventStore['visualExperience']>>['click_labels'];
       scroll_coverage: Awaited<ReturnType<EventStore['visualExperience']>>['scroll_coverage'];
       sections: Awaited<ReturnType<EventStore['visualExperience']>>['sections'];
+      agent_context: VisualAgentContext;
       causality: string;
       meta: QueryMeta;
     }
@@ -105,11 +186,14 @@ export type QueryResult =
       baseline: Extract<QueryResult, { kind: 'visual_experience' }>;
       comparison: Extract<QueryResult, { kind: 'visual_experience' }>;
       delta: {
+        events: number;
+        page_views: number;
         sessions: number;
         clicks: number;
         actors: number;
         sections: Array<{ section: string; percentage_points: number }>;
       };
+      agent_context: VisualCompareAgentContext;
       causality: string;
       meta: QueryMeta;
     };
@@ -698,6 +782,7 @@ export class QueryService {
       to,
       grid: q.grid,
     });
+    const agentContext = buildVisualAgentContext(surface, q, result, snapshot, now);
     return {
       kind: 'visual_experience',
       surface: { key: surface.key, name: surface.name, purpose: surface.purpose, status: surface.status },
@@ -707,6 +792,7 @@ export class QueryService {
       grid: q.grid,
       snapshot,
       ...result,
+      agent_context: agentContext,
       causality: 'Aggregated interaction evidence shows where observed sessions clicked or reached; it does not prove why users stopped or that a page change caused a difference.',
       meta: {
         computed_at: now.toISOString(),
@@ -752,23 +838,222 @@ export class QueryService {
     const baselineSections = new Map(baseline.sections.map((item) => [item.section, item.percentage]));
     const comparisonSections = new Map(comparison.sections.map((item) => [item.section, item.percentage]));
     const sectionKeys = [...new Set([...baselineSections.keys(), ...comparisonSections.keys()])].sort();
+    const sectionDeltas = sectionKeys.map((section) => ({
+      section,
+      percentage_points: Number(((comparisonSections.get(section) ?? 0) - (baselineSections.get(section) ?? 0)).toFixed(2)),
+    }));
     return {
       kind: 'visual_experience_compare',
       baseline,
       comparison,
       delta: {
+        events: comparison.summary.events - baseline.summary.events,
+        page_views: comparison.summary.page_views - baseline.summary.page_views,
         sessions: comparison.summary.sessions - baseline.summary.sessions,
         clicks: comparison.summary.clicks - baseline.summary.clicks,
         actors: comparison.summary.actors - baseline.summary.actors,
-        sections: sectionKeys.map((section) => ({
-          section,
-          percentage_points: Number(((comparisonSections.get(section) ?? 0) - (baselineSections.get(section) ?? 0)).toFixed(2)),
-        })),
+        sections: sectionDeltas,
       },
+      agent_context: buildVisualCompareAgentContext(q, baseline, comparison, sectionDeltas),
       causality: 'This is a descriptive comparison across selected cohorts. Traffic mix, instrumentation, seasonality and concurrent changes can explain differences.',
       meta: { computed_at: now.toISOString(), sampling: null, source: 'native' },
     };
   }
+}
+
+function buildVisualAgentContext(
+  surface: { key: string; purpose: string },
+  q: VisualExperienceQueryInput,
+  result: Awaited<ReturnType<EventStore['visualExperience']>>,
+  snapshot: Awaited<ReturnType<typeof getExactExperienceSnapshot>>,
+  now: Date,
+): VisualAgentContext {
+  const sectionDropoffs = result.sections.slice(1).map((section, index) => {
+    const previous = result.sections[index]!;
+    return {
+      from_section: previous.section,
+      to_section: section.section,
+      lost_sessions: Math.max(0, previous.sessions - section.sessions),
+      percentage_points: Number(Math.max(0, previous.percentage - section.percentage).toFixed(2)),
+    };
+  }).sort((a, b) =>
+    b.percentage_points - a.percentage_points
+    || b.lost_sessions - a.lost_sessions
+    || a.from_section.localeCompare(b.from_section)
+    || a.to_section.localeCompare(b.to_section)
+  ).slice(0, 5);
+  const labelledClicks = result.click_labels.reduce((sum, item) => sum + item.count, 0);
+  const caveats = [
+    'Accepted event totals can exclude signals withheld by client consent or discarded by rate guards.',
+    'This evidence is descriptive and non-causal; verify instrumentation and cohort differences before acting.',
+  ];
+  let quality: VisualAgentContext['data_quality']['status'] = 'ok';
+  if (result.summary.sessions === 0) {
+    quality = 'empty';
+    caveats.push('No eligible page-view sessions matched this exact scope and period.');
+  } else {
+    if (!snapshot) {
+      quality = 'limited';
+      caveats.push('No exact snapshot matched, so events are not restricted to one viewport and document size.');
+    } else if (snapshot.stale) {
+      quality = 'limited';
+      caveats.push('The matching snapshot is stale; confirm the route still renders this version before interpreting coordinates.');
+    }
+    if (result.sections.length === 0) {
+      quality = 'limited';
+      caveats.push('No stable section exposure labels were observed, so section reach and drop-off are unavailable.');
+    }
+    if (labelledClicks < result.summary.clicks) {
+      quality = 'limited';
+      caveats.push(`${result.summary.clicks - labelledClicks} click(s) lacked a safe stable label and are excluded from label concentration.`);
+    }
+  }
+  const capturedAt = snapshot ? new Date(snapshot.captured_at).toISOString() : null;
+  const expiresAt = snapshot ? new Date(snapshot.expires_at).toISOString() : null;
+  const evidenceRefs: VisualEvidenceRef[] = snapshot ? [{
+    type: 'experience_snapshot',
+    id: snapshot.id,
+    evidence_ref: snapshot.evidence_ref,
+  }] : [];
+  return {
+    scope: {
+      surface: surface.key,
+      route: q.route,
+      version: q.version,
+      device: q.device,
+      purpose: surface.purpose,
+    },
+    sample_size: {
+      events: result.summary.events,
+      page_views: result.summary.page_views,
+      sessions: result.summary.sessions,
+      actors: result.summary.actors,
+      clicks: result.summary.clicks,
+    },
+    section_order: result.sections.map((section) => section.section),
+    largest_section_dropoffs: sectionDropoffs,
+    click_concentration: result.click_labels.map((item) => ({
+      ...item,
+      percentage_of_all_clicks: percentage(item.count, result.summary.clicks),
+    })),
+    scroll_reach: result.scroll_coverage,
+    snapshot_coverage: {
+      status: snapshot ? (snapshot.stale ? 'stale' : 'fresh') : 'missing',
+      exact_viewport_match: snapshot !== null,
+      snapshot_id: snapshot?.id ?? null,
+      evidence_ref: snapshot?.evidence_ref ?? null,
+      captured_at: capturedAt,
+      expires_at: expiresAt,
+      age_seconds: capturedAt === null
+        ? null
+        : Math.max(0, Math.floor((now.getTime() - new Date(capturedAt).getTime()) / 1000)),
+    },
+    evidence_refs: evidenceRefs,
+    data_quality: { status: quality, caveats },
+    suggested_next_actions: [
+      {
+        action: 'list_versions',
+        tool: 'list_visual_experience_versions',
+        reason: 'Discover explicit snapshot-backed versions and devices before choosing a comparison cohort.',
+        known_parameters: { surface: q.surface, route: q.route, env: q.env },
+        requires: [],
+      },
+      {
+        action: 'compare_explicit_cohorts',
+        tool: 'compare_visual_experience',
+        reason: 'Compare this bounded cohort only after selecting another explicit version, device or period; do not infer causation.',
+        known_parameters: {
+          surface: q.surface,
+          route: q.route,
+          env: q.env,
+          baseline: {
+            version: q.version,
+            device: q.device,
+            date_from: q.date_from,
+            ...(q.date_to ? { date_to: q.date_to } : {}),
+          },
+        },
+        requires: ['comparison.version', 'comparison.device', 'comparison.date_from'],
+      },
+    ],
+  };
+}
+
+function buildVisualCompareAgentContext(
+  q: VisualExperienceCompareInput,
+  baseline: Extract<QueryResult, { kind: 'visual_experience' }>,
+  comparison: Extract<QueryResult, { kind: 'visual_experience' }>,
+  sectionDeltas: Array<{ section: string; percentage_points: number }>,
+): VisualCompareAgentContext {
+  const baselineSections = new Map(baseline.sections.map((item) => [item.section, item.percentage]));
+  const comparisonSections = new Map(comparison.sections.map((item) => [item.section, item.percentage]));
+  const evidenceRefs = [...baseline.agent_context.evidence_refs, ...comparison.agent_context.evidence_refs]
+    .filter((item, index, all) => all.findIndex((candidate) => candidate.evidence_ref === item.evidence_ref) === index);
+  const caveats = [
+    ...baseline.agent_context.data_quality.caveats.map((item) => `Baseline: ${item}`),
+    ...comparison.agent_context.data_quality.caveats.map((item) => `Comparison: ${item}`),
+    'Deltas are descriptive and non-causal; traffic mix, instrumentation, seasonality and concurrent changes may differ.',
+  ];
+  const statuses = [baseline.agent_context.data_quality.status, comparison.agent_context.data_quality.status];
+  const quality = statuses.includes('empty') ? 'empty' : statuses.includes('limited') ? 'limited' : 'ok';
+  return {
+    scope: {
+      surface: baseline.surface.key,
+      route: q.route,
+      purpose: baseline.surface.purpose,
+    },
+    sample_sizes: {
+      baseline: baseline.agent_context.sample_size,
+      comparison: comparison.agent_context.sample_size,
+    },
+    largest_section_changes: sectionDeltas.map((item) => ({
+      section: item.section,
+      baseline_percentage: baselineSections.get(item.section) ?? 0,
+      comparison_percentage: comparisonSections.get(item.section) ?? 0,
+      percentage_points: item.percentage_points,
+    })).sort((a, b) =>
+      Math.abs(b.percentage_points) - Math.abs(a.percentage_points)
+      || a.section.localeCompare(b.section)
+    ).slice(0, 5),
+    evidence_refs: evidenceRefs,
+    data_quality: { status: quality, caveats: [...new Set(caveats)] },
+    suggested_next_actions: [
+      {
+        action: 'inspect_baseline_map',
+        tool: 'get_visual_experience_map',
+        reason: 'Inspect the bounded baseline counts, percentages, reach and evidence before interpreting a delta.',
+        query: {
+          surface: q.surface,
+          route: q.route,
+          version: q.baseline.version,
+          device: q.baseline.device,
+          date_from: q.baseline.date_from,
+          ...(q.baseline.date_to ? { date_to: q.baseline.date_to } : {}),
+          grid: q.grid,
+          env: q.env,
+        },
+      },
+      {
+        action: 'inspect_comparison_map',
+        tool: 'get_visual_experience_map',
+        reason: 'Inspect the bounded comparison counts, percentages, reach and evidence before interpreting a delta.',
+        query: {
+          surface: q.surface,
+          route: q.route,
+          version: q.comparison.version,
+          device: q.comparison.device,
+          date_from: q.comparison.date_from,
+          ...(q.comparison.date_to ? { date_to: q.comparison.date_to } : {}),
+          grid: q.grid,
+          env: q.env,
+        },
+      },
+    ],
+  };
+}
+
+function percentage(num: number, denom: number): number {
+  return denom === 0 ? 0 : Number((num * 100 / denom).toFixed(2));
 }
 
 function ratio(num: number, denom: number): number {
