@@ -119,6 +119,9 @@ describe('@poolstatis/sdk/browser', () => {
     expect(f.queued).toEqual([]);
     expect(f.localStorage.getItem('poolstatis.browser.visitor')).toBeNull();
     expect(f.sessionStorage.getItem('poolstatis.browser.session')).toBeNull();
+    analytics.resetIdentity();
+    expect(f.localStorage.getItem('poolstatis.browser.visitor')).toBeNull();
+    expect(f.sessionStorage.getItem('poolstatis.browser.session')).toBeNull();
   });
 
   it('keeps the visitor stable while rotating a session after inactivity', () => {

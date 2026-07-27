@@ -281,6 +281,11 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       if (!browser) return;
       storageRemove(browser.localStorage, VISITOR_KEY);
       storageRemove(browser.sessionStorage, SESSION_KEY);
+      if (!options.hasConsent()) {
+        visitorId = null; sessionId = null; actorId = null; lastActivity = null;
+        lastPath = null; acquisitionProperties = null;
+        return;
+      }
       visitorId = `visitor:${createId()}`;
       actorId = visitorId;
       storageSet(browser.localStorage, VISITOR_KEY, visitorId);
