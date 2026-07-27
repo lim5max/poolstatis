@@ -127,11 +127,13 @@ values, stacks и network data в Poolstatis не отправляются.
 
 Visual map tools additionally return an agent-ready `agent_context`: the
 purpose-tagged scope, sample sizes, ordered section labels, counts and
-percentages, largest adjacent-section drop-offs, safe-label click concentration,
+percentages, largest adjacent-section aggregate reach decreases, safe-label click concentration,
 scroll reach, snapshot freshness/coverage, evidence references, explicit
 data-quality caveats and deterministic next actions. Comparison includes count
 and section percentage-point deltas plus exact follow-up map queries for both
-cohorts. MCP never returns DOM, page text, form values, image bytes or PII and
+cohorts using resolved ISO periods. Renamed/missing section labels are reported
+as taxonomy mismatches with no behavioral delta; top-100 click-label and
+200-section truncation is explicit. MCP never returns DOM, page text, form values, image bytes or PII and
 never invents a cause; comparison output is explicitly descriptive and
 non-causal.
 

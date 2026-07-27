@@ -122,17 +122,24 @@ opaque reference for a later authenticated metadata/image request.
 
 Outputs are structured and bounded. Each map includes an `agent_context` with
 the purpose-tagged surface/route/version/device scope, sample sizes, explicit
-section order, the five largest adjacent-section drop-offs, safe-label click
+section order, the five largest adjacent-section aggregate reach decreases, safe-label click
 share, scroll reach, snapshot freshness/coverage, evidence references,
 data-quality caveats and two deterministic next actions. Comparison adds
 baseline/comparison sample sizes, count deltas, the five largest absolute
 section percentage-point changes and exact map follow-ups for both cohorts.
+The follow-ups use resolved ISO timestamps, not moving relative windows.
+An adjacent reach decrease compares aggregate counts; it does not claim that
+the counted sessions are the same sessions transitioning between sections.
+Added/removed/renamed section labels are taxonomy mismatches with a `null`
+delta, never a fabricated behavioral change.
 
 The semantic summary is derived only from the returned aggregates. It never
 generates a cause or returns DOM, page text, form values, image bytes or PII.
 Every map and comparison repeats an explicit non-causal caveat; consent,
 rate-guard, missing-label, missing-section and missing/stale-snapshot limits are
-reported instead of silently treated as complete data. The exact same
+reported instead of silently treated as complete data. Top-100 click-label and
+200-section bounds carry explicit truncation metadata and caveats. Future-dated
+snapshot evidence is flagged as clock skew rather than fresh. The exact same
 project-scoped REST queries power MCP and the admin UI.
 
 ## `poolstatis.xyz` landing handoff

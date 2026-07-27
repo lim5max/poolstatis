@@ -167,6 +167,7 @@ export interface VisualExperienceResponse {
   };
   click_cells: Array<{ x: number; y: number; count: number; actors: number }>;
   click_labels: Array<{ label: string; count: number; actors: number }>;
+  click_labels_truncated: boolean;
   scroll_coverage: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
   sections: Array<{
     section: string;
@@ -176,6 +177,7 @@ export interface VisualExperienceResponse {
     percentage: number;
     dropoff_percentage: number;
   }>;
+  sections_truncated: boolean;
   agent_context: {
     scope: {
       surface: string;
@@ -195,8 +197,10 @@ export interface VisualExperienceResponse {
     largest_section_dropoffs: Array<{
       from_section: string;
       to_section: string;
-      lost_sessions: number;
-      percentage_points: number;
+      from_sessions: number;
+      to_sessions: number;
+      session_count_decrease: number;
+      percentage_point_decrease: number;
     }>;
     click_concentration: Array<{
       label: string;
@@ -205,8 +209,14 @@ export interface VisualExperienceResponse {
       percentage_of_all_clicks: number;
     }>;
     scroll_reach: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+    output_coverage: {
+      click_labels_returned: number;
+      click_labels_truncated: boolean;
+      sections_returned: number;
+      sections_truncated: boolean;
+    };
     snapshot_coverage: {
-      status: 'fresh' | 'stale' | 'missing';
+      status: 'fresh' | 'stale' | 'future' | 'missing';
       exact_viewport_match: boolean;
       snapshot_id: string | null;
       evidence_ref: string | null;
@@ -238,7 +248,12 @@ export interface VisualExperienceCompareResponse {
     sessions: number;
     clicks: number;
     actors: number;
-    sections: Array<{ section: string; percentage_points: number }>;
+    sections: Array<{
+      section: string;
+      baseline_present: boolean;
+      comparison_present: boolean;
+      percentage_points: number | null;
+    }>;
   };
   agent_context: {
     scope: { surface: string; route: string; purpose: string };
@@ -251,6 +266,11 @@ export interface VisualExperienceCompareResponse {
       baseline_percentage: number;
       comparison_percentage: number;
       percentage_points: number;
+    }>;
+    section_taxonomy_mismatches: Array<{
+      section: string;
+      baseline_present: boolean;
+      comparison_present: boolean;
     }>;
     evidence_refs: Array<{ type: 'experience_snapshot'; id: string; evidence_ref: string }>;
     data_quality: { status: 'ok' | 'limited' | 'empty'; caveats: string[] };

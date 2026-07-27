@@ -717,14 +717,14 @@ jsonTool(
 
 jsonTool(
   'get_visual_experience_map',
-  'Explain one bounded surface/route/version/device/period using purpose, sample sizes, ordered safe section labels, counts and percentages, largest section-to-section drop-offs, safe-label click concentration, scroll reach, snapshot freshness/coverage, evidence references, data-quality caveats and deterministic next actions. Returns aggregates only: never DOM, page text, input values, image bytes or PII. Evidence is descriptive and non-causal.',
+  'Explain one bounded surface/route/version/device/period using purpose, sample sizes, ordered safe section labels, counts and percentages, largest adjacent-section aggregate reach decreases, safe-label click concentration, scroll reach, snapshot freshness/coverage, evidence references, truncation/data-quality caveats and deterministic next actions with resolved periods. Returns aggregates only: never DOM, page text, input values, image bytes or PII. Reach counts do not track the same sessions between sections; evidence is descriptive and non-causal.',
   { project, query: visualExperienceQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'visual_experience', ...query })),
 );
 
 jsonTool(
   'compare_visual_experience',
-  'Compare two explicit bounded version/device/period cohorts for one purpose-tagged route. Returns both sample sizes, count deltas, section percentage-point changes, snapshot evidence/freshness, data-quality caveats and deterministic map follow-ups. It never invents causes or returns DOM, page text, input values, image bytes or PII; all differences are descriptive and non-causal.',
+  'Compare two explicit bounded version/device/period cohorts for one purpose-tagged route. Returns both sample sizes, count deltas, matched-label section percentage-point changes, taxonomy mismatches, snapshot evidence/freshness, truncation/data-quality caveats and deterministic map follow-ups with resolved ISO periods. It never invents causes or returns DOM, page text, input values, image bytes or PII; all differences are descriptive and non-causal.',
   { project, query: visualExperienceCompareSchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'visual_experience_compare', ...query })),
 );

@@ -55,8 +55,10 @@ interface VisualAgentContext {
   largest_section_dropoffs: Array<{
     from_section: string;
     to_section: string;
-    lost_sessions: number;
-    percentage_points: number;
+    from_sessions: number;
+    to_sessions: number;
+    session_count_decrease: number;
+    percentage_point_decrease: number;
   }>;
   click_concentration: Array<{
     label: string;
@@ -65,8 +67,14 @@ interface VisualAgentContext {
     percentage_of_all_clicks: number;
   }>;
   scroll_reach: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+  output_coverage: {
+    click_labels_returned: number;
+    click_labels_truncated: boolean;
+    sections_returned: number;
+    sections_truncated: boolean;
+  };
   snapshot_coverage: {
-    status: 'fresh' | 'stale' | 'missing';
+    status: 'fresh' | 'stale' | 'future' | 'missing';
     exact_viewport_match: boolean;
     snapshot_id: string | null;
     evidence_ref: string | null;
@@ -99,6 +107,11 @@ interface VisualCompareAgentContext {
     baseline_percentage: number;
     comparison_percentage: number;
     percentage_points: number;
+  }>;
+  section_taxonomy_mismatches: Array<{
+    section: string;
+    baseline_present: boolean;
+    comparison_present: boolean;
   }>;
   evidence_refs: VisualEvidenceRef[];
   data_quality: VisualAgentContext['data_quality'];
@@ -175,8 +188,10 @@ export type QueryResult =
       summary: Awaited<ReturnType<EventStore['visualExperience']>>['summary'];
       click_cells: Awaited<ReturnType<EventStore['visualExperience']>>['click_cells'];
       click_labels: Awaited<ReturnType<EventStore['visualExperience']>>['click_labels'];
+      click_labels_truncated: boolean;
       scroll_coverage: Awaited<ReturnType<EventStore['visualExperience']>>['scroll_coverage'];
       sections: Awaited<ReturnType<EventStore['visualExperience']>>['sections'];
+      sections_truncated: boolean;
       agent_context: VisualAgentContext;
       causality: string;
       meta: QueryMeta;
@@ -191,7 +206,12 @@ export type QueryResult =
         sessions: number;
         clicks: number;
         actors: number;
-        sections: Array<{ section: string; percentage_points: number }>;
+        sections: Array<{
+          section: string;
+          baseline_present: boolean;
+          comparison_present: boolean;
+          percentage_points: number | null;
+        }>;
       };
       agent_context: VisualCompareAgentContext;
       causality: string;
@@ -782,7 +802,7 @@ export class QueryService {
       to,
       grid: q.grid,
     });
-    const agentContext = buildVisualAgentContext(surface, q, result, snapshot, now);
+    const agentContext = buildVisualAgentContext(surface, q, result, snapshot, from, to, now);
     return {
       kind: 'visual_experience',
       surface: { key: surface.key, name: surface.name, purpose: surface.purpose, status: surface.status },
@@ -838,10 +858,18 @@ export class QueryService {
     const baselineSections = new Map(baseline.sections.map((item) => [item.section, item.percentage]));
     const comparisonSections = new Map(comparison.sections.map((item) => [item.section, item.percentage]));
     const sectionKeys = [...new Set([...baselineSections.keys(), ...comparisonSections.keys()])].sort();
-    const sectionDeltas = sectionKeys.map((section) => ({
-      section,
-      percentage_points: Number(((comparisonSections.get(section) ?? 0) - (baselineSections.get(section) ?? 0)).toFixed(2)),
-    }));
+    const sectionDeltas = sectionKeys.map((section) => {
+      const baselinePresent = baselineSections.has(section);
+      const comparisonPresent = comparisonSections.has(section);
+      return {
+        section,
+        baseline_present: baselinePresent,
+        comparison_present: comparisonPresent,
+        percentage_points: baselinePresent && comparisonPresent
+          ? Number((comparisonSections.get(section)! - baselineSections.get(section)!).toFixed(2))
+          : null,
+      };
+    });
     return {
       kind: 'visual_experience_compare',
       baseline,
@@ -866,6 +894,8 @@ function buildVisualAgentContext(
   q: VisualExperienceQueryInput,
   result: Awaited<ReturnType<EventStore['visualExperience']>>,
   snapshot: Awaited<ReturnType<typeof getExactExperienceSnapshot>>,
+  from: Date,
+  to: Date,
   now: Date,
 ): VisualAgentContext {
   const sectionDropoffs = result.sections.slice(1).map((section, index) => {
@@ -873,12 +903,15 @@ function buildVisualAgentContext(
     return {
       from_section: previous.section,
       to_section: section.section,
-      lost_sessions: Math.max(0, previous.sessions - section.sessions),
-      percentage_points: Number(Math.max(0, previous.percentage - section.percentage).toFixed(2)),
+      from_sessions: previous.sessions,
+      to_sessions: section.sessions,
+      session_count_decrease: previous.sessions - section.sessions,
+      percentage_point_decrease: Number((previous.percentage - section.percentage).toFixed(2)),
     };
-  }).sort((a, b) =>
-    b.percentage_points - a.percentage_points
-    || b.lost_sessions - a.lost_sessions
+  }).filter((item) => item.percentage_point_decrease > 0 || item.session_count_decrease > 0)
+    .sort((a, b) =>
+    b.percentage_point_decrease - a.percentage_point_decrease
+    || b.session_count_decrease - a.session_count_decrease
     || a.from_section.localeCompare(b.from_section)
     || a.to_section.localeCompare(b.to_section)
   ).slice(0, 5);
@@ -888,28 +921,48 @@ function buildVisualAgentContext(
     'This evidence is descriptive and non-causal; verify instrumentation and cohort differences before acting.',
   ];
   let quality: VisualAgentContext['data_quality']['status'] = 'ok';
+  const capturedAt = snapshot ? new Date(snapshot.captured_at).toISOString() : null;
+  const expiresAt = snapshot ? new Date(snapshot.expires_at).toISOString() : null;
+  const snapshotAgeSeconds = capturedAt === null
+    ? null
+    : Math.floor((now.getTime() - new Date(capturedAt).getTime()) / 1000);
+  const snapshotStatus: VisualAgentContext['snapshot_coverage']['status'] = !snapshot
+    ? 'missing'
+    : snapshotAgeSeconds !== null && snapshotAgeSeconds < 0
+      ? 'future'
+      : snapshot.stale
+        ? 'stale'
+        : 'fresh';
+  if (!snapshot) {
+    quality = 'limited';
+    caveats.push('No exact snapshot matched, so events are not restricted to one viewport and document size.');
+  } else if (snapshotStatus === 'future') {
+    quality = 'limited';
+    caveats.push('The matching snapshot captured_at is in the future; verify capture clock skew before using its coordinates.');
+  } else if (snapshotStatus === 'stale') {
+    quality = 'limited';
+    caveats.push('The matching snapshot is stale; confirm the route still renders this version before interpreting coordinates.');
+  }
   if (result.summary.sessions === 0) {
     quality = 'empty';
     caveats.push('No eligible page-view sessions matched this exact scope and period.');
   } else {
-    if (!snapshot) {
-      quality = 'limited';
-      caveats.push('No exact snapshot matched, so events are not restricted to one viewport and document size.');
-    } else if (snapshot.stale) {
-      quality = 'limited';
-      caveats.push('The matching snapshot is stale; confirm the route still renders this version before interpreting coordinates.');
-    }
     if (result.sections.length === 0) {
       quality = 'limited';
       caveats.push('No stable section exposure labels were observed, so section reach and drop-off are unavailable.');
     }
-    if (labelledClicks < result.summary.clicks) {
+    if (result.sections_truncated) {
+      quality = 'limited';
+      caveats.push('Section output reached the 200-label bound; section order and drop-off omit additional labels.');
+    }
+    if (result.click_labels_truncated) {
+      quality = 'limited';
+      caveats.push('Click-label output reached the top-100 bound; remaining safe labels are omitted from concentration output.');
+    } else if (labelledClicks < result.summary.clicks) {
       quality = 'limited';
       caveats.push(`${result.summary.clicks - labelledClicks} click(s) lacked a safe stable label and are excluded from label concentration.`);
     }
   }
-  const capturedAt = snapshot ? new Date(snapshot.captured_at).toISOString() : null;
-  const expiresAt = snapshot ? new Date(snapshot.expires_at).toISOString() : null;
   const evidenceRefs: VisualEvidenceRef[] = snapshot ? [{
     type: 'experience_snapshot',
     id: snapshot.id,
@@ -937,16 +990,20 @@ function buildVisualAgentContext(
       percentage_of_all_clicks: percentage(item.count, result.summary.clicks),
     })),
     scroll_reach: result.scroll_coverage,
+    output_coverage: {
+      click_labels_returned: result.click_labels.length,
+      click_labels_truncated: result.click_labels_truncated,
+      sections_returned: result.sections.length,
+      sections_truncated: result.sections_truncated,
+    },
     snapshot_coverage: {
-      status: snapshot ? (snapshot.stale ? 'stale' : 'fresh') : 'missing',
+      status: snapshotStatus,
       exact_viewport_match: snapshot !== null,
       snapshot_id: snapshot?.id ?? null,
       evidence_ref: snapshot?.evidence_ref ?? null,
       captured_at: capturedAt,
       expires_at: expiresAt,
-      age_seconds: capturedAt === null
-        ? null
-        : Math.max(0, Math.floor((now.getTime() - new Date(capturedAt).getTime()) / 1000)),
+      age_seconds: snapshotAgeSeconds,
     },
     evidence_refs: evidenceRefs,
     data_quality: { status: quality, caveats },
@@ -969,8 +1026,8 @@ function buildVisualAgentContext(
           baseline: {
             version: q.version,
             device: q.device,
-            date_from: q.date_from,
-            ...(q.date_to ? { date_to: q.date_to } : {}),
+            date_from: from.toISOString(),
+            date_to: to.toISOString(),
           },
         },
         requires: ['comparison.version', 'comparison.device', 'comparison.date_from'],
@@ -983,19 +1040,38 @@ function buildVisualCompareAgentContext(
   q: VisualExperienceCompareInput,
   baseline: Extract<QueryResult, { kind: 'visual_experience' }>,
   comparison: Extract<QueryResult, { kind: 'visual_experience' }>,
-  sectionDeltas: Array<{ section: string; percentage_points: number }>,
+  sectionDeltas: Array<{
+    section: string;
+    baseline_present: boolean;
+    comparison_present: boolean;
+    percentage_points: number | null;
+  }>,
 ): VisualCompareAgentContext {
   const baselineSections = new Map(baseline.sections.map((item) => [item.section, item.percentage]));
   const comparisonSections = new Map(comparison.sections.map((item) => [item.section, item.percentage]));
   const evidenceRefs = [...baseline.agent_context.evidence_refs, ...comparison.agent_context.evidence_refs]
     .filter((item, index, all) => all.findIndex((candidate) => candidate.evidence_ref === item.evidence_ref) === index);
+  const taxonomyMismatches = sectionDeltas.filter((item) =>
+    !item.baseline_present || !item.comparison_present
+  ).map(({ section, baseline_present, comparison_present }) => ({
+    section,
+    baseline_present,
+    comparison_present,
+  }));
   const caveats = [
     ...baseline.agent_context.data_quality.caveats.map((item) => `Baseline: ${item}`),
     ...comparison.agent_context.data_quality.caveats.map((item) => `Comparison: ${item}`),
     'Deltas are descriptive and non-causal; traffic mix, instrumentation, seasonality and concurrent changes may differ.',
+    ...(taxonomyMismatches.length > 0
+      ? ['Section labels differ between cohorts; unmatched labels are reported as taxonomy mismatches, not behavioral deltas.']
+      : []),
   ];
   const statuses = [baseline.agent_context.data_quality.status, comparison.agent_context.data_quality.status];
-  const quality = statuses.includes('empty') ? 'empty' : statuses.includes('limited') ? 'limited' : 'ok';
+  const quality = statuses.includes('empty')
+    ? 'empty'
+    : statuses.includes('limited') || taxonomyMismatches.length > 0
+      ? 'limited'
+      : 'ok';
   return {
     scope: {
       surface: baseline.surface.key,
@@ -1006,15 +1082,16 @@ function buildVisualCompareAgentContext(
       baseline: baseline.agent_context.sample_size,
       comparison: comparison.agent_context.sample_size,
     },
-    largest_section_changes: sectionDeltas.map((item) => ({
+    largest_section_changes: sectionDeltas.filter((item) => item.percentage_points !== null).map((item) => ({
       section: item.section,
-      baseline_percentage: baselineSections.get(item.section) ?? 0,
-      comparison_percentage: comparisonSections.get(item.section) ?? 0,
-      percentage_points: item.percentage_points,
+      baseline_percentage: baselineSections.get(item.section)!,
+      comparison_percentage: comparisonSections.get(item.section)!,
+      percentage_points: item.percentage_points!,
     })).sort((a, b) =>
       Math.abs(b.percentage_points) - Math.abs(a.percentage_points)
       || a.section.localeCompare(b.section)
     ).slice(0, 5),
+    section_taxonomy_mismatches: taxonomyMismatches,
     evidence_refs: evidenceRefs,
     data_quality: { status: quality, caveats: [...new Set(caveats)] },
     suggested_next_actions: [
@@ -1027,8 +1104,8 @@ function buildVisualCompareAgentContext(
           route: q.route,
           version: q.baseline.version,
           device: q.baseline.device,
-          date_from: q.baseline.date_from,
-          ...(q.baseline.date_to ? { date_to: q.baseline.date_to } : {}),
+          date_from: baseline.meta.date_range!.from,
+          date_to: baseline.meta.date_range!.to,
           grid: q.grid,
           env: q.env,
         },
@@ -1042,8 +1119,8 @@ function buildVisualCompareAgentContext(
           route: q.route,
           version: q.comparison.version,
           device: q.comparison.device,
-          date_from: q.comparison.date_from,
-          ...(q.comparison.date_to ? { date_to: q.comparison.date_to } : {}),
+          date_from: comparison.meta.date_range!.from,
+          date_to: comparison.meta.date_range!.to,
           grid: q.grid,
           env: q.env,
         },

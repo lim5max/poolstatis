@@ -323,6 +323,7 @@ export interface VisualExperienceResult {
   };
   click_cells: Array<{ x: number; y: number; count: number; actors: number }>;
   click_labels: Array<{ label: string; count: number; actors: number }>;
+  click_labels_truncated: boolean;
   scroll_coverage: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
   sections: Array<{
     section: string;
@@ -332,6 +333,7 @@ export interface VisualExperienceResult {
     percentage: number;
     dropoff_percentage: number;
   }>;
+  sections_truncated: boolean;
 }
 
 /**

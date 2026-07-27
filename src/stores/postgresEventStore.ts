@@ -781,7 +781,7 @@ export class PostgresEventStore implements EventStore {
                 count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors
          FROM cohort
          WHERE event = 'experience.element_clicked'
-         GROUP BY 1 ORDER BY count DESC, label LIMIT 100`,
+         GROUP BY 1 ORDER BY count DESC, label LIMIT 101`,
         filterParams,
       ),
       this.pool.query<{ depth: string; sessions: string; actors: string; percentage: string }>(
@@ -836,7 +836,7 @@ export class PostgresEventStore implements EventStore {
          FROM cohort CROSS JOIN page_total p
          WHERE event = 'experience.section_exposed'
          GROUP BY properties->>'section', p.sessions
-         ORDER BY top, section LIMIT 200`,
+         ORDER BY top, section LIMIT 201`,
         filterParams,
       ),
     ]);
@@ -854,16 +854,17 @@ export class PostgresEventStore implements EventStore {
       click_cells: cells.rows.map((row) => ({
         x: Number(row.x), y: Number(row.y), count: Number(row.count), actors: Number(row.actors),
       })),
-      click_labels: labels.rows.map((row) => ({
+      click_labels: labels.rows.slice(0, 100).map((row) => ({
         label: row.label, count: Number(row.count), actors: Number(row.actors),
       })),
+      click_labels_truncated: labels.rows.length > 100,
       scroll_coverage: scroll.rows.map((row) => ({
         depth: Number(row.depth),
         sessions: Number(row.sessions),
         actors: Number(row.actors),
         percentage: Number(row.percentage),
       })),
-      sections: sections.rows.map((row) => ({
+      sections: sections.rows.slice(0, 200).map((row) => ({
         section: row.section,
         top: Number(row.top),
         sessions: Number(row.sessions),
@@ -871,6 +872,7 @@ export class PostgresEventStore implements EventStore {
         percentage: Number(row.percentage),
         dropoff_percentage: Number(row.dropoff_percentage),
       })),
+      sections_truncated: sections.rows.length > 200,
     };
   }
 

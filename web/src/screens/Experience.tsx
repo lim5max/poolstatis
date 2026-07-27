@@ -469,7 +469,10 @@ function ComparisonStrip({ comparison }: { comparison: VisualExperienceCompareRe
         <div className="mt-3 flex flex-wrap gap-2">
           {comparison.delta.sections.map((section) => (
             <span key={section.section} className="rounded-md border bg-background px-2 py-1 font-mono text-xs">
-              {section.section} {signed(section.percentage_points)} pp
+              {section.section}{' '}
+              {section.percentage_points === null
+                ? 'taxonomy mismatch'
+                : `${signed(section.percentage_points)} pp`}
             </span>
           ))}
         </div>
