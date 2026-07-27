@@ -194,7 +194,7 @@ export interface VisualExperienceResponse {
       clicks: number;
     };
     section_order: string[];
-    largest_section_dropoffs: Array<{
+    largest_section_reach_decreases: Array<{
       from_section: string;
       to_section: string;
       from_sessions: number;

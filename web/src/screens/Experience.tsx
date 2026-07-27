@@ -42,7 +42,7 @@ export function Experience() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-3xl">
             <p className="text-sm text-muted-foreground">
-              Read clicks, scroll reach and named-section drop-off on the immutable page version that produced them.
+              Read clicks, scroll reach and named-section aggregate reach on the immutable page version that produced them.
               Poolstatis stores only consented coordinates and developer labels — never DOM, text, form values,
               query strings or pointer paths.
             </p>

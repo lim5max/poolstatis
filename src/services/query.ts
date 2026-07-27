@@ -52,7 +52,7 @@ interface VisualAgentContext {
     clicks: number;
   };
   section_order: string[];
-  largest_section_dropoffs: Array<{
+  largest_section_reach_decreases: Array<{
     from_section: string;
     to_section: string;
     from_sessions: number;
@@ -898,7 +898,7 @@ function buildVisualAgentContext(
   to: Date,
   now: Date,
 ): VisualAgentContext {
-  const sectionDropoffs = result.sections.slice(1).map((section, index) => {
+  const sectionReachDecreases = result.sections.slice(1).map((section, index) => {
     const previous = result.sections[index]!;
     return {
       from_section: previous.section,
@@ -984,7 +984,7 @@ function buildVisualAgentContext(
       clicks: result.summary.clicks,
     },
     section_order: result.sections.map((section) => section.section),
-    largest_section_dropoffs: sectionDropoffs,
+    largest_section_reach_decreases: sectionReachDecreases,
     click_concentration: result.click_labels.map((item) => ({
       ...item,
       percentage_of_all_clicks: percentage(item.count, result.summary.clicks),

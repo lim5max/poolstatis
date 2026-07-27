@@ -188,7 +188,7 @@ beforeAll(async () => {
             },
             sample_size: { events: 8, sessions: 3, actors: 3, page_views: 3, clicks: 2 },
             section_order: ['checkout_form'],
-            largest_section_dropoffs: [],
+            largest_section_reach_decreases: [],
             click_concentration: [{ label: 'checkout.pay', count: 2, actors: 2, percentage_of_all_clicks: 100 }],
             scroll_reach: [{ depth: 100, sessions: 2, actors: 2, percentage: 66.67 }],
             snapshot_coverage: {

@@ -210,7 +210,7 @@ describe('visual experience maps', () => {
         },
         sample_size: { events: 7, page_views: 2, sessions: 2, actors: 2, clicks: 1 },
         section_order: ['hero', 'features'],
-        largest_section_dropoffs: [{
+        largest_section_reach_decreases: [{
           from_section: 'hero',
           to_section: 'features',
           from_sessions: 2,
