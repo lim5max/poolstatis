@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Loader2, Search } from '@/components/icons';
 import { useAsync, useStore } from '../store';
@@ -100,13 +100,13 @@ export function Measurement() {
       <p className="mb-4 max-w-3xl text-sm text-muted-foreground">Browser acquisition setup adds only the five canonical UTM definitions as proposed. Session landing attribution is an association, not causal campaign credit.</p>
       {attributionError && <div className="mb-4"><ErrorNote>{attributionError}</ErrorNote></div>}
       {properties.length === 0 ? <p className="text-sm text-muted-foreground">No decision properties are registered yet.</p> : <div className="overflow-x-auto">
-        <Table><TableHeader><TableRow><TableHead>Property</TableHead><TableHead>Meaning</TableHead><TableHead>Type</TableHead><TableHead>Trust</TableHead><TableHead>Coverage</TableHead><TableHead>Source</TableHead></TableRow></TableHeader>
+        <Table data-testid="property-meanings-table" className="min-w-6xl table-fixed"><TableHeader><TableRow><TableHead className="w-56">Property</TableHead><TableHead className="w-96">Meaning</TableHead><TableHead className="w-28">Type</TableHead><TableHead className="w-32">Trust</TableHead><TableHead className="w-64">Coverage</TableHead><TableHead className="w-28">Source</TableHead></TableRow></TableHeader>
           <TableBody>{properties.map((property) => <TableRow key={`${property.scope}:${property.key}`}>
-            <TableCell><code className="text-xs">{property.scope}.{property.key}</code></TableCell>
-            <TableCell className="max-w-lg text-sm text-muted-foreground">{property.purpose}</TableCell>
+            <TableCell className="break-all align-top"><code className="break-all text-xs">{property.scope}.{property.key}</code></TableCell>
+            <TableCell className="whitespace-normal break-words align-top text-sm text-muted-foreground">{property.purpose}</TableCell>
             <TableCell><Badge variant="outline" className="font-normal">{property.value_type}</Badge></TableCell>
             <TableCell><PropertyTrustBadge status={property.status} /></TableCell>
-            <TableCell className="min-w-44 text-xs text-muted-foreground"><PropertyCoverage property={property.key} rows={propertyCoverage} /></TableCell>
+            <TableCell className="whitespace-normal break-words align-top text-xs text-muted-foreground"><PropertyCoverage property={property.key} rows={propertyCoverage} /></TableCell>
             <TableCell className="text-xs text-muted-foreground">{property.source}</TableCell>
           </TableRow>)}</TableBody>
         </Table>
@@ -161,6 +161,13 @@ function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: 
   const [busy, setBusy] = useState(false);
   const [setupBusy, setSetupBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestGeneration = useRef(0);
+  useEffect(() => {
+    requestGeneration.current += 1;
+    setResult(null);
+    setError(null);
+    setBusy(false);
+  }, [project, env, period]);
   const setup = async () => {
     setSetupBusy(true); setError(null);
     try { await client!.proposeBrowserAnalytics(project!); onSetup(); }
@@ -169,22 +176,29 @@ function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: 
   };
   const run = async () => {
     if (!metric) return;
+    const generation = ++requestGeneration.current;
     setBusy(true); setError(null); setResult(null);
     try {
-      setResult(await client!.webAnalytics(project!, {
+      const response = await client!.webAnalytics(project!, {
         metric: metric.key, date_from: `-${period}d`, dimensions: webDimensions, env,
-      }));
+      });
+      if (requestGeneration.current === generation) setResult(response);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'could not query web analytics');
-    } finally { setBusy(false); }
+      if (requestGeneration.current === generation) {
+        setError(caught instanceof Error ? caught.message : 'could not query web analytics');
+      }
+    } finally {
+      if (requestGeneration.current === generation) setBusy(false);
+    }
   };
   return <Panel title="Web analytics" right={<span className="text-xs text-muted-foreground">consented browser context · {env}</span>}>
     <p className="max-w-3xl text-sm text-muted-foreground">How many visited, where they came from, and what they used.</p>
     <div className="mt-4 flex flex-wrap items-end gap-2">
       <div className="space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Period</label><Select value={period} onValueChange={(value) => { setPeriod(value); setResult(null); }}><SelectTrigger aria-label="Web analytics period" className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent></Select></div>
       {metric
-        ? <Button onClick={run} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}Run traffic summary</Button>
+        ? <Button onClick={run} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}{result ? 'Refresh traffic summary' : 'Run traffic summary'}</Button>
         : <Button variant="outline" onClick={setup} disabled={setupBusy}>{setupBusy ? 'Proposing…' : 'Propose browser analytics'}</Button>}
+      {result && <span className="pb-2 text-xs text-muted-foreground">Snapshot {formatDate(result.meta.computed_at)}</span>}
     </div>
     {!metric && <div className="mt-4"><EmptyState headline="Traffic summary unavailable" lead="propose the canonical bundle, review it in Registry, then activate web_page_views" /></div>}
     {error && <div className="mt-4"><ErrorNote>{error}</ErrorNote></div>}
@@ -504,13 +518,21 @@ function RankedDimensionExplorer({
           aria-label={`${webDimensionLabels[dimension]} ranked by page views`}
         >
           {visibleRows.map((row) => {
-            const label = row.value.trim() && row.value.toLocaleLowerCase() !== 'unknown' ? row.value : 'Unknown';
+            const countryLabel = dimension === 'country' ? countryDisplayName(row.value) : null;
+            const isUnknownCountry = dimension === 'country' && countryLabel === null;
+            const label = dimension === 'country'
+              ? countryLabel ?? 'Unknown'
+              : row.value.trim() && row.value.toLocaleLowerCase() !== 'unknown' ? row.value : 'Unknown';
             const percentage = Number.isFinite(row.percentage)
               ? Math.max(0, Math.min(100, row.percentage))
               : 0;
             return <div key={row.value} className="relative isolate grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] gap-3 overflow-hidden px-4 py-2.5 text-sm" role="listitem">
               <div className="absolute inset-y-1 left-0 -z-10 rounded-r-sm bg-primary/10" style={{ width: `${percentage}%` }} aria-hidden="true" />
-              <span className="min-w-0 truncate font-medium" title={label}>{label}</span>
+              {isUnknownCountry
+                ? <Hint label="Historical events stay Unknown because raw IP is not stored, so earlier traffic cannot be backfilled. VPN or proxy traffic may also be unresolved.">
+                  <button type="button" aria-label="Unknown country explanation" className="min-w-0 truncate rounded-sm text-left font-medium underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Unknown</button>
+                </Hint>
+                : <span className="min-w-0 truncate font-medium" title={label}>{label}</span>}
               <span className="tabular-nums">{fmtNum(row.page_views)}</span>
               <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{percentage}%</span>
               <span className="sr-only">{fmtNum(row.visitors)} visitors, {fmtNum(row.sessions)} sessions</span>
@@ -715,4 +737,17 @@ function pct(value: number) {
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+}
+
+function countryDisplayName(value: string) {
+  const code = value.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return null;
+  const flag = String.fromCodePoint(...[...code].map((character) => character.charCodeAt(0) + 127397));
+  try {
+    const name = new Intl.DisplayNames(['en'], { type: 'region' }).of(code);
+    if (!name || name === code || name === 'Unknown Region') return null;
+    return `${flag} ${name ?? code}`;
+  } catch {
+    return null;
+  }
 }

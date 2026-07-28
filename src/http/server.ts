@@ -1324,13 +1324,16 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const actor = authOwner(req.auth);
-    return {
+    const result = {
       properties: [
         ...await proposeBrowserAnalyticsProperties(ctx.pool, project.id, actor),
         ...await proposeAcquisitionProperties(ctx.pool, project.id, actor),
       ],
       metrics: await proposeBrowserAnalyticsMetrics(ctx.pool, project.id, actor),
     };
+    ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
+    return result;
   });
 
   app.get('/api/v1/projects/:slug/properties', async (req) => {

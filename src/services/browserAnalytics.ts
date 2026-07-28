@@ -3,7 +3,7 @@ import { ApiError, badRequest } from '../errors.js';
 import { isIsoAlpha2Country } from './country.js';
 import { ACQUISITION_UTM_PROPERTIES } from './acquisitionAttribution.js';
 import { createPropertyDefinition, listPropertyDefinitions, type PropertyDefinition } from './properties.js';
-import { listMetrics, registerMetric, type Metric } from './registry.js';
+import { listMetrics, registerMetric, updateMetric, type Metric } from './registry.js';
 
 type Spec = {
   value_type: 'string' | 'enum';
@@ -117,29 +117,75 @@ export async function proposeBrowserAnalyticsMetrics(
   actor: string,
 ): Promise<Metric[]> {
   const existing = new Map((await listMetrics(pool, projectId)).map((metric) => [metric.key, metric]));
-  const result: Metric[] = [];
-  for (const spec of BROWSER_METRICS) {
+  const plans = BROWSER_METRICS.map((spec) => {
     const metric = existing.get(spec.key);
+    if (!metric) return { spec, metric: null };
+    const source = metric.source as {
+      event?: string;
+      data_source?: string;
+      filters?: unknown[];
+      source_connection_id?: unknown;
+    };
+    const filters = source.filters ?? [];
+    const canonicalFilter = filters[0] as { property?: unknown; op?: unknown; value?: unknown } | undefined;
+    const canonicalFilters = filters.length === 1
+      && canonicalFilter?.property === '$browser_context'
+      && canonicalFilter.op === 'eq'
+      && canonicalFilter.value === '1';
+    const legacyCompatibleFilters = filters.length === 0 || canonicalFilters;
+    const hasUnexpectedSourceFields = Object.keys(source)
+      .some((key) => !['event', 'filters', 'data_source'].includes(key));
+    if (metric.type !== spec.type
+      || !['active', 'proposed'].includes(metric.status)
+      || source.event !== 'page.viewed'
+      || (source.data_source ?? 'native') !== 'native'
+      || source.source_connection_id !== undefined
+      || hasUnexpectedSourceFields
+      || !legacyCompatibleFilters) {
+      throw new ApiError(
+        409,
+        'browser_metric_conflict',
+        `reserved browser metric "${spec.key}" has an incompatible definition`,
+        'restore a compatible active or proposed native page.viewed definition before enabling web analytics',
+      );
+    }
+    return { spec, metric };
+  });
+
+  const result: Metric[] = [];
+  for (const { spec, metric } of plans) {
+    const tags = [...new Set([...(metric?.tags ?? []), 'browser-analytics'])];
     if (metric) {
       const source = metric.source as { event?: string; data_source?: string; filters?: unknown[] };
-      if (metric.name !== spec.name || metric.purpose !== spec.purpose || metric.type !== spec.type
-        || metric.category !== 'acquisition' || source.event !== 'page.viewed'
-        || (source.data_source ?? 'native') !== 'native'
-        || JSON.stringify(source.filters ?? []) !== JSON.stringify(BROWSER_METRIC_FILTERS)) {
-        throw new ApiError(
-          409,
-          'browser_metric_conflict',
-          `reserved browser metric "${spec.key}" has an incompatible definition`,
-          'restore the canonical page.viewed metric definition before enabling web analytics',
-        );
+      const filter = source.filters?.[0] as { property?: unknown; op?: unknown; value?: unknown } | undefined;
+      const alreadyCanonical = metric.name === spec.name
+        && metric.purpose === spec.purpose
+        && metric.category === 'acquisition'
+        && metric.tags.length === tags.length
+        && metric.tags.every((tag, index) => tag === tags[index])
+        && source.event === 'page.viewed'
+        && source.data_source === 'native'
+        && source.filters?.length === 1
+        && filter?.property === '$browser_context'
+        && filter.op === 'eq'
+        && filter.value === '1';
+      if (alreadyCanonical) {
+        result.push(metric);
+        continue;
       }
-      result.push(metric);
+      result.push(await updateMetric(pool, projectId, spec.key, {
+        name: spec.name,
+        purpose: spec.purpose,
+        category: 'acquisition',
+        tags,
+        source: { event: 'page.viewed', filters: BROWSER_METRIC_FILTERS, data_source: 'native' },
+      }));
       continue;
     }
     result.push(await registerMetric(pool, projectId, {
       ...spec,
       category: 'acquisition',
-      tags: ['browser-analytics'],
+      tags,
       source: { event: 'page.viewed', filters: BROWSER_METRIC_FILTERS, data_source: 'native' },
     }, actor));
   }

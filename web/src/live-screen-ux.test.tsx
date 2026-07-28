@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Experience } from './screens/Experience';
@@ -14,6 +14,12 @@ vi.mock('./store', async (importOriginal) => ({
 }));
 
 const mockedStore = vi.mocked(useStore);
+vi.stubGlobal('ResizeObserver', class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+});
+HTMLElement.prototype.scrollIntoView = vi.fn();
 const metric = {
   id: 'm1', key: 'landing_visits', name: 'Landing visits',
   purpose: 'Count accepted landing page visits for acquisition reporting.',
@@ -223,6 +229,9 @@ describe('live customer screen UX', () => {
     expect(screen.getByText('2m 5s')).toBeInTheDocument();
     expect(screen.getByText(/2 incomplete sessions/)).toBeInTheDocument();
     expect(screen.getByText('75%')).toBeInTheDocument();
+    expect(screen.getByText('🇺🇸 United States')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh traffic summary' })).toBeInTheDocument();
+    expect(screen.getByText(/Snapshot/)).toHaveTextContent('Jul 27, 2026');
     expect(screen.getByRole('link', { name: 'IP Geolocation by DB-IP' })).toHaveAttribute(
       'href',
       'https://db-ip.com',
@@ -314,6 +323,164 @@ describe('live customer screen UX', () => {
     const noData = await screen.findByRole('region', { name: 'Session detail' });
     expect(within(noData).getByText('Session details unavailable')).toBeInTheDocument();
     expect(within(noData).getByText(/No matching accepted page-view session/)).toBeInTheDocument();
+  });
+
+  it('keeps unknown country honest and explains why historical traffic cannot be backfilled', async () => {
+    const webMetric = {
+      ...metric,
+      id: 'web-unknown', key: 'web_page_views', name: 'Web page views',
+      source: { event: 'page.viewed' },
+    };
+    mockedStore.mockReturnValue(store({
+      properties: vi.fn().mockResolvedValue([]), actorLinks: vi.fn().mockResolvedValue({ links: [], audit: [] }),
+      sources: vi.fn().mockResolvedValue([]), metrics: vi.fn().mockResolvedValue([webMetric]),
+      contracts: vi.fn().mockResolvedValue([]), exportContracts: vi.fn(),
+      measurementTrust: vi.fn().mockResolvedValue({
+        status: 'trusted', primary_metric: { key: webMetric.key, purpose: webMetric.purpose, category: 'acquisition', observed_events: 1, observed_actors: 1, registered_coverage: 1 },
+        identity: { distinct_id_coverage: 1, raw_actors: 1, resolved_actors: 1 }, properties: [], blockers: [], warnings: [],
+      }),
+      trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
+      webAnalytics: vi.fn().mockResolvedValue({
+        kind: 'web_analytics',
+        summary: { visitors: 1, sessions: 1, page_views: 1 },
+        engagement: {
+          measured_sessions: 0, incomplete_sessions: 1, unknown_sessions: 1, engaged_sessions: 0,
+          bounce_sessions: 0, single_page_sessions: 1,
+          measured_session_coverage: 0, engaged_rate: null, bounce_rate: null,
+          timed_page_views: 0, total_page_views: 1, timed_page_coverage: 0,
+          foreground_ms: 0, session_span_ms: 0,
+        },
+        breakdowns: {
+          country: [{ value: 'ZZ', visitors: 1, sessions: 1, page_views: 1, percentage: 100 }],
+          device: [], browser: [], os: [], source: [],
+        },
+        meta: {
+          computed_at: '2026-07-27T00:00:00Z',
+          truncated_dimensions: [],
+          definitions: {
+            visitors: 'Unique resolved actors.',
+            sessions: 'Distinct session ids.',
+            page_views: 'Accepted stored page-view events.',
+            measured_sessions: 'Known classifications.',
+            unknown_sessions: 'Unknown classifications.',
+            engaged_sessions: 'Measured engagement.',
+            bounce_sessions: 'Count of measured sessions without engagement.',
+            engaged_rate: 'Engaged divided by measured.',
+            bounce_rate: 'Bounces divided by measured.',
+            single_page_sessions: 'Single-page sessions.',
+            foreground_ms: 'Visible focused time.',
+            session_span_ms: 'Wall-clock span.',
+          },
+          accepted_event_accounting: 'Accepted stored events.',
+          privacy: 'Raw IP is not stored.',
+        },
+      }),
+    }));
+    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    await screen.findByText('Web analytics');
+    fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
+    const unknown = await screen.findByRole('button', { name: 'Unknown country explanation' });
+    fireEvent.focus(unknown);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(/Historical events stay Unknown because raw IP is not stored/);
+    expect(screen.getByRole('tooltip')).toHaveTextContent(/VPN or proxy traffic may also be unresolved/);
+  });
+
+  it('ignores an older traffic response after the reporting period changes', async () => {
+    const webMetric = {
+      ...metric,
+      id: 'web-stale', key: 'web_page_views', name: 'Web page views',
+      source: { event: 'page.viewed' },
+    };
+    const response = (computedAt: string, pageViews: number) => ({
+      kind: 'web_analytics',
+      summary: { visitors: pageViews, sessions: pageViews, page_views: pageViews },
+      engagement: {
+        measured_sessions: 0, incomplete_sessions: pageViews, unknown_sessions: pageViews, engaged_sessions: 0,
+        bounce_sessions: 0, single_page_sessions: pageViews,
+        measured_session_coverage: 0, engaged_rate: null, bounce_rate: null,
+        timed_page_views: 0, total_page_views: pageViews, timed_page_coverage: 0,
+        foreground_ms: 0, session_span_ms: 0,
+      },
+      breakdowns: { country: [], device: [], browser: [], os: [], source: [] },
+      meta: {
+        computed_at: computedAt,
+        truncated_dimensions: [],
+        definitions: {
+          visitors: 'Unique resolved actors.',
+          sessions: 'Distinct session ids.',
+          page_views: 'Accepted stored page-view events.',
+          measured_sessions: 'Known classifications.',
+          unknown_sessions: 'Unknown classifications.',
+          engaged_sessions: 'Measured engagement.',
+          bounce_sessions: 'Count of measured sessions without engagement.',
+          engaged_rate: 'Engaged divided by measured.',
+          bounce_rate: 'Bounces divided by measured.',
+          single_page_sessions: 'Single-page sessions.',
+          foreground_ms: 'Visible focused time.',
+          session_span_ms: 'Wall-clock span.',
+        },
+        accepted_event_accounting: 'Accepted stored events.',
+        privacy: 'Raw IP is not stored.',
+      },
+    });
+    let resolveThirtyDays!: (value: ReturnType<typeof response>) => void;
+    let resolveSevenDays!: (value: ReturnType<typeof response>) => void;
+    const webAnalytics = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveThirtyDays = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSevenDays = resolve; }));
+    mockedStore.mockReturnValue(store({
+      properties: vi.fn().mockResolvedValue([]), actorLinks: vi.fn().mockResolvedValue({ links: [], audit: [] }),
+      sources: vi.fn().mockResolvedValue([]), metrics: vi.fn().mockResolvedValue([webMetric]),
+      contracts: vi.fn().mockResolvedValue([]), exportContracts: vi.fn(),
+      measurementTrust: vi.fn().mockResolvedValue({
+        status: 'trusted', primary_metric: { key: webMetric.key, purpose: webMetric.purpose, category: 'acquisition', observed_events: 1, observed_actors: 1, registered_coverage: 1 },
+        identity: { distinct_id_coverage: 1, raw_actors: 1, resolved_actors: 1 }, properties: [], blockers: [], warnings: [],
+      }),
+      trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
+      webAnalytics,
+    }));
+    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    await screen.findByText('Web analytics');
+    fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
+    const period = screen.getByRole('combobox', { name: 'Web analytics period' });
+    fireEvent.keyDown(period, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: '7 days' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run traffic summary' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
+
+    await act(async () => { resolveSevenDays(response('2030-01-02T00:00:00Z', 2)); });
+    expect(await screen.findByText(/Snapshot/)).toHaveTextContent('Jan 2, 2030');
+    await act(async () => { resolveThirtyDays(response('2030-01-01T00:00:00Z', 1)); });
+    expect(screen.getByText(/Snapshot/)).toHaveTextContent('Jan 2, 2030');
+    expect(screen.queryByText(/Jan 1, 2030/)).not.toBeInTheDocument();
+    expect(webAnalytics).toHaveBeenNthCalledWith(2, 'alpha', expect.objectContaining({ date_from: '-7d' }));
+  });
+
+  it('keeps long property meanings in bounded responsive columns', async () => {
+    const longPurpose = 'Records a deliberately long browser property meaning so the type, trust, coverage, and source columns stay readable without overlapping adjacent content.';
+    mockedStore.mockReturnValue(store({
+      properties: vi.fn().mockResolvedValue([{
+        id: 'property-1',
+        key: '$browser_family',
+        scope: 'event',
+        value_type: 'enum',
+        purpose: longPurpose,
+        enum_values: ['chrome', 'safari'],
+        status: 'proposed',
+        source: 'native',
+      }]),
+      actorLinks: vi.fn().mockResolvedValue({ links: [], audit: [] }),
+      sources: vi.fn().mockResolvedValue([]),
+      metrics: vi.fn().mockResolvedValue([]),
+      contracts: vi.fn().mockResolvedValue([]),
+      exportContracts: vi.fn(),
+    }));
+    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    const table = await screen.findByTestId('property-meanings-table');
+    expect(table).toHaveClass('table-fixed', 'min-w-6xl');
+    expect(screen.getByText(longPurpose).closest('td')).toHaveClass('whitespace-normal', 'break-words');
+    expect(screen.getByText('Not assessed').closest('td')).toHaveClass('whitespace-normal', 'break-words');
+    expect(screen.getByText('event.$browser_family').closest('td')).toHaveClass('break-all');
   });
 
   it('bounds 100+ dimension values behind one searchable ranked explorer', async () => {

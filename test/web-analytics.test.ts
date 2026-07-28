@@ -47,6 +47,267 @@ describe('web analytics query', () => {
     },
   });
 
+  it('upgrades a legacy-compatible reserved metric without changing its review status', async () => {
+    const legacy = await createTestEnv({ countryResolver });
+    try {
+      const registered = await api(
+        legacy,
+        legacy.secretToken,
+        'POST',
+        `/api/v1/projects/${legacy.projectSlug}/metrics`,
+        {
+          key: 'web_page_views',
+          name: 'Legacy page views',
+          purpose: 'Counts the older browser page-view contract before canonical setup.',
+          category: 'acquisition',
+          tags: ['legacy-import'],
+          type: 'count',
+          source: { event: 'page.viewed', filters: [], data_source: 'native' },
+        },
+      );
+      expect(registered.status).toBe(201);
+      const visitors = await api(
+        legacy,
+        legacy.secretToken,
+        'POST',
+        `/api/v1/projects/${legacy.projectSlug}/metrics`,
+        {
+          key: 'web_visitors',
+          name: 'Legacy visitors',
+          purpose: 'Counts the older browser visitor contract before canonical setup.',
+          category: 'acquisition',
+          tags: ['legacy-reach'],
+          type: 'unique_actors',
+          source: { event: 'page.viewed' },
+        },
+      );
+      expect(visitors.status).toBe(201);
+      expect((await api(
+        legacy,
+        legacy.secretToken,
+        'PATCH',
+        `/api/v1/projects/${legacy.projectSlug}/metrics/web_page_views`,
+        { status: 'active' },
+      )).status).toBe(200);
+
+      const setup = await api(
+        legacy,
+        legacy.secretToken,
+        'POST',
+        `/api/v1/projects/${legacy.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+
+      expect(setup.status).toBe(200);
+      expect(setup.body.metrics).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          key: 'web_page_views',
+          id: registered.body.id,
+          owner: registered.body.owner,
+          name: 'Web page views',
+          purpose: 'Counts consented privacy-bounded page views to assess website traffic and route demand.',
+          category: 'acquisition',
+          status: 'active',
+          tags: expect.arrayContaining(['legacy-import', 'browser-analytics']),
+          source: {
+            event: 'page.viewed',
+            filters: [{ property: '$browser_context', op: 'eq', value: '1' }],
+            data_source: 'native',
+          },
+        }),
+        expect.objectContaining({
+          key: 'web_visitors',
+          id: visitors.body.id,
+          owner: visitors.body.owner,
+          name: 'Web visitors',
+          purpose: 'Counts unique resolved browser actors to compare traffic reach without conflating sessions or page views.',
+          category: 'acquisition',
+          status: 'proposed',
+          tags: expect.arrayContaining(['legacy-reach', 'browser-analytics']),
+          source: {
+            event: 'page.viewed',
+            filters: [{ property: '$browser_context', op: 'eq', value: '1' }],
+            data_source: 'native',
+          },
+        }),
+      ]));
+      const beforeRepeat = await legacy.pool.query<{ updated_at: Date }>(
+        `SELECT updated_at
+           FROM metrics
+          WHERE project_id = $1 AND key = 'web_page_views'`,
+        [legacy.projectId],
+      );
+
+      const repeated = await api(
+        legacy,
+        legacy.secretToken,
+        'POST',
+        `/api/v1/projects/${legacy.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+      expect(repeated.status).toBe(200);
+      expect(repeated.body.metrics).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          key: 'web_page_views',
+          id: registered.body.id,
+          status: 'active',
+          tags: expect.arrayContaining(['legacy-import', 'browser-analytics']),
+        }),
+        expect.objectContaining({
+          key: 'web_visitors',
+          id: visitors.body.id,
+          status: 'proposed',
+          tags: expect.arrayContaining(['legacy-reach', 'browser-analytics']),
+        }),
+      ]));
+      expect(repeated.body.metrics.find((item: { key: string; tags: string[] }) => item.key === 'web_page_views')
+        .tags.filter((tag: string) => tag === 'browser-analytics')).toHaveLength(1);
+      const afterRepeat = await legacy.pool.query<{ updated_at: Date }>(
+        `SELECT updated_at
+           FROM metrics
+          WHERE project_id = $1 AND key = 'web_page_views'`,
+        [legacy.projectId],
+      );
+      expect(afterRepeat.rows[0]!.updated_at.toISOString()).toBe(beforeRepeat.rows[0]!.updated_at.toISOString());
+    } finally {
+      await legacy.close();
+    }
+  });
+
+  it('preflights both reserved metrics before changing a legacy-compatible definition', async () => {
+    const collision = await createTestEnv({ countryResolver });
+    try {
+      const pageViews = await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+        {
+          key: 'web_page_views',
+          name: 'Legacy page views',
+          purpose: 'Counts the untouched legacy browser page-view contract for migration safety.',
+          category: 'acquisition',
+          tags: ['must-remain-legacy'],
+          type: 'count',
+          source: { event: 'page.viewed', filters: [] },
+        },
+      );
+      expect(pageViews.status).toBe(201);
+      expect((await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+        {
+          key: 'web_visitors',
+          name: 'Checkout visitors',
+          purpose: 'Counts checkout visitors for a product-specific conversion decision.',
+          category: 'activation',
+          type: 'unique_actors',
+          source: { event: 'checkout.viewed', filters: [] },
+        },
+      )).status).toBe(201);
+
+      const setup = await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+      expect(setup.status).toBe(409);
+      expect(setup.body.error.code).toBe('browser_metric_conflict');
+
+      const listed = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+      );
+      const unchanged = listed.body.metrics.find((item: { key: string }) => item.key === 'web_page_views');
+      expect(unchanged).toEqual(expect.objectContaining({
+        id: pageViews.body.id,
+        name: 'Legacy page views',
+        purpose: 'Counts the untouched legacy browser page-view contract for migration safety.',
+        tags: ['must-remain-legacy'],
+        source: { event: 'page.viewed', filters: [], data_source: 'native' },
+      }));
+    } finally {
+      await collision.close();
+    }
+  });
+
+  it('rejects an incompatible reserved metric instead of rewriting user semantics', async () => {
+    const collision = await createTestEnv({ countryResolver });
+    try {
+      expect((await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+        {
+          key: 'web_page_views',
+          name: 'Checkout page views',
+          purpose: 'Counts checkout views for a product-specific conversion decision.',
+          category: 'activation',
+          type: 'count',
+          source: { event: 'checkout.viewed', filters: [], data_source: 'native' },
+        },
+      )).status).toBe(201);
+
+      const setup = await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+
+      expect(setup.status).toBe(409);
+      expect(setup.body.error.code).toBe('browser_metric_conflict');
+    } finally {
+      await collision.close();
+    }
+  });
+
+  it('rejects external-source residue on a legacy native reserved metric', async () => {
+    const collision = await createTestEnv({ countryResolver });
+    try {
+      expect((await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+        {
+          key: 'web_page_views',
+          name: 'Legacy page views',
+          purpose: 'Counts legacy browser page views before canonical browser analytics setup.',
+          category: 'acquisition',
+          type: 'count',
+          source: { event: 'page.viewed', filters: [] },
+        },
+      )).status).toBe(201);
+      await collision.pool.query(
+        `UPDATE metrics
+            SET source = source || jsonb_build_object('source_connection_id', $3::text)
+          WHERE project_id = $1 AND key = $2`,
+        [collision.projectId, 'web_page_views', '00000000-0000-4000-8000-000000000001'],
+      );
+
+      const setup = await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+      expect(setup.status).toBe(409);
+      expect(setup.body.error.code).toBe('browser_metric_conflict');
+    } finally {
+      await collision.close();
+    }
+  });
+
   it('exposes required DB-IP attribution only when the local MMDB resolver is active', async () => {
     const attributed = await createTestEnv({
       countryResolver: createLocalMmdbCountryResolverFromReader({
