@@ -34,6 +34,14 @@ import type {
   VisualExperienceResult,
   WebAnalyticsQuery,
   WebAnalyticsResult,
+  WebEngagementBaseQuery,
+  WebSessionsQuery,
+  WebSessionsResult,
+  WebSessionQuery,
+  WebSessionResult,
+  WebSessionSummary,
+  PageEngagementQuery,
+  WebPageEngagement,
 } from './eventStore.js';
 import { andFilters, compileFilters, numericPropSql } from './filters.js';
 import { ApiError } from '../errors.js';
@@ -410,6 +418,37 @@ export class PostgresEventStore implements EventStore {
       sessions: Number(summaryRows.rows[0]?.sessions ?? 0),
       page_views: Number(summaryRows.rows[0]?.page_views ?? 0),
     };
+    const engagementParams: unknown[] = [q.projectId, q.env, q.event, q.from, q.to];
+    const engagementRows = await this.pool.query(
+      `${this.webEngagementCtes(q, engagementParams)}
+       SELECT
+         count(*) FILTER (WHERE complete)::int AS measured_sessions,
+         count(*) FILTER (WHERE NOT complete)::int AS incomplete_sessions,
+         count(*) FILTER (WHERE engaged)::int AS engaged_sessions,
+         count(*) FILTER (WHERE bounce)::int AS bounce_sessions,
+         count(*) FILTER (WHERE single_page)::int AS single_page_sessions,
+         COALESCE(sum(timed_page_views), 0)::int AS timed_page_views,
+         COALESCE(sum(page_views), 0)::int AS total_page_views,
+         COALESCE(sum(foreground_ms), 0)::bigint AS foreground_ms,
+         COALESCE(sum(session_span_ms), 0)::bigint AS session_span_ms
+       FROM session_rows`,
+      engagementParams,
+    );
+    const engagementRow = engagementRows.rows[0] ?? {};
+    const totalPageViews = summary.page_views;
+    const timedPageViews = Number(engagementRow.timed_page_views ?? 0);
+    const engagement = {
+      measured_sessions: Number(engagementRow.measured_sessions ?? 0),
+      incomplete_sessions: Number(engagementRow.incomplete_sessions ?? 0),
+      engaged_sessions: Number(engagementRow.engaged_sessions ?? 0),
+      bounce_sessions: Number(engagementRow.bounce_sessions ?? 0),
+      single_page_sessions: Number(engagementRow.single_page_sessions ?? 0),
+      timed_page_views: timedPageViews,
+      total_page_views: totalPageViews,
+      timed_page_coverage: totalPageViews === 0 ? null : timedPageViews / totalPageViews,
+      foreground_ms: Number(engagementRow.foreground_ms ?? 0),
+      session_span_ms: Number(engagementRow.session_span_ms ?? 0),
+    };
     const breakdowns: WebAnalyticsResult['breakdowns'] = {};
     const truncatedDimensions: string[] = [];
     for (const dimension of q.dimensions) {
@@ -430,7 +469,252 @@ export class PostgresEventStore implements EventStore {
         page_views: Number(row.page_views),
       }));
     }
-    return { summary, breakdowns, truncatedDimensions };
+    return { summary, engagement, breakdowns, truncatedDimensions };
+  }
+
+  async webSessions(q: WebSessionsQuery): Promise<WebSessionsResult> {
+    const params: unknown[] = [q.projectId, q.env, q.event, q.from, q.to];
+    const ctes = this.webEngagementCtes(q, params);
+    params.push(q.limit);
+    const limitParam = params.length;
+    const { rows } = await this.pool.query(
+      `${ctes}
+       SELECT *, count(*) OVER ()::int AS total
+       FROM session_rows
+       ORDER BY started_at DESC, session_id
+       LIMIT $${limitParam}`,
+      params,
+    );
+    return {
+      sessions: rows.map((row) => this.webSessionSummary(row)),
+      total: Number(rows[0]?.total ?? 0),
+    };
+  }
+
+  async webSession(q: WebSessionQuery): Promise<WebSessionResult> {
+    const params: unknown[] = [q.projectId, q.env, q.event, q.from, q.to];
+    const ctes = this.webEngagementCtes(q, params);
+    params.push(q.sessionId);
+    const sessionParam = params.length;
+    params.push(q.pageLimit);
+    const pageLimitParam = params.length;
+    const [summaryRows, pageRows] = await Promise.all([
+      this.pool.query(
+        `${ctes}
+         SELECT * FROM session_rows
+         WHERE session_id = $${sessionParam} AND $${pageLimitParam}::int > 0`,
+        params,
+      ),
+      this.pool.query(
+        `${ctes}
+         SELECT *, count(*) OVER ()::int AS total_pages
+         FROM pages WHERE session_id = $${sessionParam}
+         ORDER BY viewed_at, page_view_id NULLS LAST
+         LIMIT $${pageLimitParam}`,
+        params,
+      ),
+    ]);
+    return {
+      summary: summaryRows.rows[0] ? this.webSessionSummary(summaryRows.rows[0]) : null,
+      pages: pageRows.rows.map((row) => this.webPageEngagement(row)),
+      total: Number(pageRows.rows[0]?.total_pages ?? summaryRows.rows[0]?.page_views ?? 0),
+    };
+  }
+
+  async pageEngagement(q: PageEngagementQuery): Promise<WebPageEngagement | null> {
+    const params: unknown[] = [q.projectId, q.env, q.event, q.from, q.to];
+    const ctes = this.webEngagementCtes(q, params);
+    params.push(q.pageViewId);
+    const pageParam = params.length;
+    const { rows } = await this.pool.query(
+      `${ctes}
+       SELECT * FROM pages
+       WHERE page_view_id = $${pageParam}
+       ORDER BY viewed_at DESC
+       LIMIT 1`,
+      params,
+    );
+    return rows[0] ? this.webPageEngagement(rows[0]) : null;
+  }
+
+  private webEngagementCtes(q: WebEngagementBaseQuery, params: unknown[]): string {
+    const pageFilters = andFilters(q.filters, 'p.properties', params);
+    const keySessions = q.keyMetric
+      ? (() => {
+          params.push(q.keyMetric.event);
+          const eventParam = params.length;
+          const keyFilters = andFilters(q.keyMetric.filters, 'k.properties', params);
+          return `key_sessions AS (
+            SELECT DISTINCT k.session_id
+            FROM events k
+            WHERE k.project_id = $1 AND k.env = $2
+              AND k.event = $${eventParam}
+              AND k."timestamp" >= $4 AND k."timestamp" < $5
+              AND k.session_id IS NOT NULL${keyFilters}
+          )`;
+        })()
+      : `key_sessions AS (
+          SELECT NULL::text AS session_id WHERE false
+        )`;
+    return `
+      WITH page_views AS (
+        SELECT
+          p.session_id,
+          poolstatis_resolve_actor(p.project_id, p.env, p.distinct_id) AS actor_id,
+          p.properties->>'$page_view_id' AS page_view_id,
+          COALESCE(p.properties->>'$page_path', '/') AS path,
+          p."timestamp" AS viewed_at
+        FROM events p
+        WHERE p.project_id = $1 AND p.env = $2 AND p.event = $3
+          AND p."timestamp" >= $4 AND p."timestamp" < $5
+          AND p.session_id IS NOT NULL${pageFilters}
+      ),
+      ranked_engagement AS (
+        SELECT
+          e.session_id,
+          e.properties->>'$page_view_id' AS page_view_id,
+          e."timestamp" AS last_snapshot_at,
+          CASE WHEN e.properties->>'sequence' ~ '^\\d{1,10}$'
+            AND (e.properties->>'sequence')::numeric <= 2147483647
+            THEN (e.properties->>'sequence')::int END AS sequence,
+          CASE WHEN e.properties->>'foreground_ms' ~ '^\\d{1,9}$'
+            AND (e.properties->>'foreground_ms')::numeric <= 604800000
+            THEN floor((e.properties->>'foreground_ms')::numeric)::bigint END AS foreground_ms,
+          CASE WHEN e.properties->>'elapsed_ms' ~ '^\\d{1,9}$'
+            AND (e.properties->>'elapsed_ms')::numeric <= 604800000
+            THEN floor((e.properties->>'elapsed_ms')::numeric)::bigint END AS elapsed_ms,
+          CASE WHEN e.properties->>'max_scroll_pct' ~ '^\\d{1,3}$'
+            AND (e.properties->>'max_scroll_pct')::numeric <= 100
+            THEN (e.properties->>'max_scroll_pct')::double precision END AS max_scroll_pct,
+          CASE WHEN e.properties->>'interaction_count' ~ '^\\d{1,10}$'
+            AND (e.properties->>'interaction_count')::numeric <= 2147483647
+            THEN (e.properties->>'interaction_count')::int END AS interaction_count,
+          CASE WHEN e.properties->>'reason' IN (
+            'heartbeat', 'visibility_hidden', 'blur', 'route_change',
+            'pagehide', 'freeze', 'destroy'
+          ) THEN e.properties->>'reason' END AS reason,
+          row_number() OVER (
+            PARTITION BY e.session_id, e.properties->>'$page_view_id'
+            ORDER BY
+              CASE WHEN e.properties->>'sequence' ~ '^\\d{1,10}$'
+                AND (e.properties->>'sequence')::numeric <= 2147483647
+                THEN (e.properties->>'sequence')::int ELSE -1 END DESC,
+              e."timestamp" DESC
+          ) AS rank
+        FROM events e
+        WHERE e.project_id = $1 AND e.env = $2 AND e.event = 'page.engagement'
+          AND e."timestamp" >= $4 AND e."timestamp" < $5
+          AND e.session_id IS NOT NULL
+          AND e.properties->>'$browser_context' = '1'
+          AND e.properties->>'$page_view_id' IS NOT NULL
+      ),
+      latest_engagement AS (
+        SELECT * FROM ranked_engagement WHERE rank = 1
+      ),
+      pages AS (
+        SELECT
+          p.page_view_id,
+          p.session_id,
+          p.path,
+          p.viewed_at,
+          l.last_snapshot_at,
+          l.sequence,
+          l.foreground_ms,
+          l.elapsed_ms,
+          l.max_scroll_pct,
+          l.interaction_count,
+          l.reason,
+          (
+            p.page_view_id IS NOT NULL
+            AND l.sequence IS NOT NULL
+            AND l.foreground_ms IS NOT NULL
+            AND l.elapsed_ms IS NOT NULL
+            AND l.foreground_ms <= l.elapsed_ms
+          ) AS timed,
+          (
+            p.page_view_id IS NOT NULL
+            AND l.sequence IS NOT NULL
+            AND l.foreground_ms IS NOT NULL
+            AND l.elapsed_ms IS NOT NULL
+            AND l.foreground_ms <= l.elapsed_ms
+            AND l.reason IN (
+              'visibility_hidden', 'blur', 'route_change',
+              'pagehide', 'freeze', 'destroy'
+            )
+          ) AS complete,
+          p.actor_id
+        FROM page_views p
+        LEFT JOIN latest_engagement l
+          ON l.session_id = p.session_id AND l.page_view_id = p.page_view_id
+      ),
+      ${keySessions},
+      session_rows AS (
+        SELECT
+          p.session_id,
+          min(p.actor_id) AS actor_id,
+          min(p.viewed_at) AS started_at,
+          max(COALESCE(p.last_snapshot_at, p.viewed_at)) AS ended_at,
+          count(*)::int AS page_views,
+          count(*) FILTER (WHERE p.timed)::int AS timed_page_views,
+          COALESCE(sum(p.foreground_ms), 0)::bigint AS foreground_ms,
+          floor(extract(epoch FROM (
+            max(COALESCE(p.last_snapshot_at, p.viewed_at)) - min(p.viewed_at)
+          )) * 1000)::bigint AS session_span_ms,
+          (count(*) FILTER (WHERE p.complete) = count(*)) AS complete,
+          (
+            COALESCE(sum(p.foreground_ms), 0) > 10000
+            OR count(*) >= 2
+            OR bool_or(k.session_id IS NOT NULL)
+          ) AS engaged,
+          CASE
+            WHEN count(*) FILTER (WHERE p.complete) = count(*)
+            THEN NOT (
+              COALESCE(sum(p.foreground_ms), 0) > 10000
+              OR count(*) >= 2
+              OR bool_or(k.session_id IS NOT NULL)
+            )
+            ELSE NULL
+          END AS bounce,
+          (count(*) = 1) AS single_page
+        FROM pages p
+        LEFT JOIN key_sessions k ON k.session_id = p.session_id
+        GROUP BY p.session_id
+      )`;
+  }
+
+  private webPageEngagement(row: Record<string, unknown>): WebPageEngagement {
+    return {
+      page_view_id: String(row.page_view_id),
+      session_id: String(row.session_id),
+      path: String(row.path),
+      viewed_at: toIso(row.viewed_at as string | Date),
+      last_snapshot_at: row.last_snapshot_at ? toIso(row.last_snapshot_at as string | Date) : null,
+      sequence: row.sequence === null || row.sequence === undefined ? null : Number(row.sequence),
+      foreground_ms: row.foreground_ms === null || row.foreground_ms === undefined ? null : Number(row.foreground_ms),
+      elapsed_ms: row.elapsed_ms === null || row.elapsed_ms === undefined ? null : Number(row.elapsed_ms),
+      max_scroll_pct: row.max_scroll_pct === null || row.max_scroll_pct === undefined ? null : Number(row.max_scroll_pct),
+      interaction_count: row.interaction_count === null || row.interaction_count === undefined ? null : Number(row.interaction_count),
+      reason: row.reason === null || row.reason === undefined ? null : String(row.reason),
+      timed: Boolean(row.timed),
+      complete: Boolean(row.complete),
+    };
+  }
+
+  private webSessionSummary(row: Record<string, unknown>): WebSessionSummary {
+    return {
+      session_id: String(row.session_id),
+      actor_id: String(row.actor_id),
+      started_at: toIso(row.started_at as string | Date),
+      ended_at: toIso(row.ended_at as string | Date),
+      page_views: Number(row.page_views),
+      timed_page_views: Number(row.timed_page_views),
+      foreground_ms: Number(row.foreground_ms),
+      session_span_ms: Number(row.session_span_ms),
+      engaged: row.engaged === null || row.engaged === undefined ? null : Boolean(row.engaged),
+      bounce: row.bounce === null || row.bounce === undefined ? null : Boolean(row.bounce),
+      single_page: Boolean(row.single_page),
+      complete: Boolean(row.complete),
+    };
   }
 
   async funnel(q: FunnelQuery): Promise<number[]> {
@@ -686,7 +970,7 @@ export class PostgresEventStore implements EventStore {
   async interactionMap(q: InteractionMapQuery): Promise<InteractionMapResult> {
     const params: unknown[] = [q.projectId, q.env, q.surface, q.from, q.to, q.grid];
     const [cells, labels] = await Promise.all([
-      this.pool.query<{ x: string; y: string; count: string; actors: string }>(
+      this.pool.query<{ x: string; y: string; count: string; sessions: string; actors: string }>(
         `SELECT
            least($6 - 1, floor((properties->>'x')::double precision * $6)::int) AS x,
            least($6 - 1, floor((properties->>'y')::double precision * $6)::int) AS y,
@@ -806,20 +1090,28 @@ export class PostgresEventStore implements EventStore {
          FROM cohort`,
         filterParams,
       ),
-      this.pool.query<{ x: string; y: string; count: string; actors: string }>(
+      this.pool.query<{ x: string; y: string; count: string; sessions: string; actors: string }>(
         `${cohortCte}
          SELECT least(${gridParam} - 1, floor((properties->>'x')::double precision * ${gridParam})::int) AS x,
                 least(${gridParam} - 1, floor((properties->>'y')::double precision * ${gridParam})::int) AS y,
                 count(*)::int AS count,
+                count(DISTINCT (
+                  session_id,
+                  poolstatis_resolve_actor(project_id, env, distinct_id)
+                ))::int AS sessions,
                 count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors
          FROM cohort
          WHERE event = 'experience.element_clicked'
          GROUP BY 1, 2 ORDER BY count DESC, y, x LIMIT 4096`,
         params,
       ),
-      this.pool.query<{ label: string; count: string; actors: string }>(
+      this.pool.query<{ label: string; count: string; sessions: string; actors: string }>(
         `${cohortCte}
          SELECT properties->>'label' AS label, count(*)::int AS count,
+                count(DISTINCT (
+                  session_id,
+                  poolstatis_resolve_actor(project_id, env, distinct_id)
+                ))::int AS sessions,
                 count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS actors
          FROM cohort
          WHERE event = 'experience.element_clicked'
@@ -894,10 +1186,12 @@ export class PostgresEventStore implements EventStore {
         max_document_height: Number(total.max_document_height ?? 0),
       },
       click_cells: cells.rows.map((row) => ({
-        x: Number(row.x), y: Number(row.y), count: Number(row.count), actors: Number(row.actors),
+        x: Number(row.x), y: Number(row.y), count: Number(row.count),
+        sessions: Number(row.sessions), actors: Number(row.actors),
       })),
       click_labels: labels.rows.slice(0, 100).map((row) => ({
-        label: row.label, count: Number(row.count), actors: Number(row.actors),
+        label: row.label, count: Number(row.count),
+        sessions: Number(row.sessions), actors: Number(row.actors),
       })),
       click_labels_truncated: labels.rows.length > 100,
       scroll_coverage: scroll.rows.map((row) => ({

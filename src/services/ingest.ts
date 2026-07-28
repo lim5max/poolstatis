@@ -83,7 +83,12 @@ export class IngestService {
           bump('rejected', e.event, acquisitionError);
           return;
         }
-        const browserError = validateAndEnrichBrowserProperties(properties, e.session_id, enrichment.country);
+        const browserError = validateAndEnrichBrowserProperties(
+          e.event,
+          properties,
+          e.session_id,
+          enrichment.country,
+        );
         if (browserError) {
           errors.push({ index, message: browserError });
           bump('rejected', e.event, browserError);

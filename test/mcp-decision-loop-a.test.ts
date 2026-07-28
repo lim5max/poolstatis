@@ -63,6 +63,11 @@ describe('decision-loop trust MCP tools', () => {
       'propose_acquisition_properties',
       'propose_browser_analytics',
       'query_web_analytics',
+      'get_web_overview',
+      'list_web_sessions',
+      'get_web_session',
+      'get_session_engagement',
+      'get_page_engagement',
       'assess_measurement_trust',
       'update_property',
       'configure_posthog',
@@ -159,6 +164,19 @@ describe('decision-loop trust MCP tools', () => {
       properties: expect.arrayContaining([expect.objectContaining({ key: '$country', status: 'proposed' })]),
       metrics: expect.arrayContaining([expect.objectContaining({ key: 'web_page_views', status: 'proposed' })]),
     });
+    const activatedBrowserMetric = await client.callTool({
+      name: 'update_metric',
+      arguments: {
+        project: env.projectSlug,
+        key: 'web_page_views',
+        patch: { status: 'active' },
+      },
+    });
+    expect(activatedBrowserMetric.isError).not.toBe(true);
+    expect(activatedBrowserMetric.structuredContent).toMatchObject({
+      key: 'web_page_views',
+      status: 'active',
+    });
     const traffic = await client.callTool({
       name: 'query_web_analytics',
       arguments: {
@@ -170,7 +188,69 @@ describe('decision-loop trust MCP tools', () => {
     expect(traffic.structuredContent).toMatchObject({
       kind: 'web_analytics',
       summary: { visitors: 0, sessions: 0, page_views: 0 },
+      engagement: {
+        measured_sessions: 0,
+        incomplete_sessions: 0,
+        timed_page_coverage: null,
+      },
       meta: { definitions: expect.any(Object), privacy: expect.stringContaining('Raw IP') },
+    });
+    const overview = await client.callTool({
+      name: 'get_web_overview',
+      arguments: {
+        project: env.projectSlug,
+        query: { metric: 'web_page_views', date_from: '-1d', dimensions: ['country'] },
+      },
+    });
+    expect(overview.isError).not.toBe(true);
+    expect(overview.structuredContent).toMatchObject({
+      kind: 'web_analytics',
+      engagement: { measured_sessions: 0, incomplete_sessions: 0 },
+    });
+
+    const sessions = await client.callTool({
+      name: 'list_web_sessions',
+      arguments: {
+        project: env.projectSlug,
+        query: { metric: 'web_page_views', date_from: '-1d', limit: 10 },
+      },
+    });
+    expect(sessions.isError).not.toBe(true);
+    expect(sessions.structuredContent).toMatchObject({
+      kind: 'web_sessions',
+      sessions: [],
+      meta: { total: 0, truncated: false },
+    });
+
+    for (const name of ['get_web_session', 'get_session_engagement'] as const) {
+      const session = await client.callTool({
+        name,
+        arguments: {
+          project: env.projectSlug,
+          query: { metric: 'web_page_views', session_id: 'missing-session', date_from: '-1d' },
+        },
+      });
+      expect(session.isError).not.toBe(true);
+      expect(session.structuredContent).toMatchObject({
+        kind: 'web_session',
+        summary: null,
+        pages: [],
+        meta: { no_data_reason: expect.any(String) },
+      });
+    }
+
+    const page = await client.callTool({
+      name: 'get_page_engagement',
+      arguments: {
+        project: env.projectSlug,
+        query: { metric: 'web_page_views', page_view_id: 'missing-page', date_from: '-1d' },
+      },
+    });
+    expect(page.isError).not.toBe(true);
+    expect(page.structuredContent).toMatchObject({
+      kind: 'page_engagement',
+      page: null,
+      meta: { no_data_reason: expect.any(String) },
     });
 
     const browserStandard = await client.readResource({ uri: 'poolstatis://standard/browser-analytics' });

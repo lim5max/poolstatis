@@ -290,6 +290,31 @@ reach/drop-off, counts, percentages and a causality caveat.
 and returns count and percentage-point deltas. Snapshot upload is raw PNG/WebP;
 the API never fetches a caller-supplied URL.
 
+## Web engagement queries
+
+`POST /query` accepts four native, project/environment-isolated web kinds:
+
+- `web_analytics`: headline traffic, engagement coverage and bounded
+  breakdowns; optional `key_metric` adds the declared product outcome to the
+  engaged-session rule;
+- `web_sessions`: bounded recent session summaries with explicit total and
+  truncation;
+- `web_session`: one browser-tab session plus ordered page evidence bounded by
+  `page_limit` (default 100, maximum 200), with `total_pages` and `truncated`;
+- `page_engagement`: the latest cumulative snapshot for one
+  `$page_view_id`.
+
+All require an active count metric sourcing canonical `page.viewed` with
+`$browser_context = "1"`. Session classification uses the highest valid
+`page.engagement.sequence` per page: engaged means `foreground_ms > 10000`, at
+least two page views, or the optional active native key metric. Bounce is the
+complement only for complete sessions; incomplete sessions return `null`.
+`session_span_ms` is wall span and never substitutes for foreground time.
+
+Reads do not create billable events. Each accepted `page.viewed`,
+`page.engagement` and key-metric event is still counted once in accepted
+stored-event usage.
+
 ## Query DSL
 
 Один POST `/query`, дискриминатор — `kind`. DSL невелик по построению: он обязан транслироваться в узкий интерфейс `EventStore` (см. [02-storage.md](02-storage.md)).

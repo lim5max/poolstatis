@@ -38,14 +38,30 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
   const localStorage = shared?.localStorage ?? storage();
   const sessionStorage = shared?.sessionStorage ?? storage();
   const listeners = new Map<string, Set<() => void>>();
+  const documentListeners = new Map<string, Set<() => void>>();
   let clock = now;
   let href = 'https://example.test/welcome';
+  let heartbeat: (() => void) | null = null;
+  let visible = true;
+  let focused = true;
+  let scrollY = 0;
   const browser = {
     location: {
       get pathname() { return new URL(href).pathname; },
       get href() { return href; },
     },
-    document: { referrer: 'https://publisher.test/private/path?secret=1' },
+    document: {
+      referrer: 'https://publisher.test/private/path?secret=1',
+      get visibilityState() { return visible ? 'visible' as const : 'hidden' as const; },
+      hasFocus: () => focused,
+      documentElement: { scrollHeight: 2_000 },
+      body: { scrollHeight: 2_000 },
+      addEventListener(type: string, listener: () => void) {
+        const set = documentListeners.get(type) ?? new Set();
+        set.add(listener); documentListeners.set(type, set);
+      },
+      removeEventListener(type: string, listener: () => void) { documentListeners.get(type)?.delete(listener); },
+    },
     history: {
       pushState(_data: unknown, _unused: string, url?: string | URL | null) {
         if (url) href = new URL(String(url), href).href;
@@ -62,8 +78,11 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
     screen: { width: 390, height: 844 },
     innerWidth: 390,
     innerHeight: 760,
+    get scrollY() { return scrollY; },
     localStorage,
     sessionStorage,
+    setInterval(listener: () => void) { heartbeat = listener; return 1; },
+    clearInterval() { heartbeat = null; },
     addEventListener(type: string, listener: () => void) {
       const set = listeners.get(type) ?? new Set();
       set.add(listener); listeners.set(type, set);
@@ -75,6 +94,21 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
     setPath: (value: string) => { href = new URL(value, href).href; },
     advance: (milliseconds: number) => { clock += milliseconds; },
     now: () => clock,
+    heartbeat: () => heartbeat?.(),
+    setVisible(value: boolean) {
+      visible = value;
+      documentListeners.get('visibilitychange')?.forEach((listener) => listener());
+    },
+    setFocused(value: boolean) {
+      focused = value;
+      listeners.get(value ? 'focus' : 'blur')?.forEach((listener) => listener());
+    },
+    scrollTo(value: number) {
+      scrollY = value;
+      listeners.get('scroll')?.forEach((listener) => listener());
+    },
+    interact() { listeners.get('pointerdown')?.forEach((listener) => listener()); },
+    pagehide() { listeners.get('pagehide')?.forEach((listener) => listener()); },
   };
 }
 
@@ -252,10 +286,20 @@ describe('@poolstatis/sdk/browser', () => {
     expect(analytics.sessionId).not.toBe(firstSession);
     expect(f.queued.at(-1)?.session_id).toBe(analytics.sessionId);
 
-    const queuedBeforeReset = [...f.queued];
+    const oldPageId = f.queued.filter((event) => event.event === 'page.viewed').at(-1)?.properties?.$page_view_id;
     analytics.resetIdentity();
-    expect(f.queued).toEqual(queuedBeforeReset);
     expect(analytics.visitorId).not.toBe(firstVisitor);
+    expect(f.queued.at(-2)).toMatchObject({
+      event: 'page.engagement',
+      distinct_id: 'user-one',
+      properties: { $page_view_id: oldPageId, reason: 'destroy' },
+    });
+    expect(f.queued.at(-1)).toMatchObject({
+      event: 'page.viewed',
+      distinct_id: analytics.visitorId,
+      session_id: analytics.sessionId,
+    });
+    expect(f.queued.at(-1)?.properties?.$page_view_id).not.toBe(oldPageId);
     const secondLink = analytics.identify('user-two');
     expect(secondLink.source_distinct_id).toBe(analytics.visitorId);
     expect(secondLink.target_distinct_id).toBe('user-two');
@@ -393,5 +437,147 @@ describe('@poolstatis/sdk/browser', () => {
       if (descriptor) Object.defineProperty(globalThis, 'window', descriptor);
       else delete (globalThis as { window?: unknown }).window;
     }
+  });
+
+  it('emits one stable page id and cumulative foreground engagement snapshots', () => {
+    const c = consent(true);
+    const f = fixture();
+    let id = 0;
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now, monotonicNow: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      createId: () => `engagement-${++id}`,
+    });
+
+    analytics.start();
+    const pageView = f.queued[0]!;
+    expect(pageView.properties?.$page_view_id).toBe('page:engagement-3');
+
+    for (let index = 0; index < 4; index += 1) {
+      f.advance(10_000);
+      f.heartbeat();
+    }
+    f.advance(5_000);
+    f.pagehide();
+
+    const snapshots = f.queued.filter((event) => event.event === 'page.engagement');
+    expect(snapshots).toHaveLength(5);
+    expect(snapshots.map((event) => event.properties?.sequence)).toEqual([1, 2, 3, 4, 5]);
+    expect(snapshots.at(-1)?.properties).toMatchObject({
+      $page_view_id: 'page:engagement-3',
+      foreground_ms: 45_000,
+      elapsed_ms: 45_000,
+      reason: 'pagehide',
+    });
+  });
+
+  it('excludes hidden time and caps one suspended foreground gap at thirty seconds', () => {
+    const c = consent(true);
+    const f = fixture();
+    let id = 0;
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now, monotonicNow: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      createId: () => `visibility-${++id}`,
+    });
+
+    analytics.start();
+    f.advance(6_000);
+    f.setVisible(false);
+    f.advance(20 * 60_000);
+    f.setVisible(true);
+    f.advance(120_000);
+    f.heartbeat();
+
+    const snapshots = f.queued.filter((event) => event.event === 'page.engagement');
+    expect(snapshots.map((event) => event.properties?.foreground_ms)).toEqual([6_000, 36_000]);
+    expect(snapshots.at(-1)?.properties?.elapsed_ms).toBe(1_326_000);
+  });
+
+  it('starts a new page and session when a hidden tab resumes after inactivity', () => {
+    const c = consent(true);
+    const f = fixture();
+    let id = 0;
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now, monotonicNow: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      createId: () => `resume-${++id}`,
+    });
+
+    analytics.start();
+    const firstSession = analytics.sessionId;
+    const firstPage = f.queued[0]?.properties?.$page_view_id;
+    f.advance(5_000);
+    f.setVisible(false);
+    f.advance(31 * 60_000);
+    f.setVisible(true);
+
+    const pageViews = f.queued.filter((event) => event.event === 'page.viewed');
+    expect(pageViews).toHaveLength(2);
+    expect(analytics.sessionId).not.toBe(firstSession);
+    expect(pageViews[1]).toMatchObject({
+      distinct_id: analytics.visitorId,
+      session_id: analytics.sessionId,
+    });
+    expect(pageViews[1]?.properties?.$page_view_id).not.toBe(firstPage);
+    expect(f.queued.find((event) => event.event === 'page.engagement')).toMatchObject({
+      session_id: firstSession,
+      properties: { $page_view_id: firstPage, reason: 'visibility_hidden' },
+    });
+  });
+
+  it('flushes an SPA page before creating a new page id and keeps cumulative page state separate', () => {
+    const c = consent(true);
+    const f = fixture();
+    let id = 0;
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now, monotonicNow: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      createId: () => `spa-${++id}`,
+    });
+
+    analytics.start();
+    f.advance(4_000);
+    f.interact();
+    f.browser.history.pushState({}, '', '/pricing');
+
+    expect(f.queued.map((event) => event.event)).toEqual([
+      'page.viewed',
+      'page.engagement',
+      'page.viewed',
+    ]);
+    expect(f.queued[1]?.properties).toMatchObject({
+      $page_view_id: 'page:spa-3',
+      foreground_ms: 4_000,
+      interaction_count: 1,
+      reason: 'route_change',
+    });
+    expect(f.queued[2]?.properties?.$page_view_id).toBe('page:spa-4');
+  });
+
+  it('does not emit engagement before consent or after consent is revoked', () => {
+    const c = consent(false);
+    const f = fixture();
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now, monotonicNow: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      createId: () => 'consent',
+    });
+
+    analytics.start();
+    f.advance(10_000);
+    f.heartbeat();
+    expect(f.queued).toEqual([]);
+
+    c.set(true);
+    f.advance(10_000);
+    f.heartbeat();
+    expect(f.queued.some((event) => event.event === 'page.engagement')).toBe(true);
+
+    c.set(false);
+    expect(f.queued).toEqual([]);
+    f.advance(10_000);
+    f.heartbeat();
+    expect(f.queued).toEqual([]);
   });
 });

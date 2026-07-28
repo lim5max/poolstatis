@@ -168,6 +168,63 @@ export async function assertBrowserAnalyticsProperties(
   }
 }
 
+const PAGE_VIEW_ID_MAX_LENGTH = 200;
+const MAX_ENGAGEMENT_DURATION_MS = 7 * 24 * 60 * 60 * 1_000;
+const MAX_ENGAGEMENT_SEQUENCE = 2_147_483_647;
+const ENGAGEMENT_REASONS = new Set([
+  'heartbeat',
+  'visibility_hidden',
+  'blur',
+  'route_change',
+  'pagehide',
+  'freeze',
+  'destroy',
+]);
+
+function boundedInteger(
+  value: unknown,
+  min: number,
+  max: number,
+): boolean {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= min
+    && value <= max;
+}
+
+function validatePageViewId(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > PAGE_VIEW_ID_MAX_LENGTH) {
+    return `$page_view_id must be a non-empty string of at most ${PAGE_VIEW_ID_MAX_LENGTH} characters`;
+  }
+  return null;
+}
+
+function validateEngagementProperties(properties: Record<string, unknown>): string | null {
+  const pageViewIdError = validatePageViewId(properties.$page_view_id);
+  if (pageViewIdError) return pageViewIdError;
+  if (!boundedInteger(properties.sequence, 1, MAX_ENGAGEMENT_SEQUENCE)) {
+    return `sequence must be an integer from 1 to ${MAX_ENGAGEMENT_SEQUENCE}`;
+  }
+  for (const key of ['foreground_ms', 'elapsed_ms'] as const) {
+    if (!boundedInteger(properties[key], 0, MAX_ENGAGEMENT_DURATION_MS)) {
+      return `${key} must be an integer from 0 to ${MAX_ENGAGEMENT_DURATION_MS}`;
+    }
+  }
+  if ((properties.foreground_ms as number) > (properties.elapsed_ms as number)) {
+    return 'foreground_ms must not exceed elapsed_ms';
+  }
+  if (!boundedInteger(properties.max_scroll_pct, 0, 100)) {
+    return 'max_scroll_pct must be an integer from 0 to 100';
+  }
+  if (!boundedInteger(properties.interaction_count, 0, MAX_ENGAGEMENT_SEQUENCE)) {
+    return `interaction_count must be an integer from 0 to ${MAX_ENGAGEMENT_SEQUENCE}`;
+  }
+  if (typeof properties.reason !== 'string' || !ENGAGEMENT_REASONS.has(properties.reason)) {
+    return 'reason must be a supported page engagement lifecycle reason';
+  }
+  return null;
+}
+
 function isPrimaryBrowserLanguage(value: string): boolean {
   return value === 'unknown' || /^[a-z]{2,3}$/.test(value);
 }
@@ -184,12 +241,14 @@ function isIanaTimezone(value: string): boolean {
 }
 
 export function validateAndEnrichBrowserProperties(
+  event: string,
   properties: Record<string, unknown>,
   sessionId: string | undefined,
   country: string,
 ): string | null {
   const marker = properties.$browser_context;
-  const hasReserved = Object.keys(properties).some((key) => key in BROWSER_ANALYTICS_PROPERTIES);
+  const hasReserved = event === 'page.engagement'
+    || Object.keys(properties).some((key) => key in BROWSER_ANALYTICS_PROPERTIES);
   if (!hasReserved) return null;
   if (marker !== '1') return '$browser_context must equal "1" when reserved browser properties are present';
   if (!sessionId) return 'session_id is required when browser analytics properties are present';
@@ -198,21 +257,34 @@ export function validateAndEnrichBrowserProperties(
   for (const [key, spec] of Object.entries(BROWSER_ANALYTICS_PROPERTIES)) {
     if (key === '$country') continue;
     const value = properties[key];
-    if (value === undefined) return `${key} is required in browser analytics context`;
+    if (value === undefined) {
+      if (key === '$browser_context' || key === '$page_path') {
+        return `${key} is required in browser analytics context`;
+      }
+      continue;
+    }
     if (typeof value !== 'string' || value.length === 0 || value.length > (key === '$page_path' ? 512 : 64)) {
       return `${key} must be a bounded non-empty string`;
     }
     if (spec.enum_values && !spec.enum_values.includes(value)) return `${key} has an unsupported value`;
   }
-  if (!isPrimaryBrowserLanguage(properties.$language as string)) {
+  if (properties.$language !== undefined && !isPrimaryBrowserLanguage(properties.$language as string)) {
     return '$language must be a normalized primary language or unknown';
   }
-  if (!isIanaTimezone(properties.$timezone as string)) {
+  if (properties.$timezone !== undefined && !isIanaTimezone(properties.$timezone as string)) {
     return '$timezone must be a recognized IANA timezone or unknown';
   }
   const path = properties.$page_path as string;
   if (!path.startsWith('/') || path.includes('?') || path.includes('#')) {
     return '$page_path must be a pathname only, without query string or fragment';
+  }
+  if (event === 'page.viewed' && properties.$page_view_id !== undefined) {
+    const pageViewIdError = validatePageViewId(properties.$page_view_id);
+    if (pageViewIdError) return pageViewIdError;
+  }
+  if (event === 'page.engagement') {
+    const engagementError = validateEngagementProperties(properties);
+    if (engagementError) return engagementError;
   }
   if (country !== 'unknown' && !isIsoAlpha2Country(country)) {
     return 'resolved country must be unknown or ISO alpha-2';

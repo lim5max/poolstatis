@@ -139,7 +139,27 @@ ph.track("signup.completed", user.id, { plan: "free" });
 ph.identify("account", user.accountId, { plan: "free", seats: 1 }); // mutable state → entity
 ```
 
-### 2.0 Browser landing attribution (optional)
+### 2.0 Browser analytics and engagement (optional)
+
+For a web product, use the one `@poolstatis/sdk/browser` owner documented in
+[Browser Analytics Context](13-browser-analytics.md). It creates one
+`page.viewed` per mapped route plus cumulative `page.engagement` snapshots for
+visible/focused time, scroll reach and coarse interactions. Do not add a second
+pixel or another Poolstatis page-view owner.
+
+This works in a React app, a static site, WordPress or Bitrix: the product only
+needs to load the Browser SDK (or send the documented HTTP event shape) and
+hold a write-only `pk_` ingest key. GitHub, GitHub Actions and a Platform/MCP
+token are not required in the browser. An agent can use MCP separately to
+propose/activate registry semantics, verify events, inspect sessions and query
+the bounded maps.
+
+Use `get_web_overview`, `list_web_sessions`, `get_web_session` and
+`get_page_engagement` for timing evidence. Use `get_click_map` and
+`get_scroll_map` only with an exact registered
+surface/version/route/device tuple. There is no video or DOM session replay.
+
+### 2.1 Browser landing attribution (optional)
 
 Для consented browser-продукта сначала вызови MCP
 `propose_acquisition_properties` (или `POST /properties/acquisition-attribution`)
@@ -156,7 +176,7 @@ full referrer, click ids и unknown query params не отправляются. 
 immutable events не переписывается. UTM trend — только session landing association,
 не доказательство причинного эффекта кампании.
 
-### 2.1 Roll out and measure a product change
+### 2.2 Roll out and measure a product change
 
 Create an active flag and an experiment in **Experiments** admin (or with the
 matching MCP tools). The experiment needs a 100%-allocated flag and an active
@@ -179,7 +199,7 @@ first `$feature_flag_called` exposure itself and only counts outcomes that occur
 after it. Use the experiment result before concluding it; conclusion freezes the
 measurement window and records the decision rationale.
 
-### 2.2 Connect the change to a decision
+### 2.3 Connect the change to a decision
 
 For a repository-owned change, keep the hypothesis in `poolstatis.yml`: contract key,
 decision owner, primary/guardrail metrics, target filters, baseline/observation windows and

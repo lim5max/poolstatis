@@ -33,6 +33,12 @@ import type {
   VisualExperienceResult,
   WebAnalyticsQuery,
   WebAnalyticsResult,
+  WebSessionsQuery,
+  WebSessionsResult,
+  WebSessionQuery,
+  WebSessionResult,
+  PageEngagementQuery,
+  WebPageEngagement,
 } from './eventStore.js';
 
 export interface BufferedEventStoreOptions {
@@ -144,6 +150,18 @@ export class BufferedEventStore implements EventStore {
 
   webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult> {
     return this.inner.webAnalytics(q);
+  }
+
+  webSessions(q: WebSessionsQuery): Promise<WebSessionsResult> {
+    return this.inner.webSessions(q);
+  }
+
+  webSession(q: WebSessionQuery): Promise<WebSessionResult> {
+    return this.inner.webSession(q);
+  }
+
+  pageEngagement(q: PageEngagementQuery): Promise<WebPageEngagement | null> {
+    return this.inner.pageEngagement(q);
   }
 
   funnel(q: FunnelQuery): Promise<number[]> {

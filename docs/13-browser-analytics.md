@@ -61,6 +61,11 @@ storage. It captures the initial pathname and SPA history changes. Query
 strings, fragments, full URLs, DOM, page text, form values and referrer paths
 are never captured.
 
+The session is scoped to one browser tab because its id lives in session
+storage. A second tab is a separate session. Activity rotates after 30 minutes
+of inactivity; an SPA route change first closes the old page under its original
+session and then opens the new page under the rotated session.
+
 `captureAcquisition: true` composes the existing
 `@poolstatis/sdk/attribution` bounded UTM snapshot into the same session and
 the same page-view event. Do not run `createAttributionClient` beside this
@@ -85,10 +90,54 @@ fonts and other fingerprinting inputs are not sent.
 Call `resetIdentity()` on logout or before switching accounts on a shared
 browser. It rotates both the visitor and session before another user is
 identified, preventing cross-account actor links. The next explicit page view
-or SPA navigation is captured under the new identity. Already queued events
+for the current route is captured under the new identity. Already queued events
 keep their original valid identity. If browser storage is readable but refuses
 the replacement, reset rotates the in-memory identity and throws an explicit
 stale-storage error so the product does not silently reload the old visitor.
+
+## Page and session engagement
+
+The browser module owns one `page.viewed` event for the initial document and
+each distinct mapped SPA route. It assigns a stable `$page_view_id` and emits
+cumulative `page.engagement` snapshots with:
+
+| Property | Meaning |
+|---|---|
+| `$page_view_id` | Opaque id shared with the owning `page.viewed` event. |
+| `sequence` | Monotonically increasing snapshot sequence for that page. |
+| `foreground_ms` | Cumulative time while visible and focused. |
+| `elapsed_ms` | Monotonic wall time since the page began; not active time. |
+| `max_scroll_pct` | Maximum bounded scroll depth reached. |
+| `interaction_count` | Count of coarse pointer/key interactions while active. |
+| `reason` | `heartbeat`, `visibility_hidden`, `blur`, `route_change`, `pagehide`, `freeze`, or `destroy`. |
+
+The heartbeat is 10 seconds. Lifecycle flushes are cumulative rather than
+additive. Core chooses the highest sequence per `$page_view_id`, so duplicate
+retries and out-of-order delivery cannot double-count time. The SDK uses a
+monotonic clock and caps one suspended foreground gap at 30 seconds. Time while
+hidden or unfocused is excluded. Core accepts at most seven days of monotonic
+duration per page and rejects snapshots where foreground time exceeds elapsed
+time.
+
+Session classification is computed at project + environment + browser-tab
+`session_id` grain:
+
+- engaged: total measured foreground time is greater than 10 seconds, or the
+  session has at least two page views, or it contains the selected active
+  native key metric;
+- bounce: the complement of engaged only when every page view in the session
+  has a lifecycle-boundary snapshot; heartbeat-only evidence remains
+  incomplete;
+- single-page: exactly one page view, independent of engagement;
+- incomplete: at least one page view lacks a valid timing snapshot.
+
+The API returns foreground time separately from wall-clock session span.
+Incomplete sessions return `bounce: null`; they never become fake zeros. A
+browser crash may leave a page incomplete because JavaScript cannot guarantee
+an exit callback.
+
+This is bounded engagement evidence, not video, DOM replay, eye tracking or
+precise pointer replay.
 
 ## Country
 
@@ -145,17 +194,25 @@ Conflicting meanings fail with `409`; the owner reviews and activates the
 bundle. Setup is idempotent but not transactional across the three registry
 groups; after resolving a conflict, repeat it to complete any partial bundle.
 
-`query_web_analytics` (Query DSL `kind: "web_analytics"`) references the
-page-view count metric and returns the three headline counts plus count and
-page-view percentage breakdowns for country, device, browser, OS, language,
-timezone and source. Reads remain project/environment isolated and use the
-`EventStore` seam. Responses name any dimension truncated beyond the bounded
-top 50; the customer UI shows the top 8 and labels that percentages still use
-all page views.
+`get_web_overview` / `query_web_analytics` (Query DSL
+`kind: "web_analytics"`) references the page-view count metric and returns the
+three headline counts, measured engagement coverage and count/page-view
+percentage breakdowns for country, device, browser, OS, language, timezone and
+source. `list_web_sessions`, `get_web_session`,
+`get_session_engagement` and `get_page_engagement` expose bounded session/page
+evidence. `get_click_map` and `get_scroll_map` require the exact
+surface/version/route/device tuple and default to unique-session aggregation.
+No-data reasons, sample size and truncation are explicit.
 
-Enrichment changes only properties of an accepted event. It emits no extra
-event, so `events_stored` billing remains the count of accepted non-system
-events.
+Reads remain project/environment isolated and use the `EventStore` seam.
+Responses name any dimension truncated beyond the bounded top 50; the customer
+UI shows a bounded initial result and labels that percentages still use all
+page views.
+
+Enrichment and queries emit no extra event. The SDK snapshots do: every
+accepted stored `page.viewed`, `page.engagement` and key-metric event remains
+one billable stored event. Deduplicating cumulative snapshots changes the
+read-time aggregate, not accepted stored-event accounting.
 
 ## Rollout
 

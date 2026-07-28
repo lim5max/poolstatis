@@ -75,7 +75,8 @@ tight loop; a single shared `Poolstatis` client handles this automatically.
 ## Browser Analytics Context (optional module)
 
 `@poolstatis/sdk/browser` adds policy-gated first-party visitors, 30-minute
-sessions, SPA-safe `page.viewed` events and coarse browser context. The
+browser-tab sessions, SPA-safe `page.viewed` events, cumulative
+`page.engagement` snapshots and coarse browser context. The
 backward-compatible default is `opt-in`; `opt-out` must be selected explicitly,
 and `external` delegates the decision to a host CMP. Global Privacy Control
 always disables collection. It never
@@ -103,6 +104,25 @@ const actorLink = browser.identify(user.id);
 // On logout/account switch, rotate visitor + session before another identify.
 browser.resetIdentity();
 ```
+
+The module owns exactly one `page.viewed` event per initial load or SPA route.
+Each page gets one stable `$page_view_id`. While the document is visible and
+focused, the SDK emits a cumulative `page.engagement` snapshot every 10 seconds
+and on hide, blur, route change, pagehide, freeze and destroy. A snapshot
+contains `sequence`, `foreground_ms`, `elapsed_ms`, `max_scroll_pct`,
+`interaction_count` and `reason`. Core keeps only the highest sequence per
+page, so retries, duplicate flushes and out-of-order arrival do not add time.
+One suspended foreground gap is capped at 30 seconds. Core accepts a maximum
+seven-day monotonic duration per page and rejects impossible snapshots where
+foreground time exceeds elapsed time.
+
+Foreground time is not wall-clock time and Poolstatis does not record video or
+DOM session replay. A session is engaged when it has more than 10 seconds of
+measured foreground time, at least two page views, or an explicitly selected
+key-metric event. Bounce is reported only for fully measured sessions; missing
+terminal timing remains incomplete instead of becoming a false zero/bounce.
+Every accepted `page.viewed` and `page.engagement` remains one stored,
+billable event.
 
 If the host loads a persisted decline or GPC state before creating the client,
 call `clearBrowserAnalyticsIdentity()` to remove an older first-party

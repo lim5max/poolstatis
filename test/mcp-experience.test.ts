@@ -37,6 +37,7 @@ describe('browser experience MCP tools', () => {
       'query_interaction_map', 'get_experience_session',
       'register_experience_route', 'list_visual_experience_versions',
       'get_visual_experience_map', 'compare_visual_experience',
+      'get_click_map', 'get_scroll_map',
     ]));
 
     const created = await client.callTool({
@@ -120,6 +121,45 @@ describe('browser experience MCP tools', () => {
         evidence_refs: [],
         data_quality: { status: 'limited' },
       },
+    });
+
+    const clickMap = await client.callTool({
+      name: 'get_click_map',
+      arguments: {
+        project: env.projectSlug,
+        query: {
+          surface: 'checkout', route: 'checkout', version: 'unversioned',
+          device: 'desktop', date_from: '-1d', env: 'prod', grid: 8,
+        },
+      },
+    });
+    expect(clickMap.isError).not.toBe(true);
+    expect(clickMap.structuredContent).toMatchObject({
+      kind: 'click_map',
+      aggregation: 'unique_sessions',
+      sample_size: { sessions: 1, click_events: 1 },
+      cells: [expect.objectContaining({ sessions: 1, click_events: 1 })],
+      truncated: false,
+      no_data_reason: null,
+    });
+
+    const scrollMap = await client.callTool({
+      name: 'get_scroll_map',
+      arguments: {
+        project: env.projectSlug,
+        query: {
+          surface: 'checkout', route: 'checkout', version: 'unversioned',
+          device: 'desktop', date_from: '-1d', env: 'prod', grid: 8,
+        },
+      },
+    });
+    expect(scrollMap.isError).not.toBe(true);
+    expect(scrollMap.structuredContent).toMatchObject({
+      kind: 'scroll_map',
+      aggregation: 'unique_sessions',
+      sample_size: { sessions: 1 },
+      truncated: false,
+      no_data_reason: null,
     });
 
     const compared = await client.callTool({

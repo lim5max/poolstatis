@@ -11,6 +11,9 @@ import type {
   RetentionQueryInput,
   StickinessQueryInput,
   TrendQueryInput,
+  WebSessionsQueryInput,
+  WebSessionQueryInput,
+  PageEngagementQueryInput,
   VisualExperienceCompareInput,
   VisualExperienceQueryInput,
   WebAnalyticsQueryInput,
@@ -143,15 +146,51 @@ export type QueryResult =
   | {
       kind: 'web_analytics';
       summary: { visitors: number; sessions: number; page_views: number };
+      engagement: import('../stores/eventStore.js').WebEngagementSummary;
       breakdowns: Record<string, Array<{
         value: string; visitors: number; sessions: number; page_views: number; percentage: number;
       }>>;
       meta: QueryMeta & {
         truncated_dimensions: string[];
-        definitions: { visitors: string; sessions: string; page_views: string };
+        definitions: {
+          visitors: string;
+          sessions: string;
+          page_views: string;
+          engaged_sessions: string;
+          bounce_sessions: string;
+          single_page_sessions: string;
+          foreground_ms: string;
+          session_span_ms: string;
+        };
+        accepted_event_accounting: string;
         privacy: string;
         country_attribution?: NonNullable<CountryResolver['attribution']>;
       };
+    }
+  | {
+      kind: 'web_sessions';
+      sessions: import('../stores/eventStore.js').WebSessionSummary[];
+      meta: QueryMeta & {
+        total: number;
+        truncated: boolean;
+        definitions: { foreground_ms: string; session_span_ms: string; bounce: string };
+      };
+    }
+  | {
+      kind: 'web_session';
+      summary: import('../stores/eventStore.js').WebSessionSummary | null;
+      pages: import('../stores/eventStore.js').WebPageEngagement[];
+      meta: QueryMeta & {
+        no_data_reason?: string;
+        privacy: string;
+        total_pages: number;
+        truncated: boolean;
+      };
+    }
+  | {
+      kind: 'page_engagement';
+      page: import('../stores/eventStore.js').WebPageEngagement | null;
+      meta: QueryMeta & { no_data_reason?: string };
     }
   | {
       kind: 'funnel';
@@ -364,6 +403,12 @@ export class QueryService {
         return this.trend(projectId, q, now);
       case 'web_analytics':
         return this.webAnalytics(projectId, q, now);
+      case 'web_sessions':
+        return this.webSessions(projectId, q, now);
+      case 'web_session':
+        return this.webSession(projectId, q, now);
+      case 'page_engagement':
+        return this.pageEngagement(projectId, q, now);
       case 'funnel':
         return this.funnel(projectId, q, now);
       case 'entities':
@@ -386,38 +431,8 @@ export class QueryService {
   }
 
   private async webAnalytics(projectId: string, q: WebAnalyticsQueryInput, now: Date): Promise<QueryResult> {
-    const metric = await getMetric(this.pool, projectId, q.metric);
-    if (metric.type !== 'count') {
-      throw badRequest(
-        'web_analytics_metric_invalid',
-        `metric "${q.metric}" must be a count metric`,
-        'register and activate a count metric whose source is the page.viewed event',
-      );
-    }
-    const source = metric.source as {
-      event: string;
-      filters?: PropertyFilter[];
-      data_source?: 'native' | 'posthog';
-    };
-    if (source.data_source === 'posthog') {
-      throw badRequest('web_analytics_source_invalid', 'web analytics currently requires native stored events');
-    }
-    if (source.event !== 'page.viewed') {
-      throw badRequest(
-        'web_analytics_metric_invalid',
-        `metric "${q.metric}" must source the canonical page.viewed event`,
-        'use the proposed web_page_views metric or an exactly compatible active replacement',
-      );
-    }
-    const hasBrowserContextFilter = source.filters?.some((filter) =>
-      filter.property === '$browser_context' && filter.op === 'eq' && filter.value === '1');
-    if (!hasBrowserContextFilter) {
-      throw badRequest(
-        'web_analytics_metric_invalid',
-        `metric "${q.metric}" must filter $browser_context = "1"`,
-        'use the canonical web_page_views metric so legacy or manual page.viewed events are excluded',
-      );
-    }
+    const source = await this.webPageViewSource(projectId, q.metric);
+    const keyMetric = q.key_metric ? await this.webKeyMetricSource(projectId, q.key_metric) : undefined;
     const dimensions = q.dimensions.map((key) => ({ key, ...WEB_DIMENSIONS[key] }));
     const requestedProperties = [
       ...q.filters.map((filter) => filter.property),
@@ -435,6 +450,7 @@ export class QueryService {
       from,
       to,
       dimensions,
+      ...(keyMetric ? { keyMetric } : {}),
     });
     const breakdowns = Object.fromEntries(Object.entries(result.breakdowns).map(([key, rows]) => [
       key,
@@ -448,6 +464,7 @@ export class QueryService {
     return {
       kind: 'web_analytics',
       summary: result.summary,
+      engagement: result.engagement,
       breakdowns,
       meta: {
         computed_at: now.toISOString(),
@@ -459,11 +476,186 @@ export class QueryService {
           visitors: 'Unique resolved actors with page-view events; audited actor links deduplicate anonymous visitors after authentication.',
           sessions: 'Distinct non-empty session_id values on page-view events; a session is not a visitor or authenticated user.',
           page_views: 'Accepted stored page-view events; enrichment does not create additional billable events.',
+          engaged_sessions: 'Sessions with more than 10 seconds of foreground time, at least two page views, or the selected key metric.',
+          bounce_sessions: 'Count of lifecycle-complete sessions that did not meet any engagement rule; heartbeat-only or missing exits are never counted as bounces.',
+          single_page_sessions: 'Sessions with exactly one accepted page-view event, independent of engagement.',
+          foreground_ms: 'Cumulative visible and focused browser time from the latest sequence for each measured page view.',
+          session_span_ms: 'Wall-clock span between the first page view and latest page snapshot; kept separate from foreground time.',
         },
+        accepted_event_accounting: 'Every accepted stored page.viewed, page.engagement and key-metric event remains one billable stored event; reads and enrichment add none.',
         privacy: 'Country is coarse server-side enrichment from a configured trusted proxy. Raw IP, full URL, query string, DOM text and full user agent are not stored.',
         ...(this.countryAttribution ? { country_attribution: this.countryAttribution } : {}),
       },
     };
+  }
+
+  private async webSessions(projectId: string, q: WebSessionsQueryInput, now: Date): Promise<QueryResult> {
+    const source = await this.webPageViewSource(projectId, q.metric);
+    const keyMetric = q.key_metric ? await this.webKeyMetricSource(projectId, q.key_metric) : undefined;
+    await assertBrowserAnalyticsProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const result = await this.eventStore.webSessions({
+      projectId,
+      env: q.env,
+      event: source.event,
+      filters: [...source.filters, ...q.filters],
+      ...(keyMetric ? { keyMetric } : {}),
+      from,
+      to,
+      limit: q.limit,
+    });
+    return {
+      kind: 'web_sessions',
+      sessions: result.sessions,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        total: result.total,
+        truncated: result.total > result.sessions.length,
+        definitions: {
+          foreground_ms: 'Visible and focused browser time, deduplicated to the latest cumulative page snapshot.',
+          session_span_ms: 'Wall-clock session span, not active time.',
+          bounce: 'Only known when every page view has a lifecycle boundary snapshot; heartbeat-only or missing exits remain incomplete.',
+        },
+      },
+    };
+  }
+
+  private async webSession(projectId: string, q: WebSessionQueryInput, now: Date): Promise<QueryResult> {
+    const source = await this.webPageViewSource(projectId, q.metric);
+    const keyMetric = q.key_metric ? await this.webKeyMetricSource(projectId, q.key_metric) : undefined;
+    await assertBrowserAnalyticsProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const result = await this.eventStore.webSession({
+      projectId,
+      env: q.env,
+      event: source.event,
+      filters: [...source.filters, ...q.filters],
+      ...(keyMetric ? { keyMetric } : {}),
+      from,
+      to,
+      sessionId: q.session_id,
+      pageLimit: q.page_limit,
+    });
+    return {
+      kind: 'web_session',
+      summary: result.summary,
+      pages: result.pages,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        total_pages: result.total,
+        truncated: result.total > result.pages.length,
+        ...(result.summary ? {} : { no_data_reason: 'No matching accepted page-view session exists in this project, environment and period.' }),
+        privacy: 'Returns bounded page paths and aggregate timing only; never DOM, page text, full URLs, raw IP or replay.',
+      },
+    };
+  }
+
+  private async pageEngagement(projectId: string, q: PageEngagementQueryInput, now: Date): Promise<QueryResult> {
+    const source = await this.webPageViewSource(projectId, q.metric);
+    await assertBrowserAnalyticsProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const page = await this.eventStore.pageEngagement({
+      projectId,
+      env: q.env,
+      event: source.event,
+      filters: [...source.filters, ...q.filters],
+      from,
+      to,
+      pageViewId: q.page_view_id,
+    });
+    return {
+      kind: 'page_engagement',
+      page,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        ...(page ? {} : { no_data_reason: 'No matching accepted page view exists in this project, environment and period.' }),
+      },
+    };
+  }
+
+  private async webPageViewSource(
+    projectId: string,
+    metricKey: string,
+  ): Promise<{ event: string; filters: PropertyFilter[] }> {
+    const metric = await getMetric(this.pool, projectId, metricKey);
+    if (metric.status !== 'active') {
+      throw badRequest(
+        'web_analytics_metric_inactive',
+        `metric "${metricKey}" must be active before it can drive web analytics`,
+        'activate the reviewed metric or select an active replacement',
+      );
+    }
+    if (metric.type !== 'count') {
+      throw badRequest(
+        'web_analytics_metric_invalid',
+        `metric "${metricKey}" must be a count metric`,
+        'register and activate a count metric whose source is the page.viewed event',
+      );
+    }
+    const source = metric.source as {
+      event: string;
+      filters?: PropertyFilter[];
+      data_source?: 'native' | 'posthog';
+    };
+    if (source.data_source === 'posthog') {
+      throw badRequest('web_analytics_source_invalid', 'web analytics currently requires native stored events');
+    }
+    if (source.event !== 'page.viewed') {
+      throw badRequest(
+        'web_analytics_metric_invalid',
+        `metric "${metricKey}" must source the canonical page.viewed event`,
+        'use the proposed web_page_views metric or an exactly compatible active replacement',
+      );
+    }
+    const filters = source.filters ?? [];
+    const hasBrowserContextFilter = filters.some((filter) =>
+      filter.property === '$browser_context' && filter.op === 'eq' && filter.value === '1');
+    if (!hasBrowserContextFilter) {
+      throw badRequest(
+        'web_analytics_metric_invalid',
+        `metric "${metricKey}" must filter $browser_context = "1"`,
+        'use the canonical web_page_views metric so legacy or manual page.viewed events are excluded',
+      );
+    }
+    return { event: source.event, filters };
+  }
+
+  private async webKeyMetricSource(
+    projectId: string,
+    metricKey: string,
+  ): Promise<{ event: string; filters: PropertyFilter[] }> {
+    const metric = await getMetric(this.pool, projectId, metricKey);
+    if (metric.status !== 'active') {
+      throw badRequest(
+        'web_analytics_key_metric_inactive',
+        `key metric "${metricKey}" must be active before it can classify engagement`,
+        'activate the reviewed key metric or omit key_metric',
+      );
+    }
+    const source = await this.eventSource(projectId, metricKey);
+    if (source.dataSource !== 'native') {
+      throw badRequest(
+        'web_analytics_source_invalid',
+        `key metric "${metricKey}" must use native stored events`,
+        'use a native event-based key metric so session classification stays inside one event store',
+      );
+    }
+    return { event: source.event, filters: source.filters };
   }
 
   /** Resolve a registry metric to an event-based source, or fail with a teaching hint. */

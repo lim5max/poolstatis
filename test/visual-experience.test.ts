@@ -194,8 +194,8 @@ describe('visual experience maps', () => {
       kind: 'visual_experience',
       snapshot: { id: snapshotBody.id, release_hash: 'abc123' },
       summary: { page_views: 2, sessions: 2, actors: 2, clicks: 1 },
-      click_cells: [{ x: 4, y: 1, count: 1, actors: 1 }],
-      click_labels: [{ label: 'hero.get_started', count: 1, actors: 1 }],
+      click_cells: [{ x: 4, y: 1, count: 1, sessions: 1, actors: 1 }],
+      click_labels: [{ label: 'hero.get_started', count: 1, sessions: 1, actors: 1 }],
       sections: [
         { section: 'hero', sessions: 2, percentage: 100, dropoff_percentage: 0 },
         { section: 'features', sessions: 1, percentage: 50, dropoff_percentage: 50 },
