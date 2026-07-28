@@ -121,6 +121,28 @@ The public runner is version-pinned so a hosted deploy cannot silently change
 its MCP runtime. `@poolstatis/mcp@0.2.0` passed a fresh registry install,
 initialize, tool-list, and project-scoped read smoke.
 
+Verify MCP from the configured client by calling `get_onboarding_status` with
+the target project and environment, then refresh **Setup & MCP**. A copied
+config is not server evidence.
+
+Install the three Poolstatis workflow skills in the product repo. MCP supplies
+live tools and project data; skills tell Codex, Claude, and other compatible
+agents to read the standard, project schema, and current documentation before
+they instrument, analyze, or maintain measurement:
+
+```bash
+pnpm dlx skills add https://github.com/lim5max/poolstatis \
+  --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
+  --agent '*' -y
+pnpm dlx skills list --json
+```
+
+Use `--agent codex` or `--agent claude-code` instead of `'*'` to target one
+runtime. An absolute local Core checkout path can replace the GitHub URL.
+See the public [quickstart](https://poolstatis.xyz/docs/quickstart),
+[instrumentation standard](https://poolstatis.xyz/docs/standard), and
+[MCP reference](https://poolstatis.xyz/docs/mcp-tools).
+
 Send product events through the ingest API:
 
 ```bash

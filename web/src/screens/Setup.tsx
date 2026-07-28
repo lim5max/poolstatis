@@ -24,8 +24,14 @@ const TOOLS = [
   ['Insights', ['list_insights', 'create_insight', 'resolve_insight']],
 ];
 
+const SKILL_NAMES = ['poolstatis-instrument', 'poolstatis-analyze', 'poolstatis-maintain'] as const;
+const SKILLS_SOURCE = 'https://github.com/lim5max/poolstatis';
+const skillInstallCommand = (agent: 'codex' | 'claude-code' | "'*'") =>
+  `pnpm dlx skills add ${SKILLS_SOURCE} --skill ${SKILL_NAMES.join(' ')} --agent ${agent} -y`;
+const SKILLS_VERIFY_COMMAND = 'pnpm dlx skills list --json';
+
 export function Setup() {
-  const { client, baseUrl, token, tokenKind, project, env } = useStore();
+  const { client, baseUrl, project, env } = useStore();
   const [clientId, setClientId] = useState<McpClientId>('claude-code');
   const [configCopied, setConfigCopied] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
@@ -46,7 +52,7 @@ export function Setup() {
   );
   const selectedClient = mcpClientById(clientId);
 
-  const mcpToken = tokenKind === 'user' ? '<replace-with-pt-or-sk>' : token;
+  const mcpToken = '<replace-with-pt-or-sk>';
   const normalizedServerUrl = serverUrl.replace(/\/$/, '');
   const mcpConfig = mcpServerConfig(MCP_RUNNER.command, MCP_RUNNER.args, normalizedServerUrl, mcpToken);
   const mcpCommand = [MCP_RUNNER.command, ...MCP_RUNNER.args].join(' ');
@@ -55,6 +61,7 @@ export function Setup() {
   -H 'Authorization: Bearer pk_…' \\
   -H 'content-type: application/json' \\
   -d '{"events":[{"event":"signup.completed","distinct_id":"u_123","properties":{"plan":"pro"}}]}'`;
+  const firstQueryPrompt = `For Poolstatis project "${slug}" in env "${env}", run query_trend with an active metric key, then call get_onboarding_status with project "${slug}" and env "${env}". Report the date range, grain, and result.`;
 
   return (
     <div className="max-w-5xl space-y-5">
@@ -68,7 +75,7 @@ export function Setup() {
       <Panel
         title="Verified progress"
         right={<div className="flex items-center gap-2">
-          <Badge variant="outline">server evidence</Badge>
+          <Badge variant="outline" className="hidden sm:inline-flex">server evidence</Badge>
           <Button variant="ghost" size="sm" onClick={proof.reload} disabled={proof.loading}>Refresh</Button>
         </div>}
       >
@@ -83,9 +90,12 @@ export function Setup() {
                 : null}
       </Panel>
 
-      <Panel title="1. Choose your MCP client">
+      <Panel title={<h2>1. Connect MCP</h2>}>
+        <p className="mb-4 max-w-2xl text-sm text-muted-foreground">
+          Choose the coding agent that edits your product, add the generated stdio config, then reload that client.
+        </p>
         <label className="block max-w-sm text-xs font-medium text-muted-foreground" htmlFor="mcp-client">
-          Client
+          MCP client
         </label>
         <select
           id="mcp-client"
@@ -102,18 +112,12 @@ export function Setup() {
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{selectedClient.pasteTarget}</p>
           </div>
         </div>
-      </Panel>
-
-      <Panel title="2. Add the config">
-        <p className="mb-4 max-w-2xl text-sm text-muted-foreground">
-          Copy the config into {selectedClient.name}, then reload the client. A copied config is not proof that MCP ran.
-        </p>
         {MCP_RUNNER.packageStatus !== 'published' && (
-          <div className="mb-4 break-words rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-950 dark:text-amber-100 [&_code]:break-all">
+          <div className="mt-4 break-words rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-950 dark:text-amber-100 [&_code]:break-all">
             Registry install is disabled for this deploy. The config below uses the exact local Core runner; replace <code>&lt;path-to-poolstatis-core&gt;</code> with its checkout path. Set <code>VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true</code> only after the pinned public package is verified.
           </div>
         )}
-        <div className="flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap gap-2">
           <CopyButton value={mcpConfig} onCopied={() => setConfigCopied(true)} onFailed={() => setConfigOpen(true)}>Copy MCP config</CopyButton>
           <CopyButton value={mcpCommand} onFailed={() => setConfigOpen(true)}>Copy command</CopyButton>
           <CopyButton value={mcpEnv} onFailed={() => setConfigOpen(true)}>Copy environment</CopyButton>
@@ -121,11 +125,9 @@ export function Setup() {
         <div aria-live="polite" role="status" className="mt-3 min-h-5 text-xs text-muted-foreground">
           {configCopied ? 'Config copied. This action does not verify MCP use.' : 'No server evidence changes until an MCP-marked request reaches the server.'}
         </div>
-        {tokenKind === 'user' && (
-          <div className="mt-4 rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
-            Replace <code>&lt;replace-with-pt-or-sk&gt;</code> with a personal <code>pt_</code> token or project <code>sk_</code> key.
-          </div>
-        )}
+        <div className="mt-4 rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+          Replace <code>&lt;replace-with-pt-or-sk&gt;</code> with a personal <code>pt_</code> token or project <code>sk_</code> key in your local MCP client. Setup never copies the current session credential.
+        </div>
         <div className="mt-4 rounded-md border bg-muted/20">
           <button
             type="button"
@@ -149,9 +151,9 @@ export function Setup() {
         </div>
       </Panel>
 
-      <Panel title="3. Record MCP use">
+      <Panel title={<h2>2. Verify MCP</h2>}>
         <p className="text-sm text-muted-foreground">
-          Ask the agent to call <code>get_onboarding_status</code> for <code>{slug}</code>, then refresh the proof above. Poolstatis records a request marked by the MCP client and its time. This is last-use evidence, not a heartbeat or transport attestation.
+          Ask the agent to call <code>get_onboarding_status</code> with project <code>{slug}</code> and env <code>{env}</code>, then refresh the server proof. Poolstatis records a request marked by the MCP client and its time. This is last-use evidence, not a heartbeat or transport attestation.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={proof.reload} disabled={proof.loading}>Refresh server proof</Button>
@@ -159,16 +161,38 @@ export function Setup() {
         </div>
       </Panel>
 
-      <Panel title="4. Send data and run a query">
+      <Panel title={<h2>3. Send your first event</h2>}>
+        <div className="mb-4 rounded-md border bg-muted/20 p-4">
+          <div className="text-sm font-medium">Activate a metric before sending</div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Register the metric through MCP, then review and activate it. New agent-created metrics stay proposed until you approve them.
+          </p>
+          <Button asChild variant="outline" size="sm" className="mt-3"><Link to="/registry">Review and activate metric</Link></Button>
+        </div>
         <p className="text-sm text-muted-foreground">
-          Send one real product event with a <code>pk_</code> key. Activate its metric in Registry, then run a typed trend or funnel query.
+          Use a write-only <code>pk_</code> key and replace the example with a real event covered by an active metric. The placeholder below never exposes a saved credential.
         </p>
+        <div className="mt-4"><CodeBlock code={ingestCurl} /></div>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button asChild size="sm"><Link to="/data">Inspect accepted data</Link></Button>
           <Button asChild variant="outline" size="sm"><Link to="/registry">Review metrics</Link></Button>
-          <Button asChild variant="ghost" size="sm"><Link to="/measurement">Check measurement trust</Link></Button>
         </div>
       </Panel>
+
+      <Panel title={<h2>4. Run your first query</h2>}>
+        <p className="text-sm text-muted-foreground">
+          Ask the connected agent for a typed trend using an active metric key. A successful server query completes the final setup proof above.
+        </p>
+        <div className="mt-4 rounded-md border bg-muted/20 p-4 text-sm leading-relaxed">
+          {firstQueryPrompt}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <CopyButton value={firstQueryPrompt}>Copy query prompt</CopyButton>
+          <Button asChild variant="outline" size="sm"><Link to="/measurement">Check measurement trust</Link></Button>
+        </div>
+      </Panel>
+
+      <SkillsInstall />
 
       <section className="rounded-xl border bg-card">
         <button
@@ -223,6 +247,84 @@ export function Setup() {
           </div>
         </div>}
       </section>
+    </div>
+  );
+}
+
+function SkillsInstall() {
+  const installs = [
+    {
+      label: 'Codex',
+      body: 'Install into the current product repo for Codex.',
+      command: skillInstallCommand('codex'),
+      copyLabel: 'Copy Codex install',
+    },
+    {
+      label: 'Claude Code',
+      body: 'Install the same skills for Claude Code.',
+      command: skillInstallCommand('claude-code'),
+      copyLabel: 'Copy Claude install',
+    },
+    {
+      label: 'Portable agents',
+      body: 'Install for every agent supported by the skills CLI.',
+      command: skillInstallCommand("'*'"),
+      copyLabel: 'Copy portable install',
+    },
+  ];
+
+  return (
+    <Panel title={<h2>Install Poolstatis skills</h2>}>
+      <div className="grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
+        <div>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            MCP gives an agent live Poolstatis tools and project data. Skills give it the standards and documentation workflow for using those tools correctly. Install both in the product repo.
+          </p>
+          <div className="mt-4 grid gap-2">
+            <SkillSummary name="poolstatis-instrument" body="Plan, register, implement, and verify purpose-first tracking." />
+            <SkillSummary name="poolstatis-analyze" body="Choose a typed query and interpret its grain and purpose." />
+            <SkillSummary name="poolstatis-maintain" body="Audit drift, warnings, coverage, and metric lifecycle." />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs">
+            <a className="text-primary underline-offset-4 hover:underline" href="https://poolstatis.xyz/docs/quickstart" target="_blank" rel="noreferrer">Public quickstart</a>
+            <a className="text-primary underline-offset-4 hover:underline" href="https://poolstatis.xyz/docs/standard" target="_blank" rel="noreferrer">Instrumentation standard</a>
+            <a className="text-primary underline-offset-4 hover:underline" href="https://poolstatis.xyz/docs/mcp-tools" target="_blank" rel="noreferrer">MCP reference</a>
+          </div>
+        </div>
+        <div className="min-w-0 space-y-3">
+          {installs.map((install) => (
+            <div key={install.label} className="min-w-0 rounded-md border bg-muted/20 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">{install.label}</div>
+                  <p className="mt-1 text-xs text-muted-foreground">{install.body}</p>
+                </div>
+                <CopyButton value={install.command}>{install.copyLabel}</CopyButton>
+              </div>
+              <code className="mt-3 block overflow-x-auto whitespace-pre rounded-md bg-background p-3 text-xs">{install.command}</code>
+            </div>
+          ))}
+          <div className="rounded-md border border-dashed p-4">
+            <div className="text-sm font-medium">Verify installed</div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Run this in the product repo and confirm all three names appear. For a local Core checkout, replace the GitHub URL in the install command with its absolute path.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <CopyButton value={SKILLS_VERIFY_COMMAND}>Copy verify command</CopyButton>
+              <code className="max-w-full overflow-x-auto whitespace-pre rounded-md bg-muted px-3 py-2 text-xs">{SKILLS_VERIFY_COMMAND}</code>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function SkillSummary({ name, body }: { name: string; body: string }) {
+  return (
+    <div className="rounded-md border bg-muted/20 p-3">
+      <code className="text-xs font-medium text-foreground">{name}</code>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{body}</p>
     </div>
   );
 }
