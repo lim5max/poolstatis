@@ -409,6 +409,140 @@ describe('web analytics query', () => {
     }
   });
 
+  it('serializes concurrent browser analytics setup without a stale transaction snapshot', async () => {
+    const collision = await createTestEnv({ countryResolver });
+    const lockClient = await collision.pool.connect();
+    const lockKey = `browser-analytics-setup:${collision.projectId}`;
+    let lockHeld = false;
+    try {
+      await lockClient.query(
+        'SELECT pg_advisory_lock(hashtextextended($1, 0))',
+        [lockKey],
+      );
+      lockHeld = true;
+      const first = api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+      const second = api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const { rows } = await collision.pool.query<{ waiting: number }>(
+          `SELECT count(*)::int AS waiting
+             FROM pg_stat_activity
+            WHERE state = 'active'
+              AND wait_event_type = 'Lock'
+              AND query LIKE 'SELECT pg_advisory_lock(hashtextextended%'`,
+        );
+        if ((rows[0]?.waiting ?? 0) >= 2) break;
+        if (attempt === 99) throw new Error('concurrent setup requests did not reach the advisory lock');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await lockClient.query(
+        'SELECT pg_advisory_unlock(hashtextextended($1, 0))',
+        [lockKey],
+      );
+      lockHeld = false;
+
+      const responses = await Promise.all([first, second]);
+      expect(responses.map((response) => response.status)).toEqual([200, 200]);
+      const properties = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+      const metrics = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+      );
+      expect(properties.body.properties).toHaveLength(15);
+      expect(metrics.body.metrics).toHaveLength(2);
+    } finally {
+      if (lockHeld) {
+        await lockClient.query(
+          'SELECT pg_advisory_unlock(hashtextextended($1, 0))',
+          [lockKey],
+        ).catch(() => {});
+      }
+      lockClient.release();
+      await collision.close();
+    }
+  });
+
+  it('returns a controlled retryable error after exhausting serialization retries', async () => {
+    const collision = await createTestEnv({ countryResolver });
+    const identifier = collision.projectId.replaceAll('-', '');
+    const functionName = `test_serialize_browser_bundle_${identifier}`;
+    const triggerName = `test_serialize_browser_bundle_${identifier}`;
+    const sequenceName = `test_serialize_browser_bundle_seq_${identifier}`;
+    try {
+      await collision.pool.query(`CREATE SEQUENCE ${sequenceName}`);
+      await collision.pool.query(`
+        CREATE FUNCTION ${functionName}() RETURNS trigger AS $$
+        BEGIN
+          IF NEW.project_id = '${collision.projectId}'::uuid THEN
+            PERFORM nextval('${sequenceName}');
+            RAISE EXCEPTION 'forced serialization failure' USING ERRCODE = '40001';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `);
+      await collision.pool.query(`
+        CREATE TRIGGER ${triggerName}
+        BEFORE INSERT ON property_definitions
+        FOR EACH ROW EXECUTE FUNCTION ${functionName}()
+      `);
+
+      const setup = await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+      expect(setup.status).toBe(503);
+      expect(setup.body.error).toEqual(expect.objectContaining({
+        code: 'browser_analytics_setup_retryable',
+        details: { retryable: true },
+      }));
+      const { rows: attempts } = await collision.pool.query<{ count: number }>(
+        `SELECT last_value::int AS count FROM ${sequenceName}`,
+      );
+      expect(attempts[0]?.count).toBe(3);
+      const properties = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+      const metrics = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+      );
+      expect(properties.body.properties).toEqual([]);
+      expect(metrics.body.metrics).toEqual([]);
+    } finally {
+      await collision.pool.query(`DROP TRIGGER IF EXISTS ${triggerName} ON property_definitions`);
+      await collision.pool.query(`DROP FUNCTION IF EXISTS ${functionName}()`);
+      await collision.pool.query(`DROP SEQUENCE IF EXISTS ${sequenceName}`);
+      await collision.close();
+    }
+  });
+
   it('rejects an incompatible reserved metric instead of rewriting user semantics', async () => {
     const collision = await createTestEnv({ countryResolver });
     try {

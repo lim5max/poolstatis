@@ -1330,32 +1330,75 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await resolveProject(req);
     const actor = authOwner(req.auth);
     const client = await ctx.pool.connect();
+    const setupLock = `browser-analytics-setup:${project.id}`;
+    let lockAcquired = false;
+    let destroyClient = false;
     let result: {
       properties: Awaited<ReturnType<typeof proposeBrowserAnalyticsProperties>>;
       metrics: Awaited<ReturnType<typeof proposeBrowserAnalyticsMetrics>>;
-    };
+    } | undefined;
     try {
-      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
       await client.query(
-        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        [`browser-analytics-setup:${project.id}`],
+        'SELECT pg_advisory_lock(hashtextextended($1, 0))',
+        [setupLock],
       );
-      await preflightBrowserAnalyticsProperties(client, project.id);
-      await preflightAcquisitionProperties(client, project.id);
-      await preflightBrowserAnalyticsMetrics(client, project.id);
-      result = {
-        properties: [
-          ...await proposeBrowserAnalyticsProperties(client, project.id, actor),
-          ...await proposeAcquisitionProperties(client, project.id, actor),
-        ],
-        metrics: await proposeBrowserAnalyticsMetrics(client, project.id, actor),
-      };
-      await client.query('COMMIT');
+      lockAcquired = true;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+          await preflightBrowserAnalyticsProperties(client, project.id);
+          await preflightAcquisitionProperties(client, project.id);
+          await preflightBrowserAnalyticsMetrics(client, project.id);
+          result = {
+            properties: [
+              ...await proposeBrowserAnalyticsProperties(client, project.id, actor),
+              ...await proposeAcquisitionProperties(client, project.id, actor),
+            ],
+            metrics: await proposeBrowserAnalyticsMetrics(client, project.id, actor),
+          };
+          await client.query('COMMIT');
+          break;
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => {});
+          const code = (error as { code?: unknown } | null)?.code;
+          const retryable = code === '40001' || code === '40P01';
+          if (!retryable) throw error;
+          if (attempt === 3) {
+            throw new ApiError(
+              503,
+              'browser_analytics_setup_retryable',
+              'browser analytics setup could not acquire a stable database snapshot',
+              'retry the complete setup request; no partial definitions were committed',
+              { retryable: true },
+            );
+          }
+        }
+      }
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
     } finally {
-      client.release();
+      if (lockAcquired) {
+        try {
+          const { rows } = await client.query<{ unlocked: boolean }>(
+            'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
+            [setupLock],
+          );
+          destroyClient = rows[0]?.unlocked !== true;
+        } catch {
+          destroyClient = true;
+        }
+      }
+      client.release(destroyClient);
+    }
+    if (!result) {
+      throw new ApiError(
+        503,
+        'browser_analytics_setup_retryable',
+        'browser analytics setup did not complete',
+        'retry the complete setup request; no partial definitions were committed',
+        { retryable: true },
+      );
     }
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
