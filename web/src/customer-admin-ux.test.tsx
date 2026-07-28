@@ -207,6 +207,28 @@ describe('server-verified setup flow', () => {
     await waitFor(() => expect(screen.queryByText('reading webhook status…')).not.toBeInTheDocument());
   });
 
+  it('lists the live taxonomy and web engagement MCP contracts in the advanced reference', async () => {
+    renderSetup();
+    await screen.findByText('Connect Poolstatis in four steps');
+    fireEvent.click(screen.getByRole('button', { name: 'Show advanced setup' }));
+    for (const tool of [
+      'list_metric_categories',
+      'create_metric_category',
+      'update_metric_category',
+      'delete_metric_category',
+      'get_web_overview',
+      'list_web_sessions',
+      'get_web_session',
+      'get_session_engagement',
+      'get_page_engagement',
+      'get_click_map',
+      'get_scroll_map',
+    ]) {
+      expect(screen.getByText(tool, { exact: true })).toBeInTheDocument();
+    }
+    await waitFor(() => expect(screen.queryByText('reading webhook status…')).not.toBeInTheDocument());
+  });
+
   it('reveals a manual fallback when clipboard access is blocked', async () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('blocked')) } });
     renderSetup();

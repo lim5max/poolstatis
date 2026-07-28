@@ -17,9 +17,10 @@ const TOOLS = [
   ['External sources', ['configure_posthog', 'verify_posthog', 'get_posthog_schema']],
   ['Decision loop', ['validate_measurement_contracts', 'diff_measurement_contracts', 'apply_measurement_contracts', 'export_measurement_contracts', 'register_release', 'list_releases', 'get_release', 'evaluate_release', 'list_decisions', 'get_decision', 'approve_decision', 'reject_decision', 'edit_decision', 'explain_outcome', 'prepare_action', 'approve_action', 'get_decision_inbox', 'search_decision_history', 'find_similar_changes']],
   ['Delivery', ['configure_webhook', 'verify_webhook']],
-  ['Registry', ['register_metric', 'update_metric', 'deprecate_metric', 'explain_metric_usage', 'list_metrics', 'delete_metric', 'register_entity_type', 'define_funnel', 'list_funnels', 'delete_funnel']],
+  ['Registry', ['list_metric_categories', 'create_metric_category', 'update_metric_category', 'delete_metric_category', 'register_metric', 'update_metric', 'deprecate_metric', 'explain_metric_usage', 'list_metrics', 'delete_metric', 'register_entity_type', 'define_funnel', 'list_funnels', 'delete_funnel']],
   ['Feature delivery', ['create_feature_flag', 'list_feature_flags', 'update_feature_flag', 'archive_feature_flag', 'evaluate_feature_flag', 'create_experiment', 'list_experiments', 'update_experiment', 'start_experiment', 'conclude_experiment', 'get_experiment_results']],
-  ['Queries', ['query_trend', 'query_funnel', 'query_entities', 'query_retention', 'query_lifecycle', 'query_stickiness', 'sample_events']],
+  ['Queries', ['query_trend', 'query_funnel', 'query_entities', 'query_retention', 'query_lifecycle', 'query_stickiness', 'query_web_analytics', 'get_web_overview', 'list_web_sessions', 'get_web_session', 'get_session_engagement', 'get_page_engagement', 'sample_events']],
+  ['Experience', ['get_click_map', 'get_scroll_map']],
   ['Diagnostics', ['list_ingest_warnings', 'list_data_quality_issues']],
   ['Insights', ['list_insights', 'create_insight', 'resolve_insight']],
 ];
