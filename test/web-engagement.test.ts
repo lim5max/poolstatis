@@ -150,10 +150,14 @@ describe('web engagement and session analytics', () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(result.body.summary).toEqual({ visitors: 7, sessions: 7, page_views: 8 });
     expect(result.body.engagement).toMatchObject({
-      measured_sessions: 5,
+      measured_sessions: 6,
       incomplete_sessions: 2,
-      engaged_sessions: 4,
+      unknown_sessions: 1,
+      engaged_sessions: 5,
       bounce_sessions: 1,
+      measured_session_coverage: 6 / 7,
+      engaged_rate: 5 / 6,
+      bounce_rate: 1 / 6,
       single_page_sessions: 6,
       timed_page_views: 7,
       total_page_views: 8,
@@ -161,6 +165,7 @@ describe('web engagement and session analytics', () => {
       foreground_ms: 114_000,
     });
     expect(result.body.meta.definitions.bounce_sessions).toContain('lifecycle-complete');
+    expect(result.body.meta.definitions.engaged_sessions).toContain('unknown');
     expect(result.body.meta.accepted_event_accounting).toContain('stored event');
 
     const usageAfter = await env.pool.query(
@@ -188,6 +193,161 @@ describe('web engagement and session analytics', () => {
       timed: true,
       complete: false,
     });
+
+    const sessions = await query({
+      kind: 'web_sessions',
+      metric: 'web_page_views',
+      key_metric: 'signup_completed',
+      date_from: '-1d',
+      env: 'prod',
+      limit: 20,
+    });
+    const heartbeatCrash = sessions.body.sessions.find(
+      (session: { session_id: string }) => session.session_id === 'session:heartbeat-crash',
+    );
+    const noEvidenceCrash = sessions.body.sessions.find(
+      (session: { session_id: string }) => session.session_id === 'session:crash',
+    );
+    expect(heartbeatCrash).toMatchObject({
+      foreground_ms: 10_000,
+      complete: false,
+      engaged: true,
+      bounce: null,
+    });
+    expect(noEvidenceCrash).toMatchObject({
+      foreground_ms: 0,
+      complete: false,
+      engaged: null,
+      bounce: null,
+    });
+  });
+
+  it('keeps actor identity in every engagement join when IDs collide', async () => {
+    const timestamp = new Date(Date.now() - 10_000).toISOString();
+    const browser = {
+      $browser_context: '1',
+      $page_view_id: 'page:collision',
+      $page_path: '/collision',
+      $device_class: 'desktop',
+      $browser_family: 'chrome',
+      $os_family: 'linux',
+      $language: 'en',
+      $timezone: 'UTC',
+      $viewport_bucket: 'lg',
+      $screen_bucket: 'lg',
+    };
+    const events = [
+      {
+        event: 'page.viewed',
+        distinct_id: 'visitor:collision-a',
+        session_id: 'session:collision',
+        timestamp,
+        properties: browser,
+      },
+      {
+        event: 'page.engagement',
+        distinct_id: 'visitor:collision-a',
+        session_id: 'session:collision',
+        timestamp,
+        properties: {
+          ...browser,
+          sequence: 1,
+          foreground_ms: 10_000,
+          elapsed_ms: 10_000,
+          max_scroll_pct: 50,
+          interaction_count: 0,
+          reason: 'pagehide',
+        },
+      },
+      {
+        event: 'page.viewed',
+        distinct_id: 'visitor:collision-b',
+        session_id: 'session:collision',
+        timestamp,
+        properties: browser,
+      },
+      {
+        event: 'page.engagement',
+        distinct_id: 'visitor:collision-b',
+        session_id: 'session:collision',
+        timestamp,
+        properties: {
+          ...browser,
+          sequence: 1,
+          foreground_ms: 1_000,
+          elapsed_ms: 1_000,
+          max_scroll_pct: 25,
+          interaction_count: 0,
+          reason: 'pagehide',
+        },
+      },
+      {
+        event: 'signup.completed',
+        distinct_id: 'visitor:collision-a',
+        session_id: 'session:collision',
+        timestamp,
+      },
+    ];
+    const stored = await api(env, env.ingestToken, 'POST', '/i/v1/events', { events });
+    expect(stored.status, JSON.stringify(stored.body)).toBe(200);
+
+    const listed = await query({
+      kind: 'web_sessions',
+      metric: 'web_page_views',
+      key_metric: 'signup_completed',
+      date_from: '-1d',
+      env: 'prod',
+      limit: 100,
+    });
+    const collisions = listed.body.sessions.filter(
+      (session: { session_id: string }) => session.session_id === 'session:collision',
+    );
+    expect(collisions).toHaveLength(2);
+    expect(collisions.map((session: { actor_id: string; foreground_ms: number; engaged: boolean }) => ({
+      actor_id: session.actor_id,
+      foreground_ms: session.foreground_ms,
+      engaged: session.engaged,
+    })).sort((a: { actor_id: string }, b: { actor_id: string }) => a.actor_id.localeCompare(b.actor_id))).toEqual([
+      { actor_id: 'visitor:collision-a', foreground_ms: 10_000, engaged: true },
+      { actor_id: 'visitor:collision-b', foreground_ms: 1_000, engaged: false },
+    ]);
+
+    for (const expected of collisions) {
+      const detail = await query({
+        kind: 'web_session',
+        metric: 'web_page_views',
+        key_metric: 'signup_completed',
+        session_id: expected.session_id,
+        actor_id: expected.actor_id,
+        date_from: '-1d',
+        env: 'prod',
+      });
+      expect(detail.status).toBe(200);
+      expect(detail.body.summary).toMatchObject(expected);
+      expect(detail.body.pages).toHaveLength(1);
+      expect(detail.body.pages[0]).toMatchObject({ actor_id: expected.actor_id });
+    }
+
+    const ambiguousSession = await query({
+      kind: 'web_session',
+      metric: 'web_page_views',
+      key_metric: 'signup_completed',
+      session_id: 'session:collision',
+      date_from: '-1d',
+      env: 'prod',
+    });
+    expect(ambiguousSession.status).toBe(400);
+    expect(ambiguousSession.body.error.code).toBe('web_session_actor_ambiguous');
+
+    const ambiguousPage = await query({
+      kind: 'page_engagement',
+      metric: 'web_page_views',
+      page_view_id: 'page:collision',
+      date_from: '-1d',
+      env: 'prod',
+    });
+    expect(ambiguousPage.status).toBe(400);
+    expect(ambiguousPage.body.error.code).toBe('page_engagement_actor_ambiguous');
   });
 
   it('uses only the highest cumulative sequence for duplicate and out-of-order snapshots', async () => {
@@ -323,6 +483,57 @@ describe('web engagement and session analytics', () => {
       `SELECT count(*)::text AS count
        FROM events
        WHERE project_id = $1 AND distinct_id LIKE 'visitor:invalid-%'`,
+      [env.projectId],
+    );
+    expect(stored.rows[0]?.count).toBe('0');
+  });
+
+  it('rejects non-canonical and oversized extras on browser-owned page events', async () => {
+    const base = {
+      $browser_context: '1',
+      $page_view_id: 'page:strict',
+      $page_path: '/',
+      $device_class: 'desktop',
+      $browser_family: 'chrome',
+      $os_family: 'linux',
+      $language: 'en',
+      $timezone: 'UTC',
+      $viewport_bucket: 'lg',
+      $screen_bucket: 'lg',
+    };
+    const engagement = {
+      ...base,
+      sequence: 1,
+      foreground_ms: 1_000,
+      elapsed_ms: 1_000,
+      max_scroll_pct: 25,
+      interaction_count: 0,
+      reason: 'heartbeat',
+    };
+    const invalid = [
+      { event: 'page.viewed', properties: { ...base, full_url: 'https://example.test/?secret=1' } },
+      { event: 'page.viewed', properties: { ...base, query: 'secret=1' } },
+      { event: 'page.viewed', properties: { ...base, dom_text: 'private page text' } },
+      { event: 'page.viewed', properties: { ...base, arbitrary: 'not canonical' } },
+      { event: 'page.engagement', properties: { ...engagement, arbitrary: 'not canonical' } },
+      { event: 'page.viewed', properties: { ...base, arbitrary: 'x'.repeat(10_000) } },
+      { event: 'page.viewed', properties: { ...base, path: 'https://example.test/private?token=x' } },
+      { event: 'page.viewed', properties: { ...base, path: '/private?token=x' } },
+      { event: 'page.viewed', properties: { ...base, path: `/${'x'.repeat(10_000)}` } },
+    ].map((event, index) => ({
+      ...event,
+      distinct_id: `visitor:strict-${index}`,
+      session_id: `session:strict-${index}`,
+    }));
+    const response = await api(env, env.ingestToken, 'POST', '/i/v1/events', { events: invalid });
+    expect(response.status).toBe(207);
+    expect(response.body.accepted).toBe(0);
+    expect(response.body.errors).toHaveLength(invalid.length);
+
+    const stored = await env.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM events
+       WHERE project_id = $1 AND distinct_id LIKE 'visitor:strict-%'`,
       [env.projectId],
     );
     expect(stored.rows[0]?.count).toBe('0');

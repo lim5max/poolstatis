@@ -156,8 +156,12 @@ export type QueryResult =
           visitors: string;
           sessions: string;
           page_views: string;
+          measured_sessions: string;
+          unknown_sessions: string;
           engaged_sessions: string;
           bounce_sessions: string;
+          engaged_rate: string;
+          bounce_rate: string;
           single_page_sessions: string;
           foreground_ms: string;
           session_span_ms: string;
@@ -474,10 +478,14 @@ export class QueryService {
         truncated_dimensions: result.truncatedDimensions,
         definitions: {
           visitors: 'Unique resolved actors with page-view events; audited actor links deduplicate anonymous visitors after authentication.',
-          sessions: 'Distinct non-empty session_id values on page-view events; a session is not a visitor or authenticated user.',
+          sessions: 'Distinct resolved-actor and non-empty session_id pairs on page-view events; a session is not a visitor or authenticated user.',
           page_views: 'Accepted stored page-view events; enrichment does not create additional billable events.',
-          engaged_sessions: 'Sessions with more than 10 seconds of foreground time, at least two page views, or the selected key metric.',
+          measured_sessions: 'Sessions with a known tri-state engagement result: positive evidence or a complete negative lifecycle.',
+          unknown_sessions: 'Sessions without positive engagement evidence and without a complete lifecycle boundary.',
+          engaged_sessions: 'Sessions with at least 10 seconds of foreground time, at least two page views, or the selected key metric. Incomplete sessions without positive evidence remain unknown.',
           bounce_sessions: 'Count of lifecycle-complete sessions that did not meet any engagement rule; heartbeat-only or missing exits are never counted as bounces.',
+          engaged_rate: 'Engaged sessions divided by measured sessions; unavailable when no session has a known classification.',
+          bounce_rate: 'Lifecycle-complete negative sessions divided by measured sessions; unavailable when no session has a known classification.',
           single_page_sessions: 'Sessions with exactly one accepted page-view event, independent of engagement.',
           foreground_ms: 'Cumulative visible and focused browser time from the latest sequence for each measured page view.',
           session_span_ms: 'Wall-clock span between the first page view and latest page snapshot; kept separate from foreground time.',
@@ -541,8 +549,16 @@ export class QueryService {
       from,
       to,
       sessionId: q.session_id,
+      ...(q.actor_id ? { actorId: q.actor_id } : {}),
       pageLimit: q.page_limit,
     });
+    if (result.ambiguous_actor) {
+      throw badRequest(
+        'web_session_actor_ambiguous',
+        `session_id "${q.session_id}" belongs to more than one actor in this query scope`,
+        'list web sessions first, then repeat this request with the returned actor_id',
+      );
+    }
     return {
       kind: 'web_session',
       summary: result.summary,
@@ -566,7 +582,7 @@ export class QueryService {
     await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
-    const page = await this.eventStore.pageEngagement({
+    const result = await this.eventStore.pageEngagement({
       projectId,
       env: q.env,
       event: source.event,
@@ -574,7 +590,16 @@ export class QueryService {
       from,
       to,
       pageViewId: q.page_view_id,
+      ...(q.actor_id ? { actorId: q.actor_id } : {}),
     });
+    if (result.ambiguous_actor) {
+      throw badRequest(
+        'page_engagement_actor_ambiguous',
+        `page_view_id "${q.page_view_id}" belongs to more than one actor in this query scope`,
+        'list web sessions first, then repeat this request with the returned actor_id',
+      );
+    }
+    const page = result.page;
     return {
       kind: 'page_engagement',
       page,

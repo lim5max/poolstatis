@@ -112,12 +112,16 @@ and on hide, blur, route change, pagehide, freeze and destroy. A snapshot
 contains `sequence`, `foreground_ms`, `elapsed_ms`, `max_scroll_pct`,
 `interaction_count` and `reason`. Core keeps only the highest sequence per
 page, so retries, duplicate flushes and out-of-order arrival do not add time.
-One suspended foreground gap is capped at 30 seconds. Core accepts a maximum
+Custom `engagementHeartbeatMs` values must be integer milliseconds from one
+second up to, but not including, seven days. One suspended foreground gap is
+capped at 30 seconds. A long-lived page is finalized and rotated before Core's
+seven-day ceiling, and foreground time is never emitted above elapsed time.
+Core accepts a maximum
 seven-day monotonic duration per page and rejects impossible snapshots where
 foreground time exceeds elapsed time.
 
 Foreground time is not wall-clock time and Poolstatis does not record video or
-DOM session replay. A session is engaged when it has more than 10 seconds of
+DOM session replay. A session is engaged when it has at least 10 seconds of
 measured foreground time, at least two page views, or an explicitly selected
 key-metric event. Bounce is reported only for fully measured sessions; missing
 terminal timing remains incomplete instead of becoming a false zero/bounce.

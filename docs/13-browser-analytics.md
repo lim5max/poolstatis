@@ -109,32 +109,38 @@ cumulative `page.engagement` snapshots with:
 | `elapsed_ms` | Monotonic wall time since the page began; not active time. |
 | `max_scroll_pct` | Maximum bounded scroll depth reached. |
 | `interaction_count` | Count of coarse pointer/key interactions while active. |
-| `reason` | `heartbeat`, `visibility_hidden`, `blur`, `route_change`, `pagehide`, `freeze`, or `destroy`. |
+| `reason` | `heartbeat`, `visibility_hidden`, `blur`, `route_change`, `pagehide`, `freeze`, `duration_rollover`, or `destroy`. |
 
-The heartbeat is 10 seconds. Lifecycle flushes are cumulative rather than
-additive. Core chooses the highest sequence per `$page_view_id`, so duplicate
+The heartbeat is 10 seconds. A custom heartbeat must be an integer from one
+second up to, but not including, seven days. Lifecycle flushes are cumulative
+rather than additive. Core chooses the highest sequence per actor and
+`$page_view_id`, so duplicate
 retries and out-of-order delivery cannot double-count time. The SDK uses a
 monotonic clock and caps one suspended foreground gap at 30 seconds. Time while
-hidden or unfocused is excluded. Core accepts at most seven days of monotonic
-duration per page and rejects snapshots where foreground time exceeds elapsed
-time.
+hidden or unfocused is excluded. Before a page reaches Core's seven-day
+monotonic duration ceiling, the SDK finalizes it with `duration_rollover` and
+starts a new page view for the same route. Core rejects snapshots where
+foreground time exceeds elapsed time.
 
-Session classification is computed at project + environment + browser-tab
-`session_id` grain:
+Session classification is computed at project + environment + resolved actor +
+browser-tab `session_id` grain:
 
-- engaged: total measured foreground time is greater than 10 seconds, or the
+- engaged: total measured foreground time is at least 10 seconds, or the
   session has at least two page views, or it contains the selected active
   native key metric;
-- bounce: the complement of engaged only when every page view in the session
-  has a lifecycle-boundary snapshot; heartbeat-only evidence remains
-  incomplete;
+- bounce: a complete session with no positive engagement evidence;
 - single-page: exactly one page view, independent of engagement;
 - incomplete: at least one page view lacks a valid timing snapshot.
 
-The API returns foreground time separately from wall-clock session span.
-Incomplete sessions return `bounce: null`; they never become fake zeros. A
-browser crash may leave a page incomplete because JavaScript cannot guarantee
-an exit callback.
+Positive evidence returns `engaged: true` even when a later page is incomplete.
+A complete negative returns `engaged: false` and `bounce: true`. All other
+sessions return `engaged: null` and `bounce: null`; they never become fake
+zeros. `measured_sessions` counts only non-null classifications,
+`unknown_sessions` counts unresolved sessions, `measured_session_coverage` is
+measured divided by total, and engagement/bounce rates are divided by measured
+sessions. Zero denominators return `null`. The API returns foreground time
+separately from wall-clock session span. A browser crash may leave a page
+incomplete because JavaScript cannot guarantee an exit callback.
 
 This is bounded engagement evidence, not video, DOM replay, eye tracking or
 precise pointer replay.
@@ -203,6 +209,8 @@ source. `list_web_sessions`, `get_web_session`,
 evidence. `get_click_map` and `get_scroll_map` require the exact
 surface/version/route/device tuple and default to unique-session aggregation.
 No-data reasons, sample size and truncation are explicit.
+If a session/page id is shared by multiple actors, detail tools fail closed
+unless the caller supplies the `actor_id` returned by `list_web_sessions`.
 
 Reads remain project/environment isolated and use the `EventStore` seam.
 Responses name any dimension truncated beyond the bounded top 50; the customer

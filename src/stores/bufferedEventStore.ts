@@ -38,7 +38,7 @@ import type {
   WebSessionQuery,
   WebSessionResult,
   PageEngagementQuery,
-  WebPageEngagement,
+  WebPageEngagementResult,
 } from './eventStore.js';
 
 export interface BufferedEventStoreOptions {
@@ -160,7 +160,7 @@ export class BufferedEventStore implements EventStore {
     return this.inner.webSession(q);
   }
 
-  pageEngagement(q: PageEngagementQuery): Promise<WebPageEngagement | null> {
+  pageEngagement(q: PageEngagementQuery): Promise<WebPageEngagementResult> {
     return this.inner.pageEngagement(q);
   }
 

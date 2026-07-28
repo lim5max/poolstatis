@@ -244,9 +244,11 @@ Definitions:
   page.viewed events are not silently mixed into the consented browser population.
 - Foreground time advances only while the document is visible and focused, using a
   monotonic clock with a 10-second heartbeat and a 30-second cap on one suspended gap.
-- A browser-tab session is engaged when foreground time is greater than 10 seconds, it has
-  at least two page views, or it contains the selected active native key metric. Bounce is
-  the complement only for complete sessions; incomplete/crashed pages remain unknown.
+- A browser-tab session is engaged when foreground time is at least 10 seconds, it has
+  at least two page views, or it contains the selected active native key metric. The
+  classification is tri-state: positive evidence is true, false requires a complete
+  negative lifecycle, and everything else remains null. Engagement and bounce rates use
+  measured (non-null) sessions as their denominator and stay unavailable when it is zero.
 
 Privacy boundary:
 - Captures pathname only, never query strings, fragments, full URLs, DOM, text or inputs.

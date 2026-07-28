@@ -134,17 +134,23 @@ trust state для конкретной зарегистрированной м�
 ```
 get_web_overview(project, {metric, key_metric?, date_from, date_to?, dimensions?, filters?, env?})
 list_web_sessions(project, {metric, key_metric?, date_from, date_to?, filters?, limit?, env?})
-get_web_session(project, {metric, key_metric?, session_id, date_from, date_to?, filters?, page_limit?, env?})
-get_session_engagement(project, {metric, key_metric?, session_id, date_from, date_to?, filters?, env?})
-get_page_engagement(project, {metric, page_view_id, date_from, date_to?, filters?, env?})
+get_web_session(project, {metric, key_metric?, actor_id?, session_id, date_from, date_to?, filters?, page_limit?, env?})
+get_session_engagement(project, {metric, key_metric?, actor_id?, session_id, date_from, date_to?, filters?, env?})
+get_page_engagement(project, {metric, actor_id?, page_view_id, date_from, date_to?, filters?, env?})
 get_click_map(project, {surface, route, version, device, date_from, date_to?, grid?, env?})
 get_scroll_map(project, {surface, route, version, device, date_from, date_to?, grid?, env?})
 ```
 
 Session tools read cumulative `page.engagement` snapshots and deduplicate them
-by the highest sequence per page. They keep visible/focused foreground time
-separate from wall span. Bounce is nullable for incomplete sessions; a missing
-exit snapshot is not a zero. Click/scroll maps require an exact
+by actor and the highest sequence per page. They keep visible/focused foreground
+time separate from wall span. Positive evidence classifies engagement
+immediately; a complete negative classifies a bounce, while unresolved sessions
+return nullable engagement and bounce. Overview rates use measured sessions,
+not all sessions, as their denominator. A missing exit snapshot is not a zero.
+When the same session or page id exists for more than one actor, omitting
+`actor_id` fails closed; first call `list_web_sessions` and reuse its exact
+`actor_id`.
+Click/scroll maps require an exact
 surface/version/route/device cohort and default to unique-session aggregation;
 event counts remain secondary. All responses are project/environment isolated
 and bounded, with sample size, truncation and no-data reasons. These tools never
@@ -191,8 +197,8 @@ query_trend(project, {metric, date_from, date_to?, interval, breakdown?, env?})
 query_web_analytics(project, {metric, date_from, date_to?, dimensions?, filters?, env?})
 get_web_overview(project, {metric, key_metric?, date_from, date_to?, dimensions?, filters?, env?})
 list_web_sessions(project, {metric, key_metric?, date_from, date_to?, filters?, limit?, env?})
-get_web_session(project, {metric, key_metric?, session_id, date_from, date_to?, filters?, page_limit?, env?})
-get_page_engagement(project, {metric, page_view_id, date_from, date_to?, filters?, env?})
+get_web_session(project, {metric, key_metric?, actor_id?, session_id, date_from, date_to?, filters?, page_limit?, env?})
+get_page_engagement(project, {metric, actor_id?, page_view_id, date_from, date_to?, filters?, env?})
 query_funnel(project, {funnel | steps, date_from, date_to?, env?})
   // каждый step возвращает metric_key, purpose, category, actors и conversion_*
 query_retention(project, {start_metric, return_metric?, interval, periods, date_from, env?})

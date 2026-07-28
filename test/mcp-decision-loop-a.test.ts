@@ -191,6 +191,10 @@ describe('decision-loop trust MCP tools', () => {
       engagement: {
         measured_sessions: 0,
         incomplete_sessions: 0,
+        unknown_sessions: 0,
+        measured_session_coverage: null,
+        engaged_rate: null,
+        bounce_rate: null,
         timed_page_coverage: null,
       },
       meta: { definitions: expect.any(Object), privacy: expect.stringContaining('Raw IP') },

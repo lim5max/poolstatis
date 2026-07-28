@@ -322,8 +322,12 @@ export interface WebAnalyticsResponse {
   engagement: {
     measured_sessions: number;
     incomplete_sessions: number;
+    unknown_sessions: number;
     engaged_sessions: number;
     bounce_sessions: number;
+    measured_session_coverage: number | null;
+    engaged_rate: number | null;
+    bounce_rate: number | null;
     single_page_sessions: number;
     timed_page_views: number;
     total_page_views: number;
@@ -345,8 +349,12 @@ export interface WebAnalyticsResponse {
       visitors: string;
       sessions: string;
       page_views: string;
+      measured_sessions: string;
+      unknown_sessions: string;
       engaged_sessions: string;
       bounce_sessions: string;
+      engaged_rate: string;
+      bounce_rate: string;
       single_page_sessions: string;
       foreground_ms: string;
       session_span_ms: string;
@@ -360,6 +368,7 @@ export interface WebAnalyticsResponse {
 export interface WebPageEngagement {
   page_view_id: string;
   session_id: string;
+  actor_id: string;
   path: string;
   viewed_at: string;
   last_snapshot_at: string | null;

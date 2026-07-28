@@ -212,6 +212,63 @@ if (variant?.key === "test") {
 }
 ```
 
+### 2.1a 1C-Bitrix browser integration
+
+Poolstatis does not need a Bitrix plugin. Build one browser asset in the
+product repository, then include the compiled file from the Bitrix site
+template. The source asset imports the same package as any other site:
+
+```ts
+import { createClient } from '@poolstatis/sdk';
+import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
+
+const hostWindow = window as Window & {
+  productConsent?: { analytics: boolean };
+};
+
+const client = createClient({
+  url: 'https://api.example.com',
+  ingestKey: 'pk_…', // write-only project key; never place sk_ or pt_ here
+});
+
+const analytics = createBrowserAnalytics({
+  client,
+  consentPolicy: 'external',
+  hasConsent: () => hostWindow.productConsent?.analytics === true,
+  subscribeConsent: (listener) => {
+    const handler = () => listener();
+    window.addEventListener('product-consent', handler);
+    return () => window.removeEventListener('product-consent', handler);
+  },
+  captureAcquisition: true,
+});
+analytics.start();
+```
+
+Do not paste this TypeScript or a bare npm import directly into a production
+template. Bundle it first with the product's normal JS build. In a D7 template,
+Bitrix documents loading that built asset with:
+
+```php
+<?php
+use Bitrix\Main\Page\Asset;
+Asset::getInstance()->addJs(SITE_TEMPLATE_PATH . '/js/poolstatis-browser.js');
+```
+
+Official reference:
+https://dev.1c-bitrix.ru/api_d7/bitrix/main/page/asset/addjs.php
+
+Server-side Bitrix/PHP code can send trusted backend events through the same
+HTTP ingest API, keeping `sk_`/`pt_` out of browser output. MCP is separate:
+install the version-pinned Poolstatis MCP runner in Codex, Claude, Cursor or
+another developer agent. The agent registers semantics and queries evidence;
+MCP does not run inside the visitor's Bitrix request.
+
+This is the integration contract, not a claim that the npm release is already
+available. Run `npm view @poolstatis/sdk version` and the package consumer smoke
+before recommending npm installation. Until that passes, use only an explicitly
+reviewed local/git package source.
+
 Do not add `variant` manually to your outcome events: Poolstatis records the
 first `$feature_flag_called` exposure itself and only counts outcomes that occur
 after it. Use the experiment result before concluding it; conclusion freezes the

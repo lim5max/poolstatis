@@ -234,9 +234,10 @@ function WebAnalyticsResults({ result }: { result: WebAnalyticsResponse }) {
 
 function WebEngagementSummary({ result }: { result: WebAnalyticsResponse }) {
   const engagement = result.engagement;
-  const coverage = engagement.timed_page_coverage === null
+  const percentage = (value: number | null) => value === null
     ? '—'
-    : `${Math.round(engagement.timed_page_coverage * 100)}%`;
+    : `${Math.round(value * 100)}%`;
+  const coverage = percentage(engagement.timed_page_coverage);
   return <section className="rounded-md border" aria-labelledby="engagement-summary-title">
     <div className="border-b px-4 py-3">
       <h3 id="engagement-summary-title" className="text-sm font-medium">Measured engagement</h3>
@@ -244,15 +245,18 @@ function WebEngagementSummary({ result }: { result: WebAnalyticsResponse }) {
         Foreground time counts only visible, focused intervals. Bounce is unknown when page timing is incomplete.
       </p>
     </div>
-    <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
       {[
-        ['Engaged', `${fmtNum(engagement.engaged_sessions)} / ${fmtNum(result.summary.sessions)}`, `${result.meta.definitions.engaged_sessions} The denominator is all sessions, including incomplete sessions that can still meet an engagement rule.`],
-        ['Bounces', fmtNum(engagement.bounce_sessions), result.meta.definitions.bounce_sessions],
-        ['Foreground time', formatEngagementMs(engagement.foreground_ms), result.meta.definitions.foreground_ms],
-        ['Timed page coverage', coverage, `${fmtNum(engagement.timed_page_views)} of ${fmtNum(engagement.total_page_views)} page views have timing evidence.`],
-      ].map(([label, value, definition]) => <div key={label} className="min-w-0 bg-card p-4">
+        ['Engaged', `${fmtNum(engagement.engaged_sessions)} / ${fmtNum(engagement.measured_sessions)}`, percentage(engagement.engaged_rate), `${result.meta.definitions.engaged_sessions} ${result.meta.definitions.engaged_rate}`],
+        ['Bounces', `${fmtNum(engagement.bounce_sessions)} / ${fmtNum(engagement.measured_sessions)}`, percentage(engagement.bounce_rate), `${result.meta.definitions.bounce_sessions} ${result.meta.definitions.bounce_rate}`],
+        ['Measured sessions', `${fmtNum(engagement.measured_sessions)} / ${fmtNum(result.summary.sessions)}`, percentage(engagement.measured_session_coverage), result.meta.definitions.measured_sessions],
+        ['Unknown sessions', fmtNum(engagement.unknown_sessions), null, result.meta.definitions.unknown_sessions],
+        ['Foreground time', formatEngagementMs(engagement.foreground_ms), null, result.meta.definitions.foreground_ms],
+        ['Timed page coverage', coverage, null, `${fmtNum(engagement.timed_page_views)} of ${fmtNum(engagement.total_page_views)} page views have timing evidence.`],
+      ].map(([label, value, supporting, definition]) => <div key={label} className="min-w-0 bg-card p-4">
         <Hint label={definition}><span className="text-xs text-muted-foreground">{label}</span></Hint>
         <div className="serif mt-1 text-xl tabular-nums">{value}</div>
+        {supporting && <div className="mt-1 text-xs tabular-nums text-muted-foreground">{supporting}</div>}
       </div>)}
     </div>
     {engagement.incomplete_sessions > 0 && <p className="border-t px-4 py-3 text-xs text-muted-foreground">
@@ -277,11 +281,11 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
       setError(caught instanceof Error ? caught.message : 'could not load sessions');
     } finally { setBusy(false); }
   };
-  const inspect = async (sessionId: string) => {
+  const inspect = async (sessionId: string, actorId: string) => {
     setBusy(true); setError(null);
     try {
       setDetail(await client!.webSession(project!, {
-        metric, session_id: sessionId, date_from: `-${period}d`, env,
+        metric, session_id: sessionId, actor_id: actorId, date_from: `-${period}d`, env,
       }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'could not load session');
@@ -302,7 +306,7 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
     {sessions && sessions.sessions.length > 0 && <div className="overflow-x-auto">
       <Table>
         <TableHeader><TableRow><TableHead>Started</TableHead><TableHead>Pages</TableHead><TableHead>Foreground</TableHead><TableHead>Span</TableHead><TableHead>Classification</TableHead><TableHead><span className="sr-only">Action</span></TableHead></TableRow></TableHeader>
-        <TableBody>{sessions.sessions.map((session) => <TableRow key={session.session_id}>
+        <TableBody>{sessions.sessions.map((session) => <TableRow key={`${session.actor_id}:${session.session_id}`}>
           <TableCell className="whitespace-nowrap text-xs">{formatDate(session.started_at)}</TableCell>
           <TableCell className="tabular-nums">{session.page_views}</TableCell>
           <TableCell className="whitespace-nowrap tabular-nums">{formatEngagementMs(session.foreground_ms)}</TableCell>
@@ -313,7 +317,7 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
             </Badge>
             <Badge variant="outline">{session.complete ? 'Complete' : 'Incomplete'}</Badge>
           </div></TableCell>
-          <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => inspect(session.session_id)}>Inspect</Button></TableCell>
+          <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => inspect(session.session_id, session.actor_id)}>Inspect</Button></TableCell>
         </TableRow>)}</TableBody>
       </Table>
       <p className="border-t px-4 py-3 text-xs text-muted-foreground">

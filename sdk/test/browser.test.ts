@@ -116,6 +116,37 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
 }
 
 describe('@poolstatis/sdk/browser', () => {
+  it('rejects heartbeat intervals that can create a browser hot loop', () => {
+    const f = fixture();
+    const c = consent(true);
+    expect(() => createBrowserAnalytics({
+      client: f.client,
+      browser: f.browser,
+      engagementHeartbeatMs: 0,
+      hasConsent: c.hasConsent,
+      subscribeConsent: c.subscribeConsent,
+    })).toThrow('engagementHeartbeatMs');
+    expect(() => createBrowserAnalytics({
+      client: f.client,
+      browser: f.browser,
+      engagementHeartbeatMs: 999,
+      hasConsent: c.hasConsent,
+      subscribeConsent: c.subscribeConsent,
+    })).toThrow('engagementHeartbeatMs');
+  });
+
+  it('rejects a heartbeat interval that cannot finalize before the server duration ceiling', () => {
+    const f = fixture();
+    const c = consent(true);
+    expect(() => createBrowserAnalytics({
+      client: f.client,
+      browser: f.browser,
+      engagementHeartbeatMs: 7 * 24 * 60 * 60 * 1_000,
+      hasConsent: c.hasConsent,
+      subscribeConsent: c.subscribeConsent,
+    })).toThrow('engagementHeartbeatMs must be less than the seven-day page duration ceiling');
+  });
+
   it('keeps opt-in as the default and starts opt-out without a host consent callback', () => {
     const defaultConsent = consent(false);
     const optIn = fixture();
@@ -472,6 +503,43 @@ describe('@poolstatis/sdk/browser', () => {
       elapsed_ms: 45_000,
       reason: 'pagehide',
     });
+  });
+
+  it('finalizes and rotates a long-lived page before the seven-day server ceiling', () => {
+    const c = consent(true);
+    const f = fixture();
+    let id = 0;
+    const analytics = createBrowserAnalytics({
+      client: f.client,
+      browser: f.browser,
+      now: f.now,
+      monotonicNow: f.now,
+      engagementHeartbeatMs: 10_000,
+      hasConsent: c.hasConsent,
+      subscribeConsent: c.subscribeConsent,
+      createId: () => `rollover-${++id}`,
+    });
+
+    analytics.start();
+    const firstPage = f.queued[0]?.properties?.$page_view_id;
+    f.advance(7 * 24 * 60 * 60 * 1_000 - 10_000);
+    f.heartbeat();
+
+    const pageViews = f.queued.filter((event) => event.event === 'page.viewed');
+    const snapshots = f.queued.filter((event) => event.event === 'page.engagement');
+    expect(pageViews).toHaveLength(2);
+    expect(pageViews[1]).toMatchObject({
+      session_id: analytics.sessionId,
+      properties: { $page_path: '/welcome' },
+    });
+    expect(pageViews[1]?.properties?.$page_view_id).not.toBe(firstPage);
+    expect(snapshots.at(-1)?.properties).toMatchObject({
+      $page_view_id: firstPage,
+      reason: 'duration_rollover',
+    });
+    expect(Number(snapshots.at(-1)?.properties?.elapsed_ms)).toBeLessThanOrEqual(
+      7 * 24 * 60 * 60 * 1_000,
+    );
   });
 
   it('keepalive-flushes a terminal snapshot after an earlier client unload handler drained the queue', async () => {

@@ -517,6 +517,7 @@ export class PoolstatisClient {
     metric: string;
     key_metric?: string;
     session_id: string;
+    actor_id?: string;
     page_limit?: number;
     date_from: string;
     date_to?: string | null;

@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { ApiError, badRequest } from '../errors.js';
 import { isIsoAlpha2Country } from './country.js';
+import { ACQUISITION_UTM_PROPERTIES } from './acquisitionAttribution.js';
 import { createPropertyDefinition, listPropertyDefinitions, type PropertyDefinition } from './properties.js';
 import { listMetrics, registerMetric, type Metric } from './registry.js';
 
@@ -178,7 +179,29 @@ const ENGAGEMENT_REASONS = new Set([
   'route_change',
   'pagehide',
   'freeze',
+  'duration_rollover',
   'destroy',
+]);
+const PAGE_VIEW_PROPERTIES = new Set([
+  ...Object.keys(BROWSER_ANALYTICS_PROPERTIES),
+  ...ACQUISITION_UTM_PROPERTIES,
+  'landing_path',
+  'referrer_origin',
+  '$page_view_id',
+  'path',
+]);
+const PAGE_ENGAGEMENT_PROPERTIES = new Set([
+  ...Object.keys(BROWSER_ANALYTICS_PROPERTIES),
+  ...ACQUISITION_UTM_PROPERTIES,
+  'landing_path',
+  'referrer_origin',
+  '$page_view_id',
+  'sequence',
+  'foreground_ms',
+  'elapsed_ms',
+  'max_scroll_pct',
+  'interaction_count',
+  'reason',
 ]);
 
 function boundedInteger(
@@ -195,6 +218,20 @@ function boundedInteger(
 function validatePageViewId(value: unknown): string | null {
   if (typeof value !== 'string' || value.length === 0 || value.length > PAGE_VIEW_ID_MAX_LENGTH) {
     return `$page_view_id must be a non-empty string of at most ${PAGE_VIEW_ID_MAX_LENGTH} characters`;
+  }
+  return null;
+}
+
+function validateLegacyPagePath(value: unknown): string | null {
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > 512
+    || !value.startsWith('/')
+    || value.includes('?')
+    || value.includes('#')
+  ) {
+    return 'path must be a pathname of at most 512 characters, without query string or fragment';
   }
   return null;
 }
@@ -246,6 +283,23 @@ export function validateAndEnrichBrowserProperties(
   sessionId: string | undefined,
   country: string,
 ): string | null {
+  const allowed = event === 'page.viewed'
+    ? PAGE_VIEW_PROPERTIES
+    : event === 'page.engagement'
+      ? PAGE_ENGAGEMENT_PROPERTIES
+      : null;
+  if (allowed) {
+    const unsupported = Object.keys(properties).find((key) => !allowed.has(key));
+    if (unsupported) return `${unsupported} is not allowed on canonical ${event} events`;
+  }
+  if (event === 'page.viewed' && properties.path !== undefined) {
+    const pathError = validateLegacyPagePath(properties.path);
+    if (pathError) return pathError;
+  }
+  if (event === 'page.viewed' && properties.$page_view_id !== undefined) {
+    const pageViewIdError = validatePageViewId(properties.$page_view_id);
+    if (pageViewIdError) return pageViewIdError;
+  }
   const marker = properties.$browser_context;
   const hasReserved = event === 'page.engagement'
     || Object.keys(properties).some((key) => key in BROWSER_ANALYTICS_PROPERTIES);
@@ -277,10 +331,6 @@ export function validateAndEnrichBrowserProperties(
   const path = properties.$page_path as string;
   if (!path.startsWith('/') || path.includes('?') || path.includes('#')) {
     return '$page_path must be a pathname only, without query string or fragment';
-  }
-  if (event === 'page.viewed' && properties.$page_view_id !== undefined) {
-    const pageViewIdError = validatePageViewId(properties.$page_view_id);
-    if (pageViewIdError) return pageViewIdError;
   }
   if (event === 'page.engagement') {
     const engagementError = validateEngagementProperties(properties);

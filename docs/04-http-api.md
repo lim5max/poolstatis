@@ -306,10 +306,18 @@ the API never fetches a caller-supplied URL.
 
 All require an active count metric sourcing canonical `page.viewed` with
 `$browser_context = "1"`. Session classification uses the highest valid
-`page.engagement.sequence` per page: engaged means `foreground_ms > 10000`, at
-least two page views, or the optional active native key metric. Bounce is the
-complement only for complete sessions; incomplete sessions return `null`.
+`page.engagement.sequence` per actor and page: engaged means
+`foreground_ms >= 10000`, at least two page views, or the optional active native
+key metric. Positive evidence makes `engaged` true even before a terminal
+snapshot. A complete negative session returns `engaged: false` and
+`bounce: true`; otherwise both remain `null`. `measured_sessions` counts only
+non-null classifications, `unknown_sessions` counts unresolved sessions, and
+the engagement/bounce rates use measured sessions as their denominator.
 `session_span_ms` is wall span and never substitutes for foreground time.
+`actor_id` stays optional for backward compatibility only when the requested
+session/page id resolves to one actor. If more than one actor shares that id,
+`web_session` and `page_engagement` fail closed with a 400 response; call
+`web_sessions` first and repeat the detail query with its returned `actor_id`.
 
 Reads do not create billable events. Each accepted `page.viewed`,
 `page.engagement` and key-metric event is still counted once in accepted

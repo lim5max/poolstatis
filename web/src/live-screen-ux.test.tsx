@@ -126,8 +126,9 @@ describe('live customer screen UX', () => {
       kind: 'web_analytics',
       summary: { visitors: 8, sessions: 11, page_views: 20 },
       engagement: {
-        measured_sessions: 9, incomplete_sessions: 2, engaged_sessions: 6,
+        measured_sessions: 9, incomplete_sessions: 2, unknown_sessions: 2, engaged_sessions: 6,
         bounce_sessions: 3, single_page_sessions: 7,
+        measured_session_coverage: 9 / 11, engaged_rate: 6 / 9, bounce_rate: 3 / 9,
         timed_page_views: 18, total_page_views: 20, timed_page_coverage: 0.9,
         foreground_ms: 125_000, session_span_ms: 240_000,
       },
@@ -143,8 +144,12 @@ describe('live customer screen UX', () => {
           visitors: 'Unique resolved actors.',
           sessions: 'Distinct session ids.',
           page_views: 'Accepted stored page-view events.',
+          measured_sessions: 'Known classifications.',
+          unknown_sessions: 'Unknown classifications.',
           engaged_sessions: 'Measured engagement.',
           bounce_sessions: 'Count of measured sessions without engagement.',
+          engaged_rate: 'Engaged divided by measured.',
+          bounce_rate: 'Bounces divided by measured.',
           single_page_sessions: 'Single-page sessions.',
           foreground_ms: 'Visible focused time.',
           session_span_ms: 'Wall-clock span.',
@@ -176,7 +181,7 @@ describe('live customer screen UX', () => {
         engaged: true, bounce: false, single_page: true, complete: true,
       },
       pages: [{
-        page_view_id: 'page-1', session_id: 'session-1', path: '/pricing',
+        page_view_id: 'page-1', session_id: 'session-1', actor_id: 'actor-1', path: '/pricing',
         viewed_at: '2026-07-27T00:00:00Z', last_snapshot_at: '2026-07-27T00:00:15Z',
         sequence: 2, foreground_ms: 15_000, elapsed_ms: 15_000, max_scroll_pct: 75,
         interaction_count: 2, reason: 'pagehide', complete: true,
@@ -201,7 +206,9 @@ describe('live customer screen UX', () => {
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('Page views')).toBeInTheDocument();
     expect(screen.getByText('Measured engagement')).toBeInTheDocument();
-    expect(screen.getByText('6 / 11')).toBeInTheDocument();
+    expect(screen.getByText('6 / 9')).toBeInTheDocument();
+    expect(screen.getByText('67%')).toBeInTheDocument();
+    expect(screen.getByText('33%')).toBeInTheDocument();
     expect(screen.getByText('2m 5s')).toBeInTheDocument();
     expect(screen.getByText(/2 incomplete sessions/)).toBeInTheDocument();
     expect(screen.getByText('75%')).toBeInTheDocument();
@@ -251,8 +258,9 @@ describe('live customer screen UX', () => {
         kind: 'web_analytics',
         summary: { visitors: sourceCount, sessions: sourceCount, page_views: pageViews },
         engagement: {
-          measured_sessions: 0, incomplete_sessions: sourceCount, engaged_sessions: 0,
+          measured_sessions: 0, incomplete_sessions: sourceCount, unknown_sessions: sourceCount, engaged_sessions: 0,
           bounce_sessions: 0, single_page_sessions: sourceCount,
+          measured_session_coverage: 0, engaged_rate: null, bounce_rate: null,
           timed_page_views: 0, total_page_views: pageViews, timed_page_coverage: 0,
           foreground_ms: 0, session_span_ms: 0,
         },
@@ -267,8 +275,12 @@ describe('live customer screen UX', () => {
             visitors: 'Unique resolved actors.',
             sessions: 'Distinct session ids.',
             page_views: 'Accepted stored page-view events.',
+            measured_sessions: 'Known classifications.',
+            unknown_sessions: 'Unknown classifications.',
             engaged_sessions: 'Measured engagement.',
             bounce_sessions: 'Count of measured sessions without engagement.',
+            engaged_rate: 'Engaged divided by measured.',
+            bounce_rate: 'Bounces divided by measured.',
             single_page_sessions: 'Single-page sessions.',
             foreground_ms: 'Visible focused time.',
             session_span_ms: 'Wall-clock span.',
@@ -282,6 +294,7 @@ describe('live customer screen UX', () => {
     await screen.findByText('Web analytics');
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
     expect(await screen.findByText('Unknown')).toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2);
 
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Source' }), { key: 'Enter' });
     expect(screen.getByRole('tabpanel')).toBeInTheDocument();

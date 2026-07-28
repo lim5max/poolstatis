@@ -98,7 +98,9 @@ const VISITOR_KEY = 'poolstatis.browser.visitor';
 const SESSION_KEY = 'poolstatis.browser.session';
 const SESSION_TIMEOUT_MS = 30 * 60_000;
 const ENGAGEMENT_HEARTBEAT_MS = 10_000;
+const MIN_ENGAGEMENT_HEARTBEAT_MS = 1_000;
 const MAX_FOREGROUND_GAP_MS = 30_000;
+const MAX_PAGE_DURATION_MS = 7 * 24 * 60 * 60 * 1_000;
 const reserved = new Set<string>(BROWSER_RESERVED_PROPERTIES);
 
 type EngagementReason =
@@ -108,6 +110,7 @@ type EngagementReason =
   | 'route_change'
   | 'pagehide'
   | 'freeze'
+  | 'duration_rollover'
   | 'destroy';
 
 interface PageEngagementState {
@@ -197,6 +200,12 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   const createId = options.createId ?? randomId;
   const timeout = options.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
   const heartbeatMs = options.engagementHeartbeatMs ?? ENGAGEMENT_HEARTBEAT_MS;
+  if (!Number.isSafeInteger(heartbeatMs) || heartbeatMs < MIN_ENGAGEMENT_HEARTBEAT_MS) {
+    throw new Error(`engagementHeartbeatMs must be an integer of at least ${MIN_ENGAGEMENT_HEARTBEAT_MS}`);
+  }
+  if (heartbeatMs >= MAX_PAGE_DURATION_MS) {
+    throw new Error('engagementHeartbeatMs must be less than the seven-day page duration ceiling');
+  }
   let browser: BrowserLike | null = null;
   let visitorId: string | null = null;
   let sessionId: string | null = null;
@@ -383,11 +392,15 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       lastActivity = now();
       persistSession();
     }
+    const elapsedMs = Math.min(
+      MAX_PAGE_DURATION_MS,
+      Math.max(0, Math.round(monotonicNow() - pageState.startedAt)),
+    );
     captureInternal(BROWSER_PAGE_ENGAGEMENT_EVENT, {
       $page_view_id: pageState.pageViewId,
       sequence: pageState.sequence,
-      foreground_ms: Math.round(pageState.foregroundMs),
-      elapsed_ms: Math.max(0, Math.round(monotonicNow() - pageState.startedAt)),
+      foreground_ms: Math.min(Math.round(pageState.foregroundMs), elapsedMs),
+      elapsed_ms: elapsedMs,
       max_scroll_pct: pageState.maxScrollPct,
       interaction_count: pageState.interactionCount,
       reason,
@@ -423,20 +436,13 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     captureInternal(event, properties);
   };
 
-  const pageViewed = () => {
-    if (!collectionAllowed() || !browser || !visitorId || !actorId) return;
-    const path = currentPagePath();
-    if (path === lastPath) return;
-    const sessionExpired = !sessionId || lastActivity === null || now() - lastActivity > timeout;
-    if (pageState) flushEngagement('route_change');
-    if (sessionExpired) rotateSession(now());
-    else ensureActiveSession();
-    lastPath = path;
+  const startPage = (path: string): boolean => {
+    if (!browser || !actorId || !sessionId) return false;
     const tick = monotonicNow();
-    pageState = {
+    const nextPage: PageEngagementState = {
       pageViewId: `page:${createId()}`,
       path,
-      sessionId: sessionId!,
+      sessionId,
       actorId,
       startedAt: tick,
       lastTickAt: tick,
@@ -450,7 +456,31 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       interactionCount: 0,
       sequence: 0,
     };
-    captureInternal(BROWSER_PAGE_VIEW_EVENT, { $page_view_id: pageState.pageViewId });
+    pageState = nextPage;
+    captureInternal(BROWSER_PAGE_VIEW_EVENT, { $page_view_id: nextPage.pageViewId });
+    return true;
+  };
+
+  const pageViewed = () => {
+    if (!collectionAllowed() || !browser || !visitorId || !actorId) return;
+    const path = currentPagePath();
+    if (path === lastPath) return;
+    const sessionExpired = !sessionId || lastActivity === null || now() - lastActivity > timeout;
+    if (pageState) flushEngagement('route_change');
+    if (sessionExpired) rotateSession(now());
+    else ensureActiveSession();
+    lastPath = path;
+    startPage(path);
+  };
+
+  const rolloverLongLivedPage = (): boolean => {
+    if (!pageState) return false;
+    const elapsed = monotonicNow() - pageState.startedAt;
+    if (elapsed < MAX_PAGE_DURATION_MS - heartbeatMs) return false;
+    const path = pageState.path;
+    if (!flushEngagement('duration_rollover')) return false;
+    pageState = null;
+    return startPage(path);
   };
 
   const resumeAfterIdle = (): boolean => {
@@ -526,11 +556,15 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     const timer = browser!.setInterval
       ? browser!.setInterval(() => {
           updateEngagementClock();
-          if (pageState?.foregroundActive) flushEngagement('heartbeat');
+          if (pageState?.foregroundActive && !rolloverLongLivedPage()) {
+            flushEngagement('heartbeat');
+          }
         }, heartbeatMs)
       : globalThis.setInterval(() => {
           updateEngagementClock();
-          if (pageState?.foregroundActive) flushEngagement('heartbeat');
+          if (pageState?.foregroundActive && !rolloverLongLivedPage()) {
+            flushEngagement('heartbeat');
+          }
         }, heartbeatMs) as unknown as number;
     browser!.document.addEventListener?.('visibilitychange', onVisibility);
     browser!.document.addEventListener?.('freeze', onFreeze);
