@@ -7,10 +7,12 @@ import {
 
 export const BROWSER_CONTEXT_VERSION = '1';
 export const BROWSER_PAGE_VIEW_EVENT = 'page.viewed';
+export const BROWSER_PAGE_ENGAGEMENT_EVENT = 'page.engagement';
 export const BROWSER_RESERVED_PROPERTIES = [
-  '$browser_context', '$page_path', '$device_class', '$browser_family', '$os_family',
+  '$browser_context', '$page_path', '$page_view_id', '$device_class', '$browser_family', '$os_family',
   '$language', '$timezone', '$viewport_bucket', '$screen_bucket', '$country',
   ...ACQUISITION_UTM_KEYS, 'landing_path', 'referrer_origin',
+  'sequence', 'foreground_ms', 'elapsed_ms', 'max_scroll_pct', 'interaction_count', 'reason',
 ] as const;
 export const BROWSER_OPTIONAL_CONTEXT_PROPERTIES = [
   '$device_class', '$browser_family', '$os_family', '$language',
@@ -23,14 +25,25 @@ type HistoryMethod = (data: unknown, unused: string, url?: string | URL | null) 
 
 export interface BrowserLike {
   location: { pathname: string; href: string };
-  document: { referrer: string };
+  document: {
+    referrer: string;
+    visibilityState?: 'visible' | 'hidden' | 'prerender';
+    hasFocus?: () => boolean;
+    documentElement?: { scrollHeight: number };
+    body?: { scrollHeight: number };
+    addEventListener?(type: string, listener: () => void): void;
+    removeEventListener?(type: string, listener: () => void): void;
+  };
   history: { pushState: HistoryMethod; replaceState: HistoryMethod };
   navigator: { userAgent: string; language: string; globalPrivacyControl?: boolean };
   screen: { width: number; height: number };
   innerWidth: number;
   innerHeight: number;
+  scrollY?: number;
   localStorage: StorageLike;
   sessionStorage: StorageLike;
+  setInterval?(listener: () => void, milliseconds: number): number;
+  clearInterval?(handle: number): void;
   addEventListener(type: string, listener: () => void): void;
   removeEventListener(type: string, listener: () => void): void;
 }
@@ -38,6 +51,7 @@ export interface BrowserLike {
 export interface BrowserCaptureClient {
   capture(event: PoolstatisEvent): void;
   discardQueuedEvents(predicate: (event: PoolstatisEvent) => boolean): void;
+  flush?(options?: { keepalive?: boolean }): Promise<void> | void;
 }
 
 export type BrowserConsentPolicy = 'opt-in' | 'opt-out' | 'external';
@@ -46,8 +60,11 @@ interface BrowserAnalyticsBaseOptions {
   client: BrowserCaptureClient;
   browser?: BrowserLike;
   now?: () => number;
+  /** Monotonic page clock. Defaults to performance.now() where available. */
+  monotonicNow?: () => number;
   createId?: () => string;
   sessionTimeoutMs?: number;
+  engagementHeartbeatMs?: number;
   /** Map the pathname to a finite, non-sensitive product route vocabulary. */
   mapPagePath?: (pathname: string) => string;
   /** Narrow the standard coarse context. Unknown properties are never emitted. */
@@ -80,7 +97,32 @@ export interface ActorLinkHandoff {
 const VISITOR_KEY = 'poolstatis.browser.visitor';
 const SESSION_KEY = 'poolstatis.browser.session';
 const SESSION_TIMEOUT_MS = 30 * 60_000;
+const ENGAGEMENT_HEARTBEAT_MS = 10_000;
+const MAX_FOREGROUND_GAP_MS = 30_000;
 const reserved = new Set<string>(BROWSER_RESERVED_PROPERTIES);
+
+type EngagementReason =
+  | 'heartbeat'
+  | 'visibility_hidden'
+  | 'blur'
+  | 'route_change'
+  | 'pagehide'
+  | 'freeze'
+  | 'destroy';
+
+interface PageEngagementState {
+  pageViewId: string;
+  path: string;
+  sessionId: string;
+  actorId: string;
+  startedAt: number;
+  lastTickAt: number;
+  foregroundActive: boolean;
+  foregroundMs: number;
+  maxScrollPct: number;
+  interactionCount: number;
+  sequence: number;
+}
 
 /** Remove the first-party anonymous visitor and session without starting capture. */
 export function clearBrowserAnalyticsIdentity(
@@ -150,8 +192,11 @@ function primaryLanguage(value: string): string {
 
 export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   const now = options.now ?? Date.now;
+  const monotonicNow = options.monotonicNow
+    ?? (() => globalThis.performance?.now?.() ?? Date.now());
   const createId = options.createId ?? randomId;
   const timeout = options.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
+  const heartbeatMs = options.engagementHeartbeatMs ?? ENGAGEMENT_HEARTBEAT_MS;
   let browser: BrowserLike | null = null;
   let visitorId: string | null = null;
   let sessionId: string | null = null;
@@ -162,6 +207,8 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   let started = false;
   let stopConsent: (() => void) | null = null;
   let restoreHistory: (() => void) | null = null;
+  let restoreEngagement: (() => void) | null = null;
+  let pageState: PageEngagementState | null = null;
   const contextProperties = new Set<BrowserOptionalContextProperty>(
     options.contextProperties ?? BROWSER_OPTIONAL_CONTEXT_PROPERTIES,
   );
@@ -199,9 +246,11 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     visitorId = null; sessionId = null; actorId = null; lastActivity = null;
     lastPath = null; acquisitionProperties = null; started = false;
     restoreHistory?.(); restoreHistory = null;
+    restoreEngagement?.(); restoreEngagement = null;
+    pageState = null;
   };
 
-  const context = (): Record<string, unknown> => {
+  const context = (path = currentPagePath()): Record<string, unknown> => {
     const ua = browser!.navigator.userAgent;
     const optional: Record<BrowserOptionalContextProperty, unknown> = {
       $device_class: deviceClass(ua),
@@ -219,7 +268,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     );
     return {
       $browser_context: BROWSER_CONTEXT_VERSION,
-      $page_path: currentPagePath(),
+      $page_path: path,
       ...selected,
     };
   };
@@ -288,27 +337,123 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     return rotated;
   };
 
+  const captureInternal = (
+    event: string,
+    properties: Record<string, unknown>,
+    identity?: { actorId: string; sessionId: string; path: string },
+  ) => {
+    if (!collectionAllowed() || !browser || !visitorId || !actorId) return;
+    options.client.capture({
+      event,
+      distinct_id: identity?.actorId ?? actorId,
+      session_id: identity?.sessionId ?? sessionId!,
+      properties: {
+        ...(acquisitionProperties ?? {}),
+        ...context(identity?.path),
+        ...properties,
+      },
+    });
+  };
+
+  const currentScrollPct = (): number => {
+    if (!browser) return 0;
+    const height = Math.max(
+      browser.document.documentElement?.scrollHeight ?? 0,
+      browser.document.body?.scrollHeight ?? 0,
+    );
+    const scrollable = Math.max(0, height - browser.innerHeight);
+    if (scrollable === 0) return 100;
+    return Math.max(0, Math.min(100, Math.round(((browser.scrollY ?? 0) / scrollable) * 100)));
+  };
+
+  const updateEngagementClock = () => {
+    if (!pageState) return;
+    const time = monotonicNow();
+    const delta = Math.max(0, Math.min(MAX_FOREGROUND_GAP_MS, time - pageState.lastTickAt));
+    if (pageState.foregroundActive) pageState.foregroundMs += delta;
+    pageState.lastTickAt = time;
+    pageState.maxScrollPct = Math.max(pageState.maxScrollPct, currentScrollPct());
+  };
+
+  const flushEngagement = (reason: EngagementReason): boolean => {
+    if (!pageState || !collectionAllowed()) return false;
+    updateEngagementClock();
+    pageState.sequence += 1;
+    if (lastActivity !== null) {
+      lastActivity = now();
+      persistSession();
+    }
+    captureInternal(BROWSER_PAGE_ENGAGEMENT_EVENT, {
+      $page_view_id: pageState.pageViewId,
+      sequence: pageState.sequence,
+      foreground_ms: Math.round(pageState.foregroundMs),
+      elapsed_ms: Math.max(0, Math.round(monotonicNow() - pageState.startedAt)),
+      max_scroll_pct: pageState.maxScrollPct,
+      interaction_count: pageState.interactionCount,
+      reason,
+    }, {
+      actorId: pageState.actorId,
+      sessionId: pageState.sessionId,
+      path: pageState.path,
+    });
+    return true;
+  };
+
+  const flushTerminalTransport = () => {
+    try {
+      const pending = options.client.flush?.({ keepalive: true });
+      if (pending) void pending.catch(() => {});
+    } catch {
+      // Browser lifecycle callbacks cannot surface transport failures safely.
+    }
+  };
+
   const capture = (event: string, properties: Record<string, unknown> = {}) => {
     if (!collectionAllowed() || !browser || !visitorId || !actorId) return;
     for (const key of Object.keys(properties)) {
       if (reserved.has(key)) throw new Error(`property ${key} is reserved by @poolstatis/sdk/browser`);
     }
     ensureActiveSession();
-    options.client.capture({
-      event,
-      distinct_id: actorId,
-      session_id: sessionId!,
-      properties: { ...properties, ...(acquisitionProperties ?? {}), ...context() },
-    });
+    captureInternal(event, properties);
   };
 
   const pageViewed = () => {
     if (!collectionAllowed() || !browser || !visitorId || !actorId) return;
-    ensureActiveSession();
     const path = currentPagePath();
     if (path === lastPath) return;
+    const sessionExpired = !sessionId || lastActivity === null || now() - lastActivity > timeout;
+    if (pageState) flushEngagement('route_change');
+    if (sessionExpired) rotateSession(now());
+    else ensureActiveSession();
     lastPath = path;
-    capture(BROWSER_PAGE_VIEW_EVENT);
+    const tick = monotonicNow();
+    pageState = {
+      pageViewId: `page:${createId()}`,
+      path,
+      sessionId: sessionId!,
+      actorId,
+      startedAt: tick,
+      lastTickAt: tick,
+      foregroundActive: (
+        browser.document.visibilityState !== 'hidden'
+        && browser.document.visibilityState !== 'prerender'
+        && (browser.document.hasFocus?.() ?? true)
+      ),
+      foregroundMs: 0,
+      maxScrollPct: currentScrollPct(),
+      interactionCount: 0,
+      sequence: 0,
+    };
+    captureInternal(BROWSER_PAGE_VIEW_EVENT, { $page_view_id: pageState.pageViewId });
+  };
+
+  const resumeAfterIdle = (): boolean => {
+    if (!sessionId || lastActivity === null || now() - lastActivity <= timeout) return false;
+    pageState = null;
+    rotateSession(now());
+    lastPath = null;
+    pageViewed();
+    return true;
   };
 
   const bindNavigation = () => {
@@ -326,6 +471,79 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     };
   };
 
+  const bindEngagement = () => {
+    const onVisibility = () => {
+      updateEngagementClock();
+      if (!pageState || !browser) return;
+      const visible = browser.document.visibilityState !== 'hidden'
+        && browser.document.visibilityState !== 'prerender';
+      if (!visible && pageState.foregroundActive) {
+        pageState.foregroundActive = false;
+        if (flushEngagement('visibility_hidden')) flushTerminalTransport();
+        return;
+      }
+      if (visible && resumeAfterIdle()) return;
+      pageState.foregroundActive = visible && (browser.document.hasFocus?.() ?? true);
+    };
+    const onFocus = () => {
+      updateEngagementClock();
+      if (resumeAfterIdle()) return;
+      if (pageState && browser) {
+        pageState.foregroundActive = browser.document.visibilityState !== 'hidden'
+          && browser.document.visibilityState !== 'prerender';
+      }
+    };
+    const onBlur = () => {
+      updateEngagementClock();
+      if (pageState?.foregroundActive) {
+        pageState.foregroundActive = false;
+        flushEngagement('blur');
+      }
+    };
+    const onScroll = () => {
+      if (pageState) pageState.maxScrollPct = Math.max(pageState.maxScrollPct, currentScrollPct());
+    };
+    const onInteraction = () => {
+      if (pageState?.foregroundActive) pageState.interactionCount += 1;
+    };
+    const onPageHide = () => {
+      if (flushEngagement('pagehide')) flushTerminalTransport();
+    };
+    const onFreeze = () => {
+      if (flushEngagement('freeze')) flushTerminalTransport();
+    };
+    const timer = browser!.setInterval
+      ? browser!.setInterval(() => {
+          updateEngagementClock();
+          if (pageState?.foregroundActive) flushEngagement('heartbeat');
+        }, heartbeatMs)
+      : globalThis.setInterval(() => {
+          updateEngagementClock();
+          if (pageState?.foregroundActive) flushEngagement('heartbeat');
+        }, heartbeatMs) as unknown as number;
+    browser!.document.addEventListener?.('visibilitychange', onVisibility);
+    browser!.addEventListener('focus', onFocus);
+    browser!.addEventListener('blur', onBlur);
+    browser!.addEventListener('scroll', onScroll);
+    browser!.addEventListener('pointerdown', onInteraction);
+    browser!.addEventListener('keydown', onInteraction);
+    browser!.addEventListener('pagehide', onPageHide);
+    browser!.addEventListener('freeze', onFreeze);
+    restoreEngagement = () => {
+      if (!browser) return;
+      if (browser.clearInterval) browser.clearInterval(timer);
+      else globalThis.clearInterval(timer);
+      browser.document.removeEventListener?.('visibilitychange', onVisibility);
+      browser.removeEventListener('focus', onFocus);
+      browser.removeEventListener('blur', onBlur);
+      browser.removeEventListener('scroll', onScroll);
+      browser.removeEventListener('pointerdown', onInteraction);
+      browser.removeEventListener('keydown', onInteraction);
+      browser.removeEventListener('pagehide', onPageHide);
+      browser.removeEventListener('freeze', onFreeze);
+    };
+  };
+
   const start = () => {
     if (!collectionAllowed() || started) return;
     browser = resolveBrowser();
@@ -334,6 +552,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     started = true;
     bindNavigation();
     pageViewed();
+    bindEngagement();
   };
 
   stopConsent = options.subscribeConsent?.(() => {
@@ -354,6 +573,8 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     },
     resetIdentity(): void {
       if (!browser) return;
+      if (pageState && collectionAllowed()) flushEngagement('destroy');
+      pageState = null;
       storageRemove(browser.localStorage, VISITOR_KEY);
       storageRemove(browser.sessionStorage, SESSION_KEY);
       if (!collectionAllowed()) {
@@ -382,9 +603,15 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
           throw new Error('browser identity rotated in memory but session storage kept a stale session; reload only after storage access is restored');
         }
       }
+      if (started && collectionAllowed()) pageViewed();
     },
     get visitorId() { return visitorId; },
     get sessionId() { return sessionId; },
-    destroy() { restoreHistory?.(); stopConsent?.(); restoreHistory = null; stopConsent = null; },
+    destroy() {
+      if (collectionAllowed()) flushEngagement('destroy');
+      restoreHistory?.(); restoreEngagement?.(); stopConsent?.();
+      restoreHistory = null; restoreEngagement = null; stopConsent = null;
+      pageState = null; started = false;
+    },
   };
 }

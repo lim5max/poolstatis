@@ -20,7 +20,9 @@ import {
   editDecisionSchema, measurementDeclarationSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
   registerReleaseSchema, reviewDecisionSchema,
-  retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, webAnalyticsQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
+  retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, webAnalyticsQuerySchema,
+  webSessionsQuerySchema, webSessionQuerySchema, pageEngagementQuerySchema,
+  updateExperimentSchema, updateFeatureFlagSchema,
   updateMetricCategorySchema, updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
 } from '../schemas.js';
 import { BROWSER_ANALYTICS_STANDARD, INSTRUMENTATION_STANDARD } from './standard.js';
@@ -732,6 +734,129 @@ jsonTool(
   'Return distinct visitors, sessions and page views plus count-and-percentage breakdowns by country, device, browser, OS, language, timezone or acquisition source. Definitions and privacy caveats are included.',
   { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_analytics', ...query })),
+);
+
+jsonTool(
+  'get_web_overview',
+  'Return a bounded web overview with visitors, sessions, page views, measured engagement, bounce only for complete sessions, single-page sessions, foreground time, wall-clock span, breakdown truncation and privacy/accounting definitions.',
+  { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_analytics', ...query })),
+);
+
+jsonTool(
+  'list_web_sessions',
+  'List recent browser-tab sessions in one project/environment and period. Results are bounded and report truncation; incomplete timing remains explicit.',
+  { project, query: webSessionsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_sessions', ...query })),
+);
+
+jsonTool(
+  'get_web_session',
+  'Read one privacy-bounded browser-tab session with ordered page paths, foreground timing, wall-clock span and completeness. This is not DOM/video replay.',
+  { project, query: webSessionQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_session', ...query })),
+);
+
+jsonTool(
+  'get_session_engagement',
+  'Explain measured engagement for one known browser-tab session. Returns the same bounded server evidence as get_web_session and never invents bounce for incomplete sessions.',
+  { project, query: webSessionQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_session', ...query })),
+);
+
+jsonTool(
+  'get_page_engagement',
+  'Read the latest cumulative snapshot for one page_view_id. Duplicate or out-of-order snapshots are reduced by highest sequence; missing evidence stays explicit.',
+  { project, query: pageEngagementQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'page_engagement', ...query })),
+);
+
+jsonTool(
+  'get_click_map',
+  'Return a bounded, exact surface/route/version/device click map. The default decision grain is unique sessions; event counts remain secondary. Reports sample size, truncation and missing-snapshot caveats.',
+  { project, query: visualExperienceQuerySchema.omit({ kind: true }) },
+  wrap(async ({ project: slug, query }) => {
+    const result = await api(
+      'POST',
+      `/api/v1/projects/${slug}/query`,
+      { kind: 'visual_experience', ...query },
+    ) as {
+      surface: unknown;
+      route: string;
+      version: string;
+      device: string;
+      grid: number;
+      snapshot: unknown;
+      summary: { sessions: number; clicks: number };
+      click_cells: Array<{ x: number; y: number; count: number; sessions: number; actors: number }>;
+      click_labels: Array<{ label: string; count: number; sessions: number; actors: number }>;
+      click_labels_truncated: boolean;
+      meta: unknown;
+    };
+    return {
+      kind: 'click_map',
+      aggregation: 'unique_sessions',
+      surface: result.surface,
+      route: result.route,
+      version: result.version,
+      device: result.device,
+      grid: result.grid,
+      snapshot: result.snapshot,
+      sample_size: { sessions: result.summary.sessions, click_events: result.summary.clicks },
+      cells: result.click_cells.map((cell) => ({
+        x: cell.x, y: cell.y, sessions: cell.sessions, click_events: cell.count, actors: cell.actors,
+      })),
+      labels: result.click_labels.map((label) => ({
+        label: label.label, sessions: label.sessions, click_events: label.count, actors: label.actors,
+      })),
+      truncated: result.click_labels_truncated,
+      no_data_reason: result.summary.sessions === 0
+        ? 'No matching accepted experience sessions exist for this exact surface, route, version, device and period.'
+        : null,
+      meta: result.meta,
+    };
+  }),
+);
+
+jsonTool(
+  'get_scroll_map',
+  'Return bounded scroll reach and section drop-off for an exact surface/route/version/device tuple. Reach is unique-session based and descriptive, not causal.',
+  { project, query: visualExperienceQuerySchema.omit({ kind: true }) },
+  wrap(async ({ project: slug, query }) => {
+    const result = await api(
+      'POST',
+      `/api/v1/projects/${slug}/query`,
+      { kind: 'visual_experience', ...query },
+    ) as {
+      surface: unknown;
+      route: string;
+      version: string;
+      device: string;
+      snapshot: unknown;
+      summary: { sessions: number };
+      scroll_coverage: unknown[];
+      sections: unknown[];
+      sections_truncated: boolean;
+      meta: unknown;
+    };
+    return {
+      kind: 'scroll_map',
+      aggregation: 'unique_sessions',
+      surface: result.surface,
+      route: result.route,
+      version: result.version,
+      device: result.device,
+      snapshot: result.snapshot,
+      sample_size: { sessions: result.summary.sessions },
+      scroll_reach: result.scroll_coverage,
+      section_dropoff: result.sections,
+      truncated: result.sections_truncated,
+      no_data_reason: result.summary.sessions === 0
+        ? 'No matching accepted experience sessions exist for this exact surface, route, version, device and period.'
+        : null,
+      meta: result.meta,
+    };
+  }),
 );
 
 jsonTool(

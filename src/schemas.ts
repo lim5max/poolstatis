@@ -734,12 +734,46 @@ export const trendQuerySchema = z.object({
 export const webAnalyticsQuerySchema = z.object({
   kind: z.literal('web_analytics'),
   metric: keySchema,
+  key_metric: keySchema.optional(),
   date_from: dateStr,
   date_to: dateStr.nullable().optional(),
   filters: z.array(propertyFilterSchema).max(20).default([]),
   dimensions: z.array(z.enum([
     'country', 'device', 'browser', 'os', 'language', 'timezone', 'source',
   ])).min(1).max(7).default(['country', 'device', 'source']),
+  env: z.string().default('prod'),
+});
+
+export const webSessionsQuerySchema = z.object({
+  kind: z.literal('web_sessions'),
+  metric: keySchema,
+  key_metric: keySchema.optional(),
+  date_from: dateStr,
+  date_to: dateStr.nullable().optional(),
+  filters: z.array(propertyFilterSchema).max(20).default([]),
+  limit: z.number().int().min(1).max(100).default(50),
+  env: z.string().default('prod'),
+});
+
+export const webSessionQuerySchema = z.object({
+  kind: z.literal('web_session'),
+  metric: keySchema,
+  key_metric: keySchema.optional(),
+  session_id: z.string().min(1).max(200),
+  date_from: dateStr,
+  date_to: dateStr.nullable().optional(),
+  filters: z.array(propertyFilterSchema).max(20).default([]),
+  page_limit: z.number().int().min(1).max(200).default(100),
+  env: z.string().default('prod'),
+});
+
+export const pageEngagementQuerySchema = z.object({
+  kind: z.literal('page_engagement'),
+  metric: keySchema,
+  page_view_id: z.string().min(1).max(200),
+  date_from: dateStr,
+  date_to: dateStr.nullable().optional(),
+  filters: z.array(propertyFilterSchema).max(20).default([]),
   env: z.string().default('prod'),
 });
 
@@ -864,6 +898,9 @@ export type PurgeDataInput = z.infer<typeof purgeDataSchema>;
 export const querySchema = z.discriminatedUnion('kind', [
   trendQuerySchema,
   webAnalyticsQuerySchema,
+  webSessionsQuerySchema,
+  webSessionQuerySchema,
+  pageEngagementQuerySchema,
   funnelQuerySchema,
   entitiesQuerySchema,
   retentionQuerySchema,
@@ -877,6 +914,9 @@ export const querySchema = z.discriminatedUnion('kind', [
 
 export type TrendQueryInput = z.infer<typeof trendQuerySchema>;
 export type WebAnalyticsQueryInput = z.infer<typeof webAnalyticsQuerySchema>;
+export type WebSessionsQueryInput = z.infer<typeof webSessionsQuerySchema>;
+export type WebSessionQueryInput = z.infer<typeof webSessionQuerySchema>;
+export type PageEngagementQueryInput = z.infer<typeof pageEngagementQuerySchema>;
 export type FunnelQueryInput = z.infer<typeof funnelQuerySchema>;
 export type EntitiesQueryInput = z.infer<typeof entitiesQuerySchema>;
 export type RetentionQueryInput = z.infer<typeof retentionQuerySchema>;

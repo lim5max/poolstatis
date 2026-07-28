@@ -125,6 +125,12 @@ describe('live customer screen UX', () => {
     const webAnalytics = vi.fn().mockResolvedValue({
       kind: 'web_analytics',
       summary: { visitors: 8, sessions: 11, page_views: 20 },
+      engagement: {
+        measured_sessions: 9, incomplete_sessions: 2, engaged_sessions: 6,
+        bounce_sessions: 3, single_page_sessions: 7,
+        timed_page_views: 18, total_page_views: 20, timed_page_coverage: 0.9,
+        foreground_ms: 125_000, session_span_ms: 240_000,
+      },
       breakdowns: {
         country: [{ value: 'US', visitors: 6, sessions: 8, page_views: 15, percentage: 75 }],
         device: [{ value: 'mobile', visitors: 5, sessions: 7, page_views: 12, percentage: 60 }],
@@ -137,13 +143,45 @@ describe('live customer screen UX', () => {
           visitors: 'Unique resolved actors.',
           sessions: 'Distinct session ids.',
           page_views: 'Accepted stored page-view events.',
+          engaged_sessions: 'Measured engagement.',
+          bounce_sessions: 'Count of measured sessions without engagement.',
+          single_page_sessions: 'Single-page sessions.',
+          foreground_ms: 'Visible focused time.',
+          session_span_ms: 'Wall-clock span.',
         },
+        accepted_event_accounting: 'Accepted stored events.',
         privacy: 'Raw IP is not stored.',
         country_attribution: {
           label: 'IP Geolocation by DB-IP',
           url: 'https://db-ip.com',
         },
       },
+    });
+    const webSessions = vi.fn().mockResolvedValue({
+      kind: 'web_sessions',
+      sessions: [{
+        session_id: 'session-1', actor_id: 'actor-1',
+        started_at: '2026-07-27T00:00:00Z', ended_at: '2026-07-27T00:00:20Z',
+        page_views: 1, timed_page_views: 1, foreground_ms: 15_000, session_span_ms: 20_000,
+        engaged: true, bounce: false, single_page: true, complete: true,
+      }],
+      meta: { computed_at: '2026-07-27T00:00:21Z', total: 1, truncated: false, definitions: {} },
+    });
+    const webSession = vi.fn().mockResolvedValue({
+      kind: 'web_session',
+      summary: {
+        session_id: 'session-1', actor_id: 'actor-1',
+        started_at: '2026-07-27T00:00:00Z', ended_at: '2026-07-27T00:00:20Z',
+        page_views: 1, timed_page_views: 1, foreground_ms: 15_000, session_span_ms: 20_000,
+        engaged: true, bounce: false, single_page: true, complete: true,
+      },
+      pages: [{
+        page_view_id: 'page-1', session_id: 'session-1', path: '/pricing',
+        viewed_at: '2026-07-27T00:00:00Z', last_snapshot_at: '2026-07-27T00:00:15Z',
+        sequence: 2, foreground_ms: 15_000, elapsed_ms: 15_000, max_scroll_pct: 75,
+        interaction_count: 2, reason: 'pagehide', complete: true,
+      }],
+      meta: { computed_at: '2026-07-27T00:00:21Z', privacy: 'No replay.' },
     });
     mockedStore.mockReturnValue(store({
       properties: vi.fn().mockResolvedValue([]), actorLinks: vi.fn().mockResolvedValue({ links: [], audit: [] }),
@@ -154,7 +192,7 @@ describe('live customer screen UX', () => {
         identity: { distinct_id_coverage: 1, raw_actors: 8, resolved_actors: 8 }, properties: [], blockers: [], warnings: [],
       }),
       trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
-      webAnalytics,
+      webAnalytics, webSessions, webSession,
     }));
     render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Web analytics');
@@ -162,6 +200,9 @@ describe('live customer screen UX', () => {
     expect(await screen.findByText('Visitors')).toBeInTheDocument();
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('Page views')).toBeInTheDocument();
+    expect(screen.getByText('Measured engagement')).toBeInTheDocument();
+    expect(screen.getByText('2m 5s')).toBeInTheDocument();
+    expect(screen.getByText(/2 incomplete sessions/)).toBeInTheDocument();
     expect(screen.getByText('75%')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'IP Geolocation by DB-IP' })).toHaveAttribute(
       'href',
@@ -174,6 +215,10 @@ describe('live customer screen UX', () => {
     expect(webAnalytics).toHaveBeenCalledWith('alpha', expect.objectContaining({
       metric: 'web_page_views', dimensions: ['country', 'device', 'browser', 'os', 'source'], env: 'prod',
     }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));
+    expect(await screen.findByText('15s')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
+    expect(await screen.findByText('/pricing')).toBeInTheDocument();
   });
 
   it('bounds 100+ dimension values behind one searchable ranked explorer', async () => {
@@ -204,6 +249,12 @@ describe('live customer screen UX', () => {
       webAnalytics: vi.fn().mockResolvedValue({
         kind: 'web_analytics',
         summary: { visitors: sourceCount, sessions: sourceCount, page_views: pageViews },
+        engagement: {
+          measured_sessions: 0, incomplete_sessions: sourceCount, engaged_sessions: 0,
+          bounce_sessions: 0, single_page_sessions: sourceCount,
+          timed_page_views: 0, total_page_views: pageViews, timed_page_coverage: 0,
+          foreground_ms: 0, session_span_ms: 0,
+        },
         breakdowns: {
           country: [{ value: 'unknown', visitors: sourceCount, sessions: sourceCount, page_views: pageViews, percentage: 100 }],
           device: [], browser: [], os: [], source: sources,
@@ -215,7 +266,13 @@ describe('live customer screen UX', () => {
             visitors: 'Unique resolved actors.',
             sessions: 'Distinct session ids.',
             page_views: 'Accepted stored page-view events.',
+            engaged_sessions: 'Measured engagement.',
+            bounce_sessions: 'Count of measured sessions without engagement.',
+            single_page_sessions: 'Single-page sessions.',
+            foreground_ms: 'Visible focused time.',
+            session_span_ms: 'Wall-clock span.',
           },
+          accepted_event_accounting: 'Accepted stored events.',
           privacy: 'Raw IP is not stored.',
         },
       }),

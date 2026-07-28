@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse } from '../api/types';
+import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
 
 interface MetricTrustRow {
   metric: Metric;
@@ -190,7 +190,10 @@ function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: 
     {error && <div className="mt-4"><ErrorNote>{error}</ErrorNote></div>}
     {busy && <div className="mt-4"><Loading what="loading traffic summary…" /></div>}
     {result && result.summary.page_views === 0 && <div className="mt-4"><EmptyState headline="No page views in this window" lead="no zero was estimated; verify consent, SDK capture and the active page-view metric" /></div>}
-    {result && result.summary.page_views > 0 && <WebAnalyticsResults result={result} />}
+    {result && result.summary.page_views > 0 && <>
+      <WebAnalyticsResults result={result} />
+      <WebSessionsExplorer metric={metric!.key} period={period} env={env} />
+    </>}
   </Panel>;
 }
 
@@ -216,6 +219,7 @@ function WebAnalyticsResults({ result }: { result: WebAnalyticsResponse }) {
         <div className="serif mt-1 text-2xl tabular-nums">{fmtNum(Number(value))}</div>
       </div>)}
     </div>
+    <WebEngagementSummary result={result} />
     <RankedDimensionExplorer
       result={result}
       dimension={dimension}
@@ -226,6 +230,119 @@ function WebAnalyticsResults({ result }: { result: WebAnalyticsResponse }) {
       onSearchChange={setSearch}
     />
   </div>;
+}
+
+function WebEngagementSummary({ result }: { result: WebAnalyticsResponse }) {
+  const engagement = result.engagement;
+  const coverage = engagement.timed_page_coverage === null
+    ? '—'
+    : `${Math.round(engagement.timed_page_coverage * 100)}%`;
+  return <section className="rounded-md border" aria-labelledby="engagement-summary-title">
+    <div className="border-b px-4 py-3">
+      <h3 id="engagement-summary-title" className="text-sm font-medium">Measured engagement</h3>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Foreground time counts only visible, focused intervals. Bounce is unknown when page timing is incomplete.
+      </p>
+    </div>
+    <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
+      {[
+        ['Engaged', `${fmtNum(engagement.engaged_sessions)} / ${fmtNum(engagement.measured_sessions)}`, result.meta.definitions.engaged_sessions],
+        ['Bounces', fmtNum(engagement.bounce_sessions), result.meta.definitions.bounce_sessions],
+        ['Foreground time', formatEngagementMs(engagement.foreground_ms), result.meta.definitions.foreground_ms],
+        ['Timed page coverage', coverage, `${fmtNum(engagement.timed_page_views)} of ${fmtNum(engagement.total_page_views)} page views have timing evidence.`],
+      ].map(([label, value, definition]) => <div key={label} className="min-w-0 bg-card p-4">
+        <Hint label={definition}><span className="text-xs text-muted-foreground">{label}</span></Hint>
+        <div className="serif mt-1 text-xl tabular-nums">{value}</div>
+      </div>)}
+    </div>
+    {engagement.incomplete_sessions > 0 && <p className="border-t px-4 py-3 text-xs text-muted-foreground">
+      {fmtNum(engagement.incomplete_sessions)} incomplete {engagement.incomplete_sessions === 1 ? 'session is' : 'sessions are'} excluded from bounce classification.
+    </p>}
+  </section>;
+}
+
+function WebSessionsExplorer({ metric, period, env }: { metric: string; period: string; env: string }) {
+  const { client, project } = useStore();
+  const [sessions, setSessions] = useState<WebSessionsResponse | null>(null);
+  const [detail, setDetail] = useState<WebSessionResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const load = async () => {
+    setBusy(true); setError(null); setDetail(null);
+    try {
+      setSessions(await client!.webSessions(project!, {
+        metric, date_from: `-${period}d`, env, limit: 20,
+      }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'could not load sessions');
+    } finally { setBusy(false); }
+  };
+  const inspect = async (sessionId: string) => {
+    setBusy(true); setError(null);
+    try {
+      setDetail(await client!.webSession(project!, {
+        metric, session_id: sessionId, date_from: `-${period}d`, env,
+      }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'could not load session');
+    } finally { setBusy(false); }
+  };
+  return <section className="mt-4 rounded-md border" aria-labelledby="web-sessions-title">
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
+      <div>
+        <h3 id="web-sessions-title" className="text-sm font-medium">Session engagement</h3>
+        <p className="mt-0.5 text-xs text-muted-foreground">Browser-tab sessions with bounded page paths and timing evidence — not video replay.</p>
+      </div>
+      <Button variant="outline" size="sm" onClick={load} disabled={busy}>
+        {busy && <Loader2 className="size-4 animate-spin" />}Load recent sessions
+      </Button>
+    </div>
+    {error && <div className="p-4"><ErrorNote>{error}</ErrorNote></div>}
+    {sessions && sessions.sessions.length === 0 && <div className="p-4"><EmptyState headline="No measured sessions" lead="no matching accepted page views exist in this period" /></div>}
+    {sessions && sessions.sessions.length > 0 && <div className="overflow-x-auto">
+      <Table>
+        <TableHeader><TableRow><TableHead>Started</TableHead><TableHead>Pages</TableHead><TableHead>Foreground</TableHead><TableHead>Span</TableHead><TableHead>Classification</TableHead><TableHead><span className="sr-only">Action</span></TableHead></TableRow></TableHeader>
+        <TableBody>{sessions.sessions.map((session) => <TableRow key={session.session_id}>
+          <TableCell className="whitespace-nowrap text-xs">{formatDate(session.started_at)}</TableCell>
+          <TableCell className="tabular-nums">{session.page_views}</TableCell>
+          <TableCell className="whitespace-nowrap tabular-nums">{formatEngagementMs(session.foreground_ms)}</TableCell>
+          <TableCell className="whitespace-nowrap tabular-nums">{formatEngagementMs(session.session_span_ms)}</TableCell>
+          <TableCell><div className="flex flex-wrap gap-1">
+            <Badge variant={session.engaged ? 'default' : 'secondary'}>
+              {session.engaged ? 'Engaged' : session.engaged === false ? 'Not engaged' : 'Unknown'}
+            </Badge>
+            <Badge variant="outline">{session.complete ? 'Complete' : 'Incomplete'}</Badge>
+          </div></TableCell>
+          <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => inspect(session.session_id)}>Inspect</Button></TableCell>
+        </TableRow>)}</TableBody>
+      </Table>
+      <p className="border-t px-4 py-3 text-xs text-muted-foreground">
+        Showing {sessions.sessions.length} of {sessions.meta.total} sessions{sessions.meta.truncated ? ' · bounded result' : ''}.
+      </p>
+    </div>}
+    {detail?.summary && <div className="border-t p-4">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <h4 className="text-sm font-medium">Session pages</h4>
+        <span className="text-xs text-muted-foreground">
+          {detail.pages.length} of {detail.meta.total_pages} page {detail.meta.total_pages === 1 ? 'view' : 'views'}
+          {detail.meta.truncated ? ' · bounded result' : ''}
+        </span>
+      </div>
+      <ol className="space-y-2">{detail.pages.map((page) => <li key={page.page_view_id} className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+        <code className="min-w-0 truncate text-xs">{page.path}</code>
+        <span className="text-xs tabular-nums text-muted-foreground">{page.foreground_ms === null ? 'Timing unavailable' : formatEngagementMs(page.foreground_ms)}</span>
+        <Badge variant={page.complete ? 'outline' : 'secondary'}>{page.complete ? 'Complete' : page.timed ? 'Timed, incomplete' : 'No timing'}</Badge>
+      </li>)}</ol>
+    </div>}
+  </section>;
+}
+
+function formatEngagementMs(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return '—';
+  const seconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
 }
 
 function RankedDimensionExplorer({

@@ -1,6 +1,6 @@
 import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
+  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 
 export class ApiError extends Error {
@@ -496,6 +496,35 @@ export class PoolstatisClient {
   }) {
     return this.req<WebAnalyticsResponse>('POST', `/api/v1/projects/${slug}/query`, {
       kind: 'web_analytics', filters: [], ...body,
+    });
+  }
+
+  webSessions(slug: string, body: {
+    metric: string;
+    key_metric?: string;
+    date_from: string;
+    date_to?: string | null;
+    filters?: SampleFilter[];
+    limit?: number;
+    env: string;
+  }) {
+    return this.req<WebSessionsResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'web_sessions', filters: [], limit: 20, ...body,
+    });
+  }
+
+  webSession(slug: string, body: {
+    metric: string;
+    key_metric?: string;
+    session_id: string;
+    page_limit?: number;
+    date_from: string;
+    date_to?: string | null;
+    filters?: SampleFilter[];
+    env: string;
+  }) {
+    return this.req<WebSessionResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'web_session', filters: [], ...body,
     });
   }
 

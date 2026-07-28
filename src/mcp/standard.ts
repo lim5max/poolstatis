@@ -237,8 +237,16 @@ Definitions:
   inactivity timeout is 30 minutes.
 - Page views: accepted stored page.viewed events. Country/device enrichment never creates
   another event and therefore does not change accepted stored-event billing semantics.
+- Page engagement: cumulative page.engagement snapshots share one stable $page_view_id
+  with the owning page view. Core keeps only the highest sequence per page, so retries and
+  out-of-order lifecycle flushes cannot double-count foreground time.
 - Canonical web queries include only events marked $browser_context = "1"; legacy/manual
   page.viewed events are not silently mixed into the consented browser population.
+- Foreground time advances only while the document is visible and focused, using a
+  monotonic clock with a 10-second heartbeat and a 30-second cap on one suspended gap.
+- A browser-tab session is engaged when foreground time is greater than 10 seconds, it has
+  at least two page views, or it contains the selected active native key metric. Bounce is
+  the complement only for complete sessions; incomplete/crashed pages remain unknown.
 
 Privacy boundary:
 - Captures pathname only, never query strings, fragments, full URLs, DOM, text or inputs.
@@ -258,4 +266,11 @@ properties plus the web_page_views and web_visitors metrics start proposed. The 
 reviews and activates them. Query with
 query_web_analytics using the page-view count metric; responses keep visitors, sessions and
 page views separate and return counts plus page-view percentages for requested dimensions.
+Use get_web_overview, list_web_sessions, get_web_session, get_session_engagement and
+get_page_engagement for bounded timing evidence. get_click_map and get_scroll_map require
+an exact surface/version/route/device cohort and default to unique-session aggregation.
+Session detail returns at most page_limit pages (default 100, maximum 200) and reports
+total_pages plus truncated; request another bounded analytic rather than treating it as replay.
+These tools do not expose video or DOM replay. Every accepted page.viewed and
+page.engagement snapshot is one stored billable event; reads create none.
 `;

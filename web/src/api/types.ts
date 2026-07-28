@@ -319,6 +319,18 @@ export type WebAnalyticsDimension = 'country' | 'device' | 'browser' | 'os' | 'l
 export interface WebAnalyticsResponse {
   kind: 'web_analytics';
   summary: { visitors: number; sessions: number; page_views: number };
+  engagement: {
+    measured_sessions: number;
+    incomplete_sessions: number;
+    engaged_sessions: number;
+    bounce_sessions: number;
+    single_page_sessions: number;
+    timed_page_views: number;
+    total_page_views: number;
+    timed_page_coverage: number | null;
+    foreground_ms: number;
+    session_span_ms: number;
+  };
   breakdowns: Partial<Record<WebAnalyticsDimension, Array<{
     value: string;
     visitors: number;
@@ -329,9 +341,74 @@ export interface WebAnalyticsResponse {
   meta: {
     computed_at: string;
     truncated_dimensions: WebAnalyticsDimension[];
-    definitions: { visitors: string; sessions: string; page_views: string };
+    definitions: {
+      visitors: string;
+      sessions: string;
+      page_views: string;
+      engaged_sessions: string;
+      bounce_sessions: string;
+      single_page_sessions: string;
+      foreground_ms: string;
+      session_span_ms: string;
+    };
+    accepted_event_accounting: string;
     privacy: string;
     country_attribution?: { label: string; url: string };
+  };
+}
+
+export interface WebPageEngagement {
+  page_view_id: string;
+  session_id: string;
+  path: string;
+  viewed_at: string;
+  last_snapshot_at: string | null;
+  sequence: number | null;
+  foreground_ms: number | null;
+  elapsed_ms: number | null;
+  max_scroll_pct: number | null;
+  interaction_count: number | null;
+  reason: string | null;
+  timed: boolean;
+  complete: boolean;
+}
+
+export interface WebSessionSummary {
+  session_id: string;
+  actor_id: string;
+  started_at: string;
+  ended_at: string;
+  page_views: number;
+  timed_page_views: number;
+  foreground_ms: number;
+  session_span_ms: number;
+  engaged: boolean | null;
+  bounce: boolean | null;
+  single_page: boolean;
+  complete: boolean;
+}
+
+export interface WebSessionsResponse {
+  kind: 'web_sessions';
+  sessions: WebSessionSummary[];
+  meta: {
+    computed_at: string;
+    total: number;
+    truncated: boolean;
+    definitions: { foreground_ms: string; session_span_ms: string; bounce: string };
+  };
+}
+
+export interface WebSessionResponse {
+  kind: 'web_session';
+  summary: WebSessionSummary | null;
+  pages: WebPageEngagement[];
+  meta: {
+    computed_at: string;
+    no_data_reason?: string;
+    privacy: string;
+    total_pages: number;
+    truncated: boolean;
   };
 }
 
