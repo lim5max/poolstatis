@@ -201,6 +201,7 @@ describe('live customer screen UX', () => {
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('Page views')).toBeInTheDocument();
     expect(screen.getByText('Measured engagement')).toBeInTheDocument();
+    expect(screen.getByText('6 / 11')).toBeInTheDocument();
     expect(screen.getByText('2m 5s')).toBeInTheDocument();
     expect(screen.getByText(/2 incomplete sessions/)).toBeInTheDocument();
     expect(screen.getByText('75%')).toBeInTheDocument();

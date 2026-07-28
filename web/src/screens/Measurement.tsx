@@ -246,7 +246,7 @@ function WebEngagementSummary({ result }: { result: WebAnalyticsResponse }) {
     </div>
     <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
       {[
-        ['Engaged', `${fmtNum(engagement.engaged_sessions)} / ${fmtNum(engagement.measured_sessions)}`, result.meta.definitions.engaged_sessions],
+        ['Engaged', `${fmtNum(engagement.engaged_sessions)} / ${fmtNum(result.summary.sessions)}`, `${result.meta.definitions.engaged_sessions} The denominator is all sessions, including incomplete sessions that can still meet an engagement rule.`],
         ['Bounces', fmtNum(engagement.bounce_sessions), result.meta.definitions.bounce_sessions],
         ['Foreground time', formatEngagementMs(engagement.foreground_ms), result.meta.definitions.foreground_ms],
         ['Timed page coverage', coverage, `${fmtNum(engagement.timed_page_views)} of ${fmtNum(engagement.total_page_views)} page views have timing evidence.`],

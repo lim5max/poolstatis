@@ -109,6 +109,9 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
     },
     interact() { listeners.get('pointerdown')?.forEach((listener) => listener()); },
     pagehide() { listeners.get('pagehide')?.forEach((listener) => listener()); },
+    pageshow() { listeners.get('pageshow')?.forEach((listener) => listener()); },
+    freeze() { documentListeners.get('freeze')?.forEach((listener) => listener()); },
+    resume() { documentListeners.get('resume')?.forEach((listener) => listener()); },
   };
 }
 
@@ -503,6 +506,36 @@ describe('@poolstatis/sdk/browser', () => {
       reason: 'pagehide',
     });
     expect(f.queued).toEqual([]);
+  });
+
+  it('stops foreground time across pagehide and document freeze until the page resumes', () => {
+    const c = consent(true);
+    const f = fixture();
+    const analytics = createBrowserAnalytics({
+      client: f.client, browser: f.browser, now: f.now, monotonicNow: f.now,
+      hasConsent: c.hasConsent, subscribeConsent: c.subscribeConsent,
+      createId: (() => { let id = 0; return () => `lifecycle-${++id}`; })(),
+    });
+
+    analytics.start();
+    f.advance(5_000);
+    f.pagehide();
+    f.advance(60_000);
+    f.pageshow();
+    f.advance(2_000);
+    f.freeze();
+    f.advance(60_000);
+    f.resume();
+    f.advance(3_000);
+    f.pagehide();
+
+    const snapshots = f.queued.filter((event) => event.event === 'page.engagement');
+    expect(snapshots.map((event) => event.properties?.reason)).toEqual([
+      'pagehide', 'freeze', 'pagehide',
+    ]);
+    expect(snapshots.map((event) => event.properties?.foreground_ms)).toEqual([
+      5_000, 7_000, 10_000,
+    ]);
   });
 
   it('excludes hidden time and caps one suspended foreground gap at thirty seconds', () => {

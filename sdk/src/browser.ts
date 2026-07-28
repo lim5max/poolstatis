@@ -408,6 +408,12 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     }
   };
 
+  const flushTerminalEngagement = (reason: Extract<EngagementReason, 'pagehide' | 'freeze'>) => {
+    updateEngagementClock();
+    if (pageState) pageState.foregroundActive = false;
+    if (flushEngagement(reason)) flushTerminalTransport();
+  };
+
   const capture = (event: string, properties: Record<string, unknown> = {}) => {
     if (!collectionAllowed() || !browser || !visitorId || !actorId) return;
     for (const key of Object.keys(properties)) {
@@ -493,6 +499,15 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
           && browser.document.visibilityState !== 'prerender';
       }
     };
+    const onResume = () => {
+      updateEngagementClock();
+      if (resumeAfterIdle()) return;
+      if (pageState && browser) {
+        pageState.foregroundActive = browser.document.visibilityState !== 'hidden'
+          && browser.document.visibilityState !== 'prerender'
+          && (browser.document.hasFocus?.() ?? true);
+      }
+    };
     const onBlur = () => {
       updateEngagementClock();
       if (pageState?.foregroundActive) {
@@ -506,12 +521,8 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     const onInteraction = () => {
       if (pageState?.foregroundActive) pageState.interactionCount += 1;
     };
-    const onPageHide = () => {
-      if (flushEngagement('pagehide')) flushTerminalTransport();
-    };
-    const onFreeze = () => {
-      if (flushEngagement('freeze')) flushTerminalTransport();
-    };
+    const onPageHide = () => flushTerminalEngagement('pagehide');
+    const onFreeze = () => flushTerminalEngagement('freeze');
     const timer = browser!.setInterval
       ? browser!.setInterval(() => {
           updateEngagementClock();
@@ -522,25 +533,29 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
           if (pageState?.foregroundActive) flushEngagement('heartbeat');
         }, heartbeatMs) as unknown as number;
     browser!.document.addEventListener?.('visibilitychange', onVisibility);
+    browser!.document.addEventListener?.('freeze', onFreeze);
+    browser!.document.addEventListener?.('resume', onResume);
     browser!.addEventListener('focus', onFocus);
     browser!.addEventListener('blur', onBlur);
     browser!.addEventListener('scroll', onScroll);
     browser!.addEventListener('pointerdown', onInteraction);
     browser!.addEventListener('keydown', onInteraction);
     browser!.addEventListener('pagehide', onPageHide);
-    browser!.addEventListener('freeze', onFreeze);
+    browser!.addEventListener('pageshow', onResume);
     restoreEngagement = () => {
       if (!browser) return;
       if (browser.clearInterval) browser.clearInterval(timer);
       else globalThis.clearInterval(timer);
       browser.document.removeEventListener?.('visibilitychange', onVisibility);
+      browser.document.removeEventListener?.('freeze', onFreeze);
+      browser.document.removeEventListener?.('resume', onResume);
       browser.removeEventListener('focus', onFocus);
       browser.removeEventListener('blur', onBlur);
       browser.removeEventListener('scroll', onScroll);
       browser.removeEventListener('pointerdown', onInteraction);
       browser.removeEventListener('keydown', onInteraction);
       browser.removeEventListener('pagehide', onPageHide);
-      browser.removeEventListener('freeze', onFreeze);
+      browser.removeEventListener('pageshow', onResume);
     };
   };
 
