@@ -5,7 +5,7 @@ Thin stdio MCP runner for a Poolstatis API instance.
 ```sh
 POOLSTATIS_URL=https://api.example.com \
 POOLSTATIS_TOKEN=pt_your_token \
-pnpm dlx @poolstatis/mcp@0.2.0
+pnpm dlx @poolstatis/mcp@0.3.0
 ```
 
 `POOLSTATIS_TOKEN` must be a `pt_` personal token or project-scoped `sk_` key.
@@ -15,3 +15,8 @@ embedded in the package, and the runner never prints the token.
 
 Node.js 22 and 24 are supported. The package is an ESM executable and speaks
 MCP over stdio only; stdout is reserved for protocol messages.
+
+Run this package in the developer's MCP host (for example Codex, Claude Code,
+Cursor, or another stdio client), not inside the product frontend or CMS.
+Bitrix frontends embed `@poolstatis/sdk/browser`; server-side Bitrix/PHP code
+can send events through the HTTP ingest API.

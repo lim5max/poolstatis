@@ -34,9 +34,10 @@ The main remaining product gaps are now:
 4. **Multi-instance operations.** Quotas and bounded workers are safe per process / through
    Postgres claims, but Cloud replicas still need shared quota coordination and explicit
    operational dashboards/alerts.
-5. **Distribution integration.** `@poolstatis/mcp@0.2.0` is public and independently
-   registry-smoked; each hosted deploy must enable that exact pin and keep future versions
-   fail-closed until their own fresh initialize/list-tools check.
+5. **Distribution integration.** `@poolstatis/mcp@0.3.0` is the release pin for Web
+   Engagement and Visual Experience; each hosted deploy must enable only an exact
+   registry-smoked pin and keep future versions fail-closed until their own fresh
+   initialize/list-tools and semantic read checks.
 
 Session Replay, DOM autocapture, caller-provided SQL/HogQL and connector marketplaces remain
 intentional non-goals. They add volume or privacy/infra cost without strengthening the

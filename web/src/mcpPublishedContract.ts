@@ -6,6 +6,7 @@ export const PUBLISHED_MCP_TOOL_GROUPS = [
   ['Delivery', ['configure_webhook', 'verify_webhook']],
   ['Registry', ['register_metric', 'update_metric', 'deprecate_metric', 'explain_metric_usage', 'list_metrics', 'delete_metric', 'register_entity_type', 'define_funnel', 'list_funnels', 'delete_funnel']],
   ['Feature delivery', ['create_feature_flag', 'list_feature_flags', 'update_feature_flag', 'archive_feature_flag', 'evaluate_feature_flag', 'create_experiment', 'list_experiments', 'update_experiment', 'start_experiment', 'conclude_experiment', 'get_experiment_results']],
+  ['Web analytics', ['query_web_analytics', 'get_web_overview', 'list_web_sessions', 'get_web_session', 'get_session_engagement', 'get_page_engagement']],
   ['Queries', ['query_trend', 'query_funnel', 'query_entities', 'query_retention', 'query_lifecycle', 'query_stickiness', 'sample_events']],
   ['Diagnostics', ['list_ingest_warnings', 'list_data_quality_issues']],
   ['Insights', ['list_insights', 'create_insight', 'resolve_insight']],

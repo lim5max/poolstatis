@@ -166,6 +166,35 @@ beforeAll(async () => {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { kind?: string };
+      if (body.kind === 'web_analytics') {
+        res.end(JSON.stringify({
+          kind: 'web_analytics',
+          summary: { visitors: 2, sessions: 2, page_views: 3 },
+          engagement: {
+            measured_sessions: 2,
+            engaged_sessions: 1,
+            bounced_sessions: 1,
+            single_page_sessions: 1,
+            incomplete_sessions: 0,
+            engaged_rate: 50,
+            bounce_rate: 50,
+            single_page_rate: 50,
+            foreground_ms: 30_000,
+            wall_clock_ms: 45_000,
+          },
+          breakdowns: {},
+          meta: {
+            metric: 'web_page_views',
+            env: 'prod',
+            truncated: false,
+            definitions: {
+              engagement: 'Measured foreground time, page depth, or selected key-metric evidence.',
+              privacy: 'No raw IP, full URL, DOM, text, or full User-Agent.',
+            },
+          },
+        }));
+        return;
+      }
       if (body.kind === 'visual_experience') {
         res.end(JSON.stringify({
           kind: 'visual_experience',
@@ -307,11 +336,17 @@ describe('@poolstatis/mcp release artifact', () => {
   it('initializes, lists tools, and performs a project-scoped read against a safe fixture', async () => {
     const { client, stderr } = await connect(process.execPath, [cliModule]);
     try {
-      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.2.0' });
+      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.3.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
+      expect(tools.tools).toHaveLength(93);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'get_project_schema',
+        'get_web_overview',
+        'list_web_sessions',
+        'get_web_session',
+        'get_session_engagement',
+        'get_page_engagement',
         'list_visual_experience_versions',
         'get_visual_experience_map',
         'compare_visual_experience',
@@ -323,6 +358,34 @@ describe('@poolstatis/mcp release artifact', () => {
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toMatchObject({
         project: { slug: 'safe-fixture', name: 'Safe Fixture' },
+      });
+
+      const engagement = await client.callTool({
+        name: 'get_web_overview',
+        arguments: {
+          project: 'safe-fixture',
+          query: {
+            metric: 'web_page_views',
+            date_from: '-7d',
+            env: 'prod',
+          },
+        },
+      }, undefined, { timeout: 15_000 });
+      expect(engagement.isError).not.toBe(true);
+      expect(engagement.structuredContent).toMatchObject({
+        kind: 'web_analytics',
+        summary: { visitors: 2, sessions: 2, page_views: 3 },
+        engagement: {
+          measured_sessions: 2,
+          engaged_sessions: 1,
+          engaged_rate: 50,
+          bounce_rate: 50,
+        },
+        meta: {
+          definitions: {
+            privacy: 'No raw IP, full URL, DOM, text, or full User-Agent.',
+          },
+        },
       });
 
       const versions = await client.callTool({

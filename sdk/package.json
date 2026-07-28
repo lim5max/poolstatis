@@ -2,7 +2,7 @@
   "name": "@poolstatis/sdk",
   "version": "0.1.0",
   "description": "Zero-dependency Poolstatis SDK for Node, browser analytics, engagement, attribution and privacy-safe experience evidence.",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lim5max/poolstatis.git",
@@ -32,6 +32,10 @@
   "files": ["dist", "README.md", "LICENSE"],
   "sideEffects": false,
   "engines": { "node": ">=18" },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "build": "tsc",
     "prepack": "pnpm build",
