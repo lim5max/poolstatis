@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -82,7 +82,7 @@ describe('customer admin shell', () => {
     render(<MemoryRouter initialEntries={['/setup']}><App /></MemoryRouter>);
     await screen.findByText('Project created');
     expect(screen.getByRole('button', { name: /alpha/i })).toBeInTheDocument();
-    expect(screen.getByText('prod')).toBeInTheDocument();
+    expect(screen.getAllByText('prod').length).toBeGreaterThan(0);
   });
 
   it('still works when browser storage is blocked', () => {
@@ -125,10 +125,73 @@ describe('server-verified setup flow', () => {
     expect(screen.queryByText('MCP connected')).not.toBeInTheDocument();
   });
 
+  it('presents the real client path as connect, verify, send event, then first query', async () => {
+    renderSetup();
+    await screen.findByText('MCP request last recorded');
+    expect(screen.getByRole('heading', { name: '1. Connect MCP' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '2. Verify MCP' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '3. Send your first event' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '4. Run your first query' })).toBeInTheDocument();
+    expect(screen.getByText('Activate a metric before sending')).toBeInTheDocument();
+    expect(screen.getByText(/last-use evidence, not a heartbeat/i)).toBeInTheDocument();
+  });
+
+  it('copies a portable three-skill install command without credentials or an unpublished SDK', async () => {
+    renderSetup();
+    await screen.findByText('Install Poolstatis skills');
+    expect(screen.getByText('poolstatis-instrument')).toBeInTheDocument();
+    expect(screen.getByText('poolstatis-analyze')).toBeInTheDocument();
+    expect(screen.getByText('poolstatis-maintain')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy portable install' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      expect.stringContaining('https://github.com/lim5max/poolstatis'),
+    ));
+    const copied = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
+    expect(copied).toContain('--agent');
+    expect(copied).toContain('poolstatis-instrument');
+    expect(copied).toContain('poolstatis-analyze');
+    expect(copied).toContain('poolstatis-maintain');
+    expect(copied).not.toContain('POOLSTATIS_TOKEN');
+    expect(copied).not.toContain('@poolstatis/sdk');
+  });
+
+  it('renders server-proof failure as retryable without implying a connection', async () => {
+    const store = baseStore() as any;
+    store.client.onboardingStatus = vi.fn().mockRejectedValue(new Error('proof unavailable'));
+    mockedStore.mockReturnValue(store);
+    renderSetup();
+    expect(await screen.findByRole('alert')).toHaveTextContent('proof unavailable');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(screen.queryByText('MCP connected')).not.toBeInTheDocument();
+  });
+
+  it('shows a project-scoped loading state while server proof is pending', async () => {
+    const store = baseStore() as any;
+    let resolveProof: ((value: typeof proof) => void) | undefined;
+    store.client.onboardingStatus = vi.fn().mockReturnValue(new Promise((resolve) => { resolveProof = resolve; }));
+    mockedStore.mockReturnValue(store);
+    renderSetup();
+    expect(screen.getByText('Checking setup proof…')).toBeInTheDocument();
+    await act(async () => resolveProof?.(proof));
+    expect(await screen.findByText('Project created')).toBeInTheDocument();
+  });
+
+  it('explains the empty proof state when no project is selected', async () => {
+    const store = baseStore() as any;
+    store.project = null;
+    mockedStore.mockReturnValue(store);
+    renderSetup();
+    expect(await screen.findByText('Choose a project to read its setup proof.')).toBeInTheDocument();
+  });
+
   it('treats copied config as local progress, not a verified connection', async () => {
     renderSetup();
     await screen.findByText('MCP request last recorded');
     fireEvent.click(screen.getByRole('button', { name: 'Copy MCP config' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
+    const copied = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
+    expect(copied).toContain('<replace-with-pt-or-sk>');
+    expect(copied).not.toContain('sk_test');
     await waitFor(() => expect(screen.getByText('Config copied. This action does not verify MCP use.')).toBeInTheDocument());
     expect(screen.getByText('MCP request last recorded')).toBeInTheDocument();
   });

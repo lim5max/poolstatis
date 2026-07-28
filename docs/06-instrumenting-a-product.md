@@ -63,11 +63,48 @@ stdio MCP protocol.
 and project-scoped read smoke. Hosted deployments may enable this exact pin;
 future versions remain fail-closed until they pass the same checks.
 
-### 2. Run the instrumentation skill
+Verify the connection from the MCP client itself: ask it to call
+`get_onboarding_status` with the target `project` and explicit `env`, then
+refresh **Setup & MCP**.
+The server records that MCP-marked request and its time. Copying config is not
+connection proof, and the recorded request is last-use evidence rather than a
+heartbeat or transport attestation.
 
-In your **product's** repo (with the MCP connected), invoke the
-[`poolstatis-instrument`](../.claude/skills/poolstatis-instrument/SKILL.md) skill, or
-just ask: *"instrument this app with Poolstatis."* The agent will:
+### 2. Install the agent skills
+
+MCP supplies live tools and project data. Skills supply the standards and
+documentation workflow for using them. Install all three in the **product repo**:
+
+```bash
+# Portable: every agent supported by the skills CLI
+pnpm dlx skills add https://github.com/lim5max/poolstatis \
+  --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
+  --agent '*' -y
+
+# Or target one runtime
+pnpm dlx skills add https://github.com/lim5max/poolstatis \
+  --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
+  --agent codex -y
+pnpm dlx skills add https://github.com/lim5max/poolstatis \
+  --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
+  --agent claude-code -y
+```
+
+For an approved local Core checkout, replace the GitHub URL with its absolute
+path. Verify project-scope installation:
+
+```bash
+pnpm dlx skills list --json
+```
+
+The list must include `poolstatis-instrument`, `poolstatis-analyze`, and
+`poolstatis-maintain`. The canonical copies are under `.agents/skills`; the
+`.claude/skills` copies are kept byte-identical for direct Claude discovery.
+
+### 3. Run the instrumentation skill
+
+With MCP connected, invoke `poolstatis-instrument` or ask:
+*"instrument this app with Poolstatis."* The skill routes the agent to:
 
 1. read `poolstatis://standard/instrumentation` and `get_project_schema`,
 2. choose category definitions from the project schema, then pick a north-star
@@ -77,7 +114,11 @@ just ask: *"instrument this app with Poolstatis."* The agent will:
 5. verify with `sample_events`, and
 6. hand back the list of metrics for you to activate.
 
-### 3. Activate
+The public references are the [quickstart](https://poolstatis.xyz/docs/quickstart),
+[instrumentation standard](https://poolstatis.xyz/docs/standard), and
+[MCP tool reference](https://poolstatis.xyz/docs/mcp-tools).
+
+### 4. Activate
 
 Open the admin **Registry** tab → metrics arrive as `proposed` → click **activate**
 on the ones you want counted. (Or `update_metric` with `{status:"active"}` via MCP.)
@@ -114,30 +155,17 @@ curl -X PATCH "$POOLSTATIS_URL/api/v1/projects/my-app/metrics/signup" \
   -d '{"status":"active"}'
 ```
 
-### 2. Send events with the SDK (JS/TS — recommended)
+### 2. Send events
 
-Use [`@poolstatis/sdk`](../sdk/README.md) — it batches, retries, and flushes on page
-unload so events aren't lost. Don't hand-roll a fetch client.
+The public ingest API is the available install-free path. The source tree also
+contains an [`sdk/`](../sdk/README.md) package for workspace/local integration,
+but `@poolstatis/sdk` is not currently published in npm. Do not run or recommend
+`npm add @poolstatis/sdk` until `npm view @poolstatis/sdk version` succeeds.
 
-```bash
-pnpm add @poolstatis/sdk
-```
-
-```ts
-// tracking.ts — one shared client, ingest key only (safe in client/server code)
-import { createClient } from "@poolstatis/sdk";
-
-export const ph = createClient({
-  url: process.env.POOLSTATIS_URL!,
-  ingestKey: process.env.POOLSTATIS_INGEST_KEY!, // pk_…
-});
-```
-
-```ts
-// at the signup site — distinct_id is the STABLE user id
-ph.track("signup.completed", user.id, { plan: "free" });
-ph.identify("account", user.accountId, { plan: "free", seats: 1 }); // mutable state → entity
-```
+Use the HTTP examples below from one shared product integration module. Keep only
+the write-only `pk_` ingest key in product runtime code; never ship `sk_` or `pt_`.
+If the target already consumes an explicitly approved local/git SDK source,
+follow that installed version's guide instead.
 
 ### 2.0 Browser landing attribution (optional)
 
@@ -145,7 +173,9 @@ ph.identify("account", user.accountId, { plan: "free", seats: 1 }); // mutable s
 `propose_acquisition_properties` (или `POST /properties/acquisition-attribution`)
 с platform credential. Это создаст пять `$utm_*` definitions как `proposed`;
 ингест-ключ в браузере не может и не должен менять реестр. Затем подключи
-`@poolstatis/sdk/attribution`, как показано в [SDK guide](../sdk/README.md#browser-acquisition-attribution-optional-module).
+локальный/одобренный `@poolstatis/sdk/attribution`, как показано в
+[SDK guide](../sdk/README.md#browser-acquisition-attribution-optional-module).
+Не обещайте npm-установку, пока registry lookup пакета не проходит.
 
 Модуль пишет только pathname landing, origin referrer и стандартные UTM; raw URL,
 full referrer, click ids и unknown query params не отправляются. Для SPA вызывай
@@ -163,6 +193,14 @@ matching MCP tools). The experiment needs a 100%-allocated flag and an active
 `count`/`unique_actors` metric as outcome.
 
 ```ts
+// Resolve @poolstatis/sdk from the approved local/git dependency described above.
+import { createClient } from "@poolstatis/sdk";
+
+const ph = createClient({
+  url: "https://api.poolstatis.com",
+  ingestKey: "pk_…",
+});
+
 const variant = await ph.getFeatureFlag("checkout_copy", user.id, {
   sessionId: session.id,
 });
@@ -250,5 +288,6 @@ Query kinds: `trend`, `funnel`, `entities`, `retention`, `lifecycle`, `stickines
 Для web analytics сначала прочитайте также
 `poolstatis://standard/browser-analytics`, затем вызовите
 `propose_browser_analytics`. Browser capture подключается только через отдельный
-`@poolstatis/sdk/browser` entrypoint и только после consent; base SDK не меняет
-поведение.
+локальный/одобренный `@poolstatis/sdk/browser` entrypoint и только после consent;
+base SDK не меняет поведение. Публичную npm-доступность перед инструкцией по
+установке нужно проверять отдельно.
