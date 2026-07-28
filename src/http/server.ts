@@ -102,6 +102,58 @@ export interface ServerOptions {
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
+const PUBLIC_BROWSER_WRITE_CORS_ROUTES = new Set([
+  '/i/v1/events',
+  '/i/v1/experience/events',
+  '/i/v1/flags/evaluate',
+]);
+const PUBLIC_BROWSER_WRITE_CORS_HEADERS = new Set([
+  'authorization',
+  'content-type',
+  'x-poolstatis-client',
+]);
+
+function requestPath(req: FastifyRequest): string {
+  return req.url.split('?', 1)[0] ?? req.url;
+}
+
+function isCanonicalHttpsOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'https:' && url.origin === origin;
+  } catch {
+    return false;
+  }
+}
+
+function hasPublicIngestBearer(req: FastifyRequest): boolean {
+  return /^Bearer\s+pk_/i.test(req.headers.authorization ?? '');
+}
+
+function hasAllowedPublicPreflightHeaders(req: FastifyRequest): boolean {
+  const requested = req.headers['access-control-request-headers'];
+  if (typeof requested !== 'string') return false;
+  const headers = requested.split(',').map((header) => header.trim().toLowerCase()).filter(Boolean);
+  return headers.includes('authorization')
+    && headers.every((header) => PUBLIC_BROWSER_WRITE_CORS_HEADERS.has(header));
+}
+
+function isPublicBrowserWriteCorsRequest(
+  req: FastifyRequest,
+  origin: string,
+  configuredOrigins: ReadonlySet<string>,
+): boolean {
+  if (configuredOrigins.has(origin)
+    || !PUBLIC_BROWSER_WRITE_CORS_ROUTES.has(requestPath(req))
+    || !isCanonicalHttpsOrigin(origin)) {
+    return false;
+  }
+  if (req.method === 'OPTIONS') {
+    return req.headers['access-control-request-method']?.toUpperCase() === 'POST'
+      && hasAllowedPublicPreflightHeaders(req);
+  }
+  return req.method === 'POST' && !req.headers.cookie && hasPublicIngestBearer(req);
+}
 
 function authOwner(auth: AuthContext): string {
   return auth.keyId ? `key:${auth.keyId}` : `user:${auth.userId}`;
@@ -266,11 +318,19 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   const corsOrigins = new Set(options.corsOrigins ?? []);
 
   void app.register(cors, {
-    origin(origin, callback) {
-      callback(null, !origin || corsOrigins.has(origin));
+    delegator(req, callback) {
+      const origin = req.headers.origin;
+      const configured = !origin || corsOrigins.has(origin);
+      const publicBrowserWrite = origin
+        ? isPublicBrowserWriteCorsRequest(req, origin, corsOrigins)
+        : false;
+      callback(null, {
+        origin: configured || publicBrowserWrite,
+        methods: publicBrowserWrite ? ['POST'] : ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
+        credentials: false,
+      });
     },
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
   });
 
   // Authentication runs in an onRequest hook and can reject before a route
@@ -280,8 +340,23 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
     const origin = req.headers.origin;
     if (!origin) return;
     void reply.header('vary', 'Origin');
-    if (corsOrigins.has(origin)) {
+    if (corsOrigins.has(origin) || isPublicBrowserWriteCorsRequest(req, origin, corsOrigins)) {
       void reply.header('access-control-allow-origin', origin);
+    }
+  });
+
+  app.addHook('onRequest', async (req) => {
+    const origin = req.headers.origin;
+    if (!origin || corsOrigins.has(origin) || req.method === 'OPTIONS') return;
+    if (PUBLIC_BROWSER_WRITE_CORS_ROUTES.has(requestPath(req))
+      && isCanonicalHttpsOrigin(origin)
+      && req.headers.cookie) {
+      throw new ApiError(
+        403,
+        'browser_credentials_forbidden',
+        'public browser ingest does not accept cookies',
+        'send only a write-only pk_ ingest key in the Authorization header',
+      );
     }
   });
 
