@@ -283,7 +283,8 @@ export function validateAndEnrichBrowserProperties(
   sessionId: string | undefined,
   country: string,
 ): string | null {
-  const allowed = event === 'page.viewed'
+  const marker = properties.$browser_context;
+  const allowed = event === 'page.viewed' && marker === '1'
     ? PAGE_VIEW_PROPERTIES
     : event === 'page.engagement'
       ? PAGE_ENGAGEMENT_PROPERTIES
@@ -300,7 +301,6 @@ export function validateAndEnrichBrowserProperties(
     const pageViewIdError = validatePageViewId(properties.$page_view_id);
     if (pageViewIdError) return pageViewIdError;
   }
-  const marker = properties.$browser_context;
   const hasReserved = event === 'page.engagement'
     || Object.keys(properties).some((key) => key in BROWSER_ANALYTICS_PROPERTIES);
   if (!hasReserved) return null;

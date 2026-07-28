@@ -176,7 +176,12 @@ describe('web analytics query', () => {
 
   it('keeps visitors, sessions and page views distinct and returns count plus percentage breakdowns', async () => {
     const legacy = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
-      events: [{ event: 'page.viewed', distinct_id: 'legacy-manual', session_id: 'legacy-session' }],
+      events: [{
+        event: 'page.viewed',
+        distinct_id: 'legacy-manual',
+        session_id: 'legacy-session',
+        properties: { custom_dimension: 'kept-for-legacy-consumers' },
+      }],
     });
     expect(legacy.status).toBe(200);
     expect((await ingest('US', [
