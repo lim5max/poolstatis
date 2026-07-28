@@ -7,6 +7,8 @@ description: Use when adding Poolstatis analytics, choosing what a product shoul
 
 Use this skill as a workflow router. Poolstatis standards and the target project's schema are the source of truth; do not restate or guess them from this file.
 
+<!-- published-mcp-required: list_projects,get_onboarding_status,get_project_schema,sample_events,list_ingest_warnings -->
+
 ## Required context
 
 1. Call `list_projects`, resolve the target project and environment, and ask the user only if more than one plausible target remains.

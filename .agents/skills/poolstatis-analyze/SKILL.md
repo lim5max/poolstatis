@@ -7,27 +7,28 @@ description: Use when answering a product question from Poolstatis trends, funne
 
 Use the declared metric purpose, query grain, and current project schema. Never substitute a raw event name or an invented metric for a registry key.
 
+<!-- published-mcp-required: list_projects,get_onboarding_status,get_project_schema,query_trend,query_funnel,query_retention,query_lifecycle,query_stickiness,query_entities,get_person,list_releases,get_release,evaluate_release,list_insights,list_visual_experience_versions,get_visual_experience_map,compare_visual_experience,query_interaction_map -->
+
 ## Required context
 
 1. Call `list_projects`, resolve the target project and environment, and ask only when more than one plausible target remains.
 2. Call `get_onboarding_status` with the resolved `project` and explicit `env`; state any measurement blocker that affects the answer.
 3. Read `poolstatis://standard/instrumentation`.
 4. For `prod`, read `poolstatis://{project}/schema`; for any other environment, call `get_project_schema` with the resolved `project` and explicit `env` because the resource form is prod-only.
-5. For browser, session, page, click-map, or scroll-map questions, also read `poolstatis://standard/browser-analytics` before choosing a query.
-6. Consult the [MCP reference](https://poolstatis.xyz/docs/mcp-tools) and [instrumentation standard](https://poolstatis.xyz/docs/standard) for current query contracts and semantics.
+5. Consult the [MCP reference](https://poolstatis.xyz/docs/mcp-tools) and [instrumentation standard](https://poolstatis.xyz/docs/standard) for current query contracts and semantics.
 
 ## Workflow
 
 1. Restate the question as a measurable outcome, population, environment, and time range.
 2. Route current measurement questions to the matching typed query: trend, funnel, retention, lifecycle, stickiness, entities, or person history. Use schema metric keys only.
-3. Route browser totals and privacy-safe dimension breakdowns through `query_web_analytics` or `get_web_overview`. Route bounded session/page evidence through `list_web_sessions`, `get_web_session`, `get_session_engagement`, and `get_page_engagement`. Route spatial interaction questions through `get_click_map` or `get_scroll_map` only when the exact surface, route, version, and device are resolved.
-4. For web engagement, keep visitors, sessions, page views, cumulative foreground duration, completeness, bounce, and incomplete lifecycle evidence distinct. Never infer a completed bounce or duration from a missing terminal lifecycle event.
+3. The pinned public MCP runner does not yet expose specialized browser aggregates, session/page engagement, or click/scroll map reads. Do not substitute a generic trend for visitors, sessions, bounce, duration, or completeness. A trend over a page-view metric can answer event counts only, and must be labelled as that narrower grain.
+4. Route captured visual experience questions through `list_visual_experience_versions`, `get_visual_experience_map`, or `compare_visual_experience`. Use `query_interaction_map` only for the aggregate interaction surface it defines; resolve the exact surface, route, version, and device before interpreting visual evidence.
 5. Route release questions through `list_releases`, `get_release`, and `evaluate_release`; route saved findings through `list_insights`. Do not replace those persisted records with an unrelated fresh query.
 6. Run the selected read/evaluation with the resolved project and environment; pass explicit `env` wherever the tool supports it. Inspect data-quality or onboarding blockers before interpreting it.
-7. Report the exact grain: events, unique actors, visitors, sessions, page views, complete or incomplete engagement observations, spatial buckets, entities, funnel entrants, retained cohort, release evidence, or saved-insight scope; include date range, filters, comparison basis, and incomplete data.
+7. Report the exact grain: events, unique actors, entities, funnel entrants, retained cohort, visual snapshot or interaction-map evidence, release evidence, or saved-insight scope; include date range, filters, comparison basis, and incomplete data.
 8. Map the result back to the metric's `purpose` and funnel `goal`. Separate observed facts from inference and recommended action.
 9. Save a reproducible insight only when the user asks or when the current workflow explicitly requires persistence.
 
 ## Completion evidence
 
-An answer must include the tool or query used, relevant metric keys, project/environment, date range or persisted evidence window, grain, result, and caveats. Browser answers must also state consent/privacy scope and whether lifecycle timing is complete; map answers must state surface, route, version, and device. Use `—` for unavailable values. A plausible narrative without a successful current read or evaluation is not analysis.
+An answer must include the tool or query used, relevant metric keys, project/environment, date range or persisted evidence window, grain, result, and caveats. For browser questions outside the pinned runner's published capability, state the unsupported grain and use `—` instead of inventing visitors, sessions, bounce, duration, or completeness. Visual answers must state surface, route, version, and device. A plausible narrative without a successful current read or evaluation is not analysis.

@@ -1,5 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MCP_PACKAGE_SPEC } from '../src/config.js';
 import { PUBLISHED_MCP_TOOL_GROUPS } from '../web/src/mcpPublishedContract.js';
@@ -40,10 +42,21 @@ suite('published MCP registry contract', () => {
     const result = await client.listTools();
     const registryTools = new Set(result.tools.map((tool) => tool.name));
     const setupTools = PUBLISHED_MCP_TOOL_GROUPS.flatMap(([, tools]) => tools);
+    const requiredBySkills = new Set<string>();
+    for (const skill of ['poolstatis-instrument', 'poolstatis-analyze', 'poolstatis-maintain']) {
+      const content = await readFile(
+        resolve(import.meta.dirname, '..', '.agents', 'skills', skill, 'SKILL.md'),
+        'utf8',
+      );
+      const contract = content.match(/<!-- published-mcp-required: ([a-z0-9_,]+) -->/);
+      expect(contract, `${skill} must declare its published MCP requirements`).not.toBeNull();
+      for (const tool of contract?.[1]?.split(',') ?? []) requiredBySkills.add(tool);
+    }
 
     expect(client.getServerVersion()).toMatchObject({ version: '0.2.0' });
     expect(result.tools).toHaveLength(78);
     expect(setupTools.every((tool) => registryTools.has(tool))).toBe(true);
+    expect([...requiredBySkills].every((tool) => registryTools.has(tool))).toBe(true);
     expect(stderr).toBe('');
   });
 });

@@ -7,6 +7,8 @@ description: Use when auditing Poolstatis data health, investigating unregistere
 
 Treat the current standard, project schema, event samples, and persisted warnings as evidence. Do not clean drift by hiding it or deleting definitions reflexively.
 
+<!-- published-mcp-required: list_projects,get_onboarding_status,get_project_schema,sample_events,list_ingest_warnings -->
+
 ## Required context
 
 1. Call `list_projects`, resolve the target project and environment, and ask only when more than one plausible target remains.
