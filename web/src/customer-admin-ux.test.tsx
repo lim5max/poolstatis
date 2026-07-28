@@ -207,7 +207,7 @@ describe('server-verified setup flow', () => {
     await waitFor(() => expect(screen.queryByText('reading webhook status…')).not.toBeInTheDocument());
   });
 
-  it('lists the live taxonomy and web engagement MCP contracts in the advanced reference', async () => {
+  it('does not advertise source-only tools that are absent from the pinned public runner', async () => {
     renderSetup();
     await screen.findByText('Connect Poolstatis in four steps');
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced setup' }));
@@ -224,7 +224,7 @@ describe('server-verified setup flow', () => {
       'get_click_map',
       'get_scroll_map',
     ]) {
-      expect(screen.getByText(tool, { exact: true })).toBeInTheDocument();
+      expect(screen.queryByText(tool, { exact: true })).not.toBeInTheDocument();
     }
     await waitFor(() => expect(screen.queryByText('reading webhook status…')).not.toBeInTheDocument());
   });
