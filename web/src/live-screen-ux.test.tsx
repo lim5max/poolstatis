@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Experience } from './screens/Experience';
@@ -164,15 +164,23 @@ describe('live customer screen UX', () => {
     });
     const webSessions = vi.fn().mockResolvedValue({
       kind: 'web_sessions',
-      sessions: [{
-        session_id: 'session-1', actor_id: 'actor-1',
-        started_at: '2026-07-27T00:00:00Z', ended_at: '2026-07-27T00:00:20Z',
-        page_views: 1, timed_page_views: 1, foreground_ms: 15_000, session_span_ms: 20_000,
-        engaged: true, bounce: false, single_page: true, complete: true,
-      }],
-      meta: { computed_at: '2026-07-27T00:00:21Z', total: 1, truncated: false, definitions: {} },
+      sessions: [
+        {
+          session_id: 'session-1', actor_id: 'actor-1',
+          started_at: '2026-07-27T00:00:00Z', ended_at: '2026-07-27T00:00:20Z',
+          page_views: 1, timed_page_views: 1, foreground_ms: 15_000, session_span_ms: 20_000,
+          engaged: true, bounce: false, single_page: true, complete: true,
+        },
+        {
+          session_id: 'session-2', actor_id: 'actor-2',
+          started_at: '2026-07-27T00:01:00Z', ended_at: '2026-07-27T00:01:05Z',
+          page_views: 1, timed_page_views: 0, foreground_ms: 0, session_span_ms: 5_000,
+          engaged: null, bounce: null, single_page: true, complete: false,
+        },
+      ],
+      meta: { computed_at: '2026-07-27T00:00:21Z', total: 2, truncated: false, definitions: {} },
     });
-    const webSession = vi.fn().mockResolvedValue({
+    const webSessionResponse = {
       kind: 'web_session',
       summary: {
         session_id: 'session-1', actor_id: 'actor-1',
@@ -187,7 +195,10 @@ describe('live customer screen UX', () => {
         interaction_count: 2, reason: 'pagehide', complete: true,
       }],
       meta: { computed_at: '2026-07-27T00:00:21Z', privacy: 'No replay.' },
-    });
+    };
+    const webSession = vi.fn()
+      .mockRejectedValueOnce(new Error('session detail temporarily unavailable'))
+      .mockResolvedValue(webSessionResponse);
     mockedStore.mockReturnValue(store({
       properties: vi.fn().mockResolvedValue([]), actorLinks: vi.fn().mockResolvedValue({ links: [], audit: [] }),
       sources: vi.fn().mockResolvedValue([]), metrics: vi.fn().mockResolvedValue([webMetric]),
@@ -225,8 +236,84 @@ describe('live customer screen UX', () => {
     }));
     fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));
     expect(await screen.findByText('15s')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
-    expect(await screen.findByText('/pricing')).toBeInTheDocument();
+    const inspect = screen.getAllByRole('button', { name: 'Inspect' })[0]!;
+    expect(inspect).toHaveAttribute('aria-expanded', 'false');
+    inspect.focus();
+    fireEvent.click(inspect);
+    expect(inspect).toHaveAttribute('aria-expanded', 'true');
+    expect(inspect).toHaveFocus();
+    const detail = await screen.findByRole('region', { name: 'Session detail' });
+    expect(detail).toHaveAttribute('aria-live', 'polite');
+    expect(within(detail).getByRole('alert')).toHaveTextContent('session detail temporarily unavailable');
+    fireEvent.click(within(detail).getByRole('button', { name: 'Retry session details' }));
+    expect(await within(detail).findByText('/pricing')).toBeInTheDocument();
+    expect(webSession).toHaveBeenNthCalledWith(2, 'alpha', expect.objectContaining({
+      session_id: 'session-1',
+      actor_id: 'actor-1',
+    }));
+    const close = screen.getByRole('button', { name: 'Close' });
+    close.focus();
+    fireEvent.click(close);
+    expect(screen.queryByRole('region', { name: 'Session detail' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Inspect' })[0]!).toHaveFocus();
+
+    const secondSessionResponse = {
+      ...webSessionResponse,
+      summary: {
+        ...webSessionResponse.summary,
+        session_id: 'session-2',
+        actor_id: 'actor-2',
+        engaged: null,
+        bounce: null,
+        complete: false,
+      },
+      pages: [{
+        ...webSessionResponse.pages[0],
+        page_view_id: 'page-2',
+        session_id: 'session-2',
+        actor_id: 'actor-2',
+        path: '/docs',
+      }],
+    };
+    let resolveFirst!: (value: typeof webSessionResponse) => void;
+    let resolveSecond!: (value: typeof secondSessionResponse) => void;
+    webSession
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]!);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]!);
+    await act(async () => { resolveSecond(secondSessionResponse); });
+    expect(await within(screen.getByRole('region', { name: 'Session detail' })).findByText('/docs')).toBeInTheDocument();
+    await act(async () => { resolveFirst(webSessionResponse); });
+    expect(within(screen.getByRole('region', { name: 'Session detail' })).queryByText('/pricing')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    let resolveStalled!: (value: typeof webSessionResponse) => void;
+    webSession.mockImplementationOnce(() => new Promise((resolve) => { resolveStalled = resolve; }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]!);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading session details');
+    expect(screen.getByRole('button', { name: 'Close' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('region', { name: 'Session detail' })).not.toBeInTheDocument();
+    await act(async () => { resolveStalled(webSessionResponse); });
+    expect(screen.queryByRole('region', { name: 'Session detail' })).not.toBeInTheDocument();
+
+    webSession.mockResolvedValueOnce({
+      kind: 'web_session',
+      summary: null,
+      pages: [],
+      meta: {
+        computed_at: '2026-07-27T00:02:00Z',
+        no_data_reason: 'No matching accepted page-view session exists in this project, environment and period.',
+        privacy: 'No replay.',
+        total_pages: 0,
+        truncated: false,
+      },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[1]!);
+    const noData = await screen.findByRole('region', { name: 'Session detail' });
+    expect(within(noData).getByText('Session details unavailable')).toBeInTheDocument();
+    expect(within(noData).getByText(/No matching accepted page-view session/)).toBeInTheDocument();
   });
 
   it('bounds 100+ dimension values behind one searchable ranked explorer', async () => {

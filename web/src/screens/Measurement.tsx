@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Loader2, Search } from '@/components/icons';
 import { useAsync, useStore } from '../store';
@@ -269,10 +269,15 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
   const { client, project } = useStore();
   const [sessions, setSessions] = useState<WebSessionsResponse | null>(null);
   const [detail, setDetail] = useState<WebSessionResponse | null>(null);
+  const [selectedSession, setSelectedSession] = useState<{ actorId: string; sessionId: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [detailBusy, setDetailBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const detailRequest = useRef(0);
   const load = async () => {
-    setBusy(true); setError(null); setDetail(null);
+    detailRequest.current += 1;
+    setBusy(true); setError(null); setDetail(null); setSelectedSession(null); setDetailBusy(false); setDetailError(null);
     try {
       setSessions(await client!.webSessions(project!, {
         metric, date_from: `-${period}d`, env, limit: 20,
@@ -282,14 +287,31 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
     } finally { setBusy(false); }
   };
   const inspect = async (sessionId: string, actorId: string) => {
-    setBusy(true); setError(null);
+    const request = detailRequest.current + 1;
+    detailRequest.current = request;
+    setSelectedSession({ sessionId, actorId });
+    setDetail(null);
+    setDetailBusy(true);
+    setDetailError(null);
     try {
-      setDetail(await client!.webSession(project!, {
+      const response = await client!.webSession(project!, {
         metric, session_id: sessionId, actor_id: actorId, date_from: `-${period}d`, env,
-      }));
+      });
+      if (detailRequest.current === request) setDetail(response);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'could not load session');
-    } finally { setBusy(false); }
+      if (detailRequest.current === request) {
+        setDetailError(caught instanceof Error ? caught.message : 'could not load session');
+      }
+    } finally {
+      if (detailRequest.current === request) setDetailBusy(false);
+    }
+  };
+  const closeDetail = () => {
+    detailRequest.current += 1;
+    setSelectedSession(null);
+    setDetail(null);
+    setDetailBusy(false);
+    setDetailError(null);
   };
   return <section className="mt-4 rounded-md border" aria-labelledby="web-sessions-title">
     <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
@@ -306,25 +328,76 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
     {sessions && sessions.sessions.length > 0 && <div className="overflow-x-auto">
       <Table>
         <TableHeader><TableRow><TableHead>Started</TableHead><TableHead>Pages</TableHead><TableHead>Foreground</TableHead><TableHead>Span</TableHead><TableHead>Classification</TableHead><TableHead><span className="sr-only">Action</span></TableHead></TableRow></TableHeader>
-        <TableBody>{sessions.sessions.map((session) => <TableRow key={`${session.actor_id}:${session.session_id}`}>
-          <TableCell className="whitespace-nowrap text-xs">{formatDate(session.started_at)}</TableCell>
-          <TableCell className="tabular-nums">{session.page_views}</TableCell>
-          <TableCell className="whitespace-nowrap tabular-nums">{formatEngagementMs(session.foreground_ms)}</TableCell>
-          <TableCell className="whitespace-nowrap tabular-nums">{formatEngagementMs(session.session_span_ms)}</TableCell>
-          <TableCell><div className="flex flex-wrap gap-1">
-            <Badge variant={session.engaged ? 'default' : 'secondary'}>
-              {session.engaged ? 'Engaged' : session.engaged === false ? 'Not engaged' : 'Unknown'}
-            </Badge>
-            <Badge variant="outline">{session.complete ? 'Complete' : 'Incomplete'}</Badge>
-          </div></TableCell>
-          <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => inspect(session.session_id, session.actor_id)}>Inspect</Button></TableCell>
-        </TableRow>)}</TableBody>
+        <TableBody>{sessions.sessions.map((session) => {
+          const sessionKey = `${session.actor_id}:${session.session_id}`;
+          const selected = selectedSession?.actorId === session.actor_id
+            && selectedSession.sessionId === session.session_id;
+          const detailId = `session-detail-${sessionKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+          return <Fragment key={sessionKey}>
+            <TableRow>
+              <TableCell className="whitespace-nowrap text-xs">{formatDate(session.started_at)}</TableCell>
+              <TableCell className="tabular-nums">{session.page_views}</TableCell>
+              <TableCell className="whitespace-nowrap tabular-nums">{formatEngagementMs(session.foreground_ms)}</TableCell>
+              <TableCell className="whitespace-nowrap tabular-nums">{formatEngagementMs(session.session_span_ms)}</TableCell>
+              <TableCell><div className="flex flex-wrap gap-1">
+                <Badge variant={session.engaged ? 'default' : 'secondary'}>
+                  {session.engaged ? 'Engaged' : session.engaged === false ? 'Not engaged' : 'Unknown'}
+                </Badge>
+                <Badge variant="outline">{session.complete ? 'Complete' : 'Incomplete'}</Badge>
+              </div></TableCell>
+              <TableCell className="text-right">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-expanded={selected}
+                  aria-controls={detailId}
+                  onClick={() => selected ? closeDetail() : inspect(session.session_id, session.actor_id)}
+                >
+                  {detailBusy && selected && <Loader2 className="size-4 animate-spin" />}
+                  {selected ? 'Close' : 'Inspect'}
+                </Button>
+              </TableCell>
+            </TableRow>
+            {selected && <TableRow>
+              <TableCell colSpan={6} className="bg-muted/20 p-0">
+                <SessionDetail
+                  id={detailId}
+                  detail={detail}
+                  busy={detailBusy}
+                  error={detailError}
+                  onRetry={() => inspect(session.session_id, session.actor_id)}
+                />
+              </TableCell>
+            </TableRow>}
+          </Fragment>;
+        })}</TableBody>
       </Table>
       <p className="border-t px-4 py-3 text-xs text-muted-foreground">
         Showing {sessions.sessions.length} of {sessions.meta.total} sessions{sessions.meta.truncated ? ' · bounded result' : ''}.
       </p>
     </div>}
-    {detail?.summary && <div className="border-t p-4">
+  </section>;
+}
+
+function SessionDetail({ id, detail, busy, error, onRetry }: {
+  id: string;
+  detail: WebSessionResponse | null;
+  busy: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  return <section id={id} role="region" aria-label="Session detail" aria-live="polite" className="p-4">
+    {busy && <div role="status" className="text-sm text-muted-foreground">Loading session details…</div>}
+    {!busy && error && <div className="space-y-3">
+      <ErrorNote>{error}</ErrorNote>
+      <Button variant="outline" size="sm" onClick={onRetry}>Retry session details</Button>
+    </div>}
+    {!busy && !error && detail && !detail.summary &&
+      <EmptyState
+        headline="Session details unavailable"
+        lead={detail.meta.no_data_reason ?? 'no matching accepted page-view session exists in this project, environment and period'}
+      />}
+    {!busy && !error && detail?.summary && <>
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <h4 className="text-sm font-medium">Session pages</h4>
         <span className="text-xs text-muted-foreground">
@@ -332,12 +405,14 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
           {detail.meta.truncated ? ' · bounded result' : ''}
         </span>
       </div>
-      <ol className="space-y-2">{detail.pages.map((page) => <li key={page.page_view_id} className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
-        <code className="min-w-0 truncate text-xs">{page.path}</code>
-        <span className="text-xs tabular-nums text-muted-foreground">{page.foreground_ms === null ? 'Timing unavailable' : formatEngagementMs(page.foreground_ms)}</span>
-        <Badge variant={page.complete ? 'outline' : 'secondary'}>{page.complete ? 'Complete' : page.timed ? 'Timed, incomplete' : 'No timing'}</Badge>
-      </li>)}</ol>
-    </div>}
+      {detail.pages.length === 0
+        ? <EmptyState headline="No page details" lead="the bounded session summary has no matching page views in this period" />
+        : <ol className="space-y-2">{detail.pages.map((page) => <li key={page.page_view_id} className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+          <code className="min-w-0 truncate text-xs">{page.path}</code>
+          <span className="text-xs tabular-nums text-muted-foreground">{page.foreground_ms === null ? 'Timing unavailable' : formatEngagementMs(page.foreground_ms)}</span>
+          <Badge variant={page.complete ? 'outline' : 'secondary'}>{page.complete ? 'Complete' : page.timed ? 'Timed, incomplete' : 'No timing'}</Badge>
+        </li>)}</ol>}
+    </>}
   </section>;
 }
 
