@@ -345,6 +345,70 @@ describe('web analytics query', () => {
     }
   });
 
+  it('rolls back the whole browser analytics bundle when a later write fails', async () => {
+    const collision = await createTestEnv({ countryResolver });
+    const identifier = collision.projectId.replaceAll('-', '');
+    const functionName = `test_fail_browser_bundle_${identifier}`;
+    const triggerName = `test_fail_browser_bundle_${identifier}`;
+    try {
+      const propertiesBefore = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+      const metricsBefore = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+      );
+      await collision.pool.query(`
+        CREATE FUNCTION ${functionName}() RETURNS trigger AS $$
+        BEGIN
+          IF NEW.project_id = '${collision.projectId}'::uuid AND NEW.key = '$utm_source' THEN
+            RAISE EXCEPTION 'forced browser analytics bundle failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `);
+      await collision.pool.query(`
+        CREATE TRIGGER ${triggerName}
+        BEFORE INSERT ON property_definitions
+        FOR EACH ROW EXECUTE FUNCTION ${functionName}()
+      `);
+
+      const setup = await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+      expect(setup.status).toBe(500);
+
+      const propertiesAfter = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+      const metricsAfter = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+      );
+      expect(propertiesAfter.body.properties).toEqual(propertiesBefore.body.properties);
+      expect(metricsAfter.body.metrics).toEqual(metricsBefore.body.metrics);
+    } finally {
+      await collision.pool.query(`DROP TRIGGER IF EXISTS ${triggerName} ON property_definitions`);
+      await collision.pool.query(`DROP FUNCTION IF EXISTS ${functionName}()`);
+      await collision.close();
+    }
+  });
+
   it('rejects an incompatible reserved metric instead of rewriting user semantics', async () => {
     const collision = await createTestEnv({ countryResolver });
     try {

@@ -5,6 +5,8 @@ import { ACQUISITION_UTM_PROPERTIES } from './acquisitionAttribution.js';
 import { createPropertyDefinition, listPropertyDefinitions, type PropertyDefinition } from './properties.js';
 import { listMetrics, registerMetric, updateMetric, type Metric } from './registry.js';
 
+type Queryable = pg.Pool | pg.PoolClient;
+
 type Spec = {
   value_type: 'string' | 'enum';
   purpose: string;
@@ -61,7 +63,7 @@ type BrowserPropertyPlan = {
 };
 
 async function browserAnalyticsPropertyPlans(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
 ): Promise<BrowserPropertyPlan[]> {
   const existing = await listPropertyDefinitions(pool, projectId, { scope: 'event' });
@@ -86,14 +88,14 @@ async function browserAnalyticsPropertyPlans(
 }
 
 export async function preflightBrowserAnalyticsProperties(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
 ): Promise<void> {
   await browserAnalyticsPropertyPlans(pool, projectId);
 }
 
 export async function proposeBrowserAnalyticsProperties(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   actor: string,
 ): Promise<PropertyDefinition[]> {
@@ -152,7 +154,7 @@ function isCanonicalBrowserMetricFilter(filter: unknown): boolean {
 }
 
 async function browserAnalyticsMetricPlans(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
 ): Promise<BrowserMetricPlan[]> {
   const existing = new Map((await listMetrics(pool, projectId)).map((metric) => [metric.key, metric]));
@@ -190,14 +192,14 @@ async function browserAnalyticsMetricPlans(
 }
 
 export async function preflightBrowserAnalyticsMetrics(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
 ): Promise<void> {
   await browserAnalyticsMetricPlans(pool, projectId);
 }
 
 export async function proposeBrowserAnalyticsMetrics(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   actor: string,
 ): Promise<Metric[]> {

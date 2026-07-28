@@ -1329,16 +1329,34 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const actor = authOwner(req.auth);
-    await preflightBrowserAnalyticsProperties(ctx.pool, project.id);
-    await preflightAcquisitionProperties(ctx.pool, project.id);
-    await preflightBrowserAnalyticsMetrics(ctx.pool, project.id);
-    const result = {
-      properties: [
-        ...await proposeBrowserAnalyticsProperties(ctx.pool, project.id, actor),
-        ...await proposeAcquisitionProperties(ctx.pool, project.id, actor),
-      ],
-      metrics: await proposeBrowserAnalyticsMetrics(ctx.pool, project.id, actor),
+    const client = await ctx.pool.connect();
+    let result: {
+      properties: Awaited<ReturnType<typeof proposeBrowserAnalyticsProperties>>;
+      metrics: Awaited<ReturnType<typeof proposeBrowserAnalyticsMetrics>>;
     };
+    try {
+      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`browser-analytics-setup:${project.id}`],
+      );
+      await preflightBrowserAnalyticsProperties(client, project.id);
+      await preflightAcquisitionProperties(client, project.id);
+      await preflightBrowserAnalyticsMetrics(client, project.id);
+      result = {
+        properties: [
+          ...await proposeBrowserAnalyticsProperties(client, project.id, actor),
+          ...await proposeAcquisitionProperties(client, project.id, actor),
+        ],
+        metrics: await proposeBrowserAnalyticsMetrics(client, project.id, actor),
+      };
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
     return result;

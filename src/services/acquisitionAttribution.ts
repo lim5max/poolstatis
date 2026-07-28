@@ -2,6 +2,8 @@ import type pg from 'pg';
 import { ApiError, badRequest } from '../errors.js';
 import { createPropertyDefinition, listPropertyDefinitions, type PropertyDefinition } from './properties.js';
 
+type Queryable = pg.Pool | pg.PoolClient;
+
 export const ACQUISITION_UTM_PROPERTIES = [
   '$utm_source', '$utm_medium', '$utm_campaign', '$utm_term', '$utm_content',
 ] as const;
@@ -20,7 +22,7 @@ type AcquisitionPropertyPlan = {
 };
 
 async function acquisitionPropertyPlans(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
 ): Promise<AcquisitionPropertyPlan[]> {
   const existing = await listPropertyDefinitions(pool, projectId, { scope: 'event' });
@@ -37,14 +39,14 @@ async function acquisitionPropertyPlans(
 }
 
 export async function preflightAcquisitionProperties(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
 ): Promise<void> {
   await acquisitionPropertyPlans(pool, projectId);
 }
 
 export async function proposeAcquisitionProperties(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   actor: string,
 ): Promise<PropertyDefinition[]> {

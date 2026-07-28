@@ -2,6 +2,8 @@ import type pg from 'pg';
 import { ApiError, badRequest, notFound } from '../errors.js';
 import type { CreateMetricCategoryInput, UpdateMetricCategoryInput } from '../schemas.js';
 
+type Queryable = pg.Pool | pg.PoolClient;
+
 export interface MetricCategory {
   id: string;
   key: string;
@@ -37,7 +39,7 @@ export async function listMetricCategories(
 }
 
 export async function assertMetricCategory(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   key: string | null | undefined,
 ): Promise<void> {
