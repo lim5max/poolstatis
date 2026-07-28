@@ -207,6 +207,18 @@ describe('web analytics query', () => {
           source: { event: 'checkout.viewed', filters: [] },
         },
       )).status).toBe(201);
+      const propertiesBefore = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+      const metricsBefore = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+      );
 
       const setup = await api(
         collision,
@@ -218,12 +230,20 @@ describe('web analytics query', () => {
       expect(setup.status).toBe(409);
       expect(setup.body.error.code).toBe('browser_metric_conflict');
 
+      const propertiesAfter = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+      expect(propertiesAfter.body.properties).toEqual(propertiesBefore.body.properties);
       const listed = await api(
         collision,
         collision.secretToken,
         'GET',
         `/api/v1/projects/${collision.projectSlug}/metrics`,
       );
+      expect(listed.body.metrics).toEqual(metricsBefore.body.metrics);
       const unchanged = listed.body.metrics.find((item: { key: string }) => item.key === 'web_page_views');
       expect(unchanged).toEqual(expect.objectContaining({
         id: pageViews.body.id,
@@ -232,6 +252,94 @@ describe('web analytics query', () => {
         tags: ['must-remain-legacy'],
         source: { event: 'page.viewed', filters: [], data_source: 'native' },
       }));
+    } finally {
+      await collision.close();
+    }
+  });
+
+  it('preflights every browser property before creating an earlier reserved definition', async () => {
+    const collision = await createTestEnv({ countryResolver });
+    try {
+      expect((await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+        {
+          key: '$country',
+          scope: 'event',
+          value_type: 'string',
+          purpose: 'Stores a client supplied browser locale as a misleading country proxy.',
+        },
+      )).status).toBe(201);
+      const before = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+
+      const setup = await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+      expect(setup.status).toBe(409);
+      expect(setup.body.error.code).toBe('browser_property_conflict');
+
+      const after = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+      expect(after.body.properties).toEqual(before.body.properties);
+    } finally {
+      await collision.close();
+    }
+  });
+
+  it('preflights every acquisition property before browser setup creates any definitions', async () => {
+    const collision = await createTestEnv({ countryResolver });
+    try {
+      expect((await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+        {
+          key: '$utm_content',
+          scope: 'event',
+          value_type: 'string',
+          purpose: 'Stores an unrelated content label with incompatible attribution semantics.',
+        },
+      )).status).toBe(201);
+      const before = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+
+      const setup = await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
+      expect(setup.status).toBe(409);
+      expect(setup.body.error.code).toBe('acquisition_property_conflict');
+
+      const after = await api(
+        collision,
+        collision.secretToken,
+        'GET',
+        `/api/v1/projects/${collision.projectSlug}/properties`,
+      );
+      expect(after.body.properties).toEqual(before.body.properties);
     } finally {
       await collision.close();
     }
@@ -263,6 +371,51 @@ describe('web analytics query', () => {
         {},
       );
 
+      expect(setup.status).toBe(409);
+      expect(setup.body.error.code).toBe('browser_metric_conflict');
+    } finally {
+      await collision.close();
+    }
+  });
+
+  it('rejects a reserved metric filter with unexpected JSON fields', async () => {
+    const collision = await createTestEnv({ countryResolver });
+    try {
+      expect((await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/metrics`,
+        {
+          key: 'web_page_views',
+          name: 'Legacy page views',
+          purpose: 'Counts legacy browser page views before canonical browser analytics setup.',
+          category: 'acquisition',
+          type: 'count',
+          source: {
+            event: 'page.viewed',
+            filters: [{ property: '$browser_context', op: 'eq', value: '1' }],
+          },
+        },
+      )).status).toBe(201);
+      await collision.pool.query(
+        `UPDATE metrics
+            SET source = jsonb_set(
+              source,
+              '{filters,0}',
+              (source->'filters'->0) || jsonb_build_object('unexpected', 'value')
+            )
+          WHERE project_id = $1 AND key = $2`,
+        [collision.projectId, 'web_page_views'],
+      );
+
+      const setup = await api(
+        collision,
+        collision.secretToken,
+        'POST',
+        `/api/v1/projects/${collision.projectSlug}/properties/browser-analytics`,
+        {},
+      );
       expect(setup.status).toBe(409);
       expect(setup.body.error.code).toBe('browser_metric_conflict');
     } finally {

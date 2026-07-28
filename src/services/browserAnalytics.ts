@@ -54,29 +54,53 @@ export const BROWSER_ANALYTICS_PROPERTIES: Record<string, Spec> = {
   },
 };
 
+type BrowserPropertyPlan = {
+  key: string;
+  spec: Spec;
+  property: PropertyDefinition | undefined;
+};
+
+async function browserAnalyticsPropertyPlans(
+  pool: pg.Pool,
+  projectId: string,
+): Promise<BrowserPropertyPlan[]> {
+  const existing = await listPropertyDefinitions(pool, projectId, { scope: 'event' });
+  const byKey = new Map(existing.map((property) => [property.key, property]));
+  return Object.entries(BROWSER_ANALYTICS_PROPERTIES).map(([key, spec]) => {
+    const property = byKey.get(key);
+    const expectedEnums = spec.enum_values ?? null;
+    const actualEnums = property?.enum_values ?? null;
+    if (property && (property.value_type !== spec.value_type
+      || property.source !== 'native'
+      || property.purpose !== spec.purpose
+      || JSON.stringify(actualEnums) !== JSON.stringify(expectedEnums))) {
+      throw new ApiError(
+        409,
+        'browser_property_conflict',
+        `reserved browser property "${key}" has an incompatible definition`,
+        'restore the canonical event-scoped native definition before enabling browser analytics',
+      );
+    }
+    return { key, spec, property };
+  });
+}
+
+export async function preflightBrowserAnalyticsProperties(
+  pool: pg.Pool,
+  projectId: string,
+): Promise<void> {
+  await browserAnalyticsPropertyPlans(pool, projectId);
+}
+
 export async function proposeBrowserAnalyticsProperties(
   pool: pg.Pool,
   projectId: string,
   actor: string,
 ): Promise<PropertyDefinition[]> {
-  const existing = await listPropertyDefinitions(pool, projectId, { scope: 'event' });
-  const byKey = new Map(existing.map((property) => [property.key, property]));
+  const plans = await browserAnalyticsPropertyPlans(pool, projectId);
   const result: PropertyDefinition[] = [];
-  for (const [key, spec] of Object.entries(BROWSER_ANALYTICS_PROPERTIES)) {
-    const property = byKey.get(key);
-    const expectedEnums = spec.enum_values ?? null;
+  for (const { key, spec, property } of plans) {
     if (property) {
-      const actualEnums = property.enum_values ?? null;
-      if (property.value_type !== spec.value_type || property.source !== 'native'
-        || property.purpose !== spec.purpose
-        || JSON.stringify(actualEnums) !== JSON.stringify(expectedEnums)) {
-        throw new ApiError(
-          409,
-          'browser_property_conflict',
-          `reserved browser property "${key}" has an incompatible definition`,
-          'restore the canonical event-scoped native definition before enabling browser analytics',
-        );
-      }
       result.push(property);
       continue;
     }
@@ -111,13 +135,28 @@ const BROWSER_METRIC_FILTERS = [
   { property: '$browser_context', op: 'eq' as const, value: '1' },
 ];
 
-export async function proposeBrowserAnalyticsMetrics(
+type BrowserMetricPlan = {
+  spec: (typeof BROWSER_METRICS)[number];
+  metric: Metric | null;
+};
+
+function isCanonicalBrowserMetricFilter(filter: unknown): boolean {
+  if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return false;
+  const record = filter as Record<string, unknown>;
+  const keys = Object.keys(record);
+  return keys.length === 3
+    && keys.every((key) => ['property', 'op', 'value'].includes(key))
+    && record.property === '$browser_context'
+    && record.op === 'eq'
+    && record.value === '1';
+}
+
+async function browserAnalyticsMetricPlans(
   pool: pg.Pool,
   projectId: string,
-  actor: string,
-): Promise<Metric[]> {
+): Promise<BrowserMetricPlan[]> {
   const existing = new Map((await listMetrics(pool, projectId)).map((metric) => [metric.key, metric]));
-  const plans = BROWSER_METRICS.map((spec) => {
+  return BROWSER_METRICS.map((spec) => {
     const metric = existing.get(spec.key);
     if (!metric) return { spec, metric: null };
     const source = metric.source as {
@@ -127,11 +166,8 @@ export async function proposeBrowserAnalyticsMetrics(
       source_connection_id?: unknown;
     };
     const filters = source.filters ?? [];
-    const canonicalFilter = filters[0] as { property?: unknown; op?: unknown; value?: unknown } | undefined;
     const canonicalFilters = filters.length === 1
-      && canonicalFilter?.property === '$browser_context'
-      && canonicalFilter.op === 'eq'
-      && canonicalFilter.value === '1';
+      && isCanonicalBrowserMetricFilter(filters[0]);
     const legacyCompatibleFilters = filters.length === 0 || canonicalFilters;
     const hasUnexpectedSourceFields = Object.keys(source)
       .some((key) => !['event', 'filters', 'data_source'].includes(key));
@@ -151,7 +187,21 @@ export async function proposeBrowserAnalyticsMetrics(
     }
     return { spec, metric };
   });
+}
 
+export async function preflightBrowserAnalyticsMetrics(
+  pool: pg.Pool,
+  projectId: string,
+): Promise<void> {
+  await browserAnalyticsMetricPlans(pool, projectId);
+}
+
+export async function proposeBrowserAnalyticsMetrics(
+  pool: pg.Pool,
+  projectId: string,
+  actor: string,
+): Promise<Metric[]> {
+  const plans = await browserAnalyticsMetricPlans(pool, projectId);
   const result: Metric[] = [];
   for (const { spec, metric } of plans) {
     const tags = [...new Set([...(metric?.tags ?? []), 'browser-analytics'])];
@@ -166,9 +216,7 @@ export async function proposeBrowserAnalyticsMetrics(
         && source.event === 'page.viewed'
         && source.data_source === 'native'
         && source.filters?.length === 1
-        && filter?.property === '$browser_context'
-        && filter.op === 'eq'
-        && filter.value === '1';
+        && isCanonicalBrowserMetricFilter(filter);
       if (alreadyCanonical) {
         result.push(metric);
         continue;

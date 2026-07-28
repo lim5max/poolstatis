@@ -14,20 +14,44 @@ export const ACQUISITION_PURPOSE: Record<(typeof ACQUISITION_UTM_PROPERTIES)[num
   $utm_content: 'Records the browser landing creative or placement variant for bounded session acquisition analysis.',
 };
 
+type AcquisitionPropertyPlan = {
+  key: (typeof ACQUISITION_UTM_PROPERTIES)[number];
+  property: PropertyDefinition | undefined;
+};
+
+async function acquisitionPropertyPlans(
+  pool: pg.Pool,
+  projectId: string,
+): Promise<AcquisitionPropertyPlan[]> {
+  const existing = await listPropertyDefinitions(pool, projectId, { scope: 'event' });
+  const byKey = new Map(existing.map((property) => [property.key, property]));
+  return ACQUISITION_UTM_PROPERTIES.map((key) => {
+    const property = byKey.get(key);
+    if (property && (property.value_type !== 'string'
+      || property.source !== 'native'
+      || property.purpose !== ACQUISITION_PURPOSE[key])) {
+      throw new ApiError(409, 'acquisition_property_conflict', `reserved attribution property "${key}" has an incompatible definition`, 'use an event-scoped native string definition before enabling browser acquisition attribution');
+    }
+    return { key, property };
+  });
+}
+
+export async function preflightAcquisitionProperties(
+  pool: pg.Pool,
+  projectId: string,
+): Promise<void> {
+  await acquisitionPropertyPlans(pool, projectId);
+}
+
 export async function proposeAcquisitionProperties(
   pool: pg.Pool,
   projectId: string,
   actor: string,
 ): Promise<PropertyDefinition[]> {
-  const existing = await listPropertyDefinitions(pool, projectId, { scope: 'event' });
-  const byKey = new Map(existing.map((property) => [property.key, property]));
+  const plans = await acquisitionPropertyPlans(pool, projectId);
   const result: PropertyDefinition[] = [];
-  for (const key of ACQUISITION_UTM_PROPERTIES) {
-    const property = byKey.get(key);
+  for (const { key, property } of plans) {
     if (property) {
-      if (property.value_type !== 'string' || property.source !== 'native' || property.purpose !== ACQUISITION_PURPOSE[key]) {
-        throw new ApiError(409, 'acquisition_property_conflict', `reserved attribution property "${key}" has an incompatible definition`, 'use an event-scoped native string definition before enabling browser acquisition attribution');
-      }
       result.push(property);
       continue;
     }

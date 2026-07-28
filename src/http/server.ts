@@ -44,8 +44,13 @@ import {
   createPropertyDefinition, listPropertyDefinitions, updatePropertyDefinition,
   type PropertyDefinition,
 } from '../services/properties.js';
-import { proposeAcquisitionProperties } from '../services/acquisitionAttribution.js';
-import { proposeBrowserAnalyticsMetrics, proposeBrowserAnalyticsProperties } from '../services/browserAnalytics.js';
+import { preflightAcquisitionProperties, proposeAcquisitionProperties } from '../services/acquisitionAttribution.js';
+import {
+  preflightBrowserAnalyticsMetrics,
+  preflightBrowserAnalyticsProperties,
+  proposeBrowserAnalyticsMetrics,
+  proposeBrowserAnalyticsProperties,
+} from '../services/browserAnalytics.js';
 import { UNKNOWN_COUNTRY_RESOLVER, type CountryResolver } from '../services/country.js';
 import { assessMeasurementTrust } from '../services/measurementTrust.js';
 import {
@@ -1324,6 +1329,9 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const actor = authOwner(req.auth);
+    await preflightBrowserAnalyticsProperties(ctx.pool, project.id);
+    await preflightAcquisitionProperties(ctx.pool, project.id);
+    await preflightBrowserAnalyticsMetrics(ctx.pool, project.id);
     const result = {
       properties: [
         ...await proposeBrowserAnalyticsProperties(ctx.pool, project.id, actor),
