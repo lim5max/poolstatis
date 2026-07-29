@@ -67,6 +67,24 @@ describe('Better Auth portal', () => {
     expect(document.body.textContent).not.toContain('correct horse battery');
   });
 
+  it('reveals and hides the sign-in password without changing its value', () => {
+    renderPortal('/login');
+    const password = screen.getByLabelText('Password');
+    fireEvent.change(password, { target: { value: 'correct horse battery' } });
+
+    expect(password).toHaveAttribute('type', 'password');
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
+
+    expect(password).toHaveAttribute('type', 'text');
+    expect(password).toHaveValue('correct horse battery');
+    expect(screen.getByRole('button', { name: 'Hide password' }))
+      .toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
+    expect(password).toHaveAttribute('type', 'password');
+    expect(password).toHaveValue('correct horse battery');
+  });
+
   it('uses the same forgot-password result for every account', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ status: true }), {

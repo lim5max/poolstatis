@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ArrowLeft } from '@/components/icons';
+import { ArrowLeft, Eye, EyeOff } from '@/components/icons';
 
 const authOrigin = 'https://auth.poolstatis.xyz';
 const neutralFailure = 'The request could not be completed. Check the details and try again.';
@@ -133,20 +133,43 @@ function Field({
   onChange(value: string): void;
   minLength?: number;
 }) {
+  const isPassword = type === 'password';
+  const [passwordVisible, setPasswordVisible] = useState(false);
+
   return (
     <div className="grid gap-2">
       <Label htmlFor={id}>{label}</Label>
-      <Input
-        id={id}
-        name={id}
-        type={type}
-        autoComplete={autoComplete}
-        value={value}
-        minLength={minLength}
-        maxLength={type === 'password' ? 128 : 254}
-        required
-        onChange={(event) => onChange(event.target.value)}
-      />
+      <div className="relative">
+        <Input
+          id={id}
+          name={id}
+          type={isPassword && passwordVisible ? 'text' : type}
+          autoComplete={autoComplete}
+          value={value}
+          minLength={minLength}
+          maxLength={isPassword ? 128 : 254}
+          required
+          className={isPassword ? 'pr-11' : undefined}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {isPassword && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+            aria-controls={id}
+            aria-pressed={passwordVisible}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setPasswordVisible((visible) => !visible)}
+          >
+            {passwordVisible
+              ? <EyeOff className="size-4" aria-hidden="true" />
+              : <Eye className="size-4" aria-hidden="true" />}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
