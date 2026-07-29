@@ -67,6 +67,7 @@ export interface ApiKeyRow {
   kind: KeyKind;
   env: string;
   label: string | null;
+  masked_token: string;
   created_at: string;
   revoked_at: string | null;
 }
@@ -121,11 +122,21 @@ export async function revokePersonalApiKey(
 /** Keys for a project, masked — the token itself is shown only once at creation. */
 export async function listApiKeys(pool: pg.Pool, projectId: string): Promise<ApiKeyRow[]> {
   const { rows } = await pool.query(
-    `SELECT id, kind, env, label, created_at, revoked_at
+    `SELECT id, kind, env, label, token_prefix, token_suffix, created_at, revoked_at
      FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC`,
     [projectId],
   );
-  return rows;
+  return rows.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    env: row.env,
+    label: row.label,
+    masked_token: row.token_suffix
+      ? `${row.token_prefix ?? (row.kind === 'ingest' ? 'pk_' : 'sk_')}...${row.token_suffix}`
+      : `${row.token_prefix ?? (row.kind === 'ingest' ? 'pk_' : 'sk_')}...`,
+    created_at: row.created_at,
+    revoked_at: row.revoked_at,
+  }));
 }
 
 export async function revokeApiKey(

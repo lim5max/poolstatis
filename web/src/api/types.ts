@@ -880,6 +880,8 @@ export interface ApiKeyRow {
   kind: KeyKind;
   env: string;
   label: string | null;
+  /** Permanently masked server value, e.g. sk_...cafe. */
+  masked_token: string;
   created_at: string;
   revoked_at: string | null;
 }
