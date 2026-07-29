@@ -143,37 +143,10 @@ function Brand() {
 export function AuthBootShell() {
   return (
     <div
-      className="flex min-h-screen bg-background p-4 md:p-6"
+      className="min-h-screen bg-background"
       data-testid="auth-boot-shell"
       aria-busy="true"
-      aria-live="polite"
-    >
-      <div className="mx-auto grid w-full max-w-6xl flex-1 overflow-hidden rounded-xl border bg-card/20 md:grid-cols-[232px_1fr]">
-        <div className="hidden border-r bg-sidebar/70 p-5 md:block">
-          <div className="brand-wordmark flex items-center gap-2.5 text-xl text-foreground">
-            <img className="size-7" src="/poolstatis-logo.svg" alt="" />
-            <span>Poolstatis</span>
-          </div>
-          <div className="mt-10 space-y-3" aria-hidden="true">
-            <div className="h-8 rounded-md bg-muted/70" />
-            <div className="h-8 rounded-md bg-muted/50" />
-            <div className="h-8 rounded-md bg-muted/40" />
-          </div>
-        </div>
-        <div className="flex min-w-0 flex-col">
-          <div className="flex h-14 items-center gap-2.5 border-b px-4 md:hidden">
-            <img className="size-7" src="/poolstatis-logo.svg" alt="" />
-            <span className="brand-wordmark text-xl">Poolstatis</span>
-          </div>
-          <div className="flex flex-1 items-center justify-center p-6">
-            <div className="flex max-w-sm items-center gap-3 text-sm text-muted-foreground" role="status">
-              <Loader2 className="size-4 shrink-0 animate-spin" />
-              <span>Restoring your workspace…</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    />
   );
 }
 

@@ -65,6 +65,8 @@ describe('hosted connection recovery', () => {
     render(<HostedConnect />);
 
     expect(screen.getByTestId('auth-boot-shell')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText('Restoring your workspace…')).not.toBeInTheDocument();
     expect(screen.queryByText('Sign in to your workspace.')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Continue to sign in' })).not.toBeInTheDocument();
     expect(store.connectHosted).not.toHaveBeenCalled();

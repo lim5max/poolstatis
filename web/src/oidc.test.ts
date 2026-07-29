@@ -53,32 +53,15 @@ describe('customer OIDC client policy', () => {
     expect(localStorage.length).toBe(0);
   });
 
-  it('passes the current id token and public login return to end-session', async () => {
-    const calls: unknown[] = [];
-    await signoutHostedUser({
-      signoutRedirect: async (args) => {
-        calls.push(args);
-      },
-    }, 'current-id-token');
-    expect(calls).toEqual([{
-      id_token_hint: 'current-id-token',
-      post_logout_redirect_uri: 'https://poolstatis.xyz/login',
-    }]);
-  });
-
-  it('falls back to the auth cookie endpoint when no id token is available', async () => {
-    const signoutRedirect = vi.fn();
+  it('clears the auth cookie without exposing an id token in browser navigation', async () => {
     const fetcher = vi.fn().mockResolvedValue({ ok: true });
     const assign = vi.fn();
 
     await signoutHostedUser(
-      { signoutRedirect },
-      undefined,
       { location: { assign } },
       fetcher as unknown as typeof fetch,
     );
 
-    expect(signoutRedirect).not.toHaveBeenCalled();
     expect(fetcher).toHaveBeenCalledWith(
       'https://auth.poolstatis.xyz/api/auth/sign-out',
       expect.objectContaining({
@@ -87,6 +70,18 @@ describe('customer OIDC client policy', () => {
       }),
     );
     expect(assign).toHaveBeenCalledWith('https://poolstatis.xyz/login');
+  });
+
+  it('does not redirect when the auth cookie could not be cleared', async () => {
+    const fetcher = vi.fn().mockResolvedValue({ ok: false });
+    const assign = vi.fn();
+
+    await expect(signoutHostedUser(
+      { location: { assign } },
+      fetcher as unknown as typeof fetch,
+    )).rejects.toThrow('Hosted sign-out could not be completed');
+
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it('uses the callback user immediately without re-reading the in-memory user store', async () => {

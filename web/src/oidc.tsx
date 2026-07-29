@@ -75,19 +75,9 @@ export function createHostedUserManager(
 }
 
 export async function signoutHostedUser(
-  manager: Pick<UserManager, 'signoutRedirect'>,
-  idToken?: string,
   browserWindow: { location: Pick<Location, 'assign'> } = window,
   fetcher: typeof fetch = fetch,
 ): Promise<void> {
-  if (idToken) {
-    await manager.signoutRedirect({
-      id_token_hint: idToken,
-      post_logout_redirect_uri: hostedLogoutUrl,
-    });
-    return;
-  }
-
   const authority = hostedAuthConfig.authority ?? 'https://auth.poolstatis.xyz';
   const response = await fetcher(`${authority}/api/auth/sign-out`, {
     method: 'POST',
@@ -273,10 +263,9 @@ export function HostedAuthProvider({
     });
   }, [manager]);
   const logout = useCallback(async () => {
-    const idToken = user?.id_token;
     clearHostedSessionMarkers(window.localStorage, window.sessionStorage);
-    await signoutHostedUser(manager, idToken);
-  }, [manager, user]);
+    await signoutHostedUser();
+  }, []);
   const getToken = useCallback(async () => {
     return hostedAccessToken(manager, user, hostedAuthConfig.audience!);
   }, [manager, user]);
