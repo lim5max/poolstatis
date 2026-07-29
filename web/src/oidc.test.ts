@@ -38,6 +38,7 @@ describe('customer OIDC client policy', () => {
     expect(manager.settings.response_type).toBe('code');
     expect(manager.settings.scope).toBe(hostedAuthScope);
     expect(manager.settings.resource).toBe('https://api.poolstatis.xyz');
+    expect(manager.settings.post_logout_redirect_uri).toBe('https://poolstatis.xyz/login');
     expect(manager.settings.extraTokenParams).toEqual({
       resource: 'https://api.poolstatis.xyz',
     });
@@ -52,14 +53,40 @@ describe('customer OIDC client policy', () => {
     expect(localStorage.length).toBe(0);
   });
 
-  it('preserves the user and id_token_hint until end-session starts', async () => {
-    const calls: string[] = [];
+  it('passes the current id token and public login return to end-session', async () => {
+    const calls: unknown[] = [];
     await signoutHostedUser({
-      signoutRedirect: async () => {
-        calls.push('signout');
+      signoutRedirect: async (args) => {
+        calls.push(args);
       },
-    });
-    expect(calls).toEqual(['signout']);
+    }, 'current-id-token');
+    expect(calls).toEqual([{
+      id_token_hint: 'current-id-token',
+      post_logout_redirect_uri: 'https://poolstatis.xyz/login',
+    }]);
+  });
+
+  it('falls back to the auth cookie endpoint when no id token is available', async () => {
+    const signoutRedirect = vi.fn();
+    const fetcher = vi.fn().mockResolvedValue({ ok: true });
+    const assign = vi.fn();
+
+    await signoutHostedUser(
+      { signoutRedirect },
+      undefined,
+      { location: { assign } },
+      fetcher as unknown as typeof fetch,
+    );
+
+    expect(signoutRedirect).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://auth.poolstatis.xyz/api/auth/sign-out',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+      }),
+    );
+    expect(assign).toHaveBeenCalledWith('https://poolstatis.xyz/login');
   });
 
   it('uses the callback user immediately without re-reading the in-memory user store', async () => {

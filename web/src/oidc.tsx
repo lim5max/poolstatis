@@ -18,6 +18,7 @@ export const hostedAuthConfig = {
 
 export const hostedAuthScope = 'openid profile email offline_access poolstatis:customer';
 export const hostedSessionMarkerKey = 'poolstatis.customer.sso';
+export const hostedLogoutUrl = 'https://poolstatis.xyz/login';
 const hostedRestoreMarkerKey = 'poolstatis.customer.restore';
 const callbackPromises = new WeakMap<UserManager, Promise<User>>();
 export const hostedAuthEnabled = Boolean(
@@ -52,7 +53,7 @@ export function createHostedUserManager(
     authority: config.authority!,
     client_id: config.clientId!,
     redirect_uri: callback,
-    post_logout_redirect_uri: callback,
+    post_logout_redirect_uri: hostedLogoutUrl,
     response_type: 'code',
     scope: hostedAuthScope,
     resource: config.audience!,
@@ -75,8 +76,26 @@ export function createHostedUserManager(
 
 export async function signoutHostedUser(
   manager: Pick<UserManager, 'signoutRedirect'>,
+  idToken?: string,
+  browserWindow: { location: Pick<Location, 'assign'> } = window,
+  fetcher: typeof fetch = fetch,
 ): Promise<void> {
-  await manager.signoutRedirect();
+  if (idToken) {
+    await manager.signoutRedirect({
+      id_token_hint: idToken,
+      post_logout_redirect_uri: hostedLogoutUrl,
+    });
+    return;
+  }
+
+  const authority = hostedAuthConfig.authority ?? 'https://auth.poolstatis.xyz';
+  const response = await fetcher(`${authority}/api/auth/sign-out`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error('Hosted sign-out could not be completed');
+  browserWindow.location.assign(hostedLogoutUrl);
 }
 
 export function markHostedSessionConnected(storage: Pick<Storage, 'setItem'> = localStorage): void {
@@ -254,9 +273,10 @@ export function HostedAuthProvider({
     });
   }, [manager]);
   const logout = useCallback(async () => {
+    const idToken = user?.id_token;
     clearHostedSessionMarkers(window.localStorage, window.sessionStorage);
-    await signoutHostedUser(manager);
-  }, [manager]);
+    await signoutHostedUser(manager, idToken);
+  }, [manager, user]);
   const getToken = useCallback(async () => {
     return hostedAccessToken(manager, user, hostedAuthConfig.audience!);
   }, [manager, user]);
