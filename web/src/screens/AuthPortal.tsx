@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ArrowLeft } from '@/components/icons';
 
 const authOrigin = 'https://auth.poolstatis.xyz';
 const neutralFailure = 'The request could not be completed. Check the details and try again.';
@@ -161,7 +162,6 @@ function AuthCard({
 }) {
   return (
     <Card className="gap-0 overflow-hidden border-border/80 bg-card/95 py-0 shadow-2xl shadow-black/20 backdrop-blur">
-      <div className="h-1 bg-gradient-to-r from-sky-400 via-indigo-400 to-violet-400" />
       <CardHeader className="px-6 pb-5 pt-6">
         <CardTitle className="serif text-3xl font-normal leading-tight">{title}</CardTitle>
         <CardDescription className="leading-6">{description}</CardDescription>
@@ -676,7 +676,17 @@ export function AuthPortal() {
   else if (pathname === '/reset') content = <ResetPassword />;
   else if (pathname === '/verify') content = <VerificationResult />;
   else if (pathname === '/consent') content = <Consent />;
-  else if (pathname === '/profile') content = <AccountProfile />;
+  else if (pathname === '/profile') content = (
+    <>
+      <a
+        href="https://app.poolstatis.xyz/profile"
+        className="mb-3 inline-flex w-fit items-center gap-2 rounded-sm text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ArrowLeft className="size-4" />Back to Poolstatis
+      </a>
+      <AccountProfile />
+    </>
+  );
   else content = <Login />;
   return <AuthShell>{content}</AuthShell>;
 }

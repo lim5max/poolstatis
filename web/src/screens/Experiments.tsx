@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Add, Loader2, Target } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, fmtNum, fmtPct } from '../components/ui';
+import { EmptyState, ErrorNote, HelpHint, Loading, Panel, RecoverableError, fmtNum, fmtPct } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -28,19 +28,29 @@ export function Experiments() {
   return (
     <div className="space-y-4">
       <Panel title="Plan a measured rollout" right={<span className="text-xs text-muted-foreground">deterministic assignment · real outcomes</span>}>
-        <div className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-2 xl:grid-cols-4">
+        <ol className="divide-y overflow-hidden rounded-md border">
           {[
             ['1', 'Outcome metric', 'Choose an active count or unique-actor metric.'],
             ['2', 'Variants', 'Define control and treatment payloads.'],
             ['3', 'Allocation', 'Assign up to 100% before activation.'],
-            ['4', 'Draft → running', 'Deploy guarded code, then start measurement.'],
-          ].map(([step, title, copy]) => <div key={step} className="bg-card p-4"><div className="flex items-center gap-2"><span className="flex size-6 items-center justify-center rounded-full border text-xs">{step}</span><span className="font-medium">{title}</span></div><p className="mt-2 text-xs text-muted-foreground">{copy}</p></div>)}
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
+            ['4', 'Activate after deploy', 'Deploy guarded code, then start measurement.'],
+          ].map(([step, title, copy]) => (
+            <li key={step} className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 px-4 py-3 sm:grid-cols-[auto_minmax(10rem,0.6fr)_minmax(0,1fr)] sm:items-center">
+              <span className="flex size-7 items-center justify-center rounded-full border text-xs font-medium text-muted-foreground">{step}</span>
+              <span className="text-sm font-medium">{title}</span>
+              <span className="col-start-2 text-xs text-muted-foreground sm:col-start-3">{copy}</span>
+            </li>
+          ))}
+        </ol>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <Button onClick={() => setCreating((value) => value === 'flag' ? null : 'flag')} aria-expanded={creating === 'flag'}><Add className="size-4" />Create feature flag</Button>
           <Button variant="outline" onClick={() => setCreating((value) => value === 'experiment' ? null : 'experiment')} aria-expanded={creating === 'experiment'} disabled={flags.filter((flag) => flag.status === 'active').length === 0}>Create experiment</Button>
         </div>
-        <p className="mt-3 text-xs text-muted-foreground"><strong className="text-foreground">Draft</strong> stores the definition only. <strong className="text-foreground">Active</strong> lets SDK evaluation assign a variant and record first exposure. A <strong className="text-foreground">running experiment</strong> compares outcome events only after that exposure. Next: deploy the guarded code before starting measurement.</p>
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground" aria-label="Rollout status help">
+          <span className="inline-flex items-center gap-1.5"><strong className="text-foreground">Draft</strong><HelpHint ariaLabel="Explain draft status" label="Saved definition only. It does not change product traffic." /></span>
+          <span className="inline-flex items-center gap-1.5"><strong className="text-foreground">Active</strong><HelpHint ariaLabel="Explain active status" label="SDK evaluation may assign a variant and record the first exposure." /></span>
+          <span className="inline-flex items-center gap-1.5"><strong className="text-foreground">Running</strong><HelpHint ariaLabel="Explain running experiment status" label="Outcome events are compared only after a recorded exposure." /></span>
+        </div>
         {flags.length === 0 && <p className="mt-3 text-xs text-muted-foreground">Start with a draft flag. No product traffic changes until you activate it and use the SDK evaluation in deployed code.</p>}
       </Panel>
       {creating === 'flag' && <FlagForm flags={flags} onCreated={() => { setCreating(null); reload(); }} />}
@@ -243,14 +253,14 @@ function ExperimentsTable({ experiments, env, onChanged }: { experiments: Experi
     finally { setBusy(null); }
   };
   return <Panel title={<>Experiments <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{experiments.length}</span></>}>
-    {experiments.length === 0 ? <EmptyState headline="No experiments" lead="create a hypothesis against an active feature flag" /> : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Experiment</TableHead><TableHead>Hypothesis</TableHead><TableHead>Flag / metric</TableHead><TableHead>Status</TableHead><TableHead /></TableRow></TableHeader><TableBody>{experiments.map((experiment) => <ExperimentRow key={experiment.id} experiment={experiment} busy={busy === experiment.key} result={results[experiment.key]} onStart={start} onResult={showResult} onConclude={setConcluding} />)}</TableBody></Table></div>}
+    {experiments.length === 0 ? <EmptyState headline="No experiments" lead="create a hypothesis against an active feature flag" /> : <div className="overflow-x-auto"><Table className="min-w-[52rem] table-fixed"><TableHeader><TableRow><TableHead className="w-48">Experiment</TableHead><TableHead>Hypothesis</TableHead><TableHead className="w-44">Flag / metric</TableHead><TableHead className="w-28">Status</TableHead><TableHead className="w-44" /></TableRow></TableHeader><TableBody>{experiments.map((experiment) => <ExperimentRow key={experiment.id} experiment={experiment} busy={busy === experiment.key} result={results[experiment.key]} onStart={start} onResult={showResult} onConclude={setConcluding} />)}</TableBody></Table></div>}
     {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     {concluding && <ConcludeDialog experiment={concluding} busy={busy === concluding.key} onCancel={() => setConcluding(null)} onConfirm={conclude} />}
   </Panel>;
 }
 
 function ExperimentRow({ experiment, busy, result, onStart, onResult, onConclude }: { experiment: Experiment; busy: boolean; result?: ExperimentResult; onStart: (key: string) => void; onResult: (key: string) => void; onConclude: (experiment: Experiment) => void }) {
-  return <><TableRow><TableCell><div className="font-medium">{experiment.name}</div><code className="text-xs text-muted-foreground">{experiment.key}</code></TableCell><TableCell className="max-w-sm text-xs text-muted-foreground">{experiment.hypothesis}</TableCell><TableCell><code className="block text-xs">{experiment.flag_key}</code><code className="block text-xs text-muted-foreground">{experiment.primary_metric_key}</code></TableCell><TableCell><ExperimentStatus status={experiment.status} /></TableCell><TableCell className="text-right">{busy ? <Loader2 className="inline size-4 animate-spin" /> : experiment.status === 'draft' ? <Button size="sm" onClick={() => onStart(experiment.key)}>Start</Button> : <div className="inline-flex gap-2"><Button variant="outline" size="sm" onClick={() => onResult(experiment.key)}>Results</Button>{experiment.status === 'running' && <Button size="sm" onClick={() => onConclude(experiment)}>Conclude</Button>}</div>}</TableCell></TableRow>{result && <TableRow className="bg-muted/30"><TableCell colSpan={5}><div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Variant</TableHead><TableHead>Exposed</TableHead><TableHead>Converted</TableHead><TableHead>Rate</TableHead><TableHead>Uplift</TableHead><TableHead>95% interval</TableHead><TableHead>Chance to win</TableHead></TableRow></TableHeader><TableBody>{result.variants.map((variant) => <TableRow key={variant.key}><TableCell><code>{variant.key}</code></TableCell><TableCell>{fmtNum(variant.exposed)}</TableCell><TableCell>{fmtNum(variant.converted)}</TableCell><TableCell>{fmtPct(variant.conversion_rate)}</TableCell><TableCell>{variant.uplift_vs_control === null ? '—' : fmtPct(variant.uplift_vs_control)}</TableCell><TableCell>{fmtPct(variant.credible_interval.lower)}–{fmtPct(variant.credible_interval.upper)}</TableCell><TableCell>{fmtPct(variant.probability_best)}</TableCell></TableRow>)}</TableBody></Table></div></TableCell></TableRow>}</>;
+  return <><TableRow><TableCell className="whitespace-normal"><div className="break-words font-medium">{experiment.name}</div><code className="mt-1 block break-all text-xs text-muted-foreground">{experiment.key}</code></TableCell><TableCell className="whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">{experiment.hypothesis}</TableCell><TableCell className="whitespace-normal"><code className="block break-all text-xs">{experiment.flag_key}</code><code className="mt-1 block break-all text-xs text-muted-foreground">{experiment.primary_metric_key}</code></TableCell><TableCell><ExperimentStatus status={experiment.status} /></TableCell><TableCell className="text-right">{busy ? <Loader2 className="inline size-4 animate-spin" /> : experiment.status === 'draft' ? <Button size="sm" onClick={() => onStart(experiment.key)}>Start</Button> : <div className="inline-flex gap-2"><Button variant="outline" size="sm" onClick={() => onResult(experiment.key)}>Results</Button>{experiment.status === 'running' && <Button size="sm" onClick={() => onConclude(experiment)}>Conclude</Button>}</div>}</TableCell></TableRow>{result && <TableRow className="bg-muted/30"><TableCell colSpan={5}><div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Variant</TableHead><TableHead>Exposed</TableHead><TableHead>Converted</TableHead><TableHead>Rate</TableHead><TableHead>Uplift</TableHead><TableHead>95% interval</TableHead><TableHead>Chance to win</TableHead></TableRow></TableHeader><TableBody>{result.variants.map((variant) => <TableRow key={variant.key}><TableCell><code>{variant.key}</code></TableCell><TableCell>{fmtNum(variant.exposed)}</TableCell><TableCell>{fmtNum(variant.converted)}</TableCell><TableCell>{fmtPct(variant.conversion_rate)}</TableCell><TableCell>{variant.uplift_vs_control === null ? '—' : fmtPct(variant.uplift_vs_control)}</TableCell><TableCell>{fmtPct(variant.credible_interval.lower)}–{fmtPct(variant.credible_interval.upper)}</TableCell><TableCell>{fmtPct(variant.probability_best)}</TableCell></TableRow>)}</TableBody></Table></div></TableCell></TableRow>}</>;
 }
 
 function ConcludeDialog({ experiment, busy, onCancel, onConfirm }: { experiment: Experiment; busy: boolean; onCancel: () => void; onConfirm: (decision: { outcome: 'ship' | 'iterate' | 'stop' | 'inconclusive'; rationale: string }) => void }) {
