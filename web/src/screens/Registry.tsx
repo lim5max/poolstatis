@@ -17,7 +17,7 @@ import {
 } from '../components/metric-categories';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { SortableTableHead, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -162,7 +162,7 @@ function MetricsTable({
     }
   };
   const clickSort = (k: SortKey) => setSort((s) => ({ key: k, dir: s.key === k && s.dir === 'asc' ? 'desc' : 'asc' }));
-  const caret = (k: SortKey) => <span className={cn('ml-1 text-xs', sort.key === k ? 'text-primary' : 'text-muted-foreground/40')}>{sort.key === k && sort.dir === 'desc' ? '▾' : '▴'}</span>;
+  const sortDirection = (k: SortKey) => sort.key === k ? sort.dir : null;
 
   return (
     <Card className="gap-0 py-0 overflow-hidden">
@@ -196,11 +196,11 @@ function MetricsTable({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('name')}>Metric{caret('name')}</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('category')}>Category{caret('category')}</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('type')}>Type{caret('type')}</TableHead>
+                <SortableTableHead label="Metric" direction={sortDirection('name')} onSort={() => clickSort('name')} />
+                <SortableTableHead label="Category" direction={sortDirection('category')} onSort={() => clickSort('category')} />
+                <SortableTableHead label="Type" direction={sortDirection('type')} onSort={() => clickSort('type')} />
                 <TableHead>Source</TableHead><TableHead>Purpose</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('status')}>Status{caret('status')}</TableHead>
+                <SortableTableHead label="Status" direction={sortDirection('status')} onSort={() => clickSort('status')} />
                 <TableHead className="w-12" />
               </TableRow>
             </TableHeader>

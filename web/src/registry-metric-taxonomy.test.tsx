@@ -172,4 +172,33 @@ describe('Registry metric taxonomy', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove #surface:checkout filter' }));
     expect(screen.queryByRole('button', { name: 'Remove #surface:checkout filter' })).not.toBeInTheDocument();
   });
+
+  it('uses accessible Hugeicons controls for every sortable metric column', async () => {
+    render(
+      <TooltipProvider>
+        <MemoryRouter><Registry /></MemoryRouter>
+      </TooltipProvider>,
+    );
+
+    const metricSort = await screen.findByRole('button', { name: 'Sort by Metric' });
+    const metricHeader = metricSort.closest('th');
+    const categorySort = screen.getByRole('button', { name: 'Sort by Category' });
+    const categoryHeader = categorySort.closest('th');
+    const sortButtons = screen.getAllByRole('button', { name: /Sort by/ });
+
+    expect(sortButtons).toHaveLength(4);
+    sortButtons.forEach((button) => expect(button.querySelector('[data-sort-icon]')).toBeInstanceOf(SVGSVGElement));
+    expect(metricHeader).not.toBeNull();
+    expect(categoryHeader).not.toBeNull();
+    expect(metricHeader).toHaveAttribute('aria-sort', 'ascending');
+    expect(metricSort.querySelector('[data-sort-icon]')).toHaveAttribute('data-direction', 'asc');
+    expect(categoryHeader).toHaveAttribute('aria-sort', 'none');
+    expect(categorySort.querySelector('[data-sort-icon]')).toHaveAttribute('data-direction', 'none');
+    expect(metricSort).not.toHaveTextContent(/[▴▾▲▼]/);
+
+    fireEvent.click(metricSort);
+
+    expect(metricHeader).toHaveAttribute('aria-sort', 'descending');
+    expect(metricSort.querySelector('[data-sort-icon]')).toHaveAttribute('data-direction', 'desc');
+  });
 });

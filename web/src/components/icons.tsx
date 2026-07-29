@@ -44,15 +44,17 @@ function bold(icon: IconSvgElement): ComponentType<IconProps> {
 }
 
 export const Add = bold(Add01Icon);
+export const ArrowDown = bold(ArrowDown01Icon);
 export const ArrowLeft = bold(ArrowLeft01Icon);
 export const ArrowRight = bold(ArrowRight01Icon);
+export const ArrowUp = bold(ArrowUp01Icon);
 export const Check = bold(Tick01Icon);
 export const CheckIcon = Check;
-export const ChevronDown = bold(ArrowDown01Icon);
+export const ChevronDown = ArrowDown;
 export const ChevronDownIcon = ChevronDown;
 export const ChevronRight = bold(ArrowRight01Icon);
 export const ChevronRightIcon = ChevronRight;
-export const ChevronUpIcon = bold(ArrowUp01Icon);
+export const ChevronUpIcon = ArrowUp;
 export const ChevronsUpDown = bold(ArrowUpDownIcon);
 export const CircleIcon = bold(HugeCircleIcon);
 export const Copy = bold(Copy01Icon);
