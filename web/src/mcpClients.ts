@@ -15,6 +15,7 @@ export type McpClientId =
   | 'custom';
 
 export type McpClientLogo =
+  | 'claude-code'
   | 'claude'
   | 'codex'
   | 'cursor'
@@ -45,7 +46,7 @@ export const MCP_CLIENTS: McpClientProfile[] = [
     id: 'claude-code',
     name: 'Claude Code',
     group: 'Popular MCP hosts',
-    logo: 'claude',
+    logo: 'claude-code',
     badge: 'Preset',
     description: 'Use this when the product repo is edited through Claude Code.',
     pasteTarget: 'Paste the stdio command, args, and env into your Claude Code MCP configuration.',

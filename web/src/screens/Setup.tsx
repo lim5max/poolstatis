@@ -1,6 +1,16 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, Copy } from '@/components/icons';
+import { ClaudeCodeLogo } from '@/components/logos/claude-code';
+import { ClaudeLogo } from '@/components/logos/claude';
+import { CodexLogo } from '@/components/logos/codex';
+import { CursorLogo } from '@/components/logos/cursor';
+import { WindsurfLogo } from '@/components/logos/windsurf';
+import { ClineLogo } from '@/components/logos/cline';
+import { ZedLogo } from '@/components/logos/zed';
+import { ContinueLogo } from '@/components/logos/continue';
+import { ReplitLogo } from '@/components/logos/replit';
+import { OpenCodeLogo } from '@/components/logos/opencode';
 import { useStore, useAsync } from '../store';
 import { MCP_CLIENTS, MCP_RUNNER, mcpClientById, mcpServerConfig, type McpClientId, type McpClientLogo } from '../mcpClients';
 import { PUBLISHED_MCP_TOOL_GROUPS } from '../mcpPublishedContract';
@@ -12,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import type { OnboardingGateKey } from '../api/types';
+import { siWarp } from 'simple-icons';
 
 const SKILL_NAMES = ['poolstatis-instrument', 'poolstatis-analyze', 'poolstatis-maintain'] as const;
 const SKILLS_SOURCE = 'https://github.com/lim5max/poolstatis';
@@ -452,101 +463,76 @@ function WebhookSetup({ project }: { project: string }) {
   </Panel>;
 }
 
-const MCP_LOGO_META: Record<McpClientLogo, { color: string; label: string }> = {
-  claude: { color: 'var(--cat-referral)', label: 'Claude' },
-  codex: { color: 'var(--foreground)', label: 'Codex' },
-  cursor: { color: 'var(--cat-quality)', label: 'Cursor' },
-  warp: { color: 'var(--cat-acquisition)', label: 'Warp' },
-  windsurf: { color: 'var(--cat-activation)', label: 'Windsurf' },
-  vscode: { color: 'var(--cat-acquisition)', label: 'VS Code' },
-  cline: { color: 'var(--cat-retention)', label: 'Cline' },
-  zed: { color: 'var(--foreground)', label: 'Zed' },
-  continue: { color: 'var(--cat-activation)', label: 'Continue' },
-  replit: { color: 'var(--cat-referral)', label: 'Replit' },
-  opencode: { color: 'var(--cat-quality)', label: 'OpenCode' },
-  hermes: { color: 'var(--cat-revenue)', label: 'Hermes' },
-  custom: { color: 'var(--muted-foreground)', label: 'Custom MCP' },
+const MCP_LOGO_LABELS: Record<McpClientLogo, string> = {
+  'claude-code': 'Claude Code',
+  claude: 'Claude',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  warp: 'Warp',
+  windsurf: 'Windsurf',
+  vscode: 'VS Code',
+  cline: 'Cline',
+  zed: 'Zed',
+  continue: 'Continue',
+  replit: 'Replit',
+  opencode: 'OpenCode',
+  hermes: 'Hermes',
+  custom: 'Custom MCP',
 };
 
 function McpClientLogoMark({ logo, className }: { logo: McpClientLogo; className?: string }) {
-  const meta = MCP_LOGO_META[logo];
   return (
     <span
-      aria-label={`${meta.label} logo`}
+      aria-label={`${MCP_LOGO_LABELS[logo]} logo`}
+      data-brand-logo={logo}
       className={cn('flex shrink-0 items-center justify-center rounded-md border bg-background', className)}
-      style={{ color: meta.color }}
     >
-      <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5">
-        <McpLogoPath logo={logo} />
-      </svg>
+      <McpBrandLogo logo={logo} />
     </span>
   );
 }
 
-function McpLogoPath({ logo }: { logo: McpClientLogo }) {
+function McpBrandLogo({ logo }: { logo: McpClientLogo }) {
   switch (logo) {
+    case 'claude-code':
+      return <ClaudeCodeLogo variant="icon-color" className="size-5" />;
     case 'claude':
-      return (
-        <>
-          <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
-          <path d="M12 5v14M5 12h14M7.2 7.2l9.6 9.6M16.8 7.2l-9.6 9.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-        </>
-      );
+      return <ClaudeLogo aria-hidden="true" className="size-5" />;
     case 'codex':
-      return <path d="M7 7.5 12 4l5 3.5v9L12 20l-5-3.5v-9Zm2 1.1v6.8l3 2.1 3-2.1V8.6l-3-2.1-3 2.1Zm2 1.6 1-0.7 1 0.7v3.6l-1 0.7-1-0.7v-3.6Z" fill="currentColor" />;
+      return <CodexLogo variant="icon-color" className="size-5" />;
     case 'cursor':
-      return <path d="M5 3.8 19.2 11 13.4 13.2 10.9 19.4 5 3.8Zm4.1 5.1 2.1 5.5 1-2.5 2.4-0.9-5.5-2.1Z" fill="currentColor" />;
+      return <CursorLogo className="size-5 text-foreground" />;
     case 'warp':
-      return (
-        <>
-          <path d="M4 8.5c2.4-2 4.8-2 7.2 0s4.8 2 7.2 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          <path d="M5.5 13c2-1.6 4-1.6 6 0s4 1.6 6 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          <path d="M7 17c1.5-1 3-1 4.5 0s3 1 4.5 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-        </>
-      );
+      return <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5" fill={`#${siWarp.hex}`}><path d={siWarp.path} /></svg>;
     case 'windsurf':
-      return <path d="M7 19h10M8 16c2.5-1.2 5.5-1.2 8 0M8 4v10l8-3.2L8 4Zm2 3.6 2.8 2.2L10 11V7.6Z" fill="currentColor" />;
+      return <WindsurfLogo aria-hidden="true" className="size-5" />;
     case 'vscode':
-      return <path d="M19 4.5v15l-4.2-1.8-5.2-4.2-3.1 3L4 15.1 7.9 12 4 8.9l2.5-1.4 3.1 3 5.2-4.2L19 4.5Zm-4 5-3.7 2.5L15 14.5v-5Z" fill="currentColor" />;
+      return <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5" fill="#23A8F2"><path d="M17.583 2.135a1.5 1.5 0 0 1 1.676.292l2.314 2.14A1.5 1.5 0 0 1 22 5.668v12.664a1.5 1.5 0 0 1-.427 1.1l-2.314 2.14a1.5 1.5 0 0 1-1.676.293l-7.24-3.487-4.236 3.306a1 1 0 0 1-1.278-.043l-2.55-2.325a1 1 0 0 1-.063-1.413L5.94 12 2.216 6.097a1 1 0 0 1 .063-1.413l2.55-2.325a1 1 0 0 1 1.278-.043l4.236 3.306 7.24-3.487ZM18 6.386l-5.51 5.615L18 17.614V6.386ZM6.002 7.43 3.94 12l2.062 4.57L9.405 12 6.002 7.43Z" /></svg>;
     case 'cline':
-      return (
-        <>
-          <path d="m5 7 4 5-4 5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M11 17h8" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-        </>
-      );
+      return <ClineLogo aria-hidden="true" className="size-5 text-foreground" />;
     case 'zed':
-      return <text x="12" y="16.5" textAnchor="middle" fontSize="13" fontWeight="700" fontFamily="var(--font-mono)" fill="currentColor">Z</text>;
+      return <ZedLogo className="size-5 text-foreground" />;
     case 'continue':
-      return <path d="M6 8.5h7.5a3.5 3.5 0 1 1 0 7H8.8l2.1 2.1-1.4 1.4L5 14.5 9.5 10l1.4 1.4-2.1 2.1h4.7a1.5 1.5 0 0 0 0-3H6v-2Z" fill="currentColor" />;
+      return <ContinueLogo aria-hidden="true" className="size-5 text-foreground" />;
     case 'replit':
-      return (
-        <>
-          <path d="M9 3h6v6H9V3ZM3 9h6v6H3V9ZM9 15h6v6H9v-6ZM15 9h6v6h-6V9Z" fill="currentColor" />
-        </>
-      );
+      return <ReplitLogo variant="icon-color" className="size-5" />;
     case 'opencode':
-      return (
-        <>
-          <path d="M8.5 6 4 12l4.5 6M15.5 6 20 12l-4.5 6" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="m13.5 5-3 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </>
-      );
+      return <OpenCodeLogo aria-hidden="true" className="size-5 text-foreground" />;
     case 'hermes':
       return (
-        <>
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5 text-foreground">
           <path d="M6 14.5c3.2-6.1 6.8-8.4 12-8.5-1.2 5.2-3.6 8.8-8.5 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M8 8.5H4.5M11 6.2H7.5M15 6h-2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </>
+        </svg>
       );
     case 'custom':
       return (
-        <>
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5 text-muted-foreground">
           <circle cx="7" cy="8" r="2.2" fill="currentColor" />
           <circle cx="17" cy="8" r="2.2" fill="currentColor" />
           <circle cx="12" cy="17" r="2.2" fill="currentColor" />
           <path d="M8.8 9.4 11 15M15.2 9.4 13 15M9.4 8h5.2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </>
+        </svg>
       );
   }
 }

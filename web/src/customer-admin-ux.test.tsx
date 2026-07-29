@@ -131,7 +131,7 @@ describe('server-verified setup flow', () => {
     renderSetup();
     await screen.findByText('MCP request last recorded');
     const chooser = screen.getByRole('button', { name: 'Coding agent: Claude Code' });
-    expect(within(chooser).getByLabelText('Claude logo')).toBeInTheDocument();
+    expect(within(chooser).getByLabelText('Claude Code logo')).toHaveAttribute('data-brand-logo', 'claude-code');
     expect(screen.getByRole('button', { name: 'Copy Claude Code install' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy Codex install' })).not.toBeInTheDocument();
   });
