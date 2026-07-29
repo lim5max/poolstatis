@@ -23,7 +23,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { cn } from '@/lib/utils';
+import { cn, isRedundantKey } from '@/lib/utils';
 import type { Funnel, Metric, MetricCategoryDefinition, MetricStatus } from '../api/types';
 
 export function Registry() {
@@ -401,7 +401,7 @@ function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, o
             {metricEvent(m)
               ? <button className="font-medium text-left hover:text-primary hover:underline underline-offset-2" title="See this metric's events" onClick={() => onOpenEvents(metricEvent(m)!)}>{m.name}</button>
               : <div className="font-medium">{m.name}</div>}
-            <div className="text-xs text-muted-foreground">{m.key}</div>
+            {!isRedundantKey(m.name, m.key) && <div className="text-xs text-muted-foreground">{m.key}</div>}
             {(m.tags ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1">
                 {m.tags.map((t) => <span key={t} className="text-[11px] rounded-full border px-1.5 py-px text-muted-foreground">#{t}</span>)}

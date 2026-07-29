@@ -257,4 +257,18 @@ describe('Better Auth portal', () => {
     resolve?.(new Response(JSON.stringify({ user: {} }), { status: 200 }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Create account' })).toBeEnabled());
   });
+
+  it('returns from account management to the app without an AI gradient strip', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ user: { name: 'Mira', email: 'mira@example.test' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const view = renderPortal('/profile');
+    expect(await screen.findByText('Your account')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to Poolstatis' }))
+      .toHaveAttribute('href', 'https://app.poolstatis.xyz/profile');
+    expect(view.container.querySelector('.bg-gradient-to-r')).toBeNull();
+  });
 });

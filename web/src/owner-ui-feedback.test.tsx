@@ -2,6 +2,7 @@ import { act, configure, fireEvent, render, screen, waitFor, within } from '@tes
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
+import { TooltipProvider } from './components/ui/tooltip';
 import { Experiments } from './screens/Experiments';
 import { Experience } from './screens/Experience';
 import { useStore } from './store';
@@ -261,7 +262,7 @@ describe('owner UI feedback regressions', () => {
         metrics: vi.fn().mockResolvedValue([]),
       },
     } as never);
-    render(<Experiments />);
+    render(<TooltipProvider><Experiments /></TooltipProvider>);
 
     const card = await screen.findByRole('article', { name: 'Landing waitlist CTA copy' });
     expect(card).toHaveClass('grid');

@@ -28,6 +28,20 @@ export function Hint({ label, children }: { label: ReactNode; children: ReactNod
   );
 }
 
+export function HelpHint({ label, ariaLabel }: { label: ReactNode; ariaLabel: string }) {
+  return (
+    <Hint label={label}>
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full border text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        ?
+      </button>
+    </Hint>
+  );
+}
+
 // ===== status / type badges =====
 
 const STATUS_HINT: Record<MetricStatus, string> = {

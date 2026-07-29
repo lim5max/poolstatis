@@ -2,13 +2,14 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Loader2, Search } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { EmptyState, ErrorNote, Hint, Loading, Panel, RecoverableError, fmtNum } from '../components/ui';
+import { EmptyState, ErrorNote, HelpHint, Hint, Loading, Panel, RecoverableError, fmtNum } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { isRedundantKey } from '@/lib/utils';
 import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
 
 interface MetricTrustRow {
@@ -562,13 +563,34 @@ function TrustOverview({ rows, properties, activeLinks, onRefresh }: {
   const trusted = rows.filter((row) => row.trust?.status === 'trusted').length;
   const unavailable = rows.filter((row) => Boolean(row.error)).length;
   const untrusted = rows.length - trusted - unavailable;
+  const summaries = [
+    {
+      value: `${trusted} trusted`,
+      label: 'No trust blockers',
+      help: 'The metric has accepted evidence and no blocker in the current 30-day trust check.',
+    },
+    {
+      value: `${untrusted} untrusted`,
+      label: 'Review the first blocker',
+      help: 'The metric exists, but its current evidence has a blocker such as missing events, actors, registration, or required properties.',
+    },
+    {
+      value: `${unavailable} unavailable`,
+      label: 'Retry or inspect the source',
+      help: 'Poolstatis could not complete the trust check. This is an unavailable result, not a zero.',
+    },
+  ];
   return <Panel title="Decision readiness" right={<Button variant="outline" size="sm" onClick={onRefresh}>Refresh evidence</Button>}>
     <div className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-3" aria-live="polite">
-      {[
-        [`${trusted} trusted`, 'No trust blockers'],
-        [`${untrusted} untrusted`, 'Review the first blocker'],
-        [`${unavailable} unavailable`, 'Retry or inspect the source'],
-      ].map(([value, label]) => <div key={value} className="bg-card p-4"><div className="serif text-2xl">{value}</div><div className="mt-1 text-xs text-muted-foreground">{label}</div></div>)}
+      {summaries.map(({ value, label, help }) => (
+        <div key={value} className="bg-card p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="serif text-2xl">{value}</div>
+            <HelpHint ariaLabel={`Explain ${value}`} label={help} />
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">{label}</div>
+        </div>
+      ))}
     </div>
     <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
       <Badge variant="outline">{rows.length} active metrics</Badge>
@@ -582,7 +604,10 @@ function TrustOverview({ rows, properties, activeLinks, onRefresh }: {
           const finding = result?.blockers[0] ?? result?.warnings[0];
           return <section key={metric.key}>
             <div className="grid min-w-0 gap-3 p-4 md:grid-cols-[minmax(12rem,1.4fr)_auto_minmax(12rem,1fr)_auto] md:items-center">
-              <div className="min-w-0"><div className="font-medium break-words">{metric.name}</div><code className="text-xs text-muted-foreground break-all">{metric.key}</code></div>
+              <div className="min-w-0">
+                <div className="break-words font-medium">{metric.name}</div>
+                {!isRedundantKey(metric.name, metric.key) && <code className="text-xs text-muted-foreground break-all">{metric.key}</code>}
+              </div>
               <TrustBadge trusted={result?.status === 'trusted'} unavailable={Boolean(error)} />
               <div className="text-xs text-muted-foreground">
                 {result ? <><div>{fmtNum(result.primary_metric.observed_events)} observations</div><div>{fmtNum(result.primary_metric.observed_actors)} actors · {pct(result.primary_metric.registered_coverage)} registered</div></> : 'Evidence unavailable'}

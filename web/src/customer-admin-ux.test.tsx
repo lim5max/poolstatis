@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -83,6 +83,7 @@ describe('customer admin shell', () => {
     await screen.findByText('Project created');
     expect(screen.getByRole('button', { name: /alpha/i })).toBeInTheDocument();
     expect(screen.getAllByText('prod').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Connect an agent, send data, and verify the first query.')).not.toBeInTheDocument();
   });
 
   it('still works when browser storage is blocked', () => {
@@ -123,6 +124,16 @@ describe('server-verified setup flow', () => {
     expect(screen.getByText('MCP request last recorded')).toBeInTheDocument();
     expect(screen.getAllByText(/Codex/i).length).toBeGreaterThan(0);
     expect(screen.queryByText('MCP connected')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('listitem')).toHaveLength(5);
+  });
+
+  it('shows client logos in one chooser and reuses the selected agent below', async () => {
+    renderSetup();
+    await screen.findByText('MCP request last recorded');
+    const chooser = screen.getByRole('button', { name: 'Coding agent: Claude Code' });
+    expect(within(chooser).getByLabelText('Claude logo')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy Claude Code install' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy Codex install' })).not.toBeInTheDocument();
   });
 
   it('presents the real client path as connect, verify, send event, then first query', async () => {
@@ -136,23 +147,37 @@ describe('server-verified setup flow', () => {
     expect(screen.getByText(/last-use evidence, not a heartbeat/i)).toBeInTheDocument();
   });
 
-  it('copies a portable three-skill install command without credentials or an unpublished SDK', async () => {
+  it('copies the selected agent three-skill install command without credentials or an unpublished SDK', async () => {
     renderSetup();
     await screen.findByText('Install Poolstatis skills');
     expect(screen.getByText('poolstatis-instrument')).toBeInTheDocument();
     expect(screen.getByText('poolstatis-analyze')).toBeInTheDocument();
     expect(screen.getByText('poolstatis-maintain')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy portable install' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Claude Code install' }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       expect.stringContaining('https://github.com/lim5max/poolstatis'),
     ));
     const copied = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
     expect(copied).toContain('--agent');
+    expect(copied).toContain('claude-code');
     expect(copied).toContain('poolstatis-instrument');
     expect(copied).toContain('poolstatis-analyze');
     expect(copied).toContain('poolstatis-maintain');
     expect(copied).not.toContain('POOLSTATIS_TOKEN');
     expect(copied).not.toContain('@poolstatis/sdk');
+  });
+
+  it('offers focused first-query prompts and copies the selected variant', async () => {
+    renderSetup();
+    await screen.findByText('MCP request last recorded');
+    expect(screen.getByRole('button', { name: 'Quick trend' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Compare periods' }));
+    expect(screen.getByRole('button', { name: 'Compare periods' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/preceding 7 days/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy compare periods prompt' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      expect.stringContaining('Do not claim causality'),
+    ));
   });
 
   it('renders server-proof failure as retryable without implying a connection', async () => {

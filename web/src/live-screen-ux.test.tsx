@@ -58,7 +58,7 @@ describe('live customer screen UX', () => {
         }],
       }),
     }));
-    render(<MemoryRouter><Registry /></MemoryRouter>);
+    render(<TooltipProvider><MemoryRouter><Registry /></MemoryRouter></TooltipProvider>);
     const funnelsTab = await screen.findByRole('tab', { name: /Funnels/ });
     fireEvent.keyDown(funnelsTab, { key: 'Enter' });
     const summary = screen.getByTestId('funnel-summary-signup');
@@ -68,6 +68,19 @@ describe('live customer screen UX', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(toggle);
     expect(screen.getByText('signup_completed')).toBeInTheDocument();
+  });
+
+  it('omits a metric key when it only repeats the human-readable name', async () => {
+    mockedStore.mockReturnValue(store({
+      schema: vi.fn().mockResolvedValue({
+        metrics: [metric], metric_categories: [], entity_types: [], observed_events_30d: [],
+        properties: [], identity: {}, sources: [], funnels: [],
+        project: { slug: 'alpha', name: 'Alpha' }, env: 'prod',
+      }),
+    }));
+    render(<TooltipProvider><MemoryRouter><Registry /></MemoryRouter></TooltipProvider>);
+    expect(await screen.findByText('Landing visits')).toBeInTheDocument();
+    expect(screen.queryByText('landing_visits', { exact: true })).not.toBeInTheDocument();
   });
 
   it('groups measurement trust and reveals repeated detail only on demand', async () => {
@@ -90,7 +103,9 @@ describe('live customer screen UX', () => {
     }));
     render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
     expect(await screen.findByText('1 untrusted')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Explain 1 untrusted' })).toBeInTheDocument();
     expect(screen.getByText('0 observations')).toBeInTheDocument();
+    expect(screen.queryByText('landing_visits', { exact: true })).not.toBeInTheDocument();
     expect(screen.queryByText('No accepted events.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Review Landing visits/ }));
     expect(screen.getByText('No accepted events.')).toBeInTheDocument();
@@ -573,16 +588,40 @@ describe('live customer screen UX', () => {
       flags: vi.fn().mockResolvedValue([]), experiments: vi.fn().mockResolvedValue([]),
       metrics: vi.fn().mockResolvedValue([metric]),
     }));
-    render(<Experiments />);
+    render(<TooltipProvider><Experiments /></TooltipProvider>);
     expect(await screen.findByText('Plan a measured rollout')).toBeInTheDocument();
     expect(screen.getByText('Draft')).toBeInTheDocument();
     expect(screen.getByText('Active')).toBeInTheDocument();
-    expect(screen.getByText('running experiment')).toBeInTheDocument();
-    expect(screen.getByText((_, element) => element?.tagName === 'P' && Boolean(element.textContent?.includes('record first exposure')) && Boolean(element.textContent?.includes('outcome events only after that exposure')))).toBeInTheDocument();
+    expect(screen.getByText('Running')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Explain draft status' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Explain active status' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Explain running experiment status' })).toBeInTheDocument();
+    expect(screen.queryByText((_, element) => element?.tagName === 'P' && Boolean(element.textContent?.includes('record first exposure')) && Boolean(element.textContent?.includes('outcome events only after that exposure')))).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Flag key')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Create feature flag' }));
     expect(screen.getByLabelText('Flag key')).toBeInTheDocument();
     expect(screen.getByText('Landing CTA example')).toBeInTheDocument();
+  });
+
+  it('wraps long experiment hypotheses inside a fixed responsive table', async () => {
+    const hypothesis = 'Directional, non-causal test: among consented landing visitors, proof-first CTA copy should improve measured signup completion while retaining the same exposure grain.';
+    mockedStore.mockReturnValue(store({
+      flags: vi.fn().mockResolvedValue([]),
+      experiments: vi.fn().mockResolvedValue([{
+        id: 'experiment-1',
+        key: 'proof_first_cta',
+        name: 'Proof-first CTA',
+        hypothesis,
+        flag_key: 'landing_cta_copy',
+        primary_metric_key: 'signup_completed',
+        status: 'draft',
+      }]),
+      metrics: vi.fn().mockResolvedValue([metric]),
+    }));
+    render(<TooltipProvider><Experiments /></TooltipProvider>);
+    const cell = (await screen.findByText(hypothesis)).closest('td');
+    expect(cell).toHaveClass('whitespace-normal', 'break-words');
+    expect(cell?.closest('table')).toHaveClass('table-fixed');
   });
 
   it('keeps customer capture recency while exposing the full Visual Experience setup', async () => {

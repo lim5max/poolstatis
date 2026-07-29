@@ -49,24 +49,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   ] },
 ];
 const TITLES: Record<string, string> = { '/': 'Projects', '/usage': 'Usage', '/profile': 'Profile', '/registry': 'Registry', '/measurement': 'Measurement', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/changes': 'Changes', '/decisions': 'Decisions', '/setup': 'Setup & MCP' };
-const PAGE_LEADS: Record<string, string> = {
-  '/': 'Choose the project this admin session manages.',
-  '/setup': 'Connect an agent, send data, and verify the first query.',
-  '/registry': 'Declare what measurements mean before agents query them.',
-  '/data': 'Inspect accepted events, entities, health, and warnings.',
-  '/measurement': 'Verify identity, properties, and source evidence.',
-  '/experiments': 'Control flags and evidence-backed experiments.',
-  '/experience': 'Inspect captured interaction evidence.',
-  '/changes': 'Register releases and evaluate measured impact.',
-  '/decisions': 'Review evidence, record outcomes, and approve exact actions.',
-  '/keys': 'Issue, audit, and revoke scoped access.',
-  '/usage': 'Review stored-event usage and monthly limits.',
-  '/profile': 'Manage identity and personal MCP tokens.',
-};
 const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' : TITLES[path] ?? 'Poolstatis');
-const leadFor = (path: string) => path.startsWith('/data/person')
-  ? 'Inspect one actor without exposing raw credentials.'
-  : PAGE_LEADS[path] ?? '';
 const isProjectScoped = (path: string) => path === '/' || path.startsWith('/setup') || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
 const SIDEBAR_KEY = 'poolstatis.sidebar.collapsed';
 const loadSidebarState = () => {
@@ -269,13 +252,12 @@ function Main() {
   const loc = useLocation();
   const { projects, project, setProject, env } = useStore();
   const title = titleFor(loc.pathname);
-  const lead = leadFor(loc.pathname);
   const showProject = isProjectScoped(loc.pathname);
 
   return (
     <div className="min-h-0 md:h-screen md:overflow-y-auto">
-      <div className="sticky top-14 z-10 flex min-h-16 items-center border-b bg-background/90 px-4 py-3 backdrop-blur-md md:top-0 md:px-8">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div className="sticky top-14 z-10 flex min-h-14 items-center border-b bg-background/90 px-4 py-3 backdrop-blur-md md:top-0 md:px-8">
+        <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
             <span className="text-muted-foreground">Poolstatis</span>
             {showProject && project && (
@@ -300,7 +282,6 @@ function Main() {
             <span className="font-medium text-foreground">{title}</span>
             {showProject && project && <code className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{env}</code>}
           </div>
-          {lead && <p className="text-xs text-muted-foreground">{lead}</p>}
         </div>
       </div>
       <motion.main id="main-content" tabIndex={-1} className="max-w-6xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
