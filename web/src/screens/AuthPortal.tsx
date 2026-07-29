@@ -1,14 +1,23 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ArrowLeft, Eye, EyeOff } from '@/components/icons';
+import authEvidenceInstrument from '@/assets/auth-evidence-instrument.jpg';
 
 const authOrigin = 'https://auth.poolstatis.xyz';
+const customerAppUrl = 'https://app.poolstatis.xyz/';
 const neutralFailure = 'The request could not be completed. Check the details and try again.';
-export const verificationContinueUrl = 'https://app.poolstatis.xyz/login';
+export const verificationContinueUrl = customerAppUrl;
 
 type ApiResult = Record<string, unknown>;
 type VerificationState =
@@ -64,6 +73,17 @@ export function approvedOAuthRedirect(value: unknown): string | null {
   }
 }
 
+export function authenticatedAppRedirect(result: ApiResult, search: string): string | null {
+  if (signedOAuthQuery(search)) return null;
+  if (
+    !result.user
+    || typeof result.user !== 'object'
+    || !result.session
+    || typeof result.session !== 'object'
+  ) return null;
+  return customerAppUrl;
+}
+
 async function authPost(path: string, body: Record<string, unknown>): Promise<ApiResult> {
   const response = await fetch(`/api/auth${path}`, {
     method: 'POST',
@@ -99,20 +119,61 @@ async function authGet(path: string): Promise<ApiResult> {
 
 function AuthShell({ children }: { children: ReactNode }) {
   return (
-    <main className="relative min-h-screen overflow-hidden bg-background px-4 py-10 sm:px-6">
-      <div aria-hidden className="pointer-events-none absolute inset-0 opacity-50 [background-image:radial-gradient(circle_at_center,oklch(0.7_0.1_260/.22)_1px,transparent_1px)] [background-size:28px_28px]" />
-      <div className="relative mx-auto flex min-h-[calc(100vh-5rem)] max-w-md flex-col justify-center">
-        <Link to="/login" className="mb-7 flex w-fit items-center gap-3">
-          <img className="size-10" src="/poolstatis-logo.svg" alt="" />
-          <span className="brand-wordmark text-2xl">Poolstatis</span>
-        </Link>
-        {children}
-        <p className="mt-6 text-xs leading-5 text-muted-foreground">
-          Your password is handled only by the Poolstatis identity service.
-          Analytics projects and organizations remain separate from your login.
-        </p>
+    <div className="min-h-dvh bg-background text-foreground lg:grid lg:grid-cols-5">
+      <section
+        aria-label="Why Poolstatis"
+        className="relative hidden min-h-dvh overflow-hidden border-r lg:col-span-3 lg:flex lg:flex-col"
+      >
+        <div
+          className="absolute inset-x-0 top-1/2 aspect-video -translate-y-1/2 bg-cover bg-center opacity-90"
+          aria-hidden="true"
+          style={{ backgroundImage: `url(${authEvidenceInstrument})` }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-background/20 via-transparent to-background" />
+        <div className="absolute inset-0 bg-gradient-to-r from-background/70 via-background/10 to-transparent" />
+        <div className="relative z-10 flex h-full flex-col justify-between p-10 xl:p-14">
+          <a
+            href="https://poolstatis.xyz/"
+            className="inline-flex w-fit items-center gap-2.5 rounded-md focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <img className="size-8" src="/poolstatis-logo.svg" alt="" width="32" height="32" />
+            <span className="text-lg font-bold tracking-tight">Poolstatis</span>
+          </a>
+          <div className="max-w-xl pb-4">
+            <p className="text-sm font-medium text-primary">Product decisions, backed by real signals</p>
+            <p className="mt-4 text-5xl font-semibold leading-tight tracking-tight xl:text-6xl">
+              See the signals behind every product decision.
+            </p>
+            <p className="mt-5 max-w-lg text-lg text-foreground/70">
+              Evidence for your next keep, fix, or roll back decision.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <div className="flex min-h-dvh flex-col lg:col-span-2">
+        <header className="flex items-center justify-between px-6 py-5 lg:px-8">
+          <a
+            href="https://poolstatis.xyz/"
+            className="inline-flex items-center gap-2 rounded-md text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ArrowLeft className="size-4" /> Back to home
+          </a>
+          <a href="https://poolstatis.xyz/" className="inline-flex items-center gap-2 lg:hidden">
+            <img className="size-7" src="/poolstatis-logo.svg" alt="" width="28" height="28" />
+            <span className="font-semibold tracking-tight">Poolstatis</span>
+          </a>
+        </header>
+        <main className="grid flex-1 place-items-center px-6 py-10 lg:px-8">
+          <div className="w-full max-w-sm">
+            {children}
+            <p className="mt-7 text-xs leading-5 text-muted-foreground">
+              Your password stays with the Poolstatis identity service.
+            </p>
+          </div>
+        </main>
       </div>
-    </main>
+    </div>
   );
 }
 
@@ -178,19 +239,26 @@ function AuthCard({
   title,
   description,
   children,
+  titleRef,
 }: {
   title: string;
   description: string;
   children: ReactNode;
+  titleRef?: Ref<HTMLHeadingElement>;
 }) {
   return (
-    <Card className="gap-0 overflow-hidden border-border/80 bg-card/95 py-0 shadow-2xl shadow-black/20 backdrop-blur">
-      <CardHeader className="px-6 pb-5 pt-6">
-        <CardTitle className="serif text-3xl font-normal leading-tight">{title}</CardTitle>
-        <CardDescription className="leading-6">{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="px-6 pb-6">{children}</CardContent>
-    </Card>
+    <section>
+      <p className="text-sm font-medium text-primary">Poolstatis Cloud · beta</p>
+      <h1
+        ref={titleRef}
+        tabIndex={titleRef ? -1 : undefined}
+        className="serif mt-3 text-4xl font-normal leading-tight outline-none"
+      >
+        {title}
+      </h1>
+      <p className="mt-3 mb-7 text-sm leading-6 text-muted-foreground">{description}</p>
+      {children}
+    </section>
   );
 }
 
@@ -242,10 +310,35 @@ function redirectResult(result: ApiResult): boolean {
 function Login() {
   const { search } = useLocation();
   const query = useMemo(() => new URLSearchParams(search), [search]);
+  const oauthQuery = useMemo(() => signedOAuthQuery(search), [search]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [sessionChecked, setSessionChecked] = useState(Boolean(oauthQuery));
   const submission = useSubmission();
   const callbackURL = safeAuthCallback('/login', search);
+
+  useEffect(() => {
+    if (oauthQuery) {
+      setSessionChecked(true);
+      return;
+    }
+    let live = true;
+    void authGet('/get-session')
+      .then((result) => {
+        if (!live) return;
+        const destination = authenticatedAppRedirect(result, search);
+        if (destination) {
+          window.location.replace(destination);
+          return;
+        }
+        setSessionChecked(true);
+      })
+      .catch(() => {
+        if (live) setSessionChecked(true);
+      });
+    return () => { live = false; };
+  }, [oauthQuery, search]);
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void submission.run(async () => {
@@ -257,10 +350,15 @@ function Login() {
         ...oauthBody(search),
       });
       if (!redirectResult(result)) {
-        window.location.assign('https://app.poolstatis.xyz/');
+        window.location.assign(customerAppUrl);
       }
     });
   };
+
+  if (!sessionChecked) {
+    return <div className="h-80" data-testid="auth-session-check" aria-busy="true" />;
+  }
+
   return (
     <AuthCard title="Welcome back" description="Sign in to continue to your Poolstatis workspace.">
       <form className="grid gap-4" onSubmit={submit}>
@@ -540,6 +638,7 @@ function VerificationResult() {
     <AuthCard
       title={state === 'checking' ? 'Checking your verification link' : content.title}
       description={state === 'checking' ? 'This will only take a moment.' : content.description}
+      titleRef={headingRef}
     >
       {state === 'checking' ? (
         <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
@@ -547,7 +646,6 @@ function VerificationResult() {
         </p>
       ) : (
         <div className="grid gap-4">
-          <h2 ref={headingRef} tabIndex={-1} className="sr-only">{content.title}</h2>
           <Button asChild>
             <a href={verificationContinueUrl}>Continue to Poolstatis</a>
           </Button>

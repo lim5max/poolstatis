@@ -38,7 +38,7 @@ describe('customer OIDC client policy', () => {
     expect(manager.settings.response_type).toBe('code');
     expect(manager.settings.scope).toBe(hostedAuthScope);
     expect(manager.settings.resource).toBe('https://api.poolstatis.xyz');
-    expect(manager.settings.post_logout_redirect_uri).toBe('https://poolstatis.xyz/login');
+    expect(manager.settings.post_logout_redirect_uri).toBe('https://auth.poolstatis.xyz/login');
     expect(manager.settings.extraTokenParams).toEqual({
       resource: 'https://api.poolstatis.xyz',
     });
@@ -69,7 +69,7 @@ describe('customer OIDC client policy', () => {
         credentials: 'include',
       }),
     );
-    expect(assign).toHaveBeenCalledWith('https://poolstatis.xyz/login');
+    expect(assign).toHaveBeenCalledWith('https://auth.poolstatis.xyz/login');
   });
 
   it('does not redirect when the auth cookie could not be cleared', async () => {
