@@ -2,6 +2,7 @@ import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricStatus, MetricUsage,
   PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse,
 } from './types';
+import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
 
 export class ApiError extends Error {
   constructor(public code: string, message: string, public hint?: string, public status?: number) {
@@ -259,6 +260,10 @@ export class PoolstatisClient {
 
   funnels(slug: string) {
     return this.req<{ funnels: Funnel[] }>('GET', `/api/v1/projects/${slug}/funnels`).then((r) => r.funnels);
+  }
+
+  query(slug: string, query: AnalysisQueryInput) {
+    return this.req<AnalysisQueryResult>('POST', `/api/v1/projects/${slug}/query`, query);
   }
 
   // ---- feature delivery ----

@@ -194,7 +194,7 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
           <div className="flex h-9 rounded-field border overflow-hidden text-sm">
             {(['all', 'reg', 'wild'] as const).map((v) => (
               <button key={v} onClick={() => setRegistered(v)}
-                className={cn('px-3 border-r last:border-r-0', registered === v ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>
+                className={cn('px-3 border-r last:border-r-0', registered === v ? 'bg-brand text-brand-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>
                 {v === 'all' ? 'all' : v === 'reg' ? 'registered' : 'off-standard'}
               </button>
             ))}

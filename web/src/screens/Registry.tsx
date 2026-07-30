@@ -120,7 +120,7 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
             {STATUS_OPTS.map((s) => (
               <button key={s} onClick={() => toggle(statuses, setStatuses, s)}
                 className={cn('px-3 capitalize border-r last:border-r-0 transition-colors',
-                  statuses.has(s) ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>
+                  statuses.has(s) ? 'bg-brand text-brand-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>
                 {s}
               </button>
             ))}
@@ -283,7 +283,7 @@ function Section({ group, busy, onActivate, onDeprecate, onDelete, onEditTags, o
             <div className="text-xs text-muted-foreground">{m.key}</div>
             {(m.tags ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1">
-                {m.tags.map((t) => <span key={t} className="text-[11px] rounded-full border px-1.5 py-px text-muted-foreground">#{t}</span>)}
+                {m.tags.map((t) => <span key={t} className="rounded-full border px-1.5 py-px text-xs text-muted-foreground">#{t}</span>)}
               </div>
             )}
           </TableCell>

@@ -91,7 +91,7 @@ function FlagForm({ flags, onCreated }: { flags: FeatureFlag[]; onCreated: () =>
         ))}
       </div>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex rounded-field border p-1"><button type="button" onClick={() => setStatus('draft')} className={`rounded-control px-3 py-1.5 text-xs ${status === 'draft' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}`}>Draft</button><button type="button" onClick={() => setStatus('active')} className={`rounded-control px-3 py-1.5 text-xs ${status === 'active' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Active</button></div>
+        <div className="flex rounded-field border p-1"><button type="button" onClick={() => setStatus('draft')} className={`rounded-control px-3 py-1.5 text-xs ${status === 'draft' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}`}>Draft</button><button type="button" onClick={() => setStatus('active')} className={`rounded-control px-3 py-1.5 text-xs ${status === 'active' ? 'bg-brand text-brand-foreground' : 'text-muted-foreground'}`}>Active</button></div>
         <div className="flex items-center gap-2"><span className="text-xs text-muted-foreground">{duplicate ? 'Key already exists' : allocation > 100 ? 'Allocation cannot exceed 100%' : 'SDK exposures are automatic'}</span><Button onClick={submit} disabled={!valid || duplicate || busy}>{busy ? <Loader2 className="size-4 animate-spin" /> : <Add className="size-4" />}Create flag</Button></div>
       </div>
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
