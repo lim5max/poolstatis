@@ -511,24 +511,6 @@ export interface SampleFilter {
   value?: string | number | Array<string | number>;
 }
 
-export interface ActorSummary {
-  first_seen: string | null;
-  last_seen: string | null;
-  total_events: number;
-  distinct_events: number;
-  active_days: number;
-  sessions: number;
-  registered_share: number;
-  top_events: Array<{ event: string; count: number }>;
-}
-
-export interface PersonSummary {
-  distinct_id: string;
-  env: string;
-  summary: ActorSummary;
-  entity: { entity_type: string; properties: Record<string, unknown>; updated_at: string } | null;
-}
-
 export interface IngestWarning {
   kind: 'rejected' | 'unregistered' | 'clock_skew';
   event: string;

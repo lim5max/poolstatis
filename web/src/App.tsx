@@ -15,6 +15,8 @@ import { Connect } from './screens/Connect';
 import { Projects } from './screens/Projects';
 import { Overview } from './screens/Overview';
 import { ProductAnalytics } from './screens/ProductAnalytics';
+import { WebAnalytics } from './screens/WebAnalytics';
+import { Users } from './screens/Users';
 import { Registry } from './screens/Registry';
 import { Data } from './screens/Data';
 import { Keys } from './screens/Keys';
@@ -46,6 +48,8 @@ const TITLES: Record<string, string> = {
   '/': 'Overview',
   '/projects': 'Projects',
   '/analyze/product': 'Product analytics',
+  '/analyze/web': 'Web analytics',
+  '/analyze/users': 'Users',
   '/registry': 'Registry',
   '/measurement': 'Measurement',
   '/data': 'Data',
@@ -56,7 +60,11 @@ const TITLES: Record<string, string> = {
   '/decisions': 'Decisions',
   '/setup': 'Setup & MCP',
 };
-const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' : TITLES[path] ?? 'Poolstatis');
+const titleFor = (path: string) => (
+  path.startsWith('/data/person') || path.startsWith('/analyze/users/')
+    ? 'Actor profile'
+    : TITLES[path] ?? 'Poolstatis'
+);
 
 export function App() {
   const { client } = useStore();
@@ -288,6 +296,9 @@ function Main() {
           <Route path="/projects" element={<Projects />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/analyze/product" element={<Guarded><ProductAnalytics /></Guarded>} />
+          <Route path="/analyze/web" element={<Guarded><WebAnalytics /></Guarded>} />
+          <Route path="/analyze/users" element={<Guarded><Users /></Guarded>} />
+          <Route path="/analyze/users/:distinctId" element={<Guarded><Person /></Guarded>} />
           <Route path="/registry" element={<Guarded><Registry /></Guarded>} />
           <Route path="/measurement" element={<Guarded><Measurement /></Guarded>} />
           <Route path="/data" element={<Guarded><Data /></Guarded>} />

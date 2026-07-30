@@ -1,8 +1,9 @@
 import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse,
+  ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
+import type { OperationalQueryInput, OperationalQueryResult, PersonResult } from '../analysis/operations';
 
 export class ApiError extends Error {
   constructor(public code: string, message: string, public hint?: string, public status?: number) {
@@ -266,6 +267,10 @@ export class PoolstatisClient {
     return this.req<AnalysisQueryResult>('POST', `/api/v1/projects/${slug}/query`, query);
   }
 
+  operationalQuery<T extends OperationalQueryResult>(slug: string, query: OperationalQueryInput) {
+    return this.req<T>('POST', `/api/v1/projects/${slug}/query`, query);
+  }
+
   // ---- feature delivery ----
   flags(slug: string) {
     return this.req<{ flags: FeatureFlag[] }>('GET', `/api/v1/projects/${slug}/flags`).then((r) => r.flags);
@@ -350,8 +355,18 @@ export class PoolstatisClient {
     return this.req<{ events: SampleEvent[] }>('GET', `/api/v1/projects/${slug}/events/sample?${qs}`).then((r) => r.events);
   }
 
-  personSummary(slug: string, distinctId: string, env = 'prod') {
-    return this.req<PersonSummary>('GET', `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinctId)}?env=${encodeURIComponent(env)}`);
+  personSummary(slug: string, distinctId: string, input: {
+    env: string; from?: string; to?: string | null; limit?: number; cursor?: string;
+  }) {
+    const query = new URLSearchParams({ env: input.env });
+    if (input.from) query.set('from', input.from);
+    if (input.to) query.set('to', input.to);
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    return this.req<PersonResult>(
+      'GET',
+      `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinctId)}?${query}`,
+    );
   }
 
   entities(slug: string, q: { entity_type: string; limit?: number; env: string }) {
