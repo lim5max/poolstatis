@@ -88,6 +88,8 @@ beforeAll(async () => {
     'LICENSE',
     'README.md',
     'dist/cli.js',
+    'dist/core/mcp/browserStandard.d.ts',
+    'dist/core/mcp/browserStandard.js',
     'dist/core/mcp/server.d.ts',
     'dist/core/mcp/server.js',
     'dist/core/mcp/standard.js',

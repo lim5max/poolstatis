@@ -254,29 +254,34 @@ Keep them semantic, small, and useful:
 
 | Event | Required properties | Why |
 |---|---|---|
-| `page.viewed` | `path`, `title`, `referrer`, `utm_*`, `session_id` | acquisition and path analysis |
-| `page.left` | `path`, `duration_ms`, `max_scroll_pct`, `session_id` | time on page and bounce quality |
-| `session.started` | `landing_path`, `referrer`, `utm_*` | session-level attribution |
-| `cta.clicked` | `cta_id`, `cta_text`, `path` | conversion intent |
-| `form.started` | `form_id`, `path` | friction before submit |
-| `form.submitted` | `form_id`, `path`, `success` | lead/signup intent |
-| `signup.started` | `source`, `path` | activation start |
+| `page.viewed` | `$route_key`, `$page_view_id`, `session_id` | privacy-safe route and session analysis |
+| `page.engagement` | `$route_key`, `$page_view_id`, `foreground_ms`, `elapsed_ms`, `max_scroll_pct`, `session_id` | measured foreground engagement and completion evidence |
+| `session.started` | `landing_route`, `referrer_origin`, `$utm_*` | consent-gated session landing attribution |
+| `cta.clicked` | `cta_id`, `$route_key` | conversion intent without captured text or URL |
+| `form.started` | `form_id`, `$route_key` | friction before submit |
+| `form.submitted` | `form_id`, `$route_key`, `success` | lead/signup intent |
+| `signup.started` | `source`, `$route_key` | activation start |
 | `signup.completed` | `plan`, `source` | activation completion |
-| `docs.searched` | `query_length`, `path` | docs demand without storing raw query by default |
+| `docs.searched` | `query_length`, `$route_key` | docs demand without storing raw query or path |
 | `mcp_config.copied` | `client`, `project_slug` | onboarding progress |
-| `web_vital.measured` | `name`, `value`, `rating`, `path` | performance quality |
+| `web_vital.measured` | `name`, `value`, `rating`, `$route_key` | performance quality by finite route |
 | `api.request.completed` | `route`, `duration_ms`, `status_group` | server/client performance |
 | `agent.answer.completed` | `duration_ms`, `accepted`, `retry_count` | AI product quality |
 
-Do not capture raw form values, copied text, or DOM text by default.
+`$route_key` and `landing_route` must come from the same finite trusted
+vocabulary, for example `home`, `pricing`, `docs.article`, and `other`.
+`referrer_origin` is origin-only, while `$utm_*` values are bounded and
+consent-gated. Do not capture raw paths, full URLs, titles, referrers, form
+values, copied text, or DOM text. Only the normalized referrer origin is
+allowed.
 
 ### Web metric pack
 
 Seed these metrics for marketing/public sites:
 
 - `website_visitors`: unique actors on `page.viewed`.
-- `landing_views`: count of `page.viewed` where `path=/`.
-- `pricing_intent`: count of `page.viewed` where `path` contains pricing.
+- `landing_views`: count of `page.viewed` where `$route_key=home`.
+- `pricing_intent`: count of `page.viewed` where `$route_key=pricing`.
 - `signup_intent`: count of `signup.started`.
 - `signup_completion`: count of `signup.completed`.
 - `cta_clicks`: count of `cta.clicked`.
@@ -309,7 +314,7 @@ const ps = createWebClient({
   },
 });
 
-ps.track("cta.clicked", { cta_id: "hero-start", path: location.pathname });
+ps.track("cta.clicked", { cta_id: "hero-start", $route_key: mapRoute(location.pathname) });
 
 const timer = ps.timer("agent.answer");
 timer.done({ accepted: true });

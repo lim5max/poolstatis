@@ -410,19 +410,14 @@ export class PostgresEventStore implements EventStore {
     const counts = `count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS visitors,
       count(DISTINCT (
         poolstatis_resolve_actor(project_id, env, distinct_id), session_id
-      )) FILTER (WHERE session_id IS NOT NULL)::int AS sessions,
+      )) FILTER (WHERE session_id IS NOT NULL AND session_id <> '')::int AS sessions,
       count(*)::int AS page_views`;
-    const summaryRows = await this.pool.query(
+    const summaryRow = (await this.pool.query(
       `SELECT ${counts} FROM events WHERE ${where}`,
       params,
-    );
-    const summary = {
-      visitors: Number(summaryRows.rows[0]?.visitors ?? 0),
-      sessions: Number(summaryRows.rows[0]?.sessions ?? 0),
-      page_views: Number(summaryRows.rows[0]?.page_views ?? 0),
-    };
+    )).rows[0] ?? {};
     const engagementParams: unknown[] = [q.projectId, q.env, q.event, q.from, q.to];
-    const engagementRows = await this.pool.query(
+    const engagementRow = (await this.pool.query(
       `${this.webEngagementCtes(q, engagementParams)}
        SELECT
          count(*) FILTER (WHERE engaged IS NOT NULL)::int AS measured_sessions,
@@ -434,16 +429,25 @@ export class PostgresEventStore implements EventStore {
          COALESCE(sum(timed_page_views), 0)::int AS timed_page_views,
          COALESCE(sum(page_views), 0)::int AS total_page_views,
          COALESCE(sum(foreground_ms), 0)::bigint AS foreground_ms,
-         COALESCE(sum(session_span_ms), 0)::bigint AS session_span_ms
+         COALESCE(sum(session_span_ms), 0)::bigint AS session_span_ms,
+         floor(avg(session_span_ms) FILTER (WHERE complete))::bigint
+           AS average_session_duration_ms
        FROM session_rows`,
       engagementParams,
-    );
-    const engagementRow = engagementRows.rows[0] ?? {};
-    const totalPageViews = summary.page_views;
-    const timedPageViews = Number(engagementRow.timed_page_views ?? 0);
+    )).rows[0] ?? {};
+    const summary = {
+      visitors: Number(summaryRow.visitors ?? 0),
+      sessions: Number(summaryRow.sessions ?? 0),
+      page_views: Number(summaryRow.page_views ?? 0),
+      average_session_duration_ms: engagementRow.average_session_duration_ms === null
+        || engagementRow.average_session_duration_ms === undefined
+        ? null
+        : Number(engagementRow.average_session_duration_ms),
+    };
     const measuredSessions = Number(engagementRow.measured_sessions ?? 0);
     const engagedSessions = Number(engagementRow.engaged_sessions ?? 0);
     const bounceSessions = Number(engagementRow.bounce_sessions ?? 0);
+    const timedPageViews = Number(engagementRow.timed_page_views ?? 0);
     const engagement = {
       measured_sessions: measuredSessions,
       incomplete_sessions: Number(engagementRow.incomplete_sessions ?? 0),
@@ -455,8 +459,8 @@ export class PostgresEventStore implements EventStore {
       bounce_rate: measuredSessions === 0 ? null : bounceSessions / measuredSessions,
       single_page_sessions: Number(engagementRow.single_page_sessions ?? 0),
       timed_page_views: timedPageViews,
-      total_page_views: totalPageViews,
-      timed_page_coverage: totalPageViews === 0 ? null : timedPageViews / totalPageViews,
+      total_page_views: summary.page_views,
+      timed_page_coverage: summary.page_views === 0 ? null : timedPageViews / summary.page_views,
       foreground_ms: Number(engagementRow.foreground_ms ?? 0),
       session_span_ms: Number(engagementRow.session_span_ms ?? 0),
     };
@@ -492,7 +496,7 @@ export class PostgresEventStore implements EventStore {
       `${ctes}
        SELECT *, count(*) OVER ()::int AS total
        FROM session_rows
-       ORDER BY started_at DESC, session_id
+       ORDER BY started_at DESC, session_id, actor_id
        LIMIT $${limitParam}`,
       params,
     );
@@ -525,13 +529,12 @@ export class PostgresEventStore implements EventStore {
          SELECT *, count(*) OVER ()::int AS total_pages
          FROM pages WHERE session_id = $${sessionParam}
            AND ($${actorParam}::text IS NULL OR actor_id = $${actorParam})
-         ORDER BY viewed_at, page_view_id NULLS LAST
+         ORDER BY viewed_at, page_view_id, actor_id, route
          LIMIT $${pageLimitParam}`,
         params,
       ),
     ]);
-    const ambiguousActor = !q.actorId && summaryRows.rows.length > 1;
-    if (ambiguousActor) {
+    if (!q.actorId && summaryRows.rows.length > 1) {
       return { summary: null, pages: [], total: 0, ambiguous_actor: true };
     }
     return {
@@ -549,21 +552,24 @@ export class PostgresEventStore implements EventStore {
     const pageParam = params.length;
     params.push(q.actorId ?? null);
     const actorParam = params.length;
+    params.push(q.sessionId ?? null);
+    const sessionParam = params.length;
     const { rows } = await this.pool.query(
-      `${ctes}
-       , matched_pages AS (
+      `${ctes},
+       matched_pages AS (
          SELECT * FROM pages
          WHERE page_view_id = $${pageParam}
            AND ($${actorParam}::text IS NULL OR actor_id = $${actorParam})
+           AND ($${sessionParam}::text IS NULL OR session_id = $${sessionParam})
        )
        SELECT *,
-         (SELECT count(DISTINCT actor_id)::int FROM matched_pages) AS actor_count
+         (SELECT count(DISTINCT (actor_id, session_id))::int FROM matched_pages) AS identity_count
        FROM matched_pages
-       ORDER BY viewed_at DESC
+       ORDER BY viewed_at DESC, session_id, actor_id, route
        LIMIT 1`,
       params,
     );
-    const ambiguousActor = !q.actorId && Number(rows[0]?.actor_count ?? 0) > 1;
+    const ambiguousActor = Number(rows[0]?.identity_count ?? 0) > 1;
     return {
       page: rows[0] && !ambiguousActor ? this.webPageEngagement(rows[0]) : null,
       ambiguous_actor: ambiguousActor,
@@ -579,33 +585,52 @@ export class PostgresEventStore implements EventStore {
           const keyFilters = andFilters(q.keyMetric.filters, 'k.properties', params);
           return `key_sessions AS (
             SELECT DISTINCT
+              k.project_id,
+              k.env,
               k.session_id,
               poolstatis_resolve_actor(k.project_id, k.env, k.distinct_id) AS actor_id
             FROM events k
-            WHERE k.project_id = $1 AND k.env = $2
+            WHERE k.project_id = $1
+              AND k.env = $2
               AND k.event = $${eventParam}
-              AND k."timestamp" >= $4 AND k."timestamp" < $5
-              AND k.session_id IS NOT NULL${keyFilters}
+              AND k."timestamp" >= $4
+              AND k."timestamp" < $5
+              AND k.session_id IS NOT NULL
+              AND k.session_id <> ''${keyFilters}
           )`;
         })()
       : `key_sessions AS (
-          SELECT NULL::text AS session_id, NULL::text AS actor_id WHERE false
+          SELECT
+            NULL::uuid AS project_id,
+            NULL::text AS env,
+            NULL::text AS session_id,
+            NULL::text AS actor_id
+          WHERE false
         )`;
     return `
       WITH page_views AS (
         SELECT
+          p.project_id,
+          p.env,
           p.session_id,
           poolstatis_resolve_actor(p.project_id, p.env, p.distinct_id) AS actor_id,
           p.properties->>'$page_view_id' AS page_view_id,
-          COALESCE(p.properties->>'$page_path', '/') AS path,
+          p.properties->>'$route_key' AS route,
           p."timestamp" AS viewed_at
         FROM events p
-        WHERE p.project_id = $1 AND p.env = $2 AND p.event = $3
-          AND p."timestamp" >= $4 AND p."timestamp" < $5
-          AND p.session_id IS NOT NULL${pageFilters}
+        WHERE p.project_id = $1
+          AND p.env = $2
+          AND p.event = $3
+          AND p."timestamp" >= $4
+          AND p."timestamp" < $5
+          AND p.session_id IS NOT NULL
+          AND p.session_id <> ''
+          AND p.properties->>'$page_view_id' IS NOT NULL${pageFilters}
       ),
       ranked_engagement AS (
         SELECT
+          e.project_id,
+          e.env,
           e.session_id,
           poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id) AS actor_id,
           e.properties->>'$page_view_id' AS page_view_id,
@@ -615,10 +640,10 @@ export class PostgresEventStore implements EventStore {
             THEN (e.properties->>'sequence')::int END AS sequence,
           CASE WHEN e.properties->>'foreground_ms' ~ '^\\d{1,9}$'
             AND (e.properties->>'foreground_ms')::numeric <= 604800000
-            THEN floor((e.properties->>'foreground_ms')::numeric)::bigint END AS foreground_ms,
+            THEN (e.properties->>'foreground_ms')::bigint END AS foreground_ms,
           CASE WHEN e.properties->>'elapsed_ms' ~ '^\\d{1,9}$'
             AND (e.properties->>'elapsed_ms')::numeric <= 604800000
-            THEN floor((e.properties->>'elapsed_ms')::numeric)::bigint END AS elapsed_ms,
+            THEN (e.properties->>'elapsed_ms')::bigint END AS elapsed_ms,
           CASE WHEN e.properties->>'max_scroll_pct' ~ '^\\d{1,3}$'
             AND (e.properties->>'max_scroll_pct')::numeric <= 100
             THEN (e.properties->>'max_scroll_pct')::double precision END AS max_scroll_pct,
@@ -631,6 +656,8 @@ export class PostgresEventStore implements EventStore {
           ) THEN e.properties->>'reason' END AS reason,
           row_number() OVER (
             PARTITION BY
+              e.project_id,
+              e.env,
               poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id),
               e.session_id,
               e.properties->>'$page_view_id'
@@ -638,12 +665,31 @@ export class PostgresEventStore implements EventStore {
               CASE WHEN e.properties->>'sequence' ~ '^\\d{1,10}$'
                 AND (e.properties->>'sequence')::numeric <= 2147483647
                 THEN (e.properties->>'sequence')::int ELSE -1 END DESC,
-              e."timestamp" DESC
+              e."timestamp" DESC,
+              CASE WHEN e.properties->>'foreground_ms' ~ '^\\d{1,9}$'
+                AND (e.properties->>'foreground_ms')::numeric <= 604800000
+                THEN (e.properties->>'foreground_ms')::bigint ELSE -1 END DESC,
+              CASE WHEN e.properties->>'elapsed_ms' ~ '^\\d{1,9}$'
+                AND (e.properties->>'elapsed_ms')::numeric <= 604800000
+                THEN (e.properties->>'elapsed_ms')::bigint ELSE -1 END DESC,
+              CASE WHEN e.properties->>'max_scroll_pct' ~ '^\\d{1,3}$'
+                AND (e.properties->>'max_scroll_pct')::numeric <= 100
+                THEN (e.properties->>'max_scroll_pct')::double precision ELSE -1 END DESC,
+              CASE WHEN e.properties->>'interaction_count' ~ '^\\d{1,10}$'
+                AND (e.properties->>'interaction_count')::numeric <= 2147483647
+                THEN (e.properties->>'interaction_count')::int ELSE -1 END DESC,
+              COALESCE(e.properties->>'reason', '') DESC,
+              e.distinct_id DESC,
+              e.properties::text DESC
           ) AS rank
         FROM events e
-        WHERE e.project_id = $1 AND e.env = $2 AND e.event = 'page.engagement'
-          AND e."timestamp" >= $4 AND e."timestamp" < $5
+        WHERE e.project_id = $1
+          AND e.env = $2
+          AND e.event = 'page.engagement'
+          AND e."timestamp" >= $4
+          AND e."timestamp" < $5
           AND e.session_id IS NOT NULL
+          AND e.session_id <> ''
           AND e.properties->>'$browser_context' = '1'
           AND e.properties->>'$page_view_id' IS NOT NULL
       ),
@@ -652,9 +698,12 @@ export class PostgresEventStore implements EventStore {
       ),
       pages AS (
         SELECT
+          p.project_id,
+          p.env,
           p.page_view_id,
           p.session_id,
-          p.path,
+          p.actor_id,
+          p.route,
           p.viewed_at,
           l.last_snapshot_at,
           l.sequence,
@@ -664,15 +713,13 @@ export class PostgresEventStore implements EventStore {
           l.interaction_count,
           l.reason,
           (
-            p.page_view_id IS NOT NULL
-            AND l.sequence IS NOT NULL
+            l.sequence IS NOT NULL
             AND l.foreground_ms IS NOT NULL
             AND l.elapsed_ms IS NOT NULL
             AND l.foreground_ms <= l.elapsed_ms
           ) AS timed,
           (
-            p.page_view_id IS NOT NULL
-            AND l.sequence IS NOT NULL
+            l.sequence IS NOT NULL
             AND l.foreground_ms IS NOT NULL
             AND l.elapsed_ms IS NOT NULL
             AND l.foreground_ms <= l.elapsed_ms
@@ -681,25 +728,35 @@ export class PostgresEventStore implements EventStore {
               'pagehide', 'freeze', 'duration_rollover', 'destroy'
             )
           ) AS complete,
-          p.actor_id
+          CASE
+            WHEN l.sequence IS NOT NULL
+              AND l.elapsed_ms IS NOT NULL
+              AND l.elapsed_ms >= 0
+            THEN p.viewed_at + l.elapsed_ms * interval '1 millisecond'
+            ELSE COALESCE(l.last_snapshot_at, p.viewed_at)
+          END AS evidence_ended_at
         FROM page_views p
         LEFT JOIN latest_engagement l
-          ON l.actor_id = p.actor_id
+          ON l.project_id = p.project_id
+          AND l.env = p.env
+          AND l.actor_id = p.actor_id
           AND l.session_id = p.session_id
           AND l.page_view_id = p.page_view_id
       ),
       ${keySessions},
       session_rows AS (
         SELECT
+          p.project_id,
+          p.env,
           p.session_id,
           p.actor_id,
           min(p.viewed_at) AS started_at,
-          max(COALESCE(p.last_snapshot_at, p.viewed_at)) AS ended_at,
+          max(p.evidence_ended_at) AS ended_at,
           count(*)::int AS page_views,
           count(*) FILTER (WHERE p.timed)::int AS timed_page_views,
           COALESCE(sum(p.foreground_ms), 0)::bigint AS foreground_ms,
           floor(extract(epoch FROM (
-            max(COALESCE(p.last_snapshot_at, p.viewed_at)) - min(p.viewed_at)
+            max(p.evidence_ended_at) - min(p.viewed_at)
           )) * 1000)::bigint AS session_span_ms,
           (count(*) FILTER (WHERE p.complete) = count(*)) AS complete,
           CASE
@@ -707,8 +764,7 @@ export class PostgresEventStore implements EventStore {
               COALESCE(sum(p.foreground_ms), 0) >= 10000
               OR count(*) >= 2
               OR bool_or(k.session_id IS NOT NULL)
-            )
-            THEN true
+            ) THEN true
             WHEN count(*) FILTER (WHERE p.complete) = count(*) THEN false
             ELSE NULL
           END AS engaged,
@@ -724,8 +780,11 @@ export class PostgresEventStore implements EventStore {
           (count(*) = 1) AS single_page
         FROM pages p
         LEFT JOIN key_sessions k
-          ON k.actor_id = p.actor_id AND k.session_id = p.session_id
-        GROUP BY p.actor_id, p.session_id
+          ON k.project_id = p.project_id
+          AND k.env = p.env
+          AND k.actor_id = p.actor_id
+          AND k.session_id = p.session_id
+        GROUP BY p.project_id, p.env, p.actor_id, p.session_id
       )`;
   }
 
@@ -734,14 +793,16 @@ export class PostgresEventStore implements EventStore {
       page_view_id: String(row.page_view_id),
       session_id: String(row.session_id),
       actor_id: String(row.actor_id),
-      path: String(row.path),
+      route: String(row.route),
       viewed_at: toIso(row.viewed_at as string | Date),
-      last_snapshot_at: row.last_snapshot_at ? toIso(row.last_snapshot_at as string | Date) : null,
-      sequence: row.sequence === null || row.sequence === undefined ? null : Number(row.sequence),
-      foreground_ms: row.foreground_ms === null || row.foreground_ms === undefined ? null : Number(row.foreground_ms),
-      elapsed_ms: row.elapsed_ms === null || row.elapsed_ms === undefined ? null : Number(row.elapsed_ms),
-      max_scroll_pct: row.max_scroll_pct === null || row.max_scroll_pct === undefined ? null : Number(row.max_scroll_pct),
-      interaction_count: row.interaction_count === null || row.interaction_count === undefined ? null : Number(row.interaction_count),
+      last_snapshot_at: row.last_snapshot_at
+        ? toIso(row.last_snapshot_at as string | Date)
+        : null,
+      sequence: nullableNumber(row.sequence),
+      foreground_ms: nullableNumber(row.foreground_ms),
+      elapsed_ms: nullableNumber(row.elapsed_ms),
+      max_scroll_pct: nullableNumber(row.max_scroll_pct),
+      interaction_count: nullableNumber(row.interaction_count),
       reason: row.reason === null || row.reason === undefined ? null : String(row.reason),
       timed: Boolean(row.timed),
       complete: Boolean(row.complete),
@@ -1669,6 +1730,10 @@ function isPartitionOverlapError(err: unknown): boolean {
 
 function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function nullableNumber(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
 }
 
 function toExperienceSessionEvent(

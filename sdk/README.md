@@ -136,18 +136,25 @@ For a host-owned, reversible opt-out policy, set `consentPolicy: 'opt-out'`.
 Without callbacks it starts immediately; provide `hasConsent` and
 `subscribeConsent` when the host persists a Disable/Enable choice. Omitting
 `consentPolicy` keeps the existing opt-in contract and requires both callbacks.
-Use `mapPagePath` when public routes can contain user-provided slugs. Its
-finite result is used for both `$page_path` and `landing_path`; mapper failures
-fall back to `/other` instead of sending the raw path.
+`mapPagePath` is required. Its finite lowercase result is used for both
+`$route_key` and `landing_route`, so raw public paths are never sent.
+Mapper exceptions fall back to the trusted `other` key; an unsafe returned key
+fails closed instead of sending the raw path.
 `contextProperties` can only narrow the SDK's typed coarse context list.
 Unknown property names are ignored at runtime and cannot expand capture.
+
+Before attribution-only capture, run browser analytics setup with the finite
+route vocabulary and mark `$route_key` as trusted. `landing_route` is validated
+against that same vocabulary even when `createAttributionClient` is used
+without the full browser module.
 
 Composed acquisition uses the same session and page-view event. Do not also
 start `createAttributionClient`, which is the acquisition-only alternative and
 owns its own page views.
 
 See [Browser Analytics Context](../docs/13-browser-analytics.md) for reserved
-properties, country proxy configuration, definitions and rollout.
+properties, finite route-vocabulary setup, definitions and rollout. Existing
+0.1 integrations must also follow the [0.2 migration guide](./MIGRATION.md).
 
 ## Browser Experience (optional module)
 
@@ -211,7 +218,7 @@ const analytics = createAttributionClient({
   distinctId: () => currentActorId(), // can change from anonymous to authenticated
   hasConsent: () => consent.has('product_analytics'),
   subscribeConsent: (listener) => consent.onChange(listener), // must synchronously call on withdrawal
-  route: () => router.currentPathname(), // safe product route/path provider
+  route: () => mapRoute(router.currentPathname()), // finite key from the trusted route vocabulary
 });
 
 await analytics.start(); // exactly one session.started + initial page.viewed
@@ -220,12 +227,16 @@ analytics.track('signup.completed', { plan: 'pro' });
 // `subscribeConsent` calls stop automatically on withdrawal and drops unsent/retrying attribution events.
 ```
 
-The helper owns and exposes `analytics.sessionId`; it snapshots only `pathname`,
-referrer **origin**, and first valid `utm_source`, `utm_medium`, `utm_campaign`,
+The helper owns and exposes `analytics.sessionId`; it snapshots only the
+product-owned finite `landing_route`, referrer **origin**, and first valid `utm_source`, `utm_medium`, `utm_campaign`,
 `utm_term`, `utm_content` (trimmed, NFC, max 256). It discards unknown query
-parameters, query/hash from the path, full referrer URLs, click IDs and all
+parameters, raw path/query/hash values, full referrer URLs, click IDs and all
 previous-session values. It does not link anonymous and authenticated actors:
 use Poolstatis's audited actor-link API/MCP flow for that query-time resolution.
+
+SDK `0.2.0` intentionally removed the raw `landing_path` contract. See
+[`MIGRATION.md`](./MIGRATION.md) before
+upgrading an attribution integration.
 
 UTM trends are labelled **session landing attribution**. They are associations,
 not causal campaign credit or an ad-attribution model.

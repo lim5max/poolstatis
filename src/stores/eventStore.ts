@@ -77,7 +77,7 @@ export interface WebAnalyticsCounts {
 }
 
 export interface WebAnalyticsResult {
-  summary: WebAnalyticsCounts;
+  summary: WebAnalyticsCounts & { average_session_duration_ms: number | null };
   engagement: WebEngagementSummary;
   breakdowns: Record<string, Array<WebAnalyticsCounts & { value: string }>>;
   truncatedDimensions: string[];
@@ -123,13 +123,14 @@ export interface WebSessionQuery extends WebEngagementBaseQuery {
 export interface PageEngagementQuery extends WebEngagementBaseQuery {
   pageViewId: string;
   actorId?: string;
+  sessionId?: string;
 }
 
 export interface WebPageEngagement {
   page_view_id: string;
   session_id: string;
   actor_id: string;
-  path: string;
+  route: string;
   viewed_at: string;
   last_snapshot_at: string | null;
   sequence: number | null;

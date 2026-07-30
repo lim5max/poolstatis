@@ -125,6 +125,15 @@ selectors, input values, error stack/message и network data не являютс
 
 CRUD-слой 1:1 с тулами MCP (см. [03-mcp-server.md](03-mcp-server.md)):
 
+Browser Analytics добавляет atomic setup endpoint
+`POST /api/v1/projects/{slug}/properties/browser-analytics` с body
+`{"route_keys":["home","docs","pricing","other"]}` и строгие ветки
+`web_analytics`, `web_sessions`, `web_session`, `page_engagement` в общем
+`POST /api/v1/projects/{slug}/query`. Session grain —
+`(resolved actor, non-empty session_id)`; ambiguous detail fail-closed, а
+отсутствующие denominators возвращаются как `null`. Полный privacy/consent
+контракт: [13-browser-analytics.md](13-browser-analytics.md).
+
 ```
 GET    /api/v1/projects
 GET    /api/v1/projects/{slug}/schema
@@ -461,6 +470,7 @@ GET /api/v1/projects/{slug}/data-quality?env=prod&limit=50&since_days=30
 - Формат ошибок единый: `{ "error": { "code": "metric_key_taken", "message": "…", "hint": "…" } }` — `hint` пишется для агента-читателя.
 Для privacy-bounded web traffic используйте Query DSL
 `kind: "web_analytics"` с registry metric key, периодом и bounded dimensions
-`country|device|browser|os|language|timezone|source`. Ответ отдельно возвращает
+`route|device|browser|os|language|timezone|source`. `country` остаётся явно
+unavailable до отдельного review trusted proxy/MMDB lifecycle. Ответ возвращает
 `visitors`, `sessions`, `page_views`, counts и page-view percentages; определения
 и privacy caveats входят в `meta`.

@@ -70,11 +70,12 @@ describe('customer admin shell', () => {
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeInTheDocument();
   });
 
-  it('groups navigation around setup, measurement, delivery, and account tasks', () => {
+  it('groups navigation around overview, analysis, decisions, data management, and account tasks', () => {
     render(<MemoryRouter><App /></MemoryRouter>);
-    expect(screen.getByText('Get started')).toBeInTheDocument();
-    expect(screen.getByText('Measure')).toBeInTheDocument();
-    expect(screen.getByText('Ship & learn')).toBeInTheDocument();
+    expect(screen.getAllByText('Overview').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Analyze')).toBeInTheDocument();
+    expect(screen.getByText('Ship & decide')).toBeInTheDocument();
+    expect(screen.getByText('Manage data')).toBeInTheDocument();
     expect(screen.getByText('Workspace')).toBeInTheDocument();
   });
 
@@ -84,6 +85,15 @@ describe('customer admin shell', () => {
     expect(screen.getByRole('button', { name: /alpha/i })).toBeInTheDocument();
     expect(screen.getAllByText('prod').length).toBeGreaterThan(0);
     expect(screen.queryByText('Connect an agent, send data, and verify the first query.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the project context and project management reachable from Analyze', async () => {
+    render(<MemoryRouter initialEntries={['/analyze/product']}><App /></MemoryRouter>);
+    const projectSwitcher = screen.getByRole('button', { name: /alpha/i });
+    expect(projectSwitcher).toBeInTheDocument();
+    expect(screen.getAllByText('prod').length).toBeGreaterThan(0);
+    fireEvent.keyDown(projectSwitcher, { key: 'ArrowDown' });
+    expect(await screen.findByRole('menuitem', { name: 'Manage projects' })).toBeInTheDocument();
   });
 
   it('still works when browser storage is blocked', () => {

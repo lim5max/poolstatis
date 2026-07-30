@@ -1,6 +1,6 @@
 {
   "name": "@poolstatis/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Zero-dependency Poolstatis SDK for Node, browser analytics, engagement, attribution and privacy-safe experience evidence.",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
@@ -29,7 +29,7 @@
     "./attribution": { "types": "./dist/attribution.d.ts", "import": "./dist/attribution.js" },
     "./browser": { "types": "./dist/browser.d.ts", "import": "./dist/browser.js" }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist", "README.md", "MIGRATION.md", "LICENSE"],
   "sideEffects": false,
   "engines": { "node": ">=18" },
   "scripts": {

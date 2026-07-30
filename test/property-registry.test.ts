@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { BROWSER_ANALYTICS_PROPERTIES } from '../src/services/browserAnalytics.js';
 import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
 
 describe('property registry and measurement trust', () => {
@@ -177,7 +178,7 @@ describe('property registry and measurement trust', () => {
       env.secretToken,
       'POST',
       '/api/v1/projects/' + env.projectSlug + '/properties',
-      { key: '$country', scope: 'event', value_type: 'string', purpose: 'A client supplied country inferred from browser locale.' },
+      { key: '$route_key', scope: 'event', value_type: 'string', purpose: 'A dynamic route field with no finite trusted vocabulary.' },
     );
     expect(malformed.status).toBe(201);
     const setup = await api(
@@ -185,9 +186,54 @@ describe('property registry and measurement trust', () => {
       env.secretToken,
       'POST',
       '/api/v1/projects/' + env.projectSlug + '/properties/browser-analytics',
-      {},
+      { route_keys: ['home', 'pricing'] },
     );
     expect(setup.status).toBe(409);
     expect(setup.body.error.code).toBe('browser_property_conflict');
+  });
+
+  test('invalidates a primed missing-route cache after generic property creation', async () => {
+    const cacheEnv = await createTestEnv();
+    try {
+      const browserEvent = {
+        event: 'page.viewed',
+        distinct_id: 'cache-actor',
+        session_id: 'cache-session',
+        properties: {
+          $browser_context: '1',
+          $route_key: 'home',
+          $page_view_id: 'cache-page',
+        },
+      };
+      const primed = await api(cacheEnv, cacheEnv.ingestToken, 'POST', '/i/v1/events', {
+        events: [browserEvent],
+      });
+      expect(primed.status).toBe(207);
+
+      const created = await api(
+        cacheEnv,
+        cacheEnv.secretToken,
+        'POST',
+        '/api/v1/projects/' + cacheEnv.projectSlug + '/properties',
+        {
+          key: '$route_key',
+          scope: 'event',
+          value_type: 'enum',
+          enum_values: ['home'],
+          purpose: BROWSER_ANALYTICS_PROPERTIES.$route_key!.purpose,
+          status: 'trusted',
+          source: 'native',
+        },
+      );
+      expect(created.status).toBe(201);
+
+      const accepted = await api(cacheEnv, cacheEnv.ingestToken, 'POST', '/i/v1/events', {
+        events: [{ ...browserEvent, properties: { ...browserEvent.properties, $page_view_id: 'cache-page-2' } }],
+      });
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.accepted).toBe(1);
+    } finally {
+      await cacheEnv.close();
+    }
   });
 });

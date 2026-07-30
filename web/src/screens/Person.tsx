@@ -109,7 +109,7 @@ export function Person() {
                       </span>
                     </button>
                     {selected === e && (
-                      <pre className="mb-2 rounded-md border bg-background p-3 text-xs overflow-auto max-h-72 whitespace-pre-wrap">{JSON.stringify({ event: e.event, timestamp: e.timestamp, session_id: e.session_id, properties: e.properties }, null, 2)}</pre>
+                      <pre className="mb-2 rounded-panel border bg-card p-3 text-xs overflow-auto max-h-72 whitespace-pre-wrap">{JSON.stringify({ event: e.event, timestamp: e.timestamp, session_id: e.session_id, properties: e.properties }, null, 2)}</pre>
                     )}
                   </div>
                 ))}

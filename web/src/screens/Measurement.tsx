@@ -131,7 +131,7 @@ export function Measurement() {
 
     <Panel title="Data sources" right={<span className="text-xs text-muted-foreground">bounded read-only capabilities</span>}>
       {sources.length === 0 ? <p className="text-sm text-muted-foreground">Native ingest is the current data path. Configure PostHog through MCP or the Platform API when raw data should remain external.</p> : <div className="space-y-3">
-        {sources.map((source) => <div key={source.id} className="rounded-md border bg-muted/20 p-4">
+        {sources.map((source) => <div key={source.id} className="rounded-panel border bg-muted/20 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{source.name}</div><div className="mt-1 text-xs text-muted-foreground"><code>{source.provider}</code> · project {source.external_project_id} · {source.host}</div></div><SourceBadge status={source.status} /></div>
           <div className="mt-3 flex flex-wrap gap-1.5">{Object.entries(source.capabilities).map(([capability, supported]) => <Hint key={capability} label={supported ? `${capability} is supported by the bounded adapter.` : `${capability} is explicitly unsupported; Poolstatis will return a capability error.`}><Badge variant={supported ? 'outline' : 'secondary'} className="cursor-help font-normal">{capability} · {supported ? 'yes' : 'no'}</Badge></Hint>)}</div>
           {source.last_error && <div className="mt-3 text-xs text-destructive">{source.last_error}</div>}
@@ -141,9 +141,9 @@ export function Measurement() {
   </div>;
 }
 
-const webDimensions: WebAnalyticsDimension[] = ['country', 'device', 'browser', 'os', 'source'];
+const webDimensions: WebAnalyticsDimension[] = ['route', 'device', 'browser', 'os', 'language', 'timezone', 'source'];
 const webDimensionLabels: Record<WebAnalyticsDimension, string> = {
-  country: 'Country',
+  route: 'Route',
   device: 'Device',
   browser: 'Browser',
   os: 'OS',
@@ -153,12 +153,23 @@ const webDimensionLabels: Record<WebAnalyticsDimension, string> = {
 };
 const collapsedBreakdownRows = 8;
 const maxBreakdownRows = 50;
+const browserRouteKeyPattern = /^[a-z][a-z0-9_.:-]{0,99}$/;
+
+export function parseBrowserRouteKeys(value: string): string[] {
+  const routeKeys = [...new Set(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean))].sort();
+  if (routeKeys.length === 0) throw new Error('Add at least one safe route key.');
+  if (routeKeys.length > 100) throw new Error('Use at most 100 safe route keys.');
+  const invalid = routeKeys.find((routeKey) => !browserRouteKeyPattern.test(routeKey));
+  if (invalid) throw new Error(`Invalid route key: ${invalid}`);
+  return routeKeys;
+}
 
 function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: string; onSetup: () => void }) {
   const { client, project } = useStore();
   const metric = metrics.find((item) => item.key === 'web_page_views' && item.type === 'count');
   const [period, setPeriod] = useState('30');
   const [result, setResult] = useState<WebAnalyticsResponse | null>(null);
+  const [routeKeysInput, setRouteKeysInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [setupBusy, setSetupBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -171,7 +182,10 @@ function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: 
   }, [project, env, period]);
   const setup = async () => {
     setSetupBusy(true); setError(null);
-    try { await client!.proposeBrowserAnalytics(project!); onSetup(); }
+    try {
+      await client!.proposeBrowserAnalytics(project!, parseBrowserRouteKeys(routeKeysInput));
+      onSetup();
+    }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'could not propose browser analytics'); }
     finally { setSetupBusy(false); }
   };
@@ -196,12 +210,29 @@ function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: 
     <p className="max-w-3xl text-sm text-muted-foreground">How many visited, where they came from, and what they used.</p>
     <div className="mt-4 flex flex-wrap items-end gap-2">
       <div className="space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Period</label><Select value={period} onValueChange={(value) => { setPeriod(value); setResult(null); }}><SelectTrigger aria-label="Web analytics period" className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent></Select></div>
-      {metric
-        ? <Button onClick={run} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}{result ? 'Refresh traffic summary' : 'Run traffic summary'}</Button>
-        : <Button variant="outline" onClick={setup} disabled={setupBusy}>{setupBusy ? 'Proposing…' : 'Propose browser analytics'}</Button>}
+      {metric && <Button onClick={run} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}{result ? 'Refresh traffic summary' : 'Run traffic summary'}</Button>}
       {result && <span className="pb-2 text-xs text-muted-foreground">Snapshot {formatDate(result.meta.computed_at)}</span>}
     </div>
-    {!metric && <div className="mt-4"><EmptyState headline="Traffic summary unavailable" lead="propose the canonical bundle, review it in Registry, then activate web_page_views" /></div>}
+    {!metric && <div className="mt-4 space-y-4">
+      <EmptyState headline="Traffic summary unavailable" lead="Propose the canonical bundle with your finite route vocabulary, review it in Registry, then activate web_page_views." />
+      <div className="flex max-w-2xl flex-col gap-2 sm:flex-row sm:items-end">
+        <label className="grid min-w-0 flex-1 gap-1.5 text-xs font-medium text-muted-foreground">
+          Safe route keys
+          <Input
+            value={routeKeysInput}
+            onChange={(event) => setRouteKeysInput(event.target.value)}
+            placeholder="home, pricing, docs"
+            aria-describedby="browser-route-keys-help"
+          />
+        </label>
+        <Button variant="outline" onClick={setup} disabled={setupBusy || !routeKeysInput.trim()}>
+          {setupBusy ? 'Proposing…' : 'Propose browser analytics'}
+        </Button>
+      </div>
+      <p id="browser-route-keys-help" className="text-xs text-muted-foreground">
+        Comma-separated stable lowercase identifiers. Never paste URLs, paths, query strings or user IDs.
+      </p>
+    </div>}
     {error && <div className="mt-4"><ErrorNote>{error}</ErrorNote></div>}
     {busy && <div className="mt-4"><Loading what="loading traffic summary…" /></div>}
     {result && result.summary.page_views === 0 && <div className="mt-4"><EmptyState headline="No page views in this window" lead="no zero was estimated; verify consent, SDK capture and the active page-view metric" /></div>}
@@ -213,7 +244,7 @@ function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: 
 }
 
 function WebAnalyticsResults({ result }: { result: WebAnalyticsResponse }) {
-  const [dimension, setDimension] = useState<WebAnalyticsDimension>('country');
+  const [dimension, setDimension] = useState<WebAnalyticsDimension>('route');
   const [expanded, setExpanded] = useState(false);
   const [search, setSearch] = useState('');
   const selectDimension = (value: string) => {
@@ -332,7 +363,7 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
     <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
       <div>
         <h3 id="web-sessions-title" className="text-sm font-medium">Session engagement</h3>
-        <p className="mt-0.5 text-xs text-muted-foreground">Browser-tab sessions with bounded page paths and timing evidence — not video replay.</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">Browser-tab sessions with trusted finite route keys and timing evidence — not video replay.</p>
       </div>
       <Button variant="outline" size="sm" onClick={load} disabled={busy}>
         {busy && <Loader2 className="size-4 animate-spin" />}Load recent sessions
@@ -423,7 +454,7 @@ function SessionDetail({ id, detail, busy, error, onRetry }: {
       {detail.pages.length === 0
         ? <EmptyState headline="No page details" lead="the bounded session summary has no matching page views in this period" />
         : <ol className="space-y-2">{detail.pages.map((page) => <li key={page.page_view_id} className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
-          <code className="min-w-0 truncate text-xs">{page.path}</code>
+          <code className="min-w-0 truncate text-xs">{page.route}</code>
           <span className="text-xs tabular-nums text-muted-foreground">{page.foreground_ms === null ? 'Timing unavailable' : formatEngagementMs(page.foreground_ms)}</span>
           <Badge variant={page.complete ? 'outline' : 'secondary'}>{page.complete ? 'Complete' : page.timed ? 'Timed, incomplete' : 'No timing'}</Badge>
         </li>)}</ol>}
@@ -471,12 +502,6 @@ function RankedDimensionExplorer({
         <p className="mt-0.5 text-xs text-muted-foreground">Ranked by page views · share of all page views</p>
       </div>
       <div className="flex shrink-0 items-center gap-3">
-        {result.meta.country_attribution && <a
-          href={result.meta.country_attribution.url}
-          target="_blank"
-          rel="noreferrer"
-          className="rounded-sm text-xs text-muted-foreground underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >{result.meta.country_attribution.label}</a>}
         <Hint label={result.meta.privacy}>
           <button type="button" className="rounded-sm text-xs text-muted-foreground underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Privacy</button>
         </Hint>
@@ -490,7 +515,7 @@ function RankedDimensionExplorer({
         </Select>
       </div>
       <div className="hidden min-w-0 border-b px-3 pt-2 sm:block">
-        <TabsList variant="line" aria-label="Breakdown dimension" className="grid h-10 w-full grid-cols-5">
+        <TabsList variant="line" aria-label="Breakdown dimension" className="grid h-10 w-full grid-cols-7">
           {webDimensions.map((item) => <TabsTrigger key={item} value={item}>{webDimensionLabels[item]}</TabsTrigger>)}
         </TabsList>
       </div>
@@ -519,21 +544,15 @@ function RankedDimensionExplorer({
           aria-label={`${webDimensionLabels[dimension]} ranked by page views`}
         >
           {visibleRows.map((row) => {
-            const countryLabel = dimension === 'country' ? countryDisplayName(row.value) : null;
-            const isUnknownCountry = dimension === 'country' && countryLabel === null;
-            const label = dimension === 'country'
-              ? countryLabel ?? 'Unknown'
-              : row.value.trim() && row.value.toLocaleLowerCase() !== 'unknown' ? row.value : 'Unknown';
-            const percentage = Number.isFinite(row.percentage)
+            const label = row.value.trim() && row.value.toLocaleLowerCase() !== 'unknown'
+              ? row.value
+              : 'Unknown';
+            const percentage = row.percentage !== null && Number.isFinite(row.percentage)
               ? Math.max(0, Math.min(100, row.percentage))
               : 0;
             return <div key={row.value} className="relative isolate grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] gap-3 overflow-hidden px-4 py-2.5 text-sm" role="listitem">
               <div className="absolute inset-y-1 left-0 -z-10 rounded-r-sm bg-primary/10" style={{ width: `${percentage}%` }} aria-hidden="true" />
-              {isUnknownCountry
-                ? <Hint label="Historical events stay Unknown because raw IP is not stored, so earlier traffic cannot be backfilled. VPN or proxy traffic may also be unresolved.">
-                  <button type="button" aria-label="Unknown country explanation" className="min-w-0 truncate rounded-sm text-left font-medium underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Unknown</button>
-                </Hint>
-                : <span className="min-w-0 truncate font-medium" title={label}>{label}</span>}
+              <span className="min-w-0 truncate font-medium" title={label}>{label}</span>
               <span className="tabular-nums">{fmtNum(row.page_views)}</span>
               <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{percentage}%</span>
               <span className="sr-only">{fmtNum(row.visitors)} visitors, {fmtNum(row.sessions)} sessions</span>
@@ -762,17 +781,4 @@ function pct(value: number) {
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
-}
-
-function countryDisplayName(value: string) {
-  const code = value.trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(code)) return null;
-  const flag = String.fromCodePoint(...[...code].map((character) => character.charCodeAt(0) + 127397));
-  try {
-    const name = new Intl.DisplayNames(['en'], { type: 'region' }).of(code);
-    if (!name || name === code || name === 'Unknown Region') return null;
-    return `${flag} ${name ?? code}`;
-  } catch {
-    return null;
-  }
 }

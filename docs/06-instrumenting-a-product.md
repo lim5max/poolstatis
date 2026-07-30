@@ -1,5 +1,14 @@
 # Instrumenting a product with Poolstatis
 
+> Optional Web analytics requires the SDK browser helper and a finite safe
+> route mapper. Never send a raw pathname that may contain customer,
+> invitation, document or token identifiers. Custom product events use the
+> neutral base SDK path; `$browser_context` is reserved for canonical
+> `page.viewed`/`page.engagement`. Run atomic browser registry setup with the
+> complete finite route vocabulary first, then explicitly review/trust the
+> enum `$route_key` and activate `web_page_views`.
+> See [Browser analytics](13-browser-analytics.md).
+
 Two ways to get metrics into Poolstatis:
 
 - **A — Let a coding agent do it** (recommended): connect the MCP, point the agent
@@ -177,11 +186,15 @@ follow that installed version's guide instead.
 [SDK guide](../sdk/README.md#browser-acquisition-attribution-optional-module).
 Не обещайте npm-установку, пока registry lookup пакета не проходит.
 
-Модуль пишет только pathname landing, origin referrer и стандартные UTM; raw URL,
-full referrer, click ids и unknown query params не отправляются. Для SPA вызывай
+Модуль пишет только обязательный finite `landing_route`, origin referrer и
+стандартные UTM; raw path/URL, full referrer, click ids и unknown query params
+не отправляются. Для SPA вызывай
 `pageViewed()` после навигации. Передай обязательный `subscribeConsent` callback,
 который синхронно вызывает listener при отзыве product-analytics consent: модуль сам
 вызовет `stop()` и удалит unsent/retrying attribution events.
+До attribution-only capture запусти browser analytics setup с конечным
+`route_keys` vocabulary и переведи `$route_key` в `trusted`: `landing_route`
+валидируется по тому же словарю даже без полного browser-модуля.
 Связь anonymous→authenticated делается отдельно через audited actor link: история
 immutable events не переписывается. UTM trend — только session landing association,
 не доказательство причинного эффекта кампании.

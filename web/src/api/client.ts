@@ -2,6 +2,7 @@ import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage,
   PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
+import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
 
 export class ApiError extends Error {
   constructor(public code: string, message: string, public hint?: string, public status?: number) {
@@ -126,9 +127,10 @@ export class PoolstatisClient {
     ).then((response) => response.properties);
   }
 
-  proposeBrowserAnalytics(slug: string) {
+  proposeBrowserAnalytics(slug: string, routeKeys: string[]) {
     return this.req<{ properties: PropertyDefinition[]; metrics: Metric[] }>(
-      'POST', `/api/v1/projects/${slug}/properties/browser-analytics`, {},
+      'POST', `/api/v1/projects/${slug}/properties/browser-analytics`,
+      { route_keys: routeKeys },
     );
   }
 
@@ -343,6 +345,10 @@ export class PoolstatisClient {
 
   funnels(slug: string) {
     return this.req<{ funnels: Funnel[] }>('GET', `/api/v1/projects/${slug}/funnels`).then((r) => r.funnels);
+  }
+
+  query(slug: string, query: AnalysisQueryInput) {
+    return this.req<AnalysisQueryResult>('POST', `/api/v1/projects/${slug}/query`, query);
   }
 
   // ---- feature delivery ----

@@ -44,13 +44,8 @@ import {
   createPropertyDefinition, listPropertyDefinitions, updatePropertyDefinition,
   type PropertyDefinition,
 } from '../services/properties.js';
-import { preflightAcquisitionProperties, proposeAcquisitionProperties } from '../services/acquisitionAttribution.js';
-import {
-  preflightBrowserAnalyticsMetrics,
-  preflightBrowserAnalyticsProperties,
-  proposeBrowserAnalyticsMetrics,
-  proposeBrowserAnalyticsProperties,
-} from '../services/browserAnalytics.js';
+import { proposeAcquisitionProperties } from '../services/acquisitionAttribution.js';
+import { setupBrowserAnalytics } from '../services/browserAnalytics.js';
 import { UNKNOWN_COUNTRY_RESOLVER, type CountryResolver } from '../services/country.js';
 import { assessMeasurementTrust } from '../services/measurementTrust.js';
 import {
@@ -80,7 +75,7 @@ import {
   actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
-  createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
+  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -1314,6 +1309,8 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
       propertyDefinitionSchema.parse(req.body),
       authOwner(req.auth),
     );
+    ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
     return reply.status(201).send(property);
   });
 
@@ -1328,78 +1325,13 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/api/v1/projects/:slug/properties/browser-analytics', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const actor = authOwner(req.auth);
-    const client = await ctx.pool.connect();
-    const setupLock = `browser-analytics-setup:${project.id}`;
-    let lockAcquired = false;
-    let destroyClient = false;
-    let result: {
-      properties: Awaited<ReturnType<typeof proposeBrowserAnalyticsProperties>>;
-      metrics: Awaited<ReturnType<typeof proposeBrowserAnalyticsMetrics>>;
-    } | undefined;
-    try {
-      await client.query(
-        'SELECT pg_advisory_lock(hashtextextended($1, 0))',
-        [setupLock],
-      );
-      lockAcquired = true;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
-          await preflightBrowserAnalyticsProperties(client, project.id);
-          await preflightAcquisitionProperties(client, project.id);
-          await preflightBrowserAnalyticsMetrics(client, project.id);
-          result = {
-            properties: [
-              ...await proposeBrowserAnalyticsProperties(client, project.id, actor),
-              ...await proposeAcquisitionProperties(client, project.id, actor),
-            ],
-            metrics: await proposeBrowserAnalyticsMetrics(client, project.id, actor),
-          };
-          await client.query('COMMIT');
-          break;
-        } catch (error) {
-          await client.query('ROLLBACK').catch(() => {});
-          const code = (error as { code?: unknown } | null)?.code;
-          const retryable = code === '40001' || code === '40P01';
-          if (!retryable) throw error;
-          if (attempt === 3) {
-            throw new ApiError(
-              503,
-              'browser_analytics_setup_retryable',
-              'browser analytics setup could not acquire a stable database snapshot',
-              'retry the complete setup request; no partial definitions were committed',
-              { retryable: true },
-            );
-          }
-        }
-      }
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw error;
-    } finally {
-      if (lockAcquired) {
-        try {
-          const { rows } = await client.query<{ unlocked: boolean }>(
-            'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
-            [setupLock],
-          );
-          destroyClient = rows[0]?.unlocked !== true;
-        } catch {
-          destroyClient = true;
-        }
-      }
-      client.release(destroyClient);
-    }
-    if (!result) {
-      throw new ApiError(
-        503,
-        'browser_analytics_setup_retryable',
-        'browser analytics setup did not complete',
-        'retry the complete setup request; no partial definitions were committed',
-        { retryable: true },
-      );
-    }
+    const input = browserAnalyticsSetupSchema.parse(req.body);
+    const result = await setupBrowserAnalytics(
+      ctx.pool,
+      project.id,
+      authOwner(req.auth),
+      input.route_keys,
+    );
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
     return result;
@@ -1424,13 +1356,16 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     if (scope !== 'event' && scope !== 'actor' && scope !== 'entity') {
       throw badRequest('invalid_property_scope', 'scope must be event, actor or entity');
     }
-    return updatePropertyDefinition(
+    const property = await updatePropertyDefinition(
       ctx.pool,
       project.id,
       scope as PropertyDefinition['scope'],
       key,
       updatePropertyDefinitionSchema.parse(req.body),
     );
+    ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
+    return property;
   });
 
   app.post('/api/v1/projects/:slug/measurement/trust', async (req) => {

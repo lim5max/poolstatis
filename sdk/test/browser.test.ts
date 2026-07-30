@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   clearBrowserAnalyticsIdentity,
-  createBrowserAnalytics,
+  createBrowserAnalytics as createBrowserAnalyticsContract,
+  type BrowserAnalyticsOptions,
   type BrowserCaptureClient,
 } from '../src/browser.js';
 import type { PoolstatisEvent } from '../src/index.js';
@@ -113,6 +114,17 @@ function fixture(now = 1_000, shared?: { localStorage: ReturnType<typeof storage
     freeze() { documentListeners.get('freeze')?.forEach((listener) => listener()); },
     resume() { documentListeners.get('resume')?.forEach((listener) => listener()); },
   };
+}
+
+function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
+  return createBrowserAnalyticsContract({
+    mapPagePath: (pathname) => pathname === '/welcome'
+      ? 'welcome'
+      : pathname === '/pricing'
+        ? 'pricing'
+        : 'other',
+    ...options,
+  });
 }
 
 describe('@poolstatis/sdk/browser', () => {
@@ -241,14 +253,14 @@ describe('@poolstatis/sdk/browser', () => {
     expect(first.queued[0]).toMatchObject({
       event: 'page.viewed', distinct_id: 'visitor:id-1', session_id: 'session:id-2',
       properties: {
-        $page_path: '/welcome', $device_class: 'mobile', $browser_family: 'safari',
+        $route_key: 'welcome', $device_class: 'mobile', $browser_family: 'safari',
         $os_family: 'ios', $language: 'en', $viewport_bucket: 'xs', $screen_bucket: 'xs',
       },
     });
     expect(JSON.stringify(first.queued)).not.toContain('Mozilla');
 
     first.browser.history.pushState({}, '', '/pricing?secret=1');
-    expect(first.queued.at(-1)?.properties?.$page_path).toBe('/pricing');
+    expect(first.queued.at(-1)?.properties?.$route_key).toBe('pricing');
     expect(JSON.stringify(first.queued)).not.toContain('secret');
 
     const link = analytics.identify('user-42');
@@ -361,7 +373,7 @@ describe('@poolstatis/sdk/browser', () => {
     expect(f.queued[0]?.properties).toMatchObject({
       $utm_source: 'search',
       $utm_campaign: 'launch',
-      landing_path: '/welcome',
+      landing_route: 'welcome',
       referrer_origin: 'https://publisher.test',
     });
     expect(JSON.stringify(f.queued)).not.toContain('private');
@@ -378,15 +390,15 @@ describe('@poolstatis/sdk/browser', () => {
       hasConsent: c.hasConsent,
       subscribeConsent: c.subscribeConsent,
       captureAcquisition: true,
-      mapPagePath: (pathname) => pathname === '/' ? '/' : '/other',
+      mapPagePath: (pathname) => pathname === '/' ? 'home' : 'other',
       createId: () => 'mapped',
     });
 
     analytics.start();
 
     expect(f.queued[0]?.properties).toMatchObject({
-      $page_path: '/other',
-      landing_path: '/other',
+      $route_key: 'other',
+      landing_route: 'other',
       $utm_source: 'search',
     });
     expect(JSON.stringify(f.queued)).not.toContain('customer-42');
@@ -440,7 +452,7 @@ describe('@poolstatis/sdk/browser', () => {
     analytics.start();
     expect(analytics.visitorId).toBe('visitor:stale');
     expect(() => analytics.resetIdentity()).toThrow('stale visitor');
-    expect(analytics.visitorId).toBe('visitor:fresh');
+    expect(analytics.visitorId).toBeNull();
   });
 
   it('reports a stale readable session when account reset cannot overwrite session storage', () => {
@@ -459,7 +471,7 @@ describe('@poolstatis/sdk/browser', () => {
     analytics.start();
     expect(analytics.sessionId).toBe('session:stale');
     expect(() => analytics.resetIdentity()).toThrow('stale session');
-    expect(analytics.sessionId).toBe('session:fresh');
+    expect(analytics.sessionId).toBeNull();
   });
 
   it('is importable in SSR without resolving browser globals', async () => {
@@ -530,7 +542,7 @@ describe('@poolstatis/sdk/browser', () => {
     expect(pageViews).toHaveLength(2);
     expect(pageViews[1]).toMatchObject({
       session_id: analytics.sessionId,
-      properties: { $page_path: '/welcome' },
+      properties: { $route_key: 'welcome' },
     });
     expect(pageViews[1]?.properties?.$page_view_id).not.toBe(firstPage);
     expect(snapshots.at(-1)?.properties).toMatchObject({

@@ -90,7 +90,7 @@ export async function listPropertyDefinitions(
 }
 
 export async function updatePropertyDefinition(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   scope: PropertyDefinition['scope'],
   key: string,
@@ -135,7 +135,7 @@ export async function updatePropertyDefinition(
 }
 
 export async function getPropertyDefinition(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   scope: PropertyDefinition['scope'],
   key: string,

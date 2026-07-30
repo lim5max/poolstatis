@@ -25,20 +25,30 @@ import { countEntities, queryEntities } from './entities.js';
 import { getExactExperienceSnapshot, getExperienceSurface } from './experience.js';
 import { canonicalQueryKey, type QueryCache } from './queryCache.js';
 import type { PostHogAdapter } from './posthog.js';
-import { assertRegisteredAcquisitionProperties } from './acquisitionAttribution.js';
-import { assertBrowserAnalyticsProperties } from './browserAnalytics.js';
+import {
+  assertRegisteredAcquisitionProperties,
+  assertTrustedAcquisitionProperties,
+} from './acquisitionAttribution.js';
+import { assertTrustedSafeRoute } from './browserAnalytics.js';
 import type { CountryResolver } from './country.js';
 
 const SESSION_ATTRIBUTION_NOTE = 'Session landing attribution: this associates events with the tagged landing in the same browser session; it is not causal campaign credit.';
 const WEB_DIMENSIONS = {
+  route: { property: '$route_key', missingValue: 'unavailable' },
+  source: { property: '$utm_source', missingValue: 'direct / unknown' },
   country: { property: '$country', missingValue: 'unknown' },
   device: { property: '$device_class', missingValue: 'unknown' },
   browser: { property: '$browser_family', missingValue: 'unknown' },
   os: { property: '$os_family', missingValue: 'unknown' },
   language: { property: '$language', missingValue: 'unknown' },
   timezone: { property: '$timezone', missingValue: 'unknown' },
-  source: { property: '$utm_source', missingValue: 'direct / unknown' },
 } as const;
+
+const WEB_FILTER_PROPERTIES = new Set<string>(
+  Object.values(WEB_DIMENSIONS)
+    .filter((dimension) => dimension.property !== '$country')
+    .map((dimension) => dimension.property),
+);
 
 export interface QueryMeta {
   computed_at: string;
@@ -145,27 +155,23 @@ export type QueryResult =
   | { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value?: string }>; meta: QueryMeta }
   | {
       kind: 'web_analytics';
-      summary: { visitors: number; sessions: number; page_views: number };
+      summary: {
+        visitors: number;
+        sessions: number;
+        page_views: number;
+        average_session_duration_ms: number | null;
+      };
       engagement: import('../stores/eventStore.js').WebEngagementSummary;
       breakdowns: Record<string, Array<{
-        value: string; visitors: number; sessions: number; page_views: number; percentage: number;
+        value: string;
+        visitors: number;
+        sessions: number;
+        page_views: number;
+        percentage: number | null;
       }>>;
       meta: QueryMeta & {
         truncated_dimensions: string[];
-        definitions: {
-          visitors: string;
-          sessions: string;
-          page_views: string;
-          measured_sessions: string;
-          unknown_sessions: string;
-          engaged_sessions: string;
-          bounce_sessions: string;
-          engaged_rate: string;
-          bounce_rate: string;
-          single_page_sessions: string;
-          foreground_ms: string;
-          session_span_ms: string;
-        };
+        definitions: Record<string, string>;
         accepted_event_accounting: string;
         privacy: string;
         country_attribution?: NonNullable<CountryResolver['attribution']>;
@@ -177,7 +183,7 @@ export type QueryResult =
       meta: QueryMeta & {
         total: number;
         truncated: boolean;
-        definitions: { foreground_ms: string; session_span_ms: string; bounce: string };
+        definitions: Record<string, string>;
       };
     }
   | {
@@ -434,42 +440,67 @@ export class QueryService {
     }
   }
 
-  private async webAnalytics(projectId: string, q: WebAnalyticsQueryInput, now: Date): Promise<QueryResult> {
+  private async webAnalytics(
+    projectId: string,
+    q: WebAnalyticsQueryInput,
+    now: Date,
+  ): Promise<QueryResult> {
     const source = await this.webPageViewSource(projectId, q.metric);
-    const keyMetric = q.key_metric ? await this.webKeyMetricSource(projectId, q.key_metric) : undefined;
-    const dimensions = q.dimensions.map((key) => ({ key, ...WEB_DIMENSIONS[key] }));
+    const keyMetric = q.key_metric
+      ? await this.webKeyMetricSource(projectId, q.key_metric)
+      : undefined;
+    this.assertWebFilterAllowlist(q.filters);
+    if (q.dimensions.includes('country')) {
+      throw badRequest(
+        'web_analytics_dimension_unavailable',
+        'country is unavailable until a separately reviewed trusted proxy or MMDB contract is active',
+      );
+    }
+    const routeVocabulary = q.dimensions.includes('route')
+      || q.filters.some((filter) => filter.property === '$route_key')
+      ? await assertTrustedSafeRoute(this.pool, projectId)
+      : null;
     const requestedProperties = [
       ...q.filters.map((filter) => filter.property),
-      ...dimensions.map((dimension) => dimension.property),
+      ...q.dimensions.map((key) => WEB_DIMENSIONS[key].property),
     ];
-    await assertBrowserAnalyticsProperties(this.pool, projectId, requestedProperties);
-    await assertRegisteredAcquisitionProperties(this.pool, projectId, requestedProperties);
+    await assertTrustedAcquisitionProperties(this.pool, projectId, requestedProperties);
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    this.assertWebDateRange(from, to);
     const result = await this.eventStore.webAnalytics({
       projectId,
       env: q.env,
       event: source.event,
-      filters: [...(source.filters ?? []), ...q.filters],
+      filters: [
+        ...source.filters,
+        ...(routeVocabulary ? [{
+          property: '$route_key',
+          op: 'in' as const,
+          value: [...routeVocabulary],
+        }] : []),
+        ...q.filters,
+      ],
       from,
       to,
-      dimensions,
+      dimensions: q.dimensions.map((key) => ({ key, ...WEB_DIMENSIONS[key] })),
       ...(keyMetric ? { keyMetric } : {}),
     });
-    const breakdowns = Object.fromEntries(Object.entries(result.breakdowns).map(([key, rows]) => [
-      key,
-      rows.map((row) => ({
-        ...row,
-        percentage: result.summary.page_views === 0
-          ? 0
-          : Math.round((row.page_views / result.summary.page_views) * 1_000) / 10,
-      })),
-    ]));
     return {
       kind: 'web_analytics',
       summary: result.summary,
       engagement: result.engagement,
-      breakdowns,
+      breakdowns: Object.fromEntries(
+        Object.entries(result.breakdowns).map(([key, rows]) => [
+          key,
+          rows.map((row) => ({
+            ...row,
+            percentage: result.summary.page_views === 0
+              ? null
+              : Math.round((row.page_views / result.summary.page_views) * 1_000) / 10,
+          })),
+        ]),
+      ),
       meta: {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },
@@ -477,42 +508,59 @@ export class QueryService {
         source: 'native',
         truncated_dimensions: result.truncatedDimensions,
         definitions: {
-          visitors: 'Unique resolved actors with page-view events; audited actor links deduplicate anonymous visitors after authentication.',
-          sessions: 'Distinct resolved-actor and non-empty session_id pairs on page-view events; a session is not a visitor or authenticated user.',
-          page_views: 'Accepted stored page-view events; enrichment does not create additional billable events.',
-          measured_sessions: 'Sessions with a known tri-state engagement result: positive evidence or a complete negative lifecycle.',
-          unknown_sessions: 'Sessions without positive engagement evidence and without a complete lifecycle boundary.',
-          engaged_sessions: 'Sessions with at least 10 seconds of foreground time, at least two page views, or the selected key metric. Incomplete sessions without positive evidence remain unknown.',
-          bounce_sessions: 'Count of lifecycle-complete sessions that did not meet any engagement rule; heartbeat-only or missing exits are never counted as bounces.',
-          engaged_rate: 'Engaged sessions divided by measured sessions; unavailable when no session has a known classification.',
-          bounce_rate: 'Lifecycle-complete negative sessions divided by measured sessions; unavailable when no session has a known classification.',
-          single_page_sessions: 'Sessions with exactly one accepted page-view event, independent of engagement.',
-          foreground_ms: 'Cumulative visible and focused browser time from the latest sequence for each measured page view.',
-          session_span_ms: 'Wall-clock span between the first page view and latest page snapshot; kept separate from foreground time.',
+          visitors: 'Unique query-time resolved actors with canonical browser page views.',
+          sessions: 'Distinct (resolved actor, non-empty session_id) pairs with canonical page views.',
+          page_views: 'Accepted canonical page.viewed events carrying $browser_context = "1".',
+          measured_sessions: 'Canonical sessions with a known positive or complete negative engagement classification.',
+          unknown_sessions: 'Canonical sessions without enough lifecycle evidence for a negative classification.',
+          engaged_sessions: 'Measured sessions with at least 10,000 ms foreground time, two page views, or the selected key metric.',
+          bounce_sessions: 'Lifecycle-complete measured sessions with one page view and no engagement evidence.',
+          measured_session_coverage: 'Known engagement classifications divided by canonical sessions; unavailable without sessions.',
+          engaged_rate: 'Engaged sessions divided by measured sessions; unavailable without a measured denominator.',
+          bounce_rate: 'Complete negative sessions divided by measured sessions; unavailable without a measured denominator.',
+          foreground_ms: 'Monotonic visible-and-focused time from the highest cumulative page snapshot.',
+          session_span_ms: 'Wall-clock span from the first page view to the latest trusted lifecycle evidence.',
+          average_session_duration_ms: 'Average wall-clock session span across lifecycle-complete sessions only; unavailable without complete-session evidence.',
+          source: 'Consent-gated session landing attribution; this is not causal campaign credit.',
         },
-        accepted_event_accounting: 'Every accepted stored page.viewed, page.engagement and key-metric event remains one billable stored event; reads and enrichment add none.',
-        privacy: 'Country is coarse server-side enrichment from a configured trusted proxy. Raw IP, full URL, query string, DOM text and full user agent are not stored.',
-        ...(this.countryAttribution ? { country_attribution: this.countryAttribution } : {}),
+        accepted_event_accounting: 'Each accepted page.viewed, page.engagement and key-metric event remains one stored event; reads create no synthetic events.',
+        privacy: 'Returns only trusted safe route keys and bounded coarse dimensions. Country is unavailable; raw IP, URL, query, hash, user agent, DOM and text are forbidden.',
       },
     };
   }
 
-  private async webSessions(projectId: string, q: WebSessionsQueryInput, now: Date): Promise<QueryResult> {
+  private async webSessions(
+    projectId: string,
+    q: WebSessionsQueryInput,
+    now: Date,
+  ): Promise<QueryResult> {
     const source = await this.webPageViewSource(projectId, q.metric);
-    const keyMetric = q.key_metric ? await this.webKeyMetricSource(projectId, q.key_metric) : undefined;
-    await assertBrowserAnalyticsProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
-    await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    const keyMetric = q.key_metric
+      ? await this.webKeyMetricSource(projectId, q.key_metric)
+      : undefined;
+    this.assertWebFilterAllowlist(q.filters);
+    const routeVocabulary = await assertTrustedSafeRoute(this.pool, projectId);
+    await assertTrustedAcquisitionProperties(
+      this.pool,
+      projectId,
+      q.filters.map((filter) => filter.property),
+    );
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    this.assertWebDateRange(from, to);
     const result = await this.eventStore.webSessions({
       projectId,
       env: q.env,
       event: source.event,
-      filters: [...source.filters, ...q.filters],
-      ...(keyMetric ? { keyMetric } : {}),
+      filters: [
+        ...source.filters,
+        { property: '$route_key', op: 'in', value: [...routeVocabulary] },
+        ...q.filters,
+      ],
       from,
       to,
       limit: q.limit,
+      ...(keyMetric ? { keyMetric } : {}),
     });
     return {
       kind: 'web_sessions',
@@ -525,38 +573,54 @@ export class QueryService {
         total: result.total,
         truncated: result.total > result.sessions.length,
         definitions: {
-          foreground_ms: 'Visible and focused browser time, deduplicated to the latest cumulative page snapshot.',
-          session_span_ms: 'Wall-clock session span, not active time.',
-          bounce: 'Only known when every page view has a lifecycle boundary snapshot; heartbeat-only or missing exits remain incomplete.',
+          foreground_ms: 'Monotonic visible and focused time from the latest cumulative snapshot per page.',
+          session_span_ms: 'Wall-clock span from first page view to latest page evidence; it is not active time.',
+          bounce: 'Known only for lifecycle-complete sessions without engagement evidence.',
         },
       },
     };
   }
 
-  private async webSession(projectId: string, q: WebSessionQueryInput, now: Date): Promise<QueryResult> {
+  private async webSession(
+    projectId: string,
+    q: WebSessionQueryInput,
+    now: Date,
+  ): Promise<QueryResult> {
     const source = await this.webPageViewSource(projectId, q.metric);
-    const keyMetric = q.key_metric ? await this.webKeyMetricSource(projectId, q.key_metric) : undefined;
-    await assertBrowserAnalyticsProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
-    await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    const keyMetric = q.key_metric
+      ? await this.webKeyMetricSource(projectId, q.key_metric)
+      : undefined;
+    this.assertWebFilterAllowlist(q.filters);
+    const routeVocabulary = await assertTrustedSafeRoute(this.pool, projectId);
+    await assertTrustedAcquisitionProperties(
+      this.pool,
+      projectId,
+      q.filters.map((filter) => filter.property),
+    );
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    this.assertWebDateRange(from, to);
     const result = await this.eventStore.webSession({
       projectId,
       env: q.env,
       event: source.event,
-      filters: [...source.filters, ...q.filters],
-      ...(keyMetric ? { keyMetric } : {}),
+      filters: [
+        ...source.filters,
+        { property: '$route_key', op: 'in', value: [...routeVocabulary] },
+        ...q.filters,
+      ],
       from,
       to,
       sessionId: q.session_id,
       ...(q.actor_id ? { actorId: q.actor_id } : {}),
       pageLimit: q.page_limit,
+      ...(keyMetric ? { keyMetric } : {}),
     });
     if (result.ambiguous_actor) {
       throw badRequest(
         'web_session_actor_ambiguous',
-        `session_id "${q.session_id}" belongs to more than one actor in this query scope`,
-        'list web sessions first, then repeat this request with the returned actor_id',
+        `session_id "${q.session_id}" belongs to more than one resolved actor in this scope`,
+        'list sessions first and repeat with the exact actor_id',
       );
     }
     return {
@@ -570,45 +634,63 @@ export class QueryService {
         source: 'native',
         total_pages: result.total,
         truncated: result.total > result.pages.length,
-        ...(result.summary ? {} : { no_data_reason: 'No matching accepted page-view session exists in this project, environment and period.' }),
-        privacy: 'Returns bounded page paths and aggregate timing only; never DOM, page text, full URLs, raw IP or replay.',
+        ...(result.summary ? {} : {
+          no_data_reason: 'No canonical session matched this project, environment, actor and period.',
+        }),
+        privacy: 'Returns bounded safe route keys and aggregate timing only; never URL, DOM, text, IP, user agent or replay.',
       },
     };
   }
 
-  private async pageEngagement(projectId: string, q: PageEngagementQueryInput, now: Date): Promise<QueryResult> {
+  private async pageEngagement(
+    projectId: string,
+    q: PageEngagementQueryInput,
+    now: Date,
+  ): Promise<QueryResult> {
     const source = await this.webPageViewSource(projectId, q.metric);
-    await assertBrowserAnalyticsProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
-    await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    this.assertWebFilterAllowlist(q.filters);
+    const routeVocabulary = await assertTrustedSafeRoute(this.pool, projectId);
+    await assertTrustedAcquisitionProperties(
+      this.pool,
+      projectId,
+      q.filters.map((filter) => filter.property),
+    );
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    this.assertWebDateRange(from, to);
     const result = await this.eventStore.pageEngagement({
       projectId,
       env: q.env,
       event: source.event,
-      filters: [...source.filters, ...q.filters],
+      filters: [
+        ...source.filters,
+        { property: '$route_key', op: 'in', value: [...routeVocabulary] },
+        ...q.filters,
+      ],
       from,
       to,
       pageViewId: q.page_view_id,
       ...(q.actor_id ? { actorId: q.actor_id } : {}),
+      ...(q.session_id ? { sessionId: q.session_id } : {}),
     });
     if (result.ambiguous_actor) {
       throw badRequest(
         'page_engagement_actor_ambiguous',
-        `page_view_id "${q.page_view_id}" belongs to more than one actor in this query scope`,
-        'list web sessions first, then repeat this request with the returned actor_id',
+        `page_view_id "${q.page_view_id}" belongs to more than one actor/session identity in this scope`,
+        'list sessions first and repeat with the exact actor_id and session_id',
       );
     }
-    const page = result.page;
     return {
       kind: 'page_engagement',
-      page,
+      page: result.page,
       meta: {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },
         sampling: null,
         source: 'native',
-        ...(page ? {} : { no_data_reason: 'No matching accepted page view exists in this project, environment and period.' }),
+        ...(result.page ? {} : {
+          no_data_reason: 'No canonical page view matched this project, environment, actor and period.',
+        }),
       },
     };
   }
@@ -621,40 +703,28 @@ export class QueryService {
     if (metric.status !== 'active') {
       throw badRequest(
         'web_analytics_metric_inactive',
-        `metric "${metricKey}" must be active before it can drive web analytics`,
-        'activate the reviewed metric or select an active replacement',
-      );
-    }
-    if (metric.type !== 'count') {
-      throw badRequest(
-        'web_analytics_metric_invalid',
-        `metric "${metricKey}" must be a count metric`,
-        'register and activate a count metric whose source is the page.viewed event',
+        `metric "${metricKey}" must be active`,
+        'activate the reviewed canonical metric or select an active replacement',
       );
     }
     const source = metric.source as {
-      event: string;
+      event?: string;
       filters?: PropertyFilter[];
       data_source?: 'native' | 'posthog';
     };
-    if (source.data_source === 'posthog') {
-      throw badRequest('web_analytics_source_invalid', 'web analytics currently requires native stored events');
-    }
-    if (source.event !== 'page.viewed') {
-      throw badRequest(
-        'web_analytics_metric_invalid',
-        `metric "${metricKey}" must source the canonical page.viewed event`,
-        'use the proposed web_page_views metric or an exactly compatible active replacement',
-      );
-    }
     const filters = source.filters ?? [];
-    const hasBrowserContextFilter = filters.some((filter) =>
-      filter.property === '$browser_context' && filter.op === 'eq' && filter.value === '1');
-    if (!hasBrowserContextFilter) {
+    const canonical = filters.length === 1
+      && filters[0]?.property === '$browser_context'
+      && filters[0]?.op === 'eq'
+      && filters[0]?.value === '1';
+    if (metric.type !== 'count'
+      || source.event !== 'page.viewed'
+      || (source.data_source ?? 'native') !== 'native'
+      || !canonical) {
       throw badRequest(
         'web_analytics_metric_invalid',
-        `metric "${metricKey}" must filter $browser_context = "1"`,
-        'use the canonical web_page_views metric so legacy or manual page.viewed events are excluded',
+        `metric "${metricKey}" must be the active canonical native page.viewed count`,
+        'use web_page_views from atomic browser analytics setup',
       );
     }
     return { event: source.event, filters };
@@ -668,19 +738,43 @@ export class QueryService {
     if (metric.status !== 'active') {
       throw badRequest(
         'web_analytics_key_metric_inactive',
-        `key metric "${metricKey}" must be active before it can classify engagement`,
-        'activate the reviewed key metric or omit key_metric',
+        `key metric "${metricKey}" must be active`,
+        'activate the reviewed native event metric or omit key_metric',
       );
     }
     const source = await this.eventSource(projectId, metricKey);
     if (source.dataSource !== 'native') {
       throw badRequest(
-        'web_analytics_source_invalid',
+        'web_analytics_key_metric_invalid',
         `key metric "${metricKey}" must use native stored events`,
-        'use a native event-based key metric so session classification stays inside one event store',
       );
     }
     return { event: source.event, filters: source.filters };
+  }
+
+  private assertWebFilterAllowlist(filters: PropertyFilter[]): void {
+    const unsupported = filters.find((filter) => !WEB_FILTER_PROPERTIES.has(filter.property));
+    if (unsupported) {
+      throw badRequest(
+        'web_analytics_filter_forbidden',
+        `property "${unsupported.property}" is not an approved Web analytics filter`,
+        'use a typed safe route, acquisition or coarse browser dimension',
+      );
+    }
+  }
+
+  private assertWebDateRange(from: Date, to: Date): void {
+    const duration = to.getTime() - from.getTime();
+    if (duration <= 0) {
+      throw badRequest('web_analytics_range_invalid', 'date_to must be later than date_from');
+    }
+    if (duration > 366 * 24 * 60 * 60_000) {
+      throw badRequest(
+        'web_analytics_range_too_large',
+        'Web analytics queries are bounded to at most 366 days',
+        'split the analysis into smaller typed windows',
+      );
+    }
   }
 
   /** Resolve a registry metric to an event-based source, or fail with a teaching hint. */

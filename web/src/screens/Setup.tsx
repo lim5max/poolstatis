@@ -91,7 +91,7 @@ export function Setup() {
   return (
     <div className="max-w-5xl space-y-5">
       <header className="max-w-2xl">
-        <h1 className="serif text-3xl tracking-tight text-balance">Connect Poolstatis in four steps</h1>
+        <h1 className="serif text-3xl text-balance">Connect Poolstatis in four steps</h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           Add one MCP config, call a tool through your client, then verify data and a query. Poolstatis only marks work complete from server evidence.
         </p>

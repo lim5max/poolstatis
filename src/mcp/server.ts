@@ -10,7 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
-  actorLinkSchema,
+  actorLinkSchema, browserRouteKeysSchema,
   applyMeasurementDeclarationSchema,
   concludeExperimentSchema, createExperimentSchema,
   createMetricCategorySchema,
@@ -25,7 +25,8 @@ import {
   updateExperimentSchema, updateFeatureFlagSchema,
   updateMetricCategorySchema, updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
 } from '../schemas.js';
-import { BROWSER_ANALYTICS_STANDARD, INSTRUMENTATION_STANDARD } from './standard.js';
+import { INSTRUMENTATION_STANDARD } from './standard.js';
+import { BROWSER_ANALYTICS_STANDARD } from './browserStandard.js';
 
 export interface McpConfig { baseUrl: string; token: string; }
 
@@ -197,9 +198,13 @@ jsonTool(
 
 jsonTool(
   'propose_browser_analytics',
-  'Idempotently propose the canonical privacy-bounded browser properties plus page-view and visitor metrics. Everything remains proposed until owner review.',
-  { project },
-  wrap(({ project: slug }) => api('POST', `/api/v1/projects/${slug}/properties/browser-analytics`, {})),
+  'Atomically propose canonical privacy-safe browser properties, a finite route vocabulary, acquisition properties and Web metrics. Definitions remain proposed until owner review.',
+  { project, route_keys: browserRouteKeysSchema },
+  wrap(({ project: slug, route_keys }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/properties/browser-analytics`,
+    { route_keys },
+  )),
 );
 
 jsonTool(
@@ -731,42 +736,42 @@ jsonTool(
 
 jsonTool(
   'query_web_analytics',
-  'Return distinct visitors, sessions and page views plus count-and-percentage breakdowns by country, device, browser, OS, language, timezone or acquisition source. Definitions and privacy caveats are included.',
+  'Return the bounded privacy-safe Web overview. Country remains unavailable; missing measurement denominators stay null.',
   { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_analytics', ...query })),
 );
 
 jsonTool(
   'get_web_overview',
-  'Return a bounded web overview with visitors, sessions, page views, measured engagement, bounce only for complete sessions, single-page sessions, foreground time, wall-clock span, breakdown truncation and privacy/accounting definitions.',
+  'Return visitors, actor-correct sessions, canonical page views, measured coverage, engagement rates and bounded trusted-route breakdowns.',
   { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_analytics', ...query })),
 );
 
 jsonTool(
   'list_web_sessions',
-  'List recent browser-tab sessions in one project/environment and period. Results are bounded and report truncation; incomplete timing remains explicit.',
+  'List bounded canonical Web sessions in deterministic started_at/session_id/actor_id order with tri-state engagement and bounce.',
   { project, query: webSessionsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_sessions', ...query })),
 );
 
 jsonTool(
   'get_web_session',
-  'Read one privacy-bounded browser-tab session with ordered page paths, foreground timing, wall-clock span and completeness. This is not DOM/video replay.',
+  'Read one actor-scoped canonical session with bounded safe routes. Ambiguous reused session IDs fail closed.',
   { project, query: webSessionQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_session', ...query })),
 );
 
 jsonTool(
   'get_session_engagement',
-  'Explain measured engagement for one known browser-tab session. Returns the same bounded server evidence as get_web_session and never invents bounce for incomplete sessions.',
+  'Explain measured engagement for one actor-scoped canonical session without converting incomplete negatives into false.',
   { project, query: webSessionQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_session', ...query })),
 );
 
 jsonTool(
   'get_page_engagement',
-  'Read the latest cumulative snapshot for one page_view_id. Duplicate or out-of-order snapshots are reduced by highest sequence; missing evidence stays explicit.',
+  'Read the highest-sequence cumulative snapshot for one actor/session-scoped page view. Reused IDs fail closed.',
   { project, query: pageEngagementQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'page_engagement', ...query })),
 );

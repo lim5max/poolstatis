@@ -739,10 +739,30 @@ export const webAnalyticsQuerySchema = z.object({
   date_to: dateStr.nullable().optional(),
   filters: z.array(propertyFilterSchema).max(20).default([]),
   dimensions: z.array(z.enum([
-    'country', 'device', 'browser', 'os', 'language', 'timezone', 'source',
-  ])).min(1).max(7).default(['country', 'device', 'source']),
-  env: z.string().default('prod'),
-});
+    'route',
+    'source',
+    'device',
+    'browser',
+    'os',
+    'language',
+    'timezone',
+    'country',
+  ])).min(1).max(8).default(['route', 'device', 'browser']),
+  env: z.string().trim().min(1).max(100).default('prod'),
+}).strict();
+
+const browserRouteKeySchema = z.string().trim().min(1).max(100)
+  .regex(/^[a-z][a-z0-9_.:-]{0,99}$/, 'route keys must be stable lowercase identifiers');
+
+export const browserRouteKeysSchema = z.array(browserRouteKeySchema).min(1).max(100);
+
+export const browserAnalyticsSetupSchema = z.object({
+  route_keys: browserRouteKeysSchema,
+}).strict().transform((input) => ({
+  route_keys: [...new Set(input.route_keys)].sort(),
+}));
+
+export type BrowserAnalyticsSetupInput = z.infer<typeof browserAnalyticsSetupSchema>;
 
 export const webSessionsQuerySchema = z.object({
   kind: z.literal('web_sessions'),
@@ -752,32 +772,33 @@ export const webSessionsQuerySchema = z.object({
   date_to: dateStr.nullable().optional(),
   filters: z.array(propertyFilterSchema).max(20).default([]),
   limit: z.number().int().min(1).max(100).default(50),
-  env: z.string().default('prod'),
-});
+  env: z.string().trim().min(1).max(100).default('prod'),
+}).strict();
 
 export const webSessionQuerySchema = z.object({
   kind: z.literal('web_session'),
   metric: keySchema,
   key_metric: keySchema.optional(),
-  session_id: z.string().min(1).max(200),
-  actor_id: z.string().min(1).max(200).optional(),
+  session_id: z.string().trim().min(1).max(200),
+  actor_id: z.string().trim().min(1).max(200).optional(),
   date_from: dateStr,
   date_to: dateStr.nullable().optional(),
   filters: z.array(propertyFilterSchema).max(20).default([]),
   page_limit: z.number().int().min(1).max(200).default(100),
-  env: z.string().default('prod'),
-});
+  env: z.string().trim().min(1).max(100).default('prod'),
+}).strict();
 
 export const pageEngagementQuerySchema = z.object({
   kind: z.literal('page_engagement'),
   metric: keySchema,
-  page_view_id: z.string().min(1).max(200),
-  actor_id: z.string().min(1).max(200).optional(),
+  page_view_id: z.string().trim().min(1).max(200),
+  actor_id: z.string().trim().min(1).max(200).optional(),
+  session_id: z.string().trim().min(1).max(200).optional(),
   date_from: dateStr,
   date_to: dateStr.nullable().optional(),
   filters: z.array(propertyFilterSchema).max(20).default([]),
-  env: z.string().default('prod'),
-});
+  env: z.string().trim().min(1).max(100).default('prod'),
+}).strict();
 
 // funnel XOR steps is enforced in QueryService (zod .refine would break the
 // discriminated union below).
