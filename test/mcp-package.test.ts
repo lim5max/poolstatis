@@ -34,7 +34,12 @@ let fixtureUrl: string;
 let generatedPackDir: string | undefined;
 const requests: Array<{ method: string; url: string; authorization?: string; client?: string }> = [];
 
-async function connect(command: string, args: string[] = [], cwd = tempProject) {
+async function connect(
+  command: string,
+  args: string[] = [],
+  cwd = tempProject,
+  extraEnv: Record<string, string> = {},
+) {
   const stderr: Buffer[] = [];
   const transport = new StdioClientTransport({
     command,
@@ -44,6 +49,7 @@ async function connect(command: string, args: string[] = [], cwd = tempProject) 
       PATH: process.env.PATH ?? '',
       POOLSTATIS_URL: fixtureUrl,
       POOLSTATIS_TOKEN: safeToken,
+      ...extraEnv,
     },
     stderr: 'pipe',
   });
@@ -442,7 +448,11 @@ describe('@poolstatis/mcp release artifact', () => {
       `file:${tarball}`,
       'dlx',
       'poolstatis-mcp',
-    ], dlxProject);
+    ], dlxProject, {
+      // Node 24 reports DEP0169 from pnpm's own dlx wrapper. The direct
+      // executable test above still enforces zero stderr from the MCP package.
+      NODE_OPTIONS: '--no-deprecation',
+    });
     try {
       const tools = await client.listTools(undefined, { timeout: 30_000 });
       expect(tools.tools.length).toBeGreaterThan(20);
