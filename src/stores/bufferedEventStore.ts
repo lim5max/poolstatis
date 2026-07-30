@@ -28,6 +28,14 @@ import type {
   StorableEvent,
   TrendPoint,
   TrendQuery,
+  WebAnalyticsQuery,
+  WebAnalyticsResult,
+  WebSessionsQuery,
+  WebSessionsResult,
+  WebSessionQuery,
+  WebSessionResult,
+  PageEngagementQuery,
+  WebPageEngagementResult,
 } from './eventStore.js';
 
 export interface BufferedEventStoreOptions {
@@ -135,6 +143,22 @@ export class BufferedEventStore implements EventStore {
 
   trend(q: TrendQuery): Promise<TrendPoint[]> {
     return this.inner.trend(q);
+  }
+
+  webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult> {
+    return this.inner.webAnalytics(q);
+  }
+
+  webSessions(q: WebSessionsQuery): Promise<WebSessionsResult> {
+    return this.inner.webSessions(q);
+  }
+
+  webSession(q: WebSessionQuery): Promise<WebSessionResult> {
+    return this.inner.webSession(q);
+  }
+
+  pageEngagement(q: PageEngagementQuery): Promise<WebPageEngagementResult> {
+    return this.inner.pageEngagement(q);
   }
 
   funnel(q: FunnelQuery): Promise<number[]> {

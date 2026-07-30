@@ -1,5 +1,13 @@
 # Instrumenting a product with Poolstatis
 
+> Optional Web analytics requires the SDK browser helper and a finite safe
+> route mapper. Never send a raw pathname that may contain customer,
+> invitation, document or token identifiers. Custom product events use the
+> neutral base SDK path; `$browser_context` is reserved for canonical
+> `page.viewed`/`page.engagement`. Run atomic browser registry setup first,
+> then explicitly review/trust `$route_key` and activate `web_page_views`.
+> See [Browser analytics](13-browser-analytics.md).
+
 Two ways to get metrics into Poolstatis:
 
 - **A — Let a coding agent do it** (recommended): connect the MCP, point the agent

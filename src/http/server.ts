@@ -36,6 +36,7 @@ import {
   createPropertyDefinition, listPropertyDefinitions, updatePropertyDefinition,
   type PropertyDefinition,
 } from '../services/properties.js';
+import { setupBrowserAnalytics } from '../services/browserAnalytics.js';
 import { assessMeasurementTrust } from '../services/measurementTrust.js';
 import {
   applyDeclaration, diffDeclaration, exportDeclaration, getContract, listContracts,
@@ -937,6 +938,19 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
         ...(status ? { status } : {}),
       }),
     };
+  });
+
+  app.post('/api/v1/projects/:slug/properties/browser-analytics', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const result = await setupBrowserAnalytics(
+      ctx.pool,
+      project.id,
+      authOwner(req.auth),
+    );
+    ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
+    return result;
   });
 
   app.patch('/api/v1/projects/:slug/properties/:scope/:key', async (req) => {

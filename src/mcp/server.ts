@@ -21,8 +21,10 @@ import {
   registerReleaseSchema, reviewDecisionSchema,
   retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
   updateMetricSchema, updatePropertyDefinitionSchema,
+  webAnalyticsQuerySchema, webSessionsQuerySchema, webSessionQuerySchema, pageEngagementQuerySchema,
 } from '../schemas.js';
 import { INSTRUMENTATION_STANDARD } from './standard.js';
+import { BROWSER_ANALYTICS_STANDARD } from './browserStandard.js';
 
 const BASE_URL = process.env.POOLSTATIS_URL ?? 'http://127.0.0.1:3300';
 const TOKEN = process.env.POOLSTATIS_TOKEN;
@@ -619,6 +621,83 @@ jsonTool(
 // ===== Queries (analysis-time) =====
 
 jsonTool(
+  'propose_browser_analytics',
+  'Atomically and idempotently propose the canonical privacy-safe browser properties, acquisition properties and Web metrics. Definitions remain proposed until owner review.',
+  { project },
+  wrap(({ project: slug }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/properties/browser-analytics`,
+    {},
+  )),
+);
+
+jsonTool(
+  'query_web_analytics',
+  'Return the bounded privacy-safe Web overview. Sessions use (resolved actor, non-empty session_id); missing measurement denominators remain null.',
+  { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/query`,
+    { kind: 'web_analytics', ...query },
+  )),
+);
+
+jsonTool(
+  'get_web_overview',
+  'Return visitors, actor-correct sessions, canonical page views, measured coverage, engagement rates, duration from complete sessions, and approved bounded breakdowns.',
+  { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/query`,
+    { kind: 'web_analytics', ...query },
+  )),
+);
+
+jsonTool(
+  'list_web_sessions',
+  'List bounded canonical Web sessions in deterministic started_at/session_id/actor_id order with tri-state engagement and bounce.',
+  { project, query: webSessionsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/query`,
+    { kind: 'web_sessions', ...query },
+  )),
+);
+
+jsonTool(
+  'get_web_session',
+  'Read one actor-scoped canonical session with bounded safe routes and engagement evidence. Ambiguous reused session IDs fail closed.',
+  { project, query: webSessionQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/query`,
+    { kind: 'web_session', ...query },
+  )),
+);
+
+jsonTool(
+  'get_session_engagement',
+  'Explain measured engagement for one actor-scoped canonical session without converting incomplete negatives into false.',
+  { project, query: webSessionQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/query`,
+    { kind: 'web_session', ...query },
+  )),
+);
+
+jsonTool(
+  'get_page_engagement',
+  'Read the latest valid cumulative engagement snapshot for one actor-scoped page view. Ambiguous reused page IDs fail closed.',
+  { project, query: pageEngagementQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/query`,
+    { kind: 'page_engagement', ...query },
+  )),
+);
+
+jsonTool(
   'query_trend',
   'Time series for a registry metric. Dates: relative ("-30d", "-12h") or ISO. Optional breakdown by an event property (top 10 + $other).',
   { project, query: trendQuerySchema.omit({ kind: true }) },
@@ -773,6 +852,18 @@ server.resource(
   'poolstatis://standard/instrumentation',
   async (uri) => ({
     contents: [{ uri: uri.href, mimeType: 'text/markdown', text: INSTRUMENTATION_STANDARD }],
+  }),
+);
+
+server.resource(
+  'browser-analytics-standard',
+  'poolstatis://standard/browser-analytics',
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/markdown',
+      text: BROWSER_ANALYTICS_STANDARD,
+    }],
   }),
 );
 

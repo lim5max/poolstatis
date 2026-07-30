@@ -6,6 +6,8 @@ import {
   type UpdatePropertyDefinitionInput,
 } from '../schemas.js';
 
+type Queryable = pg.Pool | pg.PoolClient;
+
 export interface PropertyDefinition {
   id: string;
   key: string;
@@ -25,7 +27,7 @@ const COLS = `id, key, scope, value_type, purpose, status, source,
   source_connection_id, enum_values, created_by, created_at, updated_at`;
 
 export async function createPropertyDefinition(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   input: PropertyDefinitionInput,
   actor: string,
@@ -66,7 +68,7 @@ export async function createPropertyDefinition(
 }
 
 export async function listPropertyDefinitions(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   filter: { scope?: string; status?: string } = {},
 ): Promise<PropertyDefinition[]> {
@@ -88,7 +90,7 @@ export async function listPropertyDefinitions(
 }
 
 export async function updatePropertyDefinition(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   scope: PropertyDefinition['scope'],
   key: string,
@@ -133,7 +135,7 @@ export async function updatePropertyDefinition(
 }
 
 export async function getPropertyDefinition(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   scope: PropertyDefinition['scope'],
   key: string,
@@ -148,7 +150,7 @@ export async function getPropertyDefinition(
 }
 
 async function assertSourceConnection(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   input: PropertyDefinitionInput,
 ): Promise<void> {

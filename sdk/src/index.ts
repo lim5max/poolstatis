@@ -36,6 +36,31 @@ export interface PoolstatisEvent {
   properties?: Record<string, unknown>;
 }
 
+export {
+  clearBrowserAnalyticsIdentity,
+  createBrowserAnalytics,
+  BROWSER_CONTEXT_VERSION,
+  BROWSER_PAGE_ENGAGEMENT_EVENT,
+  BROWSER_PAGE_VIEW_EVENT,
+} from './browser.js';
+export type {
+  ActorLinkHandoff,
+  BrowserAnalyticsOptions,
+  BrowserCaptureClient,
+  BrowserConsentPolicy,
+  BrowserLike,
+} from './browser.js';
+export {
+  ACQUISITION_UTM_KEYS,
+  acquisitionPropertyDefinitions,
+  snapshotFromBrowser,
+} from './attribution.js';
+export type {
+  AcquisitionUtmKey,
+  AttributionSnapshot,
+  BrowserAttributionEnvironment,
+} from './attribution.js';
+
 /** Narrow wire contract consumed by the optional Browser Experience module. */
 export type ExperienceCaptureEvent =
   | { kind: 'page_viewed'; distinct_id: string; session_id: string; route: string; sequence: number }

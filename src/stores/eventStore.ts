@@ -46,6 +46,122 @@ export interface TrendPoint {
   breakdown_value?: string;
 }
 
+export interface WebAnalyticsQuery {
+  projectId: string;
+  env: string;
+  event: string;
+  filters: PropertyFilter[];
+  from: Date;
+  to: Date;
+  dimensions: Array<{ key: string; property: string; missingValue: string }>;
+  keyMetric?: FunnelStepQuery;
+}
+
+export interface WebAnalyticsCounts {
+  visitors: number;
+  sessions: number;
+  page_views: number;
+}
+
+export interface WebEngagementSummary {
+  measured_sessions: number;
+  incomplete_sessions: number;
+  unknown_sessions: number;
+  engaged_sessions: number;
+  bounce_sessions: number;
+  measured_session_coverage: number | null;
+  engaged_rate: number | null;
+  bounce_rate: number | null;
+  single_page_sessions: number;
+  timed_page_views: number;
+  total_page_views: number;
+  timed_page_coverage: number | null;
+  foreground_ms: number;
+  session_span_ms: number;
+}
+
+export interface WebAnalyticsResult {
+  summary: WebAnalyticsCounts & { average_session_duration_ms: number | null };
+  engagement: WebEngagementSummary;
+  breakdowns: Record<string, Array<WebAnalyticsCounts & { value: string }>>;
+  truncatedDimensions: string[];
+}
+
+export interface WebEngagementBaseQuery {
+  projectId: string;
+  env: string;
+  event: string;
+  filters: PropertyFilter[];
+  from: Date;
+  to: Date;
+  keyMetric?: FunnelStepQuery;
+}
+
+export interface WebSessionsQuery extends WebEngagementBaseQuery {
+  limit: number;
+}
+
+export interface WebSessionQuery extends WebEngagementBaseQuery {
+  sessionId: string;
+  actorId?: string;
+  pageLimit: number;
+}
+
+export interface PageEngagementQuery extends WebEngagementBaseQuery {
+  pageViewId: string;
+  actorId?: string;
+  sessionId?: string;
+}
+
+export interface WebPageEngagement {
+  page_view_id: string;
+  session_id: string;
+  actor_id: string;
+  route: string;
+  viewed_at: string;
+  last_snapshot_at: string | null;
+  sequence: number | null;
+  foreground_ms: number | null;
+  elapsed_ms: number | null;
+  max_scroll_pct: number | null;
+  interaction_count: number | null;
+  reason: string | null;
+  timed: boolean;
+  complete: boolean;
+}
+
+export interface WebSessionSummary {
+  session_id: string;
+  actor_id: string;
+  started_at: string;
+  ended_at: string;
+  page_views: number;
+  timed_page_views: number;
+  foreground_ms: number;
+  session_span_ms: number;
+  engaged: boolean | null;
+  bounce: boolean | null;
+  single_page: boolean;
+  complete: boolean;
+}
+
+export interface WebSessionsResult {
+  sessions: WebSessionSummary[];
+  total: number;
+}
+
+export interface WebSessionResult {
+  summary: WebSessionSummary | null;
+  pages: WebPageEngagement[];
+  total: number;
+  ambiguous_actor: boolean;
+}
+
+export interface WebPageEngagementResult {
+  page: WebPageEngagement | null;
+  ambiguous_actor: boolean;
+}
+
 export interface FunnelStepQuery {
   event: string;
   filters: PropertyFilter[];
@@ -290,6 +406,10 @@ export interface EventStore {
   /** Returns false when the batch was already durably appended. */
   appendIdempotent(batch: IdempotentAppend): Promise<boolean>;
   trend(q: TrendQuery): Promise<TrendPoint[]>;
+  webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult>;
+  webSessions(q: WebSessionsQuery): Promise<WebSessionsResult>;
+  webSession(q: WebSessionQuery): Promise<WebSessionResult>;
+  pageEngagement(q: PageEngagementQuery): Promise<WebPageEngagementResult>;
   funnel(q: FunnelQuery): Promise<number[]>; // actor count per step
   retention(q: RetentionQuery): Promise<RetentionCohort[]>;
   lifecycle(q: IntervalActivityQuery): Promise<LifecyclePoint[]>;

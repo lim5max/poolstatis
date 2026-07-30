@@ -8,6 +8,8 @@ import {
 } from '../schemas.js';
 import { ApiError, badRequest, notFound } from '../errors.js';
 
+type Queryable = pg.Pool | pg.PoolClient;
+
 export interface Metric {
   id: string;
   key: string;
@@ -40,7 +42,7 @@ function normalizeTags(tags: string[] | undefined): string[] {
 }
 
 export async function registerMetric(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   input: RegisterMetricInput,
   owner: string | null,
@@ -84,7 +86,7 @@ export async function registerMetric(
 }
 
 export async function updateMetric(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   key: string,
   patch: UpdateMetricInput,
@@ -128,7 +130,7 @@ export async function updateMetric(
 }
 
 async function assertMetricSourceConnection(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   type: Metric['type'],
   source: unknown,
@@ -181,7 +183,7 @@ export async function deprecateMetric(
   return rows[0];
 }
 
-export async function getMetric(pool: pg.Pool | pg.PoolClient, projectId: string, key: string): Promise<Metric> {
+export async function getMetric(pool: Queryable, projectId: string, key: string): Promise<Metric> {
   const { rows } = await pool.query(
     `SELECT ${METRIC_COLS} FROM metrics WHERE project_id = $1 AND key = $2`,
     [projectId, key],
@@ -193,7 +195,7 @@ export async function getMetric(pool: pg.Pool | pg.PoolClient, projectId: string
 }
 
 export async function listMetrics(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   filter: { status?: string; category?: string } = {},
 ): Promise<Metric[]> {

@@ -12,6 +12,7 @@
 | URI | Содержание |
 |-----|------------|
 | `poolstatis://standard/instrumentation` | Стандарт инструментации: именование событий, обязательные свойства, какие метрики ставить по типу продукта. Версионируется. (Контент — этап 2.) |
+| `poolstatis://standard/browser-analytics` | Нормативный privacy/consent/session-grain контракт Browser Analytics. |
 | `poolstatis://{project}/schema` | Живая схема проекта: метрики реестра, воронки, типы сущностей, фактические имена событий за 30 дней с пометкой registered/unregistered. |
 
 Схема как ресурс — ключевой UX-ход: агент получает полный контекст проекта одним чтением, без цепочки list-вызовов.
@@ -134,6 +135,14 @@ query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning
 query_stickiness(project, {metric, interval, date_from, env?})
 query_entities(project, {entity_type, filters?, limit, order_by?})
 
+propose_browser_analytics(project)
+get_web_overview(project, {metric, date_from, dimensions?, key_metric?, env?})
+query_web_analytics(project, {metric, date_from, dimensions?, key_metric?, env?})
+list_web_sessions(project, {metric, date_from, limit?, key_metric?, env?})
+get_web_session(project, {metric, session_id, actor_id?, date_from, page_limit?, env?})
+get_session_engagement(project, {metric, session_id, actor_id?, date_from, env?})
+get_page_engagement(project, {metric, page_view_id, actor_id?, date_from, env?})
+
 get_person(project, {distinct_id, env?})       // engagement summary + identity entity
 sample_events(project, {event?, registered?, distinct_id?, limit≤100})  // отладка ингеста
 list_ingest_warnings(project, {env?, kind?})   // rejected/unregistered/clock_skew (лог ошибок)
@@ -142,6 +151,9 @@ list_data_quality_issues(project, {env?, limit?, since_days?})
 ```
 
 MCP tools expose structured JSON output (`structuredContent`) with a text JSON fallback for older clients.
+Web tools используют только typed Query DSL и registry metric keys: raw SQL и
+raw event-name escape hatch отсутствуют. Полный контракт:
+[13-browser-analytics.md](13-browser-analytics.md).
 
 ### Инсайты
 

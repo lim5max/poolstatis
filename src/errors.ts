@@ -9,17 +9,19 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly hint?: string,
+    public readonly retryable?: boolean,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 
-  toBody(): { error: { code: string; message: string; hint?: string } } {
+  toBody(): { error: { code: string; message: string; hint?: string; retryable?: boolean } } {
     return {
       error: {
         code: this.code,
         message: this.message,
         ...(this.hint ? { hint: this.hint } : {}),
+        ...(this.retryable !== undefined ? { retryable: this.retryable } : {}),
       },
     };
   }
