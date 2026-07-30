@@ -10,7 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
-  actorLinkSchema,
+  actorLinkSchema, browserRouteKeysSchema,
   applyMeasurementDeclarationSchema,
   concludeExperimentSchema, createExperimentSchema,
   deprecateMetricSchema,
@@ -622,12 +622,12 @@ jsonTool(
 
 jsonTool(
   'propose_browser_analytics',
-  'Atomically and idempotently propose the canonical privacy-safe browser properties, acquisition properties and Web metrics. Definitions remain proposed until owner review.',
-  { project },
-  wrap(({ project: slug }) => api(
+  'Atomically and idempotently propose the canonical privacy-safe browser properties, finite route vocabulary, acquisition properties and Web metrics. Definitions remain proposed until owner review.',
+  { project, route_keys: browserRouteKeysSchema },
+  wrap(({ project: slug, route_keys }) => api(
     'POST',
     `/api/v1/projects/${slug}/properties/browser-analytics`,
-    {},
+    { route_keys },
   )),
 );
 

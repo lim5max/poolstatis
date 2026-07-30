@@ -301,9 +301,10 @@ export class QueryService {
       ? await this.webKeyMetricSource(projectId, q.key_metric)
       : undefined;
     this.assertWebFilterAllowlist(q.filters);
-    if (q.dimensions.includes('route') || q.filters.some((filter) => filter.property === '$route_key')) {
-      await assertTrustedSafeRoute(this.pool, projectId);
-    }
+    const routeVocabulary = q.dimensions.includes('route')
+      || q.filters.some((filter) => filter.property === '$route_key')
+      ? await assertTrustedSafeRoute(this.pool, projectId)
+      : null;
     const requestedProperties = [
       ...q.filters.map((filter) => filter.property),
       ...q.dimensions.map((key) => WEB_DIMENSIONS[key].property),
@@ -316,7 +317,15 @@ export class QueryService {
       projectId,
       env: q.env,
       event: source.event,
-      filters: [...source.filters, ...q.filters],
+      filters: [
+        ...source.filters,
+        ...(routeVocabulary ? [{
+          property: '$route_key',
+          op: 'in' as const,
+          value: [...routeVocabulary],
+        }] : []),
+        ...q.filters,
+      ],
       from,
       to,
       dimensions: q.dimensions.map((key) => ({ key, ...WEB_DIMENSIONS[key] })),
@@ -369,7 +378,7 @@ export class QueryService {
       ? await this.webKeyMetricSource(projectId, q.key_metric)
       : undefined;
     this.assertWebFilterAllowlist(q.filters);
-    await assertTrustedSafeRoute(this.pool, projectId);
+    const routeVocabulary = await assertTrustedSafeRoute(this.pool, projectId);
     await assertTrustedAcquisitionProperties(
       this.pool,
       projectId,
@@ -382,7 +391,11 @@ export class QueryService {
       projectId,
       env: q.env,
       event: source.event,
-      filters: [...source.filters, ...q.filters],
+      filters: [
+        ...source.filters,
+        { property: '$route_key', op: 'in', value: [...routeVocabulary] },
+        ...q.filters,
+      ],
       from,
       to,
       limit: q.limit,
@@ -417,7 +430,7 @@ export class QueryService {
       ? await this.webKeyMetricSource(projectId, q.key_metric)
       : undefined;
     this.assertWebFilterAllowlist(q.filters);
-    await assertTrustedSafeRoute(this.pool, projectId);
+    const routeVocabulary = await assertTrustedSafeRoute(this.pool, projectId);
     await assertTrustedAcquisitionProperties(
       this.pool,
       projectId,
@@ -430,7 +443,11 @@ export class QueryService {
       projectId,
       env: q.env,
       event: source.event,
-      filters: [...source.filters, ...q.filters],
+      filters: [
+        ...source.filters,
+        { property: '$route_key', op: 'in', value: [...routeVocabulary] },
+        ...q.filters,
+      ],
       from,
       to,
       sessionId: q.session_id,
@@ -471,7 +488,7 @@ export class QueryService {
   ): Promise<QueryResult> {
     const source = await this.webPageViewSource(projectId, q.metric);
     this.assertWebFilterAllowlist(q.filters);
-    await assertTrustedSafeRoute(this.pool, projectId);
+    const routeVocabulary = await assertTrustedSafeRoute(this.pool, projectId);
     await assertTrustedAcquisitionProperties(
       this.pool,
       projectId,
@@ -484,7 +501,11 @@ export class QueryService {
       projectId,
       env: q.env,
       event: source.event,
-      filters: [...source.filters, ...q.filters],
+      filters: [
+        ...source.filters,
+        { property: '$route_key', op: 'in', value: [...routeVocabulary] },
+        ...q.filters,
+      ],
       from,
       to,
       pageViewId: q.page_view_id,

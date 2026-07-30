@@ -4,8 +4,9 @@
 > route mapper. Never send a raw pathname that may contain customer,
 > invitation, document or token identifiers. Custom product events use the
 > neutral base SDK path; `$browser_context` is reserved for canonical
-> `page.viewed`/`page.engagement`. Run atomic browser registry setup first,
-> then explicitly review/trust `$route_key` and activate `web_page_views`.
+> `page.viewed`/`page.engagement`. Run atomic browser registry setup with the
+> complete finite route vocabulary first, then explicitly review/trust the
+> enum `$route_key` and activate `web_page_views`.
 > See [Browser analytics](13-browser-analytics.md).
 
 Two ways to get metrics into Poolstatis:

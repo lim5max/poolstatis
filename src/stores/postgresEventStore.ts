@@ -529,7 +529,14 @@ export class PostgresEventStore implements EventStore {
               'visibility_hidden', 'blur', 'route_change',
               'pagehide', 'freeze', 'duration_rollover', 'destroy'
             )
-          ) AS complete
+          ) AS complete,
+          CASE
+            WHEN l.sequence IS NOT NULL
+              AND l.elapsed_ms IS NOT NULL
+              AND l.elapsed_ms >= 0
+            THEN p.viewed_at + l.elapsed_ms * interval '1 millisecond'
+            ELSE COALESCE(l.last_snapshot_at, p.viewed_at)
+          END AS evidence_ended_at
         FROM page_views p
         LEFT JOIN latest_engagement l
           ON l.project_id = p.project_id
@@ -546,12 +553,12 @@ export class PostgresEventStore implements EventStore {
           p.session_id,
           p.actor_id,
           min(p.viewed_at) AS started_at,
-          max(COALESCE(p.last_snapshot_at, p.viewed_at)) AS ended_at,
+          max(p.evidence_ended_at) AS ended_at,
           count(*)::int AS page_views,
           count(*) FILTER (WHERE p.timed)::int AS timed_page_views,
           COALESCE(sum(p.foreground_ms), 0)::bigint AS foreground_ms,
           floor(extract(epoch FROM (
-            max(COALESCE(p.last_snapshot_at, p.viewed_at)) - min(p.viewed_at)
+            max(p.evidence_ended_at) - min(p.viewed_at)
           )) * 1000)::bigint AS session_span_ms,
           (count(*) FILTER (WHERE p.complete) = count(*)) AS complete,
           CASE

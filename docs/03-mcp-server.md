@@ -135,7 +135,7 @@ query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning
 query_stickiness(project, {metric, interval, date_from, env?})
 query_entities(project, {entity_type, filters?, limit, order_by?})
 
-propose_browser_analytics(project)
+propose_browser_analytics(project, route_keys[]) // finite reviewed vocabulary; atomic
 get_web_overview(project, {metric, date_from, dimensions?, key_metric?, env?})
 query_web_analytics(project, {metric, date_from, dimensions?, key_metric?, env?})
 list_web_sessions(project, {metric, date_from, limit?, key_metric?, env?})

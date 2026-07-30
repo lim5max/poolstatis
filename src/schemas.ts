@@ -652,9 +652,22 @@ export const webAnalyticsQuerySchema = z.object({
     'os',
     'language',
     'timezone',
-  ])).min(1).max(7).default(['route', 'source', 'device', 'browser']),
+  ])).min(1).max(7).default(['route', 'device', 'browser']),
   env: z.string().trim().min(1).max(100).default('prod'),
 }).strict();
+
+const browserRouteKeySchema = z.string().trim().min(1).max(100)
+  .regex(/^[a-z][a-z0-9_.:-]{0,99}$/, 'route keys must be stable lowercase identifiers');
+
+export const browserRouteKeysSchema = z.array(browserRouteKeySchema).min(1).max(100);
+
+export const browserAnalyticsSetupSchema = z.object({
+  route_keys: browserRouteKeysSchema,
+}).strict().transform((input) => ({
+  route_keys: [...new Set(input.route_keys)].sort(),
+}));
+
+export type BrowserAnalyticsSetupInput = z.infer<typeof browserAnalyticsSetupSchema>;
 
 export const webSessionsQuerySchema = z.object({
   kind: z.literal('web_sessions'),

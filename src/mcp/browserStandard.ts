@@ -25,9 +25,10 @@ Analytics semantics.
 
 ## Privacy
 
-Customer-facing route analysis requires a trusted canonical \`$route_key\`
-definition. The host mapper must return a finite non-sensitive vocabulary,
-never a URL or dynamic path.
+Customer-facing route analysis and canonical capture require a trusted
+canonical enum \`$route_key\` definition. Atomic setup receives the complete
+finite non-sensitive vocabulary; the host mapper must return one of those
+values, never a URL or dynamic path.
 
 Never send or return raw IP, full URL, query, hash, full user agent, DOM, text,
 or secret-bearing dynamic route data. Country is unavailable until a separate
@@ -41,11 +42,12 @@ The browser module supports explicit opt-in, opt-out and external consent
 policies. Global Privacy Control disables all modes. No browser storage is read
 before collection is allowed. Withdrawal clears listeners, queued browser-owned
 events and stored identifiers. Logout or account switch rotates visitor and
-session identity. Terminal pagehide/freeze snapshots use keepalive transport.
+session identity. Hidden/pagehide/freeze terminal snapshots use keepalive
+transport.
 
 ## Setup and analysis
 
-Use \`propose_browser_analytics\` once per project. Setup is one serialized
+Use \`propose_browser_analytics(project, route_keys)\` once per project. Setup is one serialized
 SERIALIZABLE transaction with full preflight and bounded retry; definitions
 remain proposed until an owner reviews them. Activate \`web_page_views\` and
 trust \`$route_key\` before querying.

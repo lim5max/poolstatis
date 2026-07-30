@@ -167,6 +167,24 @@ export class Poolstatis {
     if (this.events.length >= this.maxBatchSize) void this.flush();
   }
 
+  /**
+   * Remove queued events owned by an optional capture module. This covers both
+   * the live queue and transient retry batches so consent withdrawal cannot
+   * resend data that was queued before the withdrawal.
+   */
+  discardQueuedEvents(predicate: (event: PoolstatisEvent) => boolean): void {
+    this.events = this.events.filter((event) => !predicate(event));
+    this.retries = this.retries.flatMap((batch) => {
+      if (batch.path !== '/i/v1/events') return [batch];
+      const body = batch.body as { batch_id?: unknown; events?: unknown };
+      if (!Array.isArray(body.events)) return [batch];
+      const events = (body.events as PoolstatisEvent[]).filter((event) => !predicate(event));
+      return events.length > 0
+        ? [{ ...batch, body: { ...body, events } }]
+        : [];
+    });
+  }
+
   /** Upsert mutable entity state (user/account/…). Merge semantics; null deletes a key. */
   identify(entityType: string, entityId: string, properties: Record<string, unknown>): void {
     this.entities.push({ entity_type: entityType, entity_id: entityId, properties });

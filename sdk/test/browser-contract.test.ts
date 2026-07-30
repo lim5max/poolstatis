@@ -5,7 +5,7 @@ import {
   type BrowserCaptureClient,
 } from '../src/browser.js';
 import { snapshotFromBrowser } from '../src/attribution.js';
-import type { PoolstatisEvent } from '../src/index.js';
+import { createClient, type PoolstatisEvent } from '../src/index.js';
 
 function storage(onRead?: () => void) {
   const values = new Map<string, string>();
@@ -21,6 +21,7 @@ function fixture() {
   let consent = false;
   let gpc = false;
   let path = '/customer/secret';
+  let visibilityState: 'visible' | 'hidden' = 'visible';
   let heartbeat: (() => void) | undefined;
   const queued: PoolstatisEvent[] = [];
   const listeners = new Map<string, Set<() => void>>();
@@ -44,7 +45,7 @@ function fixture() {
     },
     document: {
       referrer: 'https://referrer.test/private?secret=1',
-      visibilityState: 'visible' as const,
+      get visibilityState() { return visibilityState; },
       hasFocus: () => true,
       documentElement: { scrollHeight: 1_000 },
       body: { scrollHeight: 1_000 },
@@ -104,6 +105,10 @@ function fixture() {
     now: () => now,
     advance(ms: number) { now += ms; },
     heartbeat() { heartbeat?.(); },
+    hide() {
+      visibilityState = 'hidden';
+      documentListeners.get('visibilitychange')?.forEach((listener) => listener());
+    },
     pagehide() { listeners.get('pagehide')?.forEach((listener) => listener()); },
   };
 }
@@ -193,9 +198,13 @@ describe('@poolstatis/sdk/browser contract', () => {
     }, 'session', 'home');
     expect(snapshot).not.toHaveProperty('$utm_source');
     expect(snapshot.$utm_medium).toBe('paid-search');
+    expect(snapshotFromBrowser({
+      location: { href: 'https://example.test/?utm_source=search' },
+      document: { referrer: 'https://127.0.0.1/private' },
+    }, 'session', 'home')).not.toHaveProperty('referrer_origin');
   });
 
-  it('uses monotonic foreground time and keepalive terminal flush', async () => {
+  it('uses monotonic foreground time and keepalive for hidden and pagehide terminals', async () => {
     const f = fixture();
     f.setConsent(true);
     const flushes: boolean[] = [];
@@ -214,11 +223,49 @@ describe('@poolstatis/sdk/browser contract', () => {
     f.advance(10_000);
     f.heartbeat();
     f.advance(2_000);
+    f.hide();
+    await Promise.resolve();
+    expect(f.queued.filter((event) => event.event === 'page.engagement').at(-1)?.properties)
+      .toMatchObject({ foreground_ms: 12_000, reason: 'visibility_hidden' });
+    expect(flushes).toContain(true);
     f.pagehide();
     await Promise.resolve();
     expect(f.queued.filter((event) => event.event === 'page.engagement').at(-1)?.properties)
       .toMatchObject({ foreground_ms: 12_000, reason: 'pagehide' });
-    expect(flushes).toContain(true);
+    expect(flushes.filter(Boolean)).toHaveLength(2);
+  });
+
+  it('uses the real base client and removes browser events from queues and retries on withdrawal', async () => {
+    let accept = false;
+    const sent: Array<{ events?: PoolstatisEvent[] }> = [];
+    const client = createClient({
+      url: 'https://example.test',
+      ingestKey: 'pk_test',
+      flushIntervalMs: 60_000,
+      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+        sent.push(JSON.parse(String(init?.body)) as { events?: PoolstatisEvent[] });
+        return new Response('{}', { status: accept ? 200 : 503 });
+      }) as typeof fetch,
+    });
+    const f = fixture();
+    f.setConsent(true);
+    const analytics = createBrowserAnalytics({
+      client,
+      browser: f.browser,
+      hasConsent: f.hasConsent,
+      subscribeConsent: f.subscribeConsent,
+      mapPagePath: () => 'home',
+      createId: () => 'real-client',
+    });
+    analytics.start();
+    await client.flush({ keepalive: true });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.events).toHaveLength(1);
+    f.setConsent(false);
+    accept = true;
+    await client.flush();
+    expect(sent).toHaveLength(1);
+    await client.shutdown();
   });
 
   it('rotates visitor and session identity on account switch', () => {

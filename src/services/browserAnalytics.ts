@@ -33,7 +33,7 @@ export const BROWSER_ANALYTICS_PROPERTIES: Record<string, BrowserPropertySpec> =
     purpose: 'Marks canonical events produced by the consent-gated privacy-safe browser analytics module.',
   },
   $route_key: {
-    value_type: 'string',
+    value_type: 'enum',
     purpose: 'Records a host-mapped finite safe route key without URL, query, hash, dynamic identifier or secret.',
   },
   $page_view_id: {
@@ -84,19 +84,23 @@ interface BrowserPropertyPlan {
 export async function browserAnalyticsPropertyPlans(
   pool: Queryable,
   projectId: string,
+  routeKeys: string[],
 ): Promise<BrowserPropertyPlan[]> {
   const existing = new Map(
     (await listPropertyDefinitions(pool, projectId, { scope: 'event' }))
       .map((property) => [property.key, property]),
   );
   return Object.entries(BROWSER_ANALYTICS_PROPERTIES).map(([key, spec]) => {
+    const expectedSpec = key === '$route_key' ? { ...spec, enum_values: routeKeys } : spec;
     const property = existing.get(key);
     const expectedEnums = spec.enum_values ?? null;
     if (property && (
-      property.value_type !== spec.value_type
+      property.value_type !== expectedSpec.value_type
       || property.source !== 'native'
-      || property.purpose !== spec.purpose
-      || JSON.stringify(property.enum_values) !== JSON.stringify(expectedEnums)
+      || property.purpose !== expectedSpec.purpose
+      || JSON.stringify(property.enum_values) !== JSON.stringify(
+        expectedSpec.enum_values ?? expectedEnums,
+      )
     )) {
       throw new ApiError(
         409,
@@ -105,7 +109,7 @@ export async function browserAnalyticsPropertyPlans(
         'restore the canonical event-scoped native definition before setup',
       );
     }
-    return { key, spec, ...(property ? { property } : {}) };
+    return { key, spec: expectedSpec, ...(property ? { property } : {}) };
   });
 }
 
@@ -269,13 +273,14 @@ export async function setupBrowserAnalytics(
   pool: pg.Pool,
   projectId: string,
   actor: string,
+  routeKeys: string[],
 ): Promise<BrowserAnalyticsSetupResult> {
   return runSerializedBrowserSetup(
     pool,
     `browser-analytics-setup:${projectId}`,
     async (client) => {
       // Full preflight before the first write.
-      const browserProperties = await browserAnalyticsPropertyPlans(client, projectId);
+      const browserProperties = await browserAnalyticsPropertyPlans(client, projectId, routeKeys);
       const acquisitionProperties = await acquisitionPropertyPlans(client, projectId);
       const browserMetrics = await browserAnalyticsMetricPlans(client, projectId);
       const properties = [
@@ -309,8 +314,11 @@ export async function runSerializedBrowserSetup<T>(
   operation: (client: pg.PoolClient) => Promise<T>,
 ): Promise<T> {
   const client = await pool.connect();
+  let locked = false;
+  let failure: unknown;
   try {
     await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
+    locked = true;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
@@ -332,12 +340,26 @@ export async function runSerializedBrowserSetup<T>(
       }
     }
     throw new Error('browser analytics setup retry loop ended unexpectedly');
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
-    await client.query(
-      'SELECT pg_advisory_unlock(hashtextextended($1, 0))',
-      [lockKey],
-    ).catch(() => {});
-    client.release();
+    let releaseError: Error | undefined;
+    if (locked) {
+      try {
+        const unlocked = await client.query<{ unlocked: boolean }>(
+          'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
+          [lockKey],
+        );
+        if (unlocked.rows[0]?.unlocked !== true) {
+          releaseError = new Error('browser analytics setup advisory lock could not be released');
+        }
+      } catch (error) {
+        releaseError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    client.release(releaseError);
+    if (releaseError && failure === undefined) throw releaseError;
   }
 }
 
@@ -382,6 +404,7 @@ export function validateBrowserAnalyticsProperties(
   event: string,
   properties: Record<string, unknown>,
   sessionId: string | undefined,
+  safeRouteKeys?: ReadonlySet<string> | null,
 ): string | null {
   const marker = properties.$browser_context;
   // Legacy/manual page events stay accepted and never acquire browser meaning.
@@ -404,10 +427,14 @@ export function validateBrowserAnalyticsProperties(
   if (!isSafeRouteKey(properties.$route_key)) {
     return '$route_key must be a finite safe route key without URL or dynamic path data';
   }
+  if (!safeRouteKeys?.has(properties.$route_key)) {
+    return '$route_key must belong to the trusted finite browser route vocabulary';
+  }
   if (typeof properties.$page_view_id !== 'string'
     || properties.$page_view_id.length === 0
-    || properties.$page_view_id.length > 200) {
-    return '$page_view_id must be a non-empty string of at most 200 characters';
+    || properties.$page_view_id.length > 200
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(properties.$page_view_id)) {
+    return '$page_view_id must be an opaque identifier, not a URL, path or query payload';
   }
   for (const [key, values] of Object.entries(CONTEXT_ENUMS)) {
     const value = properties[key];
@@ -454,21 +481,38 @@ export function validateBrowserAnalyticsProperties(
 export async function assertTrustedSafeRoute(
   pool: Queryable,
   projectId: string,
-): Promise<void> {
+): Promise<Set<string>> {
+  const vocabulary = await browserRouteVocabulary(pool, projectId);
+  if (!vocabulary) {
+    throw badRequest(
+      'safe_route_unavailable',
+      'route analysis requires a trusted canonical finite $route_key vocabulary',
+      'run setup with the complete finite route vocabulary, then review and trust its definition',
+    );
+  }
+  return vocabulary;
+}
+
+export async function browserRouteVocabulary(
+  pool: Queryable,
+  projectId: string,
+): Promise<Set<string> | null> {
   const property = (await listPropertyDefinitions(pool, projectId, { scope: 'event' }))
     .find((candidate) => candidate.key === '$route_key');
+  const values = property?.enum_values;
   const spec = BROWSER_ANALYTICS_PROPERTIES.$route_key!;
   if (!property
     || property.status !== 'trusted'
     || property.source !== 'native'
-    || property.value_type !== spec.value_type
-    || property.purpose !== spec.purpose) {
-    throw badRequest(
-      'safe_route_unavailable',
-      'route analysis requires the trusted canonical $route_key definition',
-      'review and trust the setup definition before returning customer-facing route breakdowns',
-    );
+    || property.value_type !== 'enum'
+    || property.purpose !== spec.purpose
+    || !values
+    || values.length === 0
+    || values.length > 100
+    || values.some((value) => !isSafeRouteKey(value))) {
+    return null;
   }
+  return new Set(values);
 }
 
 function boundedInteger(value: unknown, min: number, max: number): boolean {

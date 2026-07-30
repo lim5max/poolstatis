@@ -132,7 +132,9 @@ export function validateAcquisitionProperties(
     if (typeof origin !== 'string' || origin.length > 255) return 'referrer_origin must be a bounded origin';
     try {
       const parsed = new URL(origin);
-      if (parsed.origin !== origin || !['http:', 'https:'].includes(parsed.protocol)) {
+      if (parsed.origin !== origin
+        || !['http:', 'https:'].includes(parsed.protocol)
+        || isIpLiteralHostname(parsed.hostname)) {
         return 'referrer_origin must be an HTTP(S) origin only';
       }
     } catch {
@@ -144,4 +146,11 @@ export function validateAcquisitionProperties(
 
 export function isSafeRouteKey(value: unknown): value is string {
   return typeof value === 'string' && /^[a-z][a-z0-9_.:-]{0,99}$/.test(value);
+}
+
+function isIpLiteralHostname(hostname: string): boolean {
+  const unwrapped = hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname;
+  return unwrapped.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(unwrapped);
 }

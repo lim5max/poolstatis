@@ -283,6 +283,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
       event,
       distinct_id: identity?.actorId ?? actorId,
       session_id: identity?.sessionId ?? sessionId,
+      timestamp: new Date(now()).toISOString(),
       properties: {
         ...(acquisition ?? {}),
         $browser_context: BROWSER_CONTEXT_VERSION,
@@ -335,14 +336,18 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     return true;
   };
 
-  const terminalFlush = (reason: 'pagehide' | 'freeze') => {
-    updateClock();
-    if (page) page.foregroundActive = false;
-    if (!flushEngagement(reason)) return;
+  const flushKeepalive = () => {
     try {
       const pending = options.client.flush?.({ keepalive: true });
       if (pending) void pending.catch(() => {});
     } catch { /* lifecycle callbacks cannot surface transport errors */ }
+  };
+
+  const terminalFlush = (reason: 'pagehide' | 'freeze') => {
+    updateClock();
+    if (page) page.foregroundActive = false;
+    if (!flushEngagement(reason)) return;
+    flushKeepalive();
   };
 
   const startPage = (route: string) => {
@@ -419,7 +424,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
         && browser.document.visibilityState !== 'prerender';
       if (!visible && page.foregroundActive) {
         page.foregroundActive = false;
-        flushEngagement('visibility_hidden');
+        if (flushEngagement('visibility_hidden')) flushKeepalive();
         return;
       }
       if (visible && resumeAfterIdle()) return;

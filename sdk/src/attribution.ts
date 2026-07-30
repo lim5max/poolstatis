@@ -79,8 +79,18 @@ function originOnly(referrer: string): string | undefined {
   if (!referrer) return undefined;
   try {
     const url = new URL(referrer);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : undefined;
+    return (url.protocol === 'https:' || url.protocol === 'http:')
+      && !isIpLiteralHostname(url.hostname)
+      ? url.origin
+      : undefined;
   } catch {
     return undefined;
   }
+}
+
+function isIpLiteralHostname(hostname: string): boolean {
+  const unwrapped = hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname;
+  return unwrapped.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(unwrapped);
 }

@@ -60,7 +60,7 @@ import {
 } from '../services/rateLimiter.js';
 import {
   deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
-  actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
+  actorLinkSchema, browserAnalyticsSetupSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
 } from '../schemas.js';
@@ -943,10 +943,12 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/api/v1/projects/:slug/properties/browser-analytics', async (req) => {
     platform(req);
     const project = await resolveProject(req);
+    const input = browserAnalyticsSetupSchema.parse(req.body);
     const result = await setupBrowserAnalytics(
       ctx.pool,
       project.id,
       authOwner(req.auth),
+      input.route_keys,
     );
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
@@ -960,13 +962,16 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     if (scope !== 'event' && scope !== 'actor' && scope !== 'entity') {
       throw badRequest('invalid_property_scope', 'scope must be event, actor or entity');
     }
-    return updatePropertyDefinition(
+    const property = await updatePropertyDefinition(
       ctx.pool,
       project.id,
       scope as PropertyDefinition['scope'],
       key,
       updatePropertyDefinitionSchema.parse(req.body),
     );
+    ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
+    return property;
   });
 
   app.post('/api/v1/projects/:slug/measurement/trust', async (req) => {

@@ -112,7 +112,8 @@ selectors, input values, error stack/message и network data не являютс
 CRUD-слой 1:1 с тулами MCP (см. [03-mcp-server.md](03-mcp-server.md)):
 
 Browser Analytics добавляет atomic setup endpoint
-`POST /api/v1/projects/{slug}/properties/browser-analytics` и строгие ветки
+`POST /api/v1/projects/{slug}/properties/browser-analytics` с body
+`{"route_keys":["home","docs","pricing","other"]}` и строгие ветки
 `web_analytics`, `web_sessions`, `web_session`, `page_engagement` в общем
 `POST /api/v1/projects/{slug}/query`. Session grain —
 `(resolved actor, non-empty session_id)`; ambiguous detail fail-closed, а

@@ -2,11 +2,24 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { querySchema } from '../src/schemas.js';
 import { runSerializedBrowserSetup } from '../src/services/browserAnalytics.js';
 import { PostgresEventStore } from '../src/stores/postgresEventStore.js';
+import {
+  createBrowserAnalytics,
+  type BrowserLike,
+  type PoolstatisEvent,
+} from '../sdk/src/index.js';
 import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
 
 let env: TestEnv;
 let other: TestEnv;
 const project = () => `/api/v1/projects/${env.projectSlug}`;
+const ROUTE_KEYS = [
+  'home',
+  'pricing',
+  'docs',
+  'dev',
+  'duration_sdk',
+  ...Array.from({ length: 51 }, (_, index) => `route_${String(index).padStart(2, '0')}`),
+];
 
 beforeAll(async () => {
   env = await createTestEnv({ ingestBuffer: false, queryCache: false });
@@ -24,7 +37,7 @@ describe('web analytics Query DSL', () => {
       metric: 'web_page_views',
       date_from: '-7d',
     })).toMatchObject({
-      dimensions: ['route', 'source', 'device', 'browser'],
+      dimensions: ['route', 'device', 'browser'],
       env: 'prod',
     });
     expect(() => querySchema.parse({
@@ -53,7 +66,12 @@ describe('atomic browser registry setup', () => {
     const statements: string[] = [];
     let released = false;
     const client = {
-      async query(sql: string) { statements.push(sql); return { rows: [] }; },
+      async query(sql: string) {
+        statements.push(sql);
+        return {
+          rows: sql.includes('pg_advisory_unlock') ? [{ unlocked: true }] : [],
+        };
+      },
       release() { released = true; },
     };
     const pool = { async connect() { return client; } };
@@ -90,8 +108,12 @@ describe('atomic browser registry setup', () => {
 
   it('is concurrent, atomic and idempotent', async () => {
     const [first, second] = await Promise.all([
-      api(env, env.secretToken, 'POST', `${project()}/properties/browser-analytics`, {}),
-      api(env, env.secretToken, 'POST', `${project()}/properties/browser-analytics`, {}),
+      api(env, env.secretToken, 'POST', `${project()}/properties/browser-analytics`, {
+        route_keys: ROUTE_KEYS,
+      }),
+      api(env, env.secretToken, 'POST', `${project()}/properties/browser-analytics`, {
+        route_keys: ROUTE_KEYS,
+      }),
     ]);
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
@@ -99,6 +121,8 @@ describe('atomic browser registry setup', () => {
     expect(first.body.metrics).toHaveLength(2);
     expect(second.body.properties).toHaveLength(15);
     expect(second.body.metrics).toHaveLength(2);
+    expect(first.body.properties.find((property: { key: string }) => property.key === '$route_key'))
+      .toMatchObject({ value_type: 'enum', enum_values: [...ROUTE_KEYS].sort() });
 
     const counts = await env.pool.query(
       `SELECT
@@ -123,7 +147,7 @@ describe('atomic browser registry setup', () => {
       other.secretToken,
       'POST',
       `/api/v1/projects/${other.projectSlug}/properties/browser-analytics`,
-      {},
+      { route_keys: ['home', 'pricing', 'docs'] },
     );
     expect(result.status).toBe(409);
     expect(result.body.error.code).toBe('browser_property_conflict');
@@ -134,6 +158,46 @@ describe('atomic browser registry setup', () => {
       [other.projectId],
     );
     expect(counts.rows[0]).toEqual({ properties: 1, metrics: 0 });
+  });
+
+  it('rolls back writes on a late operation failure and destroys a client after unlock failure', async () => {
+    await expect(runSerializedBrowserSetup(
+      env.pool,
+      `late-rollback:${env.projectId}`,
+      async (client) => {
+        await client.query(
+          `INSERT INTO property_definitions
+             (project_id, key, scope, value_type, purpose, status, source, created_by)
+           VALUES ($1, 'late_rollback_probe', 'event', 'string',
+             'Proves that a late setup failure rolls every earlier write back.',
+             'proposed', 'native', 'test')`,
+          [env.projectId],
+        );
+        throw new Error('late setup failure');
+      },
+    )).rejects.toThrow('late setup failure');
+    const rolledBack = await env.pool.query(
+      `SELECT count(*)::int AS count
+       FROM property_definitions
+       WHERE project_id = $1 AND key = 'late_rollback_probe'`,
+      [env.projectId],
+    );
+    expect(rolledBack.rows[0]?.count).toBe(0);
+
+    let releasedWith: Error | undefined;
+    const poisonedClient = {
+      async query(sql: string) {
+        if (sql.includes('pg_advisory_unlock')) throw new Error('unlock failed');
+        return { rows: [] };
+      },
+      release(error?: Error) { releasedWith = error; },
+    };
+    await expect(runSerializedBrowserSetup(
+      { connect: async () => poisonedClient } as never,
+      'unlock-failure',
+      async () => 'committed',
+    )).rejects.toThrow('unlock failed');
+    expect(releasedWith?.message).toContain('unlock failed');
   });
 });
 
@@ -197,6 +261,37 @@ describe('privacy-safe browser ingest and Web analytics', () => {
           },
         },
         {
+          event: 'page.viewed',
+          distinct_id: 'unsafe-e',
+          session_id: 'unsafe-s5',
+          properties: {
+            $browser_context: '1',
+            $route_key: 'pricing',
+            $page_view_id: 'https://example.test/?token=secret',
+          },
+        },
+        {
+          event: 'page.viewed',
+          distinct_id: 'unsafe-f',
+          session_id: 'unsafe-s6',
+          properties: {
+            $browser_context: '1',
+            $route_key: 'invite:secret-token',
+            $page_view_id: 'opaque-page-id',
+          },
+        },
+        {
+          event: 'page.viewed',
+          distinct_id: 'unsafe-g',
+          session_id: 'unsafe-s7',
+          properties: {
+            $browser_context: '1',
+            $route_key: 'pricing',
+            $page_view_id: 'opaque-page-ip',
+            referrer_origin: 'https://127.0.0.1',
+          },
+        },
+        {
           event: 'checkout.completed',
           distinct_id: 'neutral',
           properties: { arbitrary: 'allowed on the neutral base SDK path' },
@@ -205,7 +300,29 @@ describe('privacy-safe browser ingest and Web analytics', () => {
     });
     expect(result.status).toBe(207);
     expect(result.body).toMatchObject({ accepted: 1 });
-    expect(result.body.errors).toHaveLength(4);
+    expect(result.body.errors).toHaveLength(7);
+  });
+
+  it('never returns an out-of-vocabulary historical route even if storage was bypassed', async () => {
+    await env.pool.query(
+      `INSERT INTO events
+         (project_id, env, event, "timestamp", distinct_id, session_id, properties, registered)
+       VALUES ($1, 'prod', 'page.viewed', '2026-07-30T10:10:00.000Z',
+         'historical-actor', 'historical-session',
+         '{"$browser_context":"1","$route_key":"invite:secret-token","$page_view_id":"historical-page"}',
+         true)`,
+      [env.projectId],
+    );
+    const result = await api(env, env.secretToken, 'POST', `${project()}/query`, {
+      kind: 'web_analytics',
+      metric: 'web_page_views',
+      date_from: '2026-07-30T10:09:00.000Z',
+      date_to: '2026-07-30T10:11:00.000Z',
+      dimensions: ['route'],
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.summary.page_views).toBe(0);
+    expect(JSON.stringify(result.body)).not.toContain('secret-token');
   });
 
   it('keeps legacy page events outside canonical semantics and returns tri-state rates', async () => {
@@ -351,6 +468,18 @@ describe('privacy-safe browser ingest and Web analytics', () => {
     await api(env, env.secretToken, 'PATCH', `${project()}/properties/event/$route_key`, {
       status: 'proposed',
     });
+    const rejectedCapture = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{
+        event: 'page.viewed',
+        distinct_id: 'untrusted-route-actor',
+        session_id: 'untrusted-route-session',
+        properties: {
+          $browser_context: '1', $route_key: 'home', $page_view_id: 'untrusted-route-page',
+        },
+      }],
+    });
+    expect(rejectedCapture.body).toMatchObject({ accepted: 0 });
+    expect(rejectedCapture.body.errors[0].message).toContain('trusted finite');
     const result = await api(env, env.secretToken, 'POST', `${project()}/query`, {
       kind: 'web_analytics',
       metric: 'web_page_views',
@@ -360,6 +489,22 @@ describe('privacy-safe browser ingest and Web analytics', () => {
     expect(result.status).toBe(400);
     expect(result.body.error.code).toBe('safe_route_unavailable');
     await api(env, env.secretToken, 'PATCH', `${project()}/properties/event/$route_key`, {
+      status: 'trusted',
+    });
+  });
+
+  it('keeps acquisition source out of the default overview until explicitly requested', async () => {
+    await api(env, env.secretToken, 'PATCH', `${project()}/properties/event/$utm_source`, {
+      status: 'proposed',
+    });
+    const result = await api(env, env.secretToken, 'POST', `${project()}/query`, {
+      kind: 'web_analytics',
+      metric: 'web_page_views',
+      date_from: '-1d',
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.breakdowns).not.toHaveProperty('source');
+    await api(env, env.secretToken, 'PATCH', `${project()}/properties/event/$utm_source`, {
       status: 'trusted',
     });
   });
@@ -405,6 +550,75 @@ describe('privacy-safe browser ingest and Web analytics', () => {
       engaged_sessions: 1,
       incomplete_sessions: 1,
     });
+  });
+
+  it('preserves SDK duration when page and terminal events share one ingest batch', async () => {
+    let wall = Date.parse('2026-07-30T10:20:00.000Z');
+    let monotonic = 1_000;
+    const captured: PoolstatisEvent[] = [];
+    const values = new Map<string, string>();
+    const sessionValues = new Map<string, string>();
+    const storage = (map: Map<string, string>) => ({
+      getItem: (key: string) => map.get(key) ?? null,
+      setItem: (key: string, value: string) => map.set(key, value),
+      removeItem: (key: string) => map.delete(key),
+    });
+    const browser = {
+      location: { pathname: '/', href: 'https://example.test/' },
+      document: {
+        referrer: '',
+        visibilityState: 'visible',
+        hasFocus: () => true,
+        documentElement: { scrollHeight: 800 },
+        body: { scrollHeight: 800 },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      },
+      history: { pushState: () => {}, replaceState: () => {} },
+      navigator: { userAgent: 'Mozilla/5.0 Chrome/120.0', language: 'en-US' },
+      screen: { width: 1280, height: 800 },
+      innerWidth: 1280,
+      innerHeight: 800,
+      localStorage: storage(values),
+      sessionStorage: storage(sessionValues),
+      setInterval: () => 1,
+      clearInterval: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as BrowserLike;
+    const analytics = createBrowserAnalytics({
+      client: {
+        capture: (event) => captured.push(event),
+        discardQueuedEvents: () => {},
+      },
+      browser,
+      now: () => wall,
+      monotonicNow: () => monotonic,
+      hasConsent: () => true,
+      subscribeConsent: () => () => {},
+      mapPagePath: () => 'duration_sdk',
+      createId: (() => {
+        let id = 0;
+        return () => `duration-${++id}`;
+      })(),
+    });
+    analytics.start();
+    wall += 5_000;
+    monotonic += 5_000;
+    analytics.destroy();
+    expect(captured.map((event) => event.event)).toEqual(['page.viewed', 'page.engagement']);
+    const ingested = await api(env, env.ingestToken, 'POST', '/i/v1/events', { events: captured });
+    expect(ingested.body.accepted).toBe(2);
+    const overview = await api(env, env.secretToken, 'POST', `${project()}/query`, {
+      kind: 'web_analytics',
+      metric: 'web_page_views',
+      date_from: '2026-07-30T10:19:00.000Z',
+      date_to: '2026-07-30T10:21:00.000Z',
+      filters: [{ property: '$route_key', op: 'eq', value: 'duration_sdk' }],
+      dimensions: ['route'],
+    });
+    expect(overview.status).toBe(200);
+    expect(overview.body.summary.average_session_duration_ms).toBe(5_000);
   });
 
   it('resolves actor links at query time and separates actors again after revoke', async () => {

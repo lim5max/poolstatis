@@ -4,7 +4,10 @@ import { ingestEventSchema, type IngestEnvelope } from '../schemas.js';
 import { registeredEventNames } from './registry.js';
 import { recordWarnings, type WarningDelta } from './warnings.js';
 import { validateAcquisitionProperties } from './acquisitionAttribution.js';
-import { validateBrowserAnalyticsProperties } from './browserAnalytics.js';
+import {
+  browserRouteVocabulary,
+  validateBrowserAnalyticsProperties,
+} from './browserAnalytics.js';
 
 const CLOCK_SKEW_FUTURE_MS = 5 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 30_000;
@@ -21,6 +24,11 @@ interface CacheEntry {
   expiresAt: number;
 }
 
+interface RouteCacheEntry {
+  keys: Set<string> | null;
+  expiresAt: number;
+}
+
 /**
  * Ingest pipeline: per-event validation (a bad event never sinks the batch),
  * batch idempotency, clock-skew correction, and the registered-flag check
@@ -28,6 +36,7 @@ interface CacheEntry {
  */
 export class IngestService {
   private readonly registryCache = new Map<string, CacheEntry>();
+  private readonly browserRouteCache = new Map<string, RouteCacheEntry>();
 
   constructor(
     private readonly pool: pg.Pool,
@@ -42,7 +51,19 @@ export class IngestService {
   ): Promise<IngestResult> {
     const rawEvents = batch.events;
     {
-      const registered = await this.registeredNames(project.id);
+      const hasCanonicalBrowserEvents = rawEvents.some((raw) => {
+        const properties = (raw as { properties?: unknown } | null)?.properties;
+        return properties !== null
+          && typeof properties === 'object'
+          && !Array.isArray(properties)
+          && (properties as Record<string, unknown>).$browser_context !== undefined;
+      });
+      const [registered, safeRouteKeys] = await Promise.all([
+        this.registeredNames(project.id),
+        hasCanonicalBrowserEvents
+          ? this.browserRouteKeys(project.id)
+          : Promise.resolve(undefined),
+      ]);
       const retentionFloor = new Date(now);
       retentionFloor.setUTCMonth(retentionFloor.getUTCMonth() - project.retention_months);
 
@@ -78,7 +99,12 @@ export class IngestService {
           bump('rejected', e.event, acquisitionError);
           return;
         }
-        const browserError = validateBrowserAnalyticsProperties(e.event, properties, e.session_id);
+        const browserError = validateBrowserAnalyticsProperties(
+          e.event,
+          properties,
+          e.session_id,
+          safeRouteKeys,
+        );
         if (browserError) {
           errors.push({ index, message: browserError });
           bump('rejected', e.event, browserError);
@@ -136,6 +162,7 @@ export class IngestService {
   /** Drop the cached registry for a project (call after metric changes). */
   invalidateRegistry(projectId: string): void {
     this.registryCache.delete(projectId);
+    this.browserRouteCache.delete(projectId);
   }
 
   private async registeredNames(projectId: string): Promise<Set<string>> {
@@ -144,5 +171,16 @@ export class IngestService {
     const names = await registeredEventNames(this.pool, projectId);
     this.registryCache.set(projectId, { names, expiresAt: Date.now() + REGISTRY_CACHE_TTL_MS });
     return names;
+  }
+
+  private async browserRouteKeys(projectId: string): Promise<Set<string> | null> {
+    const cached = this.browserRouteCache.get(projectId);
+    if (cached && cached.expiresAt > Date.now()) return cached.keys;
+    const keys = await browserRouteVocabulary(this.pool, projectId);
+    this.browserRouteCache.set(projectId, {
+      keys,
+      expiresAt: Date.now() + REGISTRY_CACHE_TTL_MS,
+    });
+    return keys;
   }
 }

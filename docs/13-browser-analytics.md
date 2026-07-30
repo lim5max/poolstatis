@@ -6,8 +6,11 @@ browser data queryable.
 
 ## Atomic registry setup
 
-Call `POST /api/v1/projects/:slug/properties/browser-analytics` or MCP
-`propose_browser_analytics`.
+Call `POST /api/v1/projects/:slug/properties/browser-analytics` with
+`{"route_keys":["home","docs","pricing","account","invite","other"]}`, or MCP
+`propose_browser_analytics(project, route_keys)`. The route list is the exact
+finite vocabulary that capture may store; setup is idempotent only for the same
+canonical sorted vocabulary.
 
 Setup takes a project advisory lock, runs one `SERIALIZABLE` transaction,
 preflights the entire reserved property/metric bundle before writes, and
@@ -15,8 +18,9 @@ commits all definitions together. SQLSTATE `40001` and `40P01` retry at most
 three times; exhaustion returns `503 browser_setup_retryable` with
 `retryable: true`. Registry and query caches invalidate only after commit.
 
-Definitions remain `proposed`. An owner must review and trust `$route_key`,
-then activate `web_page_views`, before route analysis is available.
+Definitions remain `proposed`. An owner must review and trust the enum
+`$route_key`, then activate `web_page_views`, before canonical browser capture
+or route analysis is available.
 
 ## Browser SDK and consent
 
@@ -43,7 +47,7 @@ const browser = createBrowserAnalytics({
 browser.start();
 ```
 
-`mapPagePath` returns a safe route key, not a pathname. Dynamic customer,
+`mapPagePath` returns one key declared in atomic setup, not a pathname. Dynamic customer,
 invitation, document or token identifiers must map to a finite key such as
 `account`, `invite` or `other`.
 
@@ -59,8 +63,9 @@ to `page.viewed` and `page.engagement`.
 
 ## Canonical events and engagement
 
-`page.viewed` requires `$browser_context = "1"`, a host-mapped `$route_key`,
-opaque `$page_view_id` and non-empty `session_id`.
+`page.viewed` requires `$browser_context = "1"`, a host-mapped `$route_key`
+from the trusted enum, an opaque identifier-shaped `$page_view_id` and
+non-empty `session_id`.
 
 `page.engagement` additionally carries cumulative `sequence`,
 `foreground_ms`, `elapsed_ms`, `max_scroll_pct`, `interaction_count` and a
@@ -72,8 +77,10 @@ The server keeps the highest sequence per
 positive engagement evidence. A complete 9,999 ms single-page session is a
 known negative. An incomplete negative remains `null`.
 
-`pagehide` and `freeze` produce terminal snapshots and request keepalive flush.
-Hidden/frozen time does not accrue foreground duration. Legacy/manual
+`visibilitychange:hidden`, `pagehide` and `freeze` produce terminal snapshots
+and request keepalive flush. Canonical events carry capture timestamps, while
+session duration uses the monotonic `elapsed_ms` evidence anchored to the page
+view. Hidden/frozen time does not accrue foreground duration. Legacy/manual
 `page.viewed` events without the marker remain accepted and stored but stay
 outside canonical Web analytics.
 
@@ -92,6 +99,8 @@ ordering is `started_at DESC, session_id, actor_id`. Detail calls without
 `actor_id` fail closed when an identifier belongs to multiple resolved actors.
 Rates and duration are `null` when their evidence denominator is absent.
 Source is consented session landing attribution, not causal campaign credit.
+It is opt-in at query time: `source` is not a default dimension and requires a
+separately trusted canonical `$utm_source` definition.
 Breakdowns return at most 50 rows and report truncation.
 
 MCP parity:
@@ -106,7 +115,8 @@ There is no raw SQL or raw event-name escape hatch.
 
 ## Privacy boundary
 
-The contract never stores or returns raw IP, full URL/query/hash, full user
+The contract never stores or returns raw IP (including IP-literal referrer
+origins), full URL/query/hash, full user
 agent or versions, DOM/selectors/text/replay, or secret-bearing dynamic path
 data.
 
