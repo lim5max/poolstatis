@@ -19,6 +19,8 @@ export const propertyFilterSchema = z
 
 export type PropertyFilter = z.infer<typeof propertyFilterSchema>;
 
+export const actorDistinctIdSchema = z.string().trim().min(1).max(200);
+
 const eventName = z
   .string()
   .min(1)
@@ -36,8 +38,8 @@ const keySchema = z
 // ===== Product decision loop trust foundation =====
 
 export const actorLinkSchema = z.object({
-  source_distinct_id: z.string().trim().min(1).max(200),
-  target_distinct_id: z.string().trim().min(1).max(200),
+  source_distinct_id: actorDistinctIdSchema,
+  target_distinct_id: actorDistinctIdSchema,
   env: z.string().trim().min(1).max(100).default('prod'),
 }).refine(
   (link) => link.source_distinct_id !== link.target_distinct_id,
@@ -731,7 +733,7 @@ export const actorsQuerySchema = z.object({
   from: dateStr.optional(),
   to: dateStr.nullable().optional(),
   limit: z.number().int().min(1).max(100).default(50),
-  cursor: z.string().trim().min(1).max(2000).optional(),
+  cursor: z.string().trim().min(1).max(8192).optional(),
   order: z.enum(['last_seen_desc', 'first_seen_desc', 'events_desc']).default('last_seen_desc'),
   search: z.object({
     kind: z.literal('exact_id'),
@@ -746,7 +748,7 @@ export const personQuerySchema = z.object({
   from: dateStr.optional(),
   to: dateStr.nullable().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
-  cursor: z.string().trim().min(1).max(2000).optional(),
+  cursor: z.string().trim().min(1).max(8192).optional(),
 }).strict();
 
 // Retention: of the actors who did `start_metric` in a cohort bucket, how many

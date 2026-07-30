@@ -10,7 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
-  actorLinkSchema, actorsQuerySchema, browserRouteKeysSchema,
+  actorDistinctIdSchema, actorLinkSchema, actorsQuerySchema, browserRouteKeysSchema,
   applyMeasurementDeclarationSchema,
   concludeExperimentSchema, createExperimentSchema,
   deprecateMetricSchema,
@@ -769,7 +769,7 @@ jsonTool(
   'Canonical actor detail with bounded raw IDs/link provenance, registered-only masked activity and opaque keyset pagination. Entity/pinned properties fail closed until a deterministic approved source exists.',
   {
     project,
-    distinct_id: z.string().trim().min(1).max(200),
+    distinct_id: actorDistinctIdSchema,
     ...personQuerySchema.shape,
   },
   wrap(({ project: slug, distinct_id, env, from, to, limit, cursor }) => {

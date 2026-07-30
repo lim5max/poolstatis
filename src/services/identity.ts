@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import type pg from 'pg';
 import { ApiError, notFound } from '../errors.js';
 import type { ActorLinkInput } from '../schemas.js';
@@ -37,6 +38,35 @@ export interface ActorIdentity {
 
 const LINK_COLS = `id, env, source_distinct_id, target_distinct_id, status,
   created_by, created_at, revoked_by, revoked_at`;
+
+export interface ActorCursorSecurity {
+  identityRevision: string;
+  signingKey: string | null;
+}
+
+export async function actorCursorSecurity(
+  pool: pg.Pool,
+  projectId: string,
+  env: string,
+  cursorSigningSecret?: string,
+): Promise<ActorCursorSecurity> {
+  const { rows } = await pool.query<{ identity_revision: string }>(
+    `SELECT md5(COALESCE(string_agg(
+       id::text || ':' || status || ':' || created_at::text || ':'
+         || COALESCE(revoked_at::text, ''),
+       ',' ORDER BY id
+     ), '')) AS identity_revision
+     FROM actor_links
+     WHERE project_id = $1 AND env = $2`,
+    [projectId, env],
+  );
+  return {
+    identityRevision: rows[0]?.identity_revision ?? '',
+    signingKey: cursorSigningSecret
+      ? createHmac('sha256', cursorSigningSecret).update(projectId).digest('base64url')
+      : null,
+  };
+}
 
 export async function createActorLink(
   pool: pg.Pool,
@@ -173,28 +203,89 @@ export async function resolveActorIdentity(
   env: string,
   requestedDistinctId: string,
   limit = 100,
+  snapshotIngestedAt = new Date(),
 ): Promise<ActorIdentity> {
   const canonicalResult = await pool.query<{ distinct_id: string }>(
     `SELECT poolstatis_resolve_actor($1::uuid, $2, $3) AS distinct_id`,
     [projectId, env, requestedDistinctId],
   );
   const distinctId = canonicalResult.rows[0]!.distinct_id;
-  const [rawCountResult, rawResult, linksResult, conflictResult] = await Promise.all([
-    pool.query<{ count: string }>(
-      `SELECT count(DISTINCT distinct_id)::text AS count
-       FROM events
-       WHERE project_id = $1 AND env = $2
-         AND poolstatis_resolve_actor(project_id, env, distinct_id) = $3`,
-      [projectId, env, distinctId],
-    ),
-    pool.query<{ distinct_id: string }>(
-      `SELECT DISTINCT distinct_id
-       FROM events
-       WHERE project_id = $1 AND env = $2
-         AND poolstatis_resolve_actor(project_id, env, distinct_id) = $3
-       ORDER BY distinct_id
-       LIMIT $4`,
-      [projectId, env, distinctId, limit + 1],
+  const [populationResult, linksResult] = await Promise.all([
+    pool.query<{
+      count: string;
+      raw_distinct_ids: string[] | null;
+      ambiguous: boolean;
+    }>(
+      `WITH RECURSIVE reverse_chain(raw_id, path, cycle) AS (
+         SELECT $3::text, ARRAY[$3::text], false
+         UNION ALL
+         SELECT links.source_distinct_id,
+                ARRAY[links.source_distinct_id]::text[] || chain.path,
+                links.source_distinct_id = ANY(chain.path)
+         FROM reverse_chain chain
+         JOIN actor_links links
+           ON links.project_id = $1 AND links.env = $2
+          AND links.status = 'active'
+          AND links.target_distinct_id = chain.raw_id
+         WHERE NOT chain.cycle
+       ), candidates AS MATERIALIZED (
+         SELECT DISTINCT raw_id FROM reverse_chain WHERE NOT cycle
+       ), observed AS MATERIALIZED (
+         SELECT DISTINCT events.distinct_id AS raw_id
+         FROM events
+         JOIN candidates ON candidates.raw_id = events.distinct_id
+         WHERE events.project_id = $1 AND events.env = $2
+           AND events.ingested_at <= $6
+       ), seeds AS MATERIALIZED (
+         SELECT raw_id FROM observed
+         UNION SELECT $4::text
+       ), actor_chain(raw_id, current_id, path, depth, cycle) AS (
+         SELECT raw_id, raw_id, ARRAY[raw_id]::text[], 0, false
+         FROM seeds
+         UNION ALL
+         SELECT chain.raw_id, links.target_distinct_id,
+                chain.path || links.target_distinct_id,
+                chain.depth + 1,
+                links.target_distinct_id = ANY(chain.path)
+         FROM actor_chain chain
+         JOIN actor_links links
+           ON links.project_id = $1 AND links.env = $2
+          AND links.status = 'active'
+          AND links.source_distinct_id = chain.current_id
+         WHERE NOT chain.cycle
+       ), actor_map AS MATERIALIZED (
+         SELECT DISTINCT ON (raw_id)
+                raw_id, current_id AS actor_id
+         FROM actor_chain
+         WHERE NOT cycle
+         ORDER BY raw_id, depth DESC, current_id
+       ), matching AS MATERIALIZED (
+         SELECT observed.raw_id
+         FROM observed
+         JOIN actor_map ON actor_map.raw_id = observed.raw_id
+         WHERE actor_map.actor_id = $3
+       )
+       SELECT
+         (SELECT count(*)::text FROM matching) AS count,
+         (
+           SELECT array_agg(raw_id ORDER BY raw_id)
+           FROM (
+             SELECT raw_id FROM matching ORDER BY raw_id LIMIT $5
+           ) bounded
+         ) AS raw_distinct_ids,
+         (
+           EXISTS (SELECT 1 FROM reverse_chain WHERE cycle)
+           OR EXISTS (
+             SELECT 1
+             FROM actor_chain
+             WHERE cycle
+               AND (
+                 raw_id = $4
+                 OR raw_id IN (SELECT raw_id FROM matching)
+               )
+           )
+         ) AS ambiguous`,
+      [projectId, env, distinctId, requestedDistinctId, limit + 1, snapshotIngestedAt],
     ),
     pool.query<ActorLink>(
       `WITH RECURSIVE provenance AS (
@@ -215,34 +306,13 @@ export async function resolveActorIdentity(
        LIMIT $4`,
       [projectId, env, distinctId, limit + 1],
     ),
-    pool.query<{ ambiguous: boolean }>(
-      `WITH RECURSIVE seeds(actor) AS (
-         SELECT DISTINCT distinct_id
-         FROM events
-         WHERE project_id = $1 AND env = $2
-           AND poolstatis_resolve_actor(project_id, env, distinct_id) = $3
-         UNION SELECT $4::text
-       ), chain(seed, actor, path, cycle) AS (
-         SELECT actor, actor, ARRAY[actor]::text[], false FROM seeds
-         UNION ALL
-         SELECT chain.seed, links.target_distinct_id,
-                chain.path || links.target_distinct_id,
-                links.target_distinct_id = ANY(chain.path)
-         FROM chain
-         JOIN actor_links links
-           ON links.project_id = $1 AND links.env = $2
-          AND links.status = 'active'
-          AND links.source_distinct_id = chain.actor
-         WHERE NOT chain.cycle
-       )
-       SELECT COALESCE(bool_or(cycle), false) AS ambiguous FROM chain`,
-      [projectId, env, distinctId, requestedDistinctId],
-    ),
   ]);
-  const rawActorCount = Number(rawCountResult.rows[0]?.count ?? 0);
-  const rawRows = rawResult.rows.slice(0, limit);
+  const population = populationResult.rows[0];
+  const rawActorCount = Number(population?.count ?? 0);
+  const rawDistinctIds = population?.raw_distinct_ids ?? [];
+  const visibleRawDistinctIds = rawDistinctIds.slice(0, limit);
   const links = linksResult.rows.slice(0, limit);
-  const ambiguous = conflictResult.rows[0]?.ambiguous === true;
+  const ambiguous = population?.ambiguous === true;
   return {
     requested_distinct_id: requestedDistinctId,
     distinct_id: distinctId,
@@ -252,8 +322,8 @@ export async function resolveActorIdentity(
         ? 'linked'
         : 'unknown',
     raw_actor_count: rawActorCount,
-    raw_distinct_ids: rawRows.map((row) => row.distinct_id),
-    raw_distinct_ids_truncated: rawResult.rows.length > limit,
+    raw_distinct_ids: visibleRawDistinctIds,
+    raw_distinct_ids_truncated: rawDistinctIds.length > limit,
     links,
     links_truncated: linksResult.rows.length > limit,
   };

@@ -6,7 +6,9 @@ active server-owned actor links. There is no mutable users table.
 - Use \`list_actors\` with an optional registered metric key in
   \`activityMetric\`; never pass a raw event name.
 - Search is exact ID only. Pagination cursors are opaque keyset cursors and
-  must be replayed unchanged.
+  must be replayed unchanged with the same query. They freeze the ingest
+  cutoff, bind the resolved metric/session capability and carry a server-side
+  HMAC; actor-link changes invalidate an outstanding cursor.
 - \`linked\` requires active link provenance or multiple raw IDs.
   Unlinked actors are \`unknown\` unless the server detects a conflict.
   Email, name and ID spelling never determine identity status.
@@ -22,5 +24,6 @@ active server-owned actor links. There is no mutable users table.
 - Person purge remains a separate destructive exact-raw-ID action. It never
   expands to the canonical actor or linked raw IDs.
 - Browser Experience session IDs are not actor identity. Reused IDs require
-  \`actor_id\`; ambiguous reads fail with a typed error.
+  \`actor_id\`; ambiguous or non-matching actor/session reads fail with typed
+  errors and never synthesize provenance from request input.
 `;

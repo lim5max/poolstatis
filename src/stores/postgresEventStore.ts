@@ -1063,12 +1063,13 @@ export class PostgresEventStore implements EventStore {
   }
 
   async actors(q: ActorsQuery): Promise<ActorsResult> {
-    const params: unknown[] = [q.projectId, q.env, q.from, q.to];
+    const params: unknown[] = [q.projectId, q.env, q.from, q.to, q.snapshotIngestedAt];
     const windowWhere = [
       'e.project_id = $1',
       'e.env = $2',
       'e."timestamp" >= $3',
       'e."timestamp" < $4',
+      'e.ingested_at <= $5',
     ];
     let populationSql = 'SELECT DISTINCT actor_id FROM window_events';
     if (q.activity) {
@@ -1080,11 +1081,39 @@ export class PostgresEventStore implements EventStore {
       populationSql = `SELECT DISTINCT w.actor_id
         FROM window_events w WHERE ${activityWhere}`;
     }
+    let searchParam: number | undefined;
     if (q.searchExactId) {
       params.push(q.searchExactId);
+      searchParam = params.length;
       populationSql = `SELECT actor_id FROM (${populationSql}) exact_population
-        WHERE actor_id = poolstatis_resolve_actor($1::uuid, $2, $${params.length})`;
+        WHERE actor_id = poolstatis_resolve_actor($1::uuid, $2, $${searchParam})`;
     }
+    const exactClosureSql = searchParam
+      ? `exact_target AS (
+           SELECT poolstatis_resolve_actor($1::uuid, $2, $${searchParam}) AS raw_id
+         ), reverse_chain(raw_id, path, cycle) AS (
+           SELECT raw_id, ARRAY[raw_id]::text[], false FROM exact_target
+           UNION ALL
+           SELECT links.source_distinct_id,
+                  ARRAY[links.source_distinct_id]::text[] || chain.path,
+                  links.source_distinct_id = ANY(chain.path)
+           FROM reverse_chain chain
+           JOIN actor_links links
+             ON links.project_id = $1 AND links.env = $2
+            AND links.status = 'active'
+            AND links.target_distinct_id = chain.raw_id
+           WHERE NOT chain.cycle
+         ),`
+      : '';
+    const rawActorsSql = searchParam
+      ? `SELECT DISTINCT e.distinct_id
+         FROM events e
+         JOIN reverse_chain chain
+           ON chain.raw_id = e.distinct_id AND NOT chain.cycle
+         WHERE ${windowWhere.join(' AND ')}`
+      : `SELECT DISTINCT e.distinct_id
+         FROM events e
+         WHERE ${windowWhere.join(' AND ')}`;
     const restrictPopulation = Boolean(q.activity || q.searchExactId);
     const selectedEventsSql = restrictPopulation
       ? `SELECT e.*, selected_raw.actor_id
@@ -1137,10 +1166,8 @@ export class PostgresEventStore implements EventStore {
       top_events: Array<{ event: string; count: number }>;
       identity_status: ActorListItem['identity_status'];
     }>(
-      `WITH RECURSIVE raw_actors AS MATERIALIZED (
-         SELECT DISTINCT e.distinct_id
-         FROM events e
-         WHERE ${windowWhere.join(' AND ')}
+      `WITH RECURSIVE ${exactClosureSql} raw_actors AS MATERIALIZED (
+         ${rawActorsSql}
        ), actor_chain(raw_id, current_id, path, depth, cycle, linked) AS (
          SELECT distinct_id, distinct_id, ARRAY[distinct_id]::text[], 0, false, false
          FROM raw_actors
@@ -1188,7 +1215,27 @@ export class PostgresEventStore implements EventStore {
                 count(*)::int AS total_events,
                 count(DISTINCT w.event)::int AS distinct_events,
                 count(DISTINCT date_trunc('day', w."timestamp"))::int AS active_days,
-                COALESCE(avg(w.registered::int), 0)::float AS registered_share,
+                COALESCE(avg(w.registered::int), 0)::float AS registered_share
+         FROM selected_events w
+         GROUP BY w.actor_id
+       ), page AS MATERIALIZED (
+         SELECT aggregates.*,
+                CASE
+                  WHEN identity_flags.ambiguous THEN 'ambiguous'
+                  WHEN aggregates.raw_actor_count > 1 OR identity_flags.linked THEN 'linked'
+                  ELSE 'unknown'
+                END AS identity_status
+         FROM aggregates
+         JOIN identity_flags ON identity_flags.actor_id = aggregates.distinct_id
+         ${keysetSql}
+         ORDER BY aggregates.${sortColumn} DESC, aggregates.distinct_id
+         LIMIT $${params.length}
+       ), page_events AS MATERIALIZED (
+         SELECT w.*
+         FROM selected_events w
+         JOIN page ON page.distinct_id = w.actor_id
+       ), session_counts AS (
+         SELECT w.actor_id,
                 CASE
                   WHEN count(*) FILTER (WHERE ${browserCondition}) > 0
                     AND count(*) FILTER (
@@ -1198,11 +1245,11 @@ export class PostgresEventStore implements EventStore {
                   THEN count(DISTINCT w.session_id) FILTER (WHERE ${browserCondition})::int
                   ELSE NULL
                 END AS session_count
-         FROM selected_events w
+         FROM page_events w
          GROUP BY w.actor_id
        ), event_counts AS (
          SELECT w.actor_id, w.event, count(*)::int AS count
-         FROM selected_events w
+         FROM page_events w
          WHERE w.registered = true
          GROUP BY w.actor_id, w.event
        ), ranked_events AS (
@@ -1218,29 +1265,14 @@ export class PostgresEventStore implements EventStore {
          FROM ranked_events
          WHERE rank <= 8
          GROUP BY actor_id
-       ), top_events_map AS (
-         SELECT COALESCE(
-           jsonb_object_agg(actor_id, events),
-           '{}'::jsonb
-         ) AS actors
-         FROM top_events
        )
-       SELECT aggregates.*,
-              COALESCE(
-                top_events_map.actors -> aggregates.distinct_id,
-                '[]'::jsonb
-              ) AS top_events,
-              CASE
-                WHEN identity_flags.ambiguous THEN 'ambiguous'
-                WHEN aggregates.raw_actor_count > 1 OR identity_flags.linked THEN 'linked'
-                ELSE 'unknown'
-              END AS identity_status
-       FROM aggregates
-       JOIN identity_flags ON identity_flags.actor_id = aggregates.distinct_id
-       CROSS JOIN top_events_map
-       ${keysetSql}
-       ORDER BY aggregates.${sortColumn} DESC, aggregates.distinct_id
-       LIMIT $${params.length}`,
+       SELECT page.*,
+              session_counts.session_count,
+              COALESCE(top_events.events, '[]'::jsonb) AS top_events
+       FROM page
+       LEFT JOIN session_counts ON session_counts.actor_id = page.distinct_id
+       LEFT JOIN top_events ON top_events.actor_id = page.distinct_id
+       ORDER BY page.${sortColumn} DESC, page.distinct_id`,
       params,
     );
     const hasMore = rows.length > q.limit;
@@ -1267,7 +1299,14 @@ export class PostgresEventStore implements EventStore {
   }
 
   async actorActivity(q: ActorActivityQuery): Promise<ActorActivityResult> {
-    const params: unknown[] = [q.projectId, q.env, q.distinctId, q.from, q.to];
+    const params: unknown[] = [
+      q.projectId,
+      q.env,
+      q.distinctId,
+      q.from,
+      q.to,
+      q.snapshotIngestedAt,
+    ];
     let cursorSql = '';
     if (q.cursor) {
       params.push(
@@ -1301,19 +1340,63 @@ export class PostgresEventStore implements EventStore {
       duplicate_ordinal: number;
       env: string;
     }>(
-      `WITH base AS (
+      `WITH RECURSIVE target AS (
+         SELECT poolstatis_resolve_actor($1::uuid, $2, $3) AS actor_id
+       ), reverse_chain(raw_id, path, cycle) AS (
+         SELECT actor_id, ARRAY[actor_id]::text[], false FROM target
+         UNION ALL
+         SELECT links.source_distinct_id,
+                ARRAY[links.source_distinct_id]::text[] || chain.path,
+                links.source_distinct_id = ANY(chain.path)
+         FROM reverse_chain chain
+         JOIN actor_links links
+           ON links.project_id = $1 AND links.env = $2
+          AND links.status = 'active'
+          AND links.target_distinct_id = chain.raw_id
+         WHERE NOT chain.cycle
+       ), raw_actors AS MATERIALIZED (
+         SELECT DISTINCT e.distinct_id
+         FROM events e
+         JOIN reverse_chain chain
+           ON chain.raw_id = e.distinct_id AND NOT chain.cycle
+         WHERE e.project_id = $1 AND e.env = $2
+           AND e."timestamp" >= $4 AND e."timestamp" < $5
+           AND e.ingested_at <= $6
+       ), actor_chain(raw_id, current_id, path, depth, cycle) AS (
+         SELECT distinct_id, distinct_id, ARRAY[distinct_id]::text[], 0, false
+         FROM raw_actors
+         UNION ALL
+         SELECT chain.raw_id, links.target_distinct_id,
+                chain.path || links.target_distinct_id,
+                chain.depth + 1,
+                links.target_distinct_id = ANY(chain.path)
+         FROM actor_chain chain
+         JOIN actor_links links
+           ON links.project_id = $1 AND links.env = $2
+          AND links.status = 'active'
+          AND links.source_distinct_id = chain.current_id
+         WHERE NOT chain.cycle
+       ), actor_map AS MATERIALIZED (
+         SELECT DISTINCT ON (raw_id)
+                raw_id, current_id AS actor_id
+         FROM actor_chain
+         WHERE NOT cycle
+         ORDER BY raw_id, depth DESC, current_id
+       ), base AS (
          SELECT e.event, e."timestamp", e.ingested_at,
-                poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id) AS distinct_id,
+                actor_map.actor_id AS distinct_id,
                 e.distinct_id AS raw_distinct_id,
                 e.session_id,
                 COALESCE(e.session_id, '') AS session_key,
                 md5(e.properties::text) AS properties_hash,
                 e.env
          FROM events e
+         JOIN actor_map ON actor_map.raw_id = e.distinct_id
+         CROSS JOIN target
          WHERE e.project_id = $1 AND e.env = $2
-           AND poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id)
-             = poolstatis_resolve_actor($1::uuid, $2, $3)
+           AND actor_map.actor_id = target.actor_id
            AND e."timestamp" >= $4 AND e."timestamp" < $5
+           AND e.ingested_at <= $6
            AND e.registered = true
        ), numbered AS (
          SELECT base.*,

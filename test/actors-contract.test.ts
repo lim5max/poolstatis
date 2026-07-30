@@ -272,6 +272,118 @@ describe('actors Query DSL contract', () => {
     expect(wrongOrder.body.error.code).toBe('actors_cursor_invalid');
   });
 
+  it('binds cursors to query scope, a frozen ingest cutoff and the identity revision', async () => {
+    await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [
+        {
+          event: 'activity.performed',
+          distinct_id: 'snapshot-first',
+          timestamp: '2026-06-20T10:00:00.000Z',
+        },
+        {
+          event: 'activity.performed',
+          distinct_id: 'snapshot-second',
+          timestamp: '2026-06-19T10:00:00.000Z',
+        },
+      ],
+    });
+    const scoped = {
+      from: '2026-06-01T00:00:00.000Z',
+      to: '2026-07-01T00:00:00.000Z',
+      limit: 1,
+    };
+    const first = await actors(scoped);
+    expect(first.body.actors[0].distinct_id).toBe('snapshot-first');
+
+    const wrongWindow = await actors({
+      ...scoped,
+      from: '2026-06-02T00:00:00.000Z',
+      cursor: first.body.meta.next_cursor,
+    });
+    expect(wrongWindow.body.error.code).toBe('actors_cursor_invalid');
+    const wrongEnv = await actors({
+      ...scoped,
+      env: 'dev',
+      cursor: first.body.meta.next_cursor,
+    });
+    expect(wrongEnv.body.error.code).toBe('actors_cursor_invalid');
+    const tamperedPayload = JSON.parse(
+      Buffer.from(first.body.meta.next_cursor, 'base64url').toString('utf8'),
+    );
+    tamperedPayload.ingestedAt = '2099-01-01T00:00:00.000Z';
+    const tampered = await actors({
+      ...scoped,
+      cursor: Buffer.from(JSON.stringify(tamperedPayload)).toString('base64url'),
+    });
+    expect(tampered.body.error.code).toBe('actors_cursor_invalid');
+
+    await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{
+        event: 'activity.performed',
+        distinct_id: 'snapshot-second',
+        timestamp: '2026-06-25T10:00:00.000Z',
+      }],
+    });
+    const second = await actors({
+      ...scoped,
+      cursor: first.body.meta.next_cursor,
+    });
+    expect(second.status).toBe(200);
+    expect(second.body.actors[0].distinct_id).toBe('snapshot-second');
+
+    const revisedFirst = await actors(scoped);
+    const link = await api(env, env.secretToken, 'POST', `${project()}/identity-links`, {
+      source_distinct_id: 'snapshot-second',
+      target_distinct_id: 'snapshot-canonical',
+      env: 'prod',
+    });
+    expect(link.status).toBe(201);
+    const afterRevision = await actors({
+      ...scoped,
+      cursor: revisedFirst.body.meta.next_cursor,
+    });
+    expect(afterRevision.body.error.code).toBe('actors_cursor_invalid');
+  });
+
+  it('invalidates an activity cursor when the resolved metric source changes', async () => {
+    const first = await actors({
+      activityMetric: 'actor_activity',
+      limit: 1,
+    });
+    expect(first.body.meta.next_cursor).toEqual(expect.any(String));
+    const updated = await api(
+      env,
+      env.secretToken,
+      'PATCH',
+      `${project()}/metrics/actor_activity`,
+      { source: { event: 'page.viewed', filters: [] } },
+    );
+    expect(updated.status).toBe(200);
+    const replayed = await actors({
+      activityMetric: 'actor_activity',
+      limit: 1,
+      cursor: first.body.meta.next_cursor,
+    });
+    expect(replayed.status).toBe(400);
+    expect(replayed.body.error.code).toBe('actors_cursor_invalid');
+  });
+
+  it('rejects crafted cursor integers outside the PostgreSQL int range', async () => {
+    const first = await actors({ order: 'events_desc', limit: 1 });
+    const payload = JSON.parse(
+      Buffer.from(first.body.meta.next_cursor, 'base64url').toString('utf8'),
+    );
+    payload.value = 2_147_483_648;
+    const crafted = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const result = await actors({
+      order: 'events_desc',
+      limit: 1,
+      cursor: crafted,
+    });
+    expect(result.status).toBe(400);
+    expect(result.body.error.code).toBe('actors_cursor_invalid');
+  });
+
   it('marks a server-detected corrupt active-link cycle as ambiguous', async () => {
     await api(env, env.ingestToken, 'POST', '/i/v1/events', {
       events: [
@@ -413,6 +525,102 @@ describe('canonical person contract', () => {
       ...person.body.activity.events,
       ...next.body.activity.events,
     ].some((event: any) => event.raw_distinct_id === 'anon-a')).toBe(true);
+
+    const otherActor = await api(
+      env,
+      env.secretToken,
+      'GET',
+      `${project()}/persons/unknown-b?env=prod`
+        + `&from=${encodeURIComponent(window.from)}&to=${encodeURIComponent(window.to)}`
+        + `&cursor=${encodeURIComponent(person.body.activity.next_cursor)}`,
+    );
+    expect(otherActor.status).toBe(400);
+    expect(otherActor.body.error.code).toBe('person_activity_cursor_invalid');
+
+    const payload = JSON.parse(
+      Buffer.from(person.body.activity.next_cursor, 'base64url').toString('utf8'),
+    );
+    payload.duplicate_ordinal = 2_147_483_648;
+    const crafted = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const oversized = await api(
+      env,
+      env.secretToken,
+      'GET',
+      `${project()}/persons/anon-a?env=prod`
+        + `&from=${encodeURIComponent(window.from)}&to=${encodeURIComponent(window.to)}`
+        + `&cursor=${encodeURIComponent(crafted)}`,
+    );
+    expect(oversized.status).toBe(400);
+    expect(oversized.body.error.code).toBe('person_activity_cursor_invalid');
+  });
+
+  it('keeps REST distinct-id length parity through 200 decoded characters', async () => {
+    for (const length of [100, 101, 200]) {
+      const result = await api(
+        env,
+        env.secretToken,
+        'GET',
+        `${project()}/persons/${'a'.repeat(length)}?env=prod`
+          + `&from=${encodeURIComponent(window.from)}&to=${encodeURIComponent(window.to)}`,
+      );
+      expect(result.status).toBe(200);
+      expect(result.body.requested_distinct_id).toBe('a'.repeat(length));
+    }
+    const oversized = await api(
+      env,
+      env.secretToken,
+      'GET',
+      `${project()}/persons/${'a'.repeat(201)}?env=prod`,
+    );
+    expect(oversized.status).toBe(400);
+    expect(oversized.body.error.code).toBe('validation_error');
+  });
+
+  it('round-trips a signed Person cursor larger than the old 2000-character bound', async () => {
+    const event = 'a'.repeat(200);
+    const actor = '€'.repeat(200);
+    const session = '€'.repeat(200);
+    await activeMetric(env, {
+      key: 'long_cursor_event',
+      source: { event, filters: [] },
+    });
+    const ingested = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [
+        {
+          event,
+          distinct_id: actor,
+          session_id: session,
+          timestamp: '2026-07-28T10:00:00.000Z',
+        },
+        {
+          event,
+          distinct_id: actor,
+          session_id: session,
+          timestamp: '2026-07-27T10:00:00.000Z',
+        },
+      ],
+    });
+    expect(ingested.status).toBe(200);
+    const first = await api(
+      env,
+      env.secretToken,
+      'GET',
+      `${project()}/persons/${encodeURIComponent(actor)}?env=prod`
+        + `&from=${encodeURIComponent(window.from)}&to=${encodeURIComponent(window.to)}`
+        + '&limit=1',
+    );
+    expect(first.status).toBe(200);
+    expect(first.body.activity.next_cursor.length).toBeGreaterThan(2000);
+    const second = await api(
+      env,
+      env.secretToken,
+      'GET',
+      `${project()}/persons/${encodeURIComponent(actor)}?env=prod`
+        + `&from=${encodeURIComponent(window.from)}&to=${encodeURIComponent(window.to)}`
+        + `&limit=1&cursor=${encodeURIComponent(first.body.activity.next_cursor)}`,
+    );
+    expect(second.status).toBe(200);
+    expect(second.body.activity.events).toHaveLength(1);
   });
 
   it('matches the actors row for the same canonical population and window', async () => {

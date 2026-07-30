@@ -7,6 +7,7 @@ export interface Config {
   host: string;
   publicUrl: string;
   connectorEncryptionKey: string | null;
+  cursorSigningSecret: string | null;
   ingestBuffer: {
     maxEvents: number;
     maxDelayMs: number;
@@ -163,6 +164,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (retentionMaxBatches < 4) {
     throw new Error('RETENTION_MAX_BATCHES must be at least 4');
   }
+  const cursorSigningSecret = env.POOLSTATIS_CURSOR_SIGNING_SECRET?.trim() || null;
+  if (cursorSigningSecret && cursorSigningSecret.length < 32) {
+    throw new Error('POOLSTATIS_CURSOR_SIGNING_SECRET must be at least 32 characters');
+  }
   return {
     databaseUrl:
       env.DATABASE_URL ??
@@ -172,6 +177,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST ?? '127.0.0.1',
     publicUrl: (env.POOLSTATIS_PUBLIC_URL ?? 'https://api.poolstatis.com').replace(/\/$/, ''),
     connectorEncryptionKey: env.POOLSTATIS_CONNECTOR_ENCRYPTION_KEY?.trim() || null,
+    cursorSigningSecret,
     ingestBuffer,
     queryCache: {
       ttlMs: positiveInt(env.QUERY_CACHE_TTL_MS, 1_000, 'QUERY_CACHE_TTL_MS'),

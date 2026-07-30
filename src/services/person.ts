@@ -4,10 +4,12 @@ import { badRequest } from '../errors.js';
 import type { PersonQueryInput } from '../schemas.js';
 import type { EventStore } from '../stores/eventStore.js';
 import {
+  actorCursorFingerprint,
   decodeActorActivityCursor,
   encodeActorActivityCursor,
+  requireActorCursorSigningKey,
 } from './actorCursors.js';
-import { resolveActorIdentity } from './identity.js';
+import { actorCursorSecurity, resolveActorIdentity } from './identity.js';
 import { hasTrustedBrowserSessionSource } from './query.js';
 
 export async function getPerson(
@@ -16,10 +18,42 @@ export async function getPerson(
   projectId: string,
   requestedDistinctId: string,
   input: PersonQueryInput,
+  cursorSigningSecret?: string,
   now = new Date(),
 ): Promise<Record<string, unknown>> {
-  const from = parseDateInput(input.from ?? '-30d', now);
-  const to = input.to ? parseDateInput(input.to, now) : now;
+  const [trustedBrowserSessions, cursorSecurity] = await Promise.all([
+    hasTrustedBrowserSessionSource(pool, projectId),
+    actorCursorSecurity(pool, projectId, input.env, cursorSigningSecret),
+  ]);
+  const fingerprint = actorCursorFingerprint({
+    kind: 'person_activity',
+    projectId,
+    env: input.env,
+    distinctId: requestedDistinctId,
+    from: input.from ?? null,
+    to: input.to ?? null,
+    trustedBrowserSessions,
+  });
+  const identityRevision = cursorSecurity.identityRevision;
+  const decodedCursor = input.cursor
+    ? decodeActorActivityCursor(
+      input.cursor,
+      fingerprint,
+      identityRevision,
+      requireActorCursorSigningKey(cursorSecurity.signingKey),
+    )
+    : undefined;
+  const from = decodedCursor
+    ? new Date(decodedCursor.snapshot.from)
+    : parseDateInput(input.from ?? '-30d', now);
+  const to = decodedCursor
+    ? new Date(decodedCursor.snapshot.to)
+    : input.to
+      ? parseDateInput(input.to, now)
+      : now;
+  const snapshotIngestedAt = decodedCursor
+    ? new Date(decodedCursor.snapshot.ingestedAt)
+    : now;
   if (to.getTime() <= from.getTime()) {
     throw badRequest('person_range_invalid', 'to must be later than from');
   }
@@ -30,16 +64,21 @@ export async function getPerson(
       'request a smaller activity window',
     );
   }
-  const [trustedBrowserSessions, identity] = await Promise.all([
-    hasTrustedBrowserSessionSource(pool, projectId),
-    resolveActorIdentity(pool, projectId, input.env, requestedDistinctId),
-  ]);
+  const identity = await resolveActorIdentity(
+    pool,
+    projectId,
+    input.env,
+    requestedDistinctId,
+    100,
+    snapshotIngestedAt,
+  );
   const [listed, activity] = await Promise.all([
     eventStore.actors({
       projectId,
       env: input.env,
       from,
       to,
+      snapshotIngestedAt,
       limit: 1,
       order: 'last_seen_desc',
       searchExactId: requestedDistinctId,
@@ -51,8 +90,9 @@ export async function getPerson(
       distinctId: requestedDistinctId,
       from,
       to,
+      snapshotIngestedAt,
       limit: input.limit,
-      ...(input.cursor ? { cursor: decodeActorActivityCursor(input.cursor) } : {}),
+      ...(decodedCursor ? { cursor: decodedCursor.key } : {}),
     }),
   ]);
   const actor = listed.actors[0];
@@ -95,7 +135,17 @@ export async function getPerson(
     activity: {
       events: activity.events,
       next_cursor: activity.hasMore && activity.lastKey
-        ? encodeActorActivityCursor(activity.lastKey)
+        ? encodeActorActivityCursor(
+          activity.lastKey,
+          fingerprint,
+          {
+            from: from.toISOString(),
+            to: to.toISOString(),
+            ingestedAt: snapshotIngestedAt.toISOString(),
+            identityRevision,
+          },
+          requireActorCursorSigningKey(cursorSecurity.signingKey),
+        )
         : null,
       registered_only: true,
       properties_masked: true,

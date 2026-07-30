@@ -133,5 +133,30 @@ describe('Actors REST/MCP parity', () => {
       summary: restPerson.body.summary,
       activity: restPerson.body.activity,
     });
+
+    const maxLengthPerson = await client.callTool({
+      name: 'get_person',
+      arguments: {
+        project: env.projectSlug,
+        distinct_id: 'a'.repeat(200),
+        env: 'prod',
+        from: '2026-07-01T00:00:00.000Z',
+        to: '2026-08-01T00:00:00.000Z',
+      },
+    });
+    expect(maxLengthPerson.isError).not.toBe(true);
+    expect(maxLengthPerson.structuredContent).toMatchObject({
+      requested_distinct_id: 'a'.repeat(200),
+    });
+
+    const tooLongPerson = await client.callTool({
+      name: 'get_person',
+      arguments: {
+        project: env.projectSlug,
+        distinct_id: 'a'.repeat(201),
+        env: 'prod',
+      },
+    });
+    expect(tooLongPerson.isError).toBe(true);
   });
 });

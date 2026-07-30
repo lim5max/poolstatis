@@ -22,7 +22,10 @@ let counter = 0;
 /** Fresh org + project + keys on the shared test database. */
 export async function createTestEnv(serverOptions: ServerOptions = {}): Promise<TestEnv> {
   const pool = createPool(TEST_DB_URL);
-  const app = buildServer(pool, serverOptions);
+  const app = buildServer(pool, {
+    cursorSigningSecret: 'synthetic-test-only-cursor-signing-secret',
+    ...serverOptions,
+  });
   const slug = `proj-${Date.now()}-${counter++}`;
 
   const org = await createOrganization(pool, `org-${slug}`);

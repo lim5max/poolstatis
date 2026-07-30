@@ -166,4 +166,31 @@ describe('actor-safe experience_session', () => {
     expect(result.status).toBe(400);
     expect(result.body.error.code).toBe('validation_error');
   });
+
+  it('does not invent actor provenance when actor context has no matching session events', async () => {
+    const wrongActor = await api(env, env.secretToken, 'POST', `${project()}/query`, {
+      kind: 'experience_session',
+      surface: 'checkout',
+      session_id: 'reused-session',
+      actor_id: 'actor-does-not-match',
+      date_from: '-1d',
+      env: 'prod',
+    });
+    expect(wrongActor.status).toBe(404);
+    expect(wrongActor.body.error).toMatchObject({
+      code: 'experience_session_actor_not_found',
+      retryable: false,
+    });
+
+    const missingSession = await api(env, env.secretToken, 'POST', `${project()}/query`, {
+      kind: 'experience_session',
+      surface: 'checkout',
+      session_id: 'missing-session',
+      actor_id: 'actor-a',
+      date_from: '-1d',
+      env: 'prod',
+    });
+    expect(missingSession.status).toBe(404);
+    expect(missingSession.body.error.code).toBe('experience_session_actor_not_found');
+  });
 });

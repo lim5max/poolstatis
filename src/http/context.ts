@@ -20,12 +20,14 @@ export interface AppContext {
   query: QueryService;
   posthog: PostHogAdapter;
   webhooks: WebhookService;
+  cursorSigningSecret?: string;
 }
 
 export interface CreateContextOptions {
   ingestBuffer?: BufferedEventStoreOptions | false;
   queryCache?: QueryCacheOptions | false;
   connectorEncryptionKey?: string;
+  cursorSigningSecret?: string;
 }
 
 export function createContext(pool: pg.Pool, options: CreateContextOptions = {}): AppContext {
@@ -41,8 +43,11 @@ export function createContext(pool: pg.Pool, options: CreateContextOptions = {})
     pool,
     eventStore,
     ingest: new IngestService(pool, eventStore),
-    query: new QueryService(pool, eventStore, queryCache, posthog),
+    query: new QueryService(pool, eventStore, queryCache, posthog, options.cursorSigningSecret),
     posthog,
     webhooks: new WebhookService(pool, options.connectorEncryptionKey),
+    ...(options.cursorSigningSecret
+      ? { cursorSigningSecret: options.cursorSigningSecret }
+      : {}),
   };
 }

@@ -232,6 +232,7 @@ export interface ActorsQuery {
   env: string;
   from: Date;
   to: Date;
+  snapshotIngestedAt: Date;
   limit: number;
   order: ActorOrder;
   cursor?: ActorsKeyset;
@@ -261,6 +262,7 @@ export interface ActorActivityQuery {
   distinctId: string;
   from: Date;
   to: Date;
+  snapshotIngestedAt: Date;
   limit: number;
   cursor?: ActorActivityKeyset;
 }

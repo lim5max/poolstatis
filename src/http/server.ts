@@ -61,7 +61,7 @@ import {
 } from '../services/rateLimiter.js';
 import {
   deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
-  actorLinkSchema, browserAnalyticsSetupSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
+  actorDistinctIdSchema, actorLinkSchema, browserAnalyticsSetupSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   personQuerySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
 } from '../schemas.js';
@@ -81,6 +81,7 @@ export interface ServerOptions {
   queryCache?: CreateContextOptions['queryCache'];
   rateLimit?: TenantRateLimitOptions | false;
   connectorEncryptionKey?: string;
+  cursorSigningSecret?: string;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -155,8 +156,17 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   if (options.connectorEncryptionKey !== undefined) {
     contextOptions.connectorEncryptionKey = options.connectorEncryptionKey;
   }
+  if (options.cursorSigningSecret !== undefined) {
+    contextOptions.cursorSigningSecret = options.cursorSigningSecret;
+  }
   const ctx = createContext(pool, contextOptions);
-  const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 1024 * 1024,
+    // distinct_id is contractually bounded to 200 decoded characters. Leave
+    // room for percent-encoded Unicode while the schema enforces that bound.
+    routerOptions: { maxParamLength: 2_000 },
+  });
   const rateLimiter = options.rateLimit === false || options.rateLimit === undefined
     ? null
     : new TenantRateLimiter(options.rateLimit);
@@ -1318,13 +1328,15 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/api/v1/projects/:slug/persons/:distinctId', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const { distinctId } = req.params as { distinctId: string };
+    const { distinctId: rawDistinctId } = req.params as { distinctId: string };
+    const distinctId = actorDistinctIdSchema.parse(rawDistinctId);
     return getPerson(
       ctx.pool,
       ctx.eventStore,
       project.id,
       distinctId,
       personQuerySchema.parse(req.query),
+      ctx.cursorSigningSecret,
     );
   });
 

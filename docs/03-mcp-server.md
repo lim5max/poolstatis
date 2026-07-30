@@ -149,7 +149,7 @@ get_session_engagement(project, {metric, session_id, actor_id?, date_from, env?}
 get_page_engagement(project, {metric, page_view_id, actor_id?, date_from, env?})
 
 get_person(project, {distinct_id, env?, from?, to?, limit?, cursor?})
-  // canonical ID + bounded raw IDs/links + registered-only masked activity
+  // distinct_id≤200; canonical ID + bounded raw IDs/links + registered-only masked activity
 sample_events(project, {event?, registered?, distinct_id?, limit≤100})  // отладка ингеста
 list_ingest_warnings(project, {env?, kind?})   // rejected/unregistered/clock_skew (лог ошибок)
 list_data_quality_issues(project, {env?, limit?, since_days?})

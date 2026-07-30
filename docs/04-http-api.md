@@ -246,7 +246,9 @@ totals. `kind: "experience_session"` принимает `{surface, session_id,
 actor_id?, date_from?, date_to?, limit?, env?}` и возвращает privacy-safe
 timeline с summary и canonical actor/link provenance. Повторно использованный
 `session_id` не смешивает людей: без `actor_id` несколько найденных акторов
-дают `experience_session_actor_ambiguous`. Оба запроса учитывают только события, принятые typed Experience
+дают `experience_session_actor_ambiguous`, а указанный `actor_id` без
+совпадающих session events — `experience_session_actor_not_found`; provenance
+не строится из одного только request input. Оба запроса учитывают только события, принятые typed Experience
 endpoint; generic `/i/v1/events` с похожим именем не попадает в эти результаты.
 Как и любой `pk_` write key, typed endpoint не является anti-fraud границей:
 доверяй данным как product telemetry, а не как доказательству действий пользователя.
@@ -314,9 +316,16 @@ capability/provenance metadata. `linked` требует active server-owned link
 равен `unknown`. `top_events` bounded и включает только event names,
 помеченные `registered` при ingest. `session_count` равен `null`, если strict
 canonical Browser session evidence для actor/window не доказан.
+Cursor v2 подписан HMAC по всему envelope, привязан к
+project/env/window/order/search/resolved activity source/session capability и
+frozen `ingested_at` cutoff. Новые и late-ingested events не меняют следующие
+страницы; изменение actor-link graph инвалидирует cursor typed-ошибкой.
+Ключ выводится per project из server-only
+`POOLSTATIS_CURSOR_SIGNING_SECRET`; API/ingest token material не используется.
 
 `GET /api/v1/projects/{slug}/persons/{distinctId}` принимает `env`, `from`,
-`to`, `limit≤100`, opaque `cursor`. Он возвращает canonical `distinct_id`,
+`to`, `limit≤100`, opaque `cursor`; `distinctId` bounded до 200 символов
+одинаково в REST и MCP. Он возвращает canonical `distinct_id`,
 requested ID, bounded raw IDs, active link provenance и keyset activity всей
 resolved population. Activity показывает только registered event names, а
 properties fail closed в `{}`. Identity entity отсутствует, пока не появится

@@ -26,8 +26,13 @@ import { canonicalQueryKey, type QueryCache } from './queryCache.js';
 import type { PostHogAdapter } from './posthog.js';
 import { assertTrustedAcquisitionProperties } from './acquisitionAttribution.js';
 import { assertTrustedSafeRoute } from './browserAnalytics.js';
-import { decodeActorsCursor, encodeActorsCursor } from './actorCursors.js';
-import { resolveActorIdentity } from './identity.js';
+import {
+  actorCursorFingerprint,
+  decodeActorsCursor,
+  encodeActorsCursor,
+  requireActorCursorSigningKey,
+} from './actorCursors.js';
+import { actorCursorSecurity, resolveActorIdentity } from './identity.js';
 
 const WEB_DIMENSIONS = {
   route: { property: '$route_key', missingValue: 'unavailable' },
@@ -225,6 +230,7 @@ export class QueryService {
     private readonly eventStore: EventStore,
     private readonly cache?: QueryCache,
     private readonly posthog?: PostHogAdapter,
+    private readonly cursorSigningSecret?: string,
   ) {}
 
   async run(projectId: string, q: QueryInput, now: Date = new Date()): Promise<QueryResult> {
@@ -946,8 +952,47 @@ export class QueryService {
         false,
       );
     }
-    const from = parseDateInput(q.from ?? '-30d', now);
-    const to = q.to ? parseDateInput(q.to, now) : now;
+    const [activity, trustedBrowserSessions, cursorSecurity] = await Promise.all([
+      q.activityMetric
+        ? this.actorActivityMetric(projectId, q.activityMetric)
+        : Promise.resolve(undefined),
+      hasTrustedBrowserSessionSource(this.pool, projectId),
+      actorCursorSecurity(this.pool, projectId, q.env, this.cursorSigningSecret),
+    ]);
+    const fingerprint = actorCursorFingerprint({
+      kind: 'actors',
+      projectId,
+      env: q.env,
+      from: q.from ?? null,
+      to: q.to ?? null,
+      order: q.order,
+      search: q.search ?? null,
+      activityMetric: q.activityMetric
+        ? { key: q.activityMetric, source: activity }
+        : null,
+      trustedBrowserSessions,
+    });
+    const identityRevision = cursorSecurity.identityRevision;
+    const decodedCursor = q.cursor
+      ? decodeActorsCursor(
+        q.cursor,
+        q.order,
+        fingerprint,
+        identityRevision,
+        requireActorCursorSigningKey(cursorSecurity.signingKey),
+      )
+      : undefined;
+    const from = decodedCursor
+      ? new Date(decodedCursor.snapshot.from)
+      : parseDateInput(q.from ?? '-30d', now);
+    const to = decodedCursor
+      ? new Date(decodedCursor.snapshot.to)
+      : q.to
+        ? parseDateInput(q.to, now)
+        : now;
+    const snapshotIngestedAt = decodedCursor
+      ? new Date(decodedCursor.snapshot.ingestedAt)
+      : now;
     if (to.getTime() <= from.getTime()) {
       throw badRequest('actors_range_invalid', 'to must be later than from');
     }
@@ -958,19 +1003,15 @@ export class QueryService {
         'split the analysis into smaller windows',
       );
     }
-    const activity = q.activityMetric
-      ? await this.actorActivityMetric(projectId, q.activityMetric)
-      : undefined;
-    const trustedBrowserSessions = await hasTrustedBrowserSessionSource(this.pool, projectId);
-    const cursor = q.cursor ? decodeActorsCursor(q.cursor, q.order) : undefined;
     const result = await this.eventStore.actors({
       projectId,
       env: q.env,
       from,
       to,
+      snapshotIngestedAt,
       limit: q.limit,
       order: q.order,
-      ...(cursor ? { cursor } : {}),
+      ...(decodedCursor ? { cursor: decodedCursor.key } : {}),
       ...(q.search ? { searchExactId: q.search.value } : {}),
       ...(activity ? { activity: { event: activity.event, filters: activity.filters } } : {}),
       trustedBrowserSessions,
@@ -982,14 +1023,25 @@ export class QueryService {
       ...actor
     }) => actor);
     const nextCursor = result.hasMore && last
-      ? encodeActorsCursor(q.order, {
-        value: q.order === 'events_desc'
-          ? last.total_events
-          : q.order === 'first_seen_desc'
-            ? last.first_seen
-            : last.last_seen,
-        distinctId: last.distinct_id,
-      })
+      ? encodeActorsCursor(
+        q.order,
+        {
+          value: q.order === 'events_desc'
+            ? last.total_events
+            : q.order === 'first_seen_desc'
+              ? last.first_seen
+              : last.last_seen,
+          distinctId: last.distinct_id,
+        },
+        fingerprint,
+        {
+          from: from.toISOString(),
+          to: to.toISOString(),
+          ingestedAt: snapshotIngestedAt.toISOString(),
+          identityRevision,
+        },
+        requireActorCursorSigningKey(cursorSecurity.signingKey),
+      )
       : null;
     return {
       kind: 'actors',
@@ -1217,6 +1269,15 @@ export class QueryService {
         'experience_session_actor_ambiguous',
         `session_id "${q.session_id}" belongs to more than one actor in this project, environment, surface and window`,
         'repeat the query with the exact actor_id returned by an actor-scoped list or person result',
+        false,
+      );
+    }
+    if (q.actor_id && result.actorIds.length !== 1) {
+      throw new ApiError(
+        404,
+        'experience_session_actor_not_found',
+        `session_id "${q.session_id}" has no events for the requested actor in this project, environment, surface and window`,
+        'verify actor_id and the exact tenant, environment, surface and date window',
         false,
       );
     }
