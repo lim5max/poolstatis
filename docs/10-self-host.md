@@ -50,7 +50,7 @@ Run the version-pinned public MCP package:
 ```bash
 POOLSTATIS_URL=http://localhost:3300 \
 POOLSTATIS_TOKEN=pt_... \
-pnpm dlx @poolstatis/mcp@0.2.0
+pnpm dlx @poolstatis/mcp@0.4.0
 ```
 
 To execute the exact server from a local Core checkout instead, use:

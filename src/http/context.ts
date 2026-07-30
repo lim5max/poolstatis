@@ -14,6 +14,7 @@ import { WebhookService } from '../services/webhooks.js';
 import type { OutboundPolicyOptions } from '../security/outbound.js';
 import { LocalArtifactStore, type ArtifactStore } from '../stores/artifactStore.js';
 import type { CountryResolver } from '../services/country.js';
+import { EventManagementService } from '../services/eventManagement.js';
 
 /** Shared service wiring for the HTTP server, CLI, and tests. */
 export interface AppContext {
@@ -24,6 +25,7 @@ export interface AppContext {
   posthog: PostHogAdapter;
   webhooks: WebhookService;
   artifacts: ArtifactStore;
+  events: EventManagementService;
 }
 
 export interface CreateContextOptions {
@@ -56,5 +58,6 @@ export function createContext(pool: pg.Pool, options: CreateContextOptions = {})
     posthog,
     webhooks: new WebhookService(pool, options.connectorEncryptionKey, options.outboundPolicy),
     artifacts: options.artifactStore ?? new LocalArtifactStore(options.artifactDir ?? './data/experience-artifacts'),
+    events: new EventManagementService(pool, eventStore),
   };
 }

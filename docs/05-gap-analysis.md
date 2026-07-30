@@ -34,9 +34,10 @@ The main remaining product gaps are now:
 4. **Multi-instance operations.** Quotas and bounded workers are safe per process / through
    Postgres claims, but Cloud replicas still need shared quota coordination and explicit
    operational dashboards/alerts.
-5. **Distribution integration.** `@poolstatis/mcp@0.2.0` is public and independently
-   registry-smoked; each hosted deploy must enable that exact pin and keep future versions
-   fail-closed until their own fresh initialize/list-tools check.
+5. **Distribution integration.** `@poolstatis/mcp@0.4.0` is the historical data
+   and audited correction candidate; each hosted deploy must keep it fail-closed
+   until the exact registry artifact passes fresh initialize, 99-tool list, and
+   a project-scoped semantic read.
 
 Session Replay, DOM autocapture, caller-provided SQL/HogQL and connector marketplaces remain
 intentional non-goals. They add volume or privacy/infra cost without strengthening the
@@ -46,7 +47,8 @@ semantics-first agent workflow.
 
 ### Analytics and trust
 
-- append-only events behind `EventStore`, entity merge-upsert and ingest warnings;
+- append-only runtime ingest behind `EventStore`, previewed/idempotent historical
+  backfill, audited optimistic event corrections, entity merge-upsert and ingest warnings;
 - registry metrics with mandatory `purpose`, funnels with mandatory `goal`;
 - typed Query DSL: trend, funnel, entities, retention, lifecycle, stickiness and Browser
   Experience reads;

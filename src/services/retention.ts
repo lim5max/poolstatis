@@ -97,7 +97,7 @@ export async function runRetentionOnce(
           record: (count: number) => void;
         }> = [
           {
-            apply: (limit) => deletePolicyBatch(client, 'events', project.id, now, limit),
+            apply: (limit) => deleteEventPolicyBatch(client, project.id, now, limit),
             record: (count) => { result.eventsDeleted += count; },
           },
           {
@@ -254,16 +254,12 @@ export function startRetentionWorker(pool: pg.Pool, options: RetentionWorkerOpti
 
 async function deletePolicyBatch(
   client: pg.PoolClient,
-  table: 'events' | 'experience_batches' | 'ingest_warnings',
+  table: 'experience_batches' | 'ingest_warnings',
   projectId: string,
   now: Date,
   batchSize: number,
 ): Promise<number> {
-  const timestampColumn = table === 'events' ? '"timestamp"' : table === 'experience_batches' ? 'received_at' : 'last_seen';
-  const rowIdentity = table === 'events' ? 'tableoid, ctid' : 'ctid';
-  const joinIdentity = table === 'events'
-    ? 'target.tableoid = doomed.tableoid AND target.ctid = doomed.ctid'
-    : 'target.ctid = doomed.ctid';
+  const timestampColumn = table === 'experience_batches' ? 'received_at' : 'last_seen';
   // The policy row is locked and re-read inside every DELETE. A concurrent
   // retention increase therefore takes effect before rows are selected.
   const result = await client.query(
@@ -273,7 +269,7 @@ async function deletePolicyBatch(
        WHERE id = $1 AND retention_months >= 1
        FOR SHARE
      ), doomed AS MATERIALIZED (
-       SELECT ${rowIdentity}
+       SELECT ctid
        FROM ${table}
        WHERE project_id = (SELECT id FROM policy)
          AND ${timestampColumn} < (SELECT cutoff FROM policy)
@@ -282,10 +278,65 @@ async function deletePolicyBatch(
      )
      DELETE FROM ${table} AS target
      USING doomed
-     WHERE ${joinIdentity}`,
+     WHERE target.ctid = doomed.ctid`,
     [projectId, now, batchSize],
   );
   return result.rowCount ?? 0;
+}
+
+/**
+ * Expire native events and every before/after correction snapshot atomically.
+ * Locking the materialized event rows first shares the same lock order as
+ * reviseEvent, so a concurrent correction either finishes before this snapshot
+ * or observes that the event has already expired.
+ */
+async function deleteEventPolicyBatch(
+  client: pg.PoolClient,
+  projectId: string,
+  now: Date,
+  batchSize: number,
+): Promise<number> {
+  try {
+    await client.query('BEGIN');
+    const doomed = await client.query<{ id: string }>(
+      `WITH policy AS MATERIALIZED (
+         SELECT id, $2::timestamptz - make_interval(months => retention_months) AS cutoff
+         FROM projects
+         WHERE id = $1 AND retention_months >= 1
+         FOR SHARE
+       )
+       SELECT id
+       FROM events
+       WHERE project_id = (SELECT id FROM policy)
+         AND "timestamp" < (SELECT cutoff FROM policy)
+       LIMIT $3
+       FOR UPDATE SKIP LOCKED`,
+      [projectId, now, batchSize],
+    );
+    const eventIds = doomed.rows.map((row) => row.id);
+    if (eventIds.length === 0) {
+      await client.query('COMMIT');
+      return 0;
+    }
+    await client.query("SELECT set_config('poolstatis.event_purge', 'on', true)");
+    // This is a new READ COMMITTED statement after event locks are held. It
+    // therefore sees any audit committed by a revision that had the lock first.
+    await client.query(
+      `DELETE FROM event_revisions
+       WHERE project_id = $1 AND event_id = ANY($2::uuid[])`,
+      [projectId, eventIds],
+    );
+    const deleted = await client.query(
+      `DELETE FROM events
+       WHERE project_id = $1 AND id = ANY($2::uuid[])`,
+      [projectId, eventIds],
+    );
+    await client.query('COMMIT');
+    return deleted.rowCount ?? 0;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  }
 }
 
 async function deleteIngestBatch(

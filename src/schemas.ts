@@ -698,6 +698,57 @@ export const ingestEnvelopeSchema = z.object({
 
 export type IngestEnvelope = z.infer<typeof ingestEnvelopeSchema>;
 
+export const historicalEventSchema = ingestEventSchema.extend({
+  timestamp: z.string().datetime({ offset: true }),
+}).strict();
+
+export const previewEventBackfillSchema = z.object({
+  env: z.string().min(1).max(100).default('prod'),
+  events: z.array(z.unknown()).min(1).max(500),
+}).strict();
+
+export const commitEventBackfillSchema = previewEventBackfillSchema.extend({
+  batch_id: z.string().trim().min(1).max(200),
+  reason: semanticText,
+  expected_payload_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
+export const eventRevisionPatchSchema = z.object({
+  event: eventName.optional(),
+  timestamp: z.string().datetime({ offset: true }).optional(),
+  distinct_id: z.string().min(1).max(200).optional(),
+  session_id: z.string().max(200).nullable().optional(),
+  set_properties: z.record(z.unknown()).default({}),
+  unset_properties: z.array(z.string().min(1).max(200)).max(100).default([]),
+}).strict().refine(
+  (value) => value.event !== undefined
+    || value.timestamp !== undefined
+    || value.distinct_id !== undefined
+    || value.session_id !== undefined
+    || Object.keys(value.set_properties).length > 0
+    || value.unset_properties.length > 0,
+  'at least one event field or property change is required',
+).refine(
+  (value) => value.unset_properties.every(
+    (key) => !Object.prototype.hasOwnProperty.call(value.set_properties, key),
+  ),
+  'a property cannot be set and unset in the same revision',
+);
+
+export const previewEventRevisionSchema = z.object({
+  env: z.string().min(1).max(100).default('prod'),
+  patch: eventRevisionPatchSchema,
+}).strict();
+
+export const commitEventRevisionSchema = previewEventRevisionSchema.extend({
+  expected_revision: z.number().int().positive(),
+  expected_preview_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  reason: semanticText,
+}).strict();
+
+export type HistoricalEventInput = z.infer<typeof historicalEventSchema>;
+export type EventRevisionPatch = z.infer<typeof eventRevisionPatchSchema>;
+
 /** UTC calendar month used by the server-side accepted-event meter. */
 export const usagePeriodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 

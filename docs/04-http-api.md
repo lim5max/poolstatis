@@ -210,10 +210,52 @@ GET    /api/v1/projects/{slug}/experience/snapshots/{id}/image
 DELETE /api/v1/projects/{slug}/experience/snapshots/{id}
 POST   /api/v1/projects/{slug}/query          ← единая точка Query DSL
 GET    /api/v1/projects/{slug}/events/sample
+POST   /api/v1/projects/{slug}/events/backfill/preview
+POST   /api/v1/projects/{slug}/events/backfill
+GET    /api/v1/projects/{slug}/events/backfills
+GET    /api/v1/projects/{slug}/events/{eventId}
+POST   /api/v1/projects/{slug}/events/{eventId}/revisions/preview
+POST   /api/v1/projects/{slug}/events/{eventId}/revisions
 GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+### Historical backfill
+
+`POST .../events/backfill/preview` принимает `env` и до 500 событий с
+обязательным ISO timestamp. В отличие от runtime-ingest, timestamp за пределами
+retention или более чем на пять минут в будущем не заменяется текущей датой:
+preview возвращает indexed errors, а commit не записывает ни одной строки.
+Успешный preview возвращает canonical `payload_sha256`.
+
+Commit повторяет тот же payload и добавляет:
+
+```json
+{
+  "batch_id": "atlas-skills-2026-part-001",
+  "reason": "Restore skill activation history from the product database.",
+  "expected_payload_sha256": "…",
+  "env": "prod",
+  "events": []
+}
+```
+
+Точный retry постоянного `batch_id` возвращает `duplicate: true`; другой payload
+с тем же id получает `409`. Backfill проходит обычную registry-классификацию,
+accepted-event metering и quota check. Audit хранит actor, reason, hash, counts
+и диапазон дат, но не копирует персональный event payload.
+
+### Event corrections
+
+Sample возвращает stable `id`, `revision` и `origin`. Сначала
+`POST .../{eventId}/revisions/preview` с patch (`timestamp`, `event`,
+`distinct_id`, `session_id`, `set_properties`, `unset_properties`), затем тот же
+patch отправляется на `POST .../{eventId}/revisions` вместе с
+`expected_revision`, `expected_preview_sha256` из preview и причиной длиной не
+менее 10 символов. Изменившийся patch/registry state или устаревшая revision
+получают `409`; системные и Browser Experience события не редактируются.
+`GET .../{eventId}` возвращает текущий факт и append-only историю before/after.
 
 Category CRUD работает только в scope проекта. Создавать можно только
 `domain: "custom"`; system definitions неизменяемы (`409

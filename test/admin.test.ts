@@ -3,6 +3,23 @@ import { api, createTestEnv, hoursAgo, type TestEnv } from './helpers.js';
 
 let env: TestEnv;
 const P = () => `/api/v1/projects/${env.projectSlug}`;
+const waitForBatchPurgeLock = async () => {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const waiting = await env.pool.query<{ waiting: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND wait_event_type = 'Lock'
+           AND query LIKE '%id = ANY%'
+           AND query LIKE '%FOR UPDATE%'
+       ) AS waiting`,
+    );
+    if (waiting.rows[0]?.waiting) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('batched purge did not reach the expected row lock');
+};
 
 beforeAll(async () => {
   env = await createTestEnv();
@@ -168,6 +185,59 @@ describe('destructive actions', () => {
     const ids = sample.body.events.map((e: any) => e.distinct_id);
     expect(ids).toContain('keep');
     expect(ids).not.toContain('drop');
+  });
+
+  it('purges large event sets in bounded batches', async () => {
+    const inserted = await env.pool.query<{ id: string }>(
+      `INSERT INTO events (
+         project_id, env, event, "timestamp", distinct_id, properties, registered
+       )
+       SELECT $1, 'purge-batch', 'purge.batch', now(),
+              'batch-actor-' || n::text, '{}'::jsonb, false
+       FROM generate_series(1, 1001) AS n
+       RETURNING id`,
+      [env.projectId],
+    );
+    const lastId = inserted.rows.map((row) => row.id).sort().at(-1)!;
+    const blocker = await env.pool.connect();
+    let purgePromise: ReturnType<typeof api> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query(
+        `SELECT id FROM events
+         WHERE project_id = $1 AND env = 'purge-batch' AND id = $2
+         FOR UPDATE`,
+        [env.projectId, lastId],
+      );
+      purgePromise = api(env, env.secretToken, 'POST', `${P()}/data/purge`, {
+        env: 'purge-batch', scope: 'events', confirm_slug: env.projectSlug,
+      });
+      await waitForBatchPurgeLock();
+      await env.pool.query(
+        `INSERT INTO events (
+           project_id, env, event, "timestamp", distinct_id, properties, registered
+         ) VALUES ($1, 'purge-batch', 'purge.late', now(),
+                   'late-actor', '{}'::jsonb, false)`,
+        [env.projectId],
+      );
+      await blocker.query('COMMIT');
+      const purge = await purgePromise;
+      expect(purge.status).toBe(200);
+      expect(purge.body.events_deleted).toBe(1001);
+    } catch (error) {
+      await blocker.query('ROLLBACK').catch(() => {});
+      await purgePromise?.catch(() => {});
+      throw error;
+    } finally {
+      blocker.release();
+    }
+    const remaining = await env.pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+       FROM events
+       WHERE project_id = $1 AND env = 'purge-batch'`,
+      [env.projectId],
+    );
+    expect(remaining.rows[0]?.count).toBe(1);
   });
 
   it('rejects distinct_id combined with a non-events scope', async () => {

@@ -307,14 +307,26 @@ describe('@poolstatis/mcp release artifact', () => {
   it('initializes, lists tools, and performs a project-scoped read against a safe fixture', async () => {
     const { client, stderr } = await connect(process.execPath, [cliModule]);
     try {
-      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.2.0' });
+      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.4.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
+      expect(tools.tools).toHaveLength(99);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'get_project_schema',
+        'get_web_overview',
+        'list_web_sessions',
+        'get_web_session',
+        'get_session_engagement',
+        'get_page_engagement',
         'list_visual_experience_versions',
         'get_visual_experience_map',
         'compare_visual_experience',
+        'preview_event_backfill',
+        'import_historical_events',
+        'list_event_backfills',
+        'preview_event_revision',
+        'revise_event',
+        'get_event_history',
       ]));
       const result = await client.callTool({
         name: 'get_project_schema',

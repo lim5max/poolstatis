@@ -77,7 +77,7 @@ import {
 } from '../services/rateLimiter.js';
 import {
   deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
-  actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
+  actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
   createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
@@ -1762,6 +1762,89 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
       ...(filters.length > 0 && { filters }),
     });
     return { events };
+  });
+
+  app.post('/api/v1/projects/:slug/events/backfill/preview', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const body = previewEventBackfillSchema.parse(req.body);
+    return ctx.events.previewBackfill(project, body.env, body.events);
+  });
+
+  app.post('/api/v1/projects/:slug/events/backfill', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const body = commitEventBackfillSchema.parse(req.body);
+    const result = await ctx.events.commitBackfill({
+      project,
+      env: body.env,
+      batchId: body.batch_id,
+      reason: body.reason,
+      actor: authOwner(req.auth),
+      expectedPayloadSha256: body.expected_payload_sha256,
+      rawEvents: body.events,
+    });
+    if (result.inserted > 0) ctx.query.invalidateProject(project.id);
+    return reply.status(result.duplicate ? 200 : 201).send(result);
+  });
+
+  app.get('/api/v1/projects/:slug/events/backfills', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env, limit } = req.query as { env?: string; limit?: string };
+    return {
+      backfills: await ctx.eventStore.listBackfills(
+        project.id,
+        env ?? 'prod',
+        parseBoundedInt(limit, 50, 1, 100, 'limit'),
+      ),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/events/:eventId', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { eventId } = req.params as { eventId: string };
+    const env = (req.query as { env?: string }).env ?? 'prod';
+    const history = await ctx.eventStore.eventHistory(
+      project.id,
+      env,
+      z.string().uuid().parse(eventId),
+    );
+    if (!history) throw notFound('event');
+    return history;
+  });
+
+  app.post('/api/v1/projects/:slug/events/:eventId/revisions/preview', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { eventId } = req.params as { eventId: string };
+    const body = previewEventRevisionSchema.parse(req.body);
+    return ctx.events.previewRevision({
+      project,
+      env: body.env,
+      eventId: z.string().uuid().parse(eventId),
+      patch: body.patch,
+    });
+  });
+
+  app.post('/api/v1/projects/:slug/events/:eventId/revisions', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { eventId } = req.params as { eventId: string };
+    const body = commitEventRevisionSchema.parse(req.body);
+    const revision = await ctx.events.commitRevision({
+      project,
+      env: body.env,
+      eventId: z.string().uuid().parse(eventId),
+      patch: body.patch,
+      expectedRevision: body.expected_revision,
+      expectedPreviewSha256: body.expected_preview_sha256,
+      reason: body.reason,
+      actor: authOwner(req.auth),
+    });
+    ctx.query.invalidateProject(project.id);
+    return reply.status(201).send({ revision });
   });
 
   app.get('/api/v1/projects/:slug/persons/:distinctId', async (req) => {

@@ -378,6 +378,7 @@ export function validateAndEnrichBrowserProperties(
   properties: Record<string, unknown>,
   sessionId: string | undefined,
   country: string,
+  options: { historical?: boolean } = {},
 ): string | null {
   const marker = properties.$browser_context;
   const allowed = event === 'page.viewed' && marker === '1'
@@ -402,7 +403,9 @@ export function validateAndEnrichBrowserProperties(
   if (!hasReserved) return null;
   if (marker !== '1') return '$browser_context must equal "1" when reserved browser properties are present';
   if (!sessionId) return 'session_id is required when browser analytics properties are present';
-  if ('$country' in properties) return '$country is server-derived and must not be sent by a client';
+  if ('$country' in properties && !options.historical) {
+    return '$country is server-derived and must not be sent by a client';
+  }
 
   for (const [key, spec] of Object.entries(BROWSER_ANALYTICS_PROPERTIES)) {
     if (key === '$country') continue;
@@ -432,9 +435,13 @@ export function validateAndEnrichBrowserProperties(
     const engagementError = validateEngagementProperties(properties);
     if (engagementError) return engagementError;
   }
-  if (country !== 'unknown' && !isIsoAlpha2Country(country)) {
+  const resolvedCountry = options.historical
+    ? (properties.$country ?? 'unknown')
+    : country;
+  if (typeof resolvedCountry !== 'string'
+      || (resolvedCountry !== 'unknown' && !isIsoAlpha2Country(resolvedCountry))) {
     return 'resolved country must be unknown or ISO alpha-2';
   }
-  properties.$country = country;
+  properties.$country = resolvedCountry;
   return null;
 }

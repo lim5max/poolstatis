@@ -6,6 +6,7 @@ import { recordWarnings, type WarningDelta } from './warnings.js';
 import { randomUUID } from 'node:crypto';
 import { validateAcquisitionProperties } from './acquisitionAttribution.js';
 import { validateAndEnrichBrowserProperties } from './browserAnalytics.js';
+import { subtractUtcCalendarMonths } from './retentionPolicy.js';
 
 const CLOCK_SKEW_FUTURE_MS = 5 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 30_000;
@@ -46,8 +47,7 @@ export class IngestService {
     const rawEvents = batch.events;
     {
       const registered = await this.registeredNames(project.id);
-      const retentionFloor = new Date(now);
-      retentionFloor.setUTCMonth(retentionFloor.getUTCMonth() - project.retention_months);
+      const retentionFloor = subtractUtcCalendarMonths(now, project.retention_months);
 
       const storable: StorableEvent[] = [];
       const errors: Array<{ index: number; message: string }> = [];

@@ -79,19 +79,19 @@ describe('production protection config', () => {
     const published = loadConfig({ POOLSTATIS_MCP_PACKAGE_PUBLISHED: 'true' });
     expect(published.mcpRunner).toMatchObject({
       command: 'pnpm',
-      args: ['--silent', 'dlx', '@poolstatis/mcp@0.2.0'],
+      args: ['--silent', 'dlx', '@poolstatis/mcp@0.4.0'],
       packageStatus: 'published',
     });
     expect(() => loadConfig({
       POOLSTATIS_MCP_PACKAGE_PUBLISHED: 'true',
       POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp',
-    })).toThrow('requires pnpm dlx pinned to @poolstatis/mcp@0.2.0');
+    })).toThrow('requires pnpm dlx pinned to @poolstatis/mcp@0.4.0');
     expect(() => loadConfig({
       POOLSTATIS_MCP_PACKAGE_PUBLISHED: 'true',
       POOLSTATIS_MCP_COMMAND: 'node',
-    })).toThrow('requires pnpm dlx pinned to @poolstatis/mcp@0.2.0');
+    })).toThrow('requires pnpm dlx pinned to @poolstatis/mcp@0.4.0');
     expect(() => loadConfig({
-      POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp@0.2.0',
+      POOLSTATIS_MCP_ARGS: '--silent dlx @poolstatis/mcp@0.4.0',
     })).toThrow('must be true before POOLSTATIS_MCP_ARGS can use @poolstatis/mcp');
   });
 

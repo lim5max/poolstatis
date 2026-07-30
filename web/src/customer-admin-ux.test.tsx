@@ -232,20 +232,30 @@ describe('server-verified setup flow', () => {
     await waitFor(() => expect(screen.queryByText('reading webhook status…')).not.toBeInTheDocument());
   });
 
-  it('does not advertise source-only tools that are absent from the pinned public runner', async () => {
+  it('advertises only tools present in the pinned public runner contract', async () => {
     renderSetup();
     await screen.findByText('Connect Poolstatis in four steps');
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced setup' }));
     for (const tool of [
-      'list_metric_categories',
-      'create_metric_category',
-      'update_metric_category',
-      'delete_metric_category',
       'get_web_overview',
       'list_web_sessions',
       'get_web_session',
       'get_session_engagement',
       'get_page_engagement',
+      'preview_event_backfill',
+      'import_historical_events',
+      'list_event_backfills',
+      'preview_event_revision',
+      'revise_event',
+      'get_event_history',
+    ]) {
+      expect(screen.getByText(tool, { exact: true })).toBeInTheDocument();
+    }
+    for (const tool of [
+      'list_metric_categories',
+      'create_metric_category',
+      'update_metric_category',
+      'delete_metric_category',
       'get_click_map',
       'get_scroll_map',
     ]) {

@@ -18,6 +18,7 @@ import {
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
   experienceRouteRegistrationSchema, experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
   editDecisionSchema, measurementDeclarationSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema,
+  eventRevisionPatchSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
   registerReleaseSchema, reviewDecisionSchema,
   retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, webAnalyticsQuerySchema,
@@ -90,7 +91,7 @@ function wrap<A>(fn: (args: A) => Promise<unknown>): (args: A) => Promise<ToolRe
   };
 }
 
-const server = new McpServer({ name: 'poolstatis', version: '0.2.0' });
+const server = new McpServer({ name: 'poolstatis', version: '0.4.0' });
 const project = z.string().describe('project slug, see list_projects');
 
 function asStructuredContent(data: unknown): Record<string, unknown> {
@@ -930,8 +931,88 @@ jsonTool(
 );
 
 jsonTool(
+  'preview_event_backfill',
+  'Validate an all-or-nothing historical import without writing anything. Preserves each supplied timestamp, enforces retention/privacy rules, and returns the payload_sha256 required by import_historical_events.',
+  {
+    project,
+    env: z.string().default('prod'),
+    events: z.array(z.unknown()).min(1).max(500),
+  },
+  wrap(({ project: slug, env, events }) =>
+    api('POST', `/api/v1/projects/${slug}/events/backfill/preview`, { env, events })),
+);
+
+jsonTool(
+  'import_historical_events',
+  'Commit an exact previously-previewed historical batch. batch_id is permanently idempotent: an exact retry is safe, while reuse with different events is rejected.',
+  {
+    project,
+    env: z.string().default('prod'),
+    batch_id: z.string().min(1).max(200),
+    reason: z.string().trim().min(10),
+    expected_payload_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    events: z.array(z.unknown()).min(1).max(500),
+  },
+  wrap(({ project: slug, ...body }) =>
+    api('POST', `/api/v1/projects/${slug}/events/backfill`, body)),
+);
+
+jsonTool(
+  'list_event_backfills',
+  'List durable historical import batches with actor, reason, exact time range, registered counts, and payload hash.',
+  {
+    project,
+    env: z.string().default('prod'),
+    limit: z.number().int().min(1).max(100).default(50),
+  },
+  wrap(({ project: slug, env, limit }) =>
+    api('GET', `/api/v1/projects/${slug}/events/backfills?env=${encodeURIComponent(env)}&limit=${limit}`)),
+);
+
+jsonTool(
+  'preview_event_revision',
+  'Preview an auditable correction to one native event. Use set_properties/unset_properties to add or remove parameters. No write occurs; review before/after and retain both expected_revision and preview_sha256.',
+  {
+    project,
+    event_id: z.string().uuid(),
+    env: z.string().default('prod'),
+    patch: eventRevisionPatchSchema,
+  },
+  wrap(({ project: slug, event_id, env, patch }) =>
+    api('POST', `/api/v1/projects/${slug}/events/${event_id}/revisions/preview`, { env, patch })),
+);
+
+jsonTool(
+  'revise_event',
+  'Apply the exact previously-reviewed native event correction with optimistic locking, a preview fingerprint, and an append-only before/after audit record. System and Browser Experience events are intentionally not editable.',
+  {
+    project,
+    event_id: z.string().uuid(),
+    env: z.string().default('prod'),
+    patch: eventRevisionPatchSchema,
+    expected_revision: z.number().int().positive(),
+    expected_preview_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    reason: z.string().trim().min(10),
+  },
+  wrap(({ project: slug, event_id, ...body }) =>
+    api('POST', `/api/v1/projects/${slug}/events/${event_id}/revisions`, body)),
+);
+
+jsonTool(
+  'get_event_history',
+  'Read the current event plus every immutable correction with actor, reason, and before/after snapshots.',
+  {
+    project,
+    event_id: z.string().uuid(),
+    env: z.string().default('prod'),
+  },
+  wrap(({ project: slug, event_id, env }) =>
+    api('GET', `/api/v1/projects/${slug}/events/${event_id}?env=${encodeURIComponent(env)}`)),
+);
+
+jsonTool(
   'sample_events',
-  'Latest raw events — use to verify instrumentation works (did the event arrive? is it registered?).',
+  'Latest raw events with stable event id, origin, and revision — use to verify instrumentation or choose one native event for an audited correction.',
   {
     project,
     event: z.string().optional(),
