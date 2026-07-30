@@ -2,6 +2,14 @@ name: Publish MCP package
 
 on:
   workflow_dispatch:
+  # This one-shot branch trigger publishes 0.4.0 from the reviewed production
+  # lineage without merging the divergent default branch. Remove it immediately
+  # after registry verification.
+  push:
+    branches:
+      - codex/event-backfill-revisions
+    paths:
+      - .github/workflows/publish-mcp.yml
 
 permissions:
   contents: read
@@ -9,7 +17,7 @@ permissions:
 
 jobs:
   publish:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/event-backfill-revisions'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -25,6 +33,10 @@ jobs:
         run: |
           mkdir -p .release
           MCP_VERSION=$(node -p "require('./packages/mcp/package.json').version")
+          if npm view "@poolstatis/mcp@$MCP_VERSION" version >/dev/null 2>&1; then
+            echo "@poolstatis/mcp@$MCP_VERSION already exists; refusing to overwrite"
+            exit 1
+          fi
           MCP_TARBALL="$PWD/.release/poolstatis-mcp-$MCP_VERSION.tgz"
           npm pack --json --pack-destination .release ./packages/mcp > .release/pack-output.txt
           POOLSTATIS_MCP_TARBALL="$MCP_TARBALL" \
