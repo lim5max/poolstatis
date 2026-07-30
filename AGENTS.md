@@ -84,6 +84,40 @@ docker compose -f docker-compose.selfhost.yml up -d --build  # self-host stack
 - **Ship a feature whole:** REST route + MCP tool + admin UI + vitest in the same change.
   Run `pnpm typecheck`, `pnpm test`, `pnpm --dir web build` before declaring done.
 
+## Continuous integration and completion
+
+- A pushed feature branch is not a completed delivery. Before declaring work
+  complete, fetch `origin`, re-read the current `origin/main`, and assemble all
+  approved workstreams into one named integration candidate based on that exact
+  revision.
+- Do not merge every old branch blindly. Inventory remote branches and open PRs,
+  identify patch-equivalent or superseded work, and preserve every unique
+  approved change. Resolve shared-file conflicts semantically so both contracts
+  survive; never finish a conflict by choosing a whole side without review.
+- Run the complete gates from the integrated tree: `pnpm typecheck`,
+  `pnpm test`, `pnpm --dir web test`, `pnpm --dir web build`,
+  `pnpm --dir sdk test`, SDK/MCP build and pack checks, and self-host
+  Compose config/build when those surfaces changed. Use an isolated disposable
+  PostgreSQL instance for database tests, never a live or shared customer
+  database. Revoke synthetic keys and remove the disposable database afterward.
+- UI changes additionally require desktop and mobile browser checks for
+  overflow, console errors, typography, interaction states, and rendered charts
+  or media. Keep STIX Two Text, Geist, and Geist Mono in their documented roles.
+- After the gates are green, obtain an independent review, prove
+  `git merge-tree` against the freshly fetched `origin/main`, push the
+  integration candidate, and merge it through a PR unless the user explicitly
+  requires another reviewed merge mechanism.
+- Completion requires read-back evidence: `origin/main` contains the integrated
+  commit, the local `main` is fast-forwarded and clean, required checks are
+  green, and no approved branch retains unique commits. Close or clearly label
+  superseded PRs and branches; do not silently leave finished work only on a
+  feature branch.
+- Merge and production release are separate gates. Before deployment, verify
+  live lineage and immutable artifacts, create and restore-test the required
+  backup, compare protected data counts, retain a tested rollback, switch
+  atomically, and run repeated live probes. Never run destructive migration or
+  restore commands against the production `poolsatis` database during tests.
+
 ## What's next
 
 See `docs/05-gap-analysis.md`. Near-term: auto-insights engine (the core unbuilt piece),
