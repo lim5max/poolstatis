@@ -69,11 +69,11 @@ export function Setup() {
       <SectionLabel>Proof of connection</SectionLabel>
       <Panel title="Setup gates" right={proof.data ? <Badge variant={proof.data.complete ? 'default' : 'outline'}>{proof.data.complete ? 'complete' : 'in progress'}</Badge> : undefined}>
         {!project ? <p className="text-sm text-muted-foreground">Select a project to inspect server-verified setup evidence.</p> : proof.loading ? <Loading what="checking setup evidence…" /> : proof.error ? <ErrorNote>{proof.error}</ErrorNote> : proof.data ? <div className="space-y-2">
-          {proof.data.gates.map((gate) => <div key={gate.key} className="flex flex-col gap-2 rounded-md border bg-muted/20 p-3 sm:flex-row sm:items-start">
-            <span className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border text-xs ${gate.complete ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600' : 'border-amber-500/40 bg-amber-500/10 text-amber-600'}`}>{gate.complete ? '✓' : '·'}</span>
+          {proof.data.gates.map((gate) => <div key={gate.key} className="flex flex-col gap-2 rounded-panel border bg-muted/20 p-3 sm:flex-row sm:items-start">
+            <span className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border text-xs ${gate.complete ? 'border-success/40 bg-success/10 text-success' : 'border-warning/40 bg-warning/10 text-warning-foreground'}`}>{gate.complete ? '✓' : '·'}</span>
             <div className="min-w-0 flex-1"><div className="text-sm font-medium">{gateLabel(gate.key)}</div>{gate.blocker && <div className="mt-1 text-xs text-muted-foreground">{gate.blocker}</div>}{gate.next_action && <div className="mt-1 text-xs">Next: {gate.next_action}</div>}</div>
           </div>)}
-          {proof.data.final_result && <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-4"><div className="text-sm font-medium">First real result · <code>{proof.data.final_result.metric_key}</code></div><div className="mt-1 text-xs text-muted-foreground">{proof.data.final_result.metric_purpose} · {proof.data.final_result.source} · {proof.data.final_result.query_window.from} → {proof.data.final_result.query_window.to}</div><div className="mt-2 text-sm">Next: {proof.data.final_result.next_action}</div></div>}
+          {proof.data.final_result && <div className="mt-3 rounded-panel border border-success/30 bg-success/5 p-4"><div className="text-sm font-medium">First real result · <code>{proof.data.final_result.metric_key}</code></div><div className="mt-1 text-xs text-muted-foreground">{proof.data.final_result.metric_purpose} · {proof.data.final_result.source} · {proof.data.final_result.query_window.from} → {proof.data.final_result.query_window.to}</div><div className="mt-2 text-sm">Next: {proof.data.final_result.next_action}</div></div>}
         </div> : null}
       </Panel>
       <SectionLabel>Connection</SectionLabel>
@@ -88,7 +88,7 @@ export function Setup() {
       <Panel title="Connect a coding agent over MCP">
         <p className="text-muted-foreground text-sm mb-3.5">Choose where Poolstatis should appear. The selected card controls the setup guide below; copy the full JSON when the host accepts JSON, or copy command/env separately for form-based settings.</p>
         {MCP_RUNNER.packageStatus !== 'published' && (
-          <div className="mb-3.5 break-words rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 [&_code]:break-all">
+          <div className="mb-3.5 break-words rounded-panel border border-warning/35 bg-warning/10 px-4 py-3 text-xs text-warning-foreground [&_code]:break-all">
             MCP runner is not marked published for this deploy. Use the command below for this self-host build. Set <code>VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true</code> only after the public runner package exists.
           </div>
         )}
@@ -100,7 +100,7 @@ export function Setup() {
               onClick={() => setClientId(profile.id)}
               aria-pressed={clientId === profile.id}
               className={cn(
-                'rounded-md border p-3 text-left transition-colors',
+                'rounded-panel border p-3 text-left transition-colors',
                 clientId === profile.id
                   ? 'border-primary bg-primary/10 text-foreground'
                   : 'bg-muted/20 text-muted-foreground hover:bg-accent/50 hover:text-foreground',
@@ -119,13 +119,13 @@ export function Setup() {
             </button>
           ))}
         </div>
-        <div className="mb-3.5 rounded-md border bg-muted/20 p-4">
+        <div className="mb-3.5 rounded-panel border bg-muted/20 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-3">
               <McpClientLogoMark logo={selectedClient.logo} className="size-11" />
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-base font-medium">{selectedClient.name}</h3>
+                  <h3 className="serif text-base font-medium">{selectedClient.name}</h3>
                   <Badge variant="outline">Selected</Badge>
                 </div>
                 <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{selectedClient.description}</p>
@@ -139,7 +139,7 @@ export function Setup() {
           </div>
           <ol className="mt-4 grid gap-2 md:grid-cols-3">
             {selectedClient.setupSteps.map((step, index) => (
-              <li key={step} className="rounded-md border bg-background p-3">
+              <li key={step} className="rounded-panel border bg-card p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <span className="flex size-6 items-center justify-center rounded-full border bg-muted/40 text-foreground">{index + 1}</span>
                   Step {index + 1}
@@ -150,7 +150,7 @@ export function Setup() {
           </ol>
         </div>
         {tokenKind === 'user' && (
-          <div className="mb-3.5 rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+          <div className="mb-3.5 rounded-panel border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
             This is a config template. Replace <code>&lt;replace-with-pt-or-sk&gt;</code> with the one-time <code>pt_</code> from onboarding, a newly issued personal token from Keys, or a project <code>sk_</code>.
           </div>
         )}
@@ -178,7 +178,7 @@ export function Setup() {
 
       <SectionLabel>The instrumentation standard</SectionLabel>
       <Panel>
-        {std.loading ? <Loading /> : <pre className="rounded-md border bg-background p-4 text-xs leading-relaxed overflow-auto max-h-96 whitespace-pre-wrap">{std.error ? `could not load standard: ${std.error}` : std.data}</pre>}
+        {std.loading ? <Loading /> : <pre className="rounded-panel border bg-card p-4 text-xs leading-relaxed overflow-auto max-h-96 whitespace-pre-wrap">{std.error ? `could not load standard: ${std.error}` : std.data}</pre>}
       </Panel>
 
       <SectionLabel danger>Danger zone</SectionLabel>
@@ -212,7 +212,7 @@ function WebhookSetup({ project }: { project: string }) {
   return <Panel title="Decision webhook" right={<span className="text-xs text-muted-foreground">encrypted · outbox delivery · approval-gated</span>}>
     <p className="mb-3 text-sm text-muted-foreground">Send sanitized product impact to one generic destination. URL and authorization are write-only; an explicit test must succeed before decision actions can queue delivery.</p>
     <div className="grid gap-2 md:grid-cols-[12rem_1fr_1fr_auto]"><Input aria-label="Webhook name" value={name} onChange={(event) => setName(event.target.value)} placeholder="product_ops" /><Input aria-label="Webhook URL" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://hooks.example.com/…" /><Input aria-label="Webhook authorization" type="password" value={authorization} onChange={(event) => setAuthorization(event.target.value)} placeholder="Authorization (optional)" /><Button onClick={configure} disabled={busy === 'configure' || !url || !name}>{busy === 'configure' ? 'Saving…' : 'Configure'}</Button></div>
-    <div className="mt-4 space-y-2">{destinations.loading ? <Loading what="reading webhook status…" /> : destinations.data?.map((destination) => <div key={destination.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"><div><div className="text-sm font-medium">{destination.name}</div><code className="text-xs text-muted-foreground">{destination.masked_url}</code>{destination.last_error && <div className="mt-1 text-xs text-destructive">{destination.last_error}</div>}</div><div className="flex items-center gap-2"><Badge variant={destination.status === 'verified' ? 'default' : destination.status === 'error' ? 'destructive' : 'outline'}>{destination.status}</Badge><Button size="sm" variant="outline" onClick={() => verify(destination.id)} disabled={busy === destination.id}>{busy === destination.id ? 'Queued…' : 'Queue test'}</Button></div></div>)}</div>
+    <div className="mt-4 space-y-2">{destinations.loading ? <Loading what="reading webhook status…" /> : destinations.data?.map((destination) => <div key={destination.id} className="flex flex-wrap items-center justify-between gap-3 rounded-panel border p-3"><div><div className="text-sm font-medium">{destination.name}</div><code className="text-xs text-muted-foreground">{destination.masked_url}</code>{destination.last_error && <div className="mt-1 text-xs text-destructive">{destination.last_error}</div>}</div><div className="flex items-center gap-2"><Badge variant={destination.status === 'verified' ? 'default' : destination.status === 'error' ? 'destructive' : 'outline'}>{destination.status}</Badge><Button size="sm" variant="outline" onClick={() => verify(destination.id)} disabled={busy === destination.id}>{busy === destination.id ? 'Queued…' : 'Queue test'}</Button></div></div>)}</div>
     {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
   </Panel>;
 }
@@ -238,7 +238,7 @@ function McpClientLogoMark({ logo, className }: { logo: McpClientLogo; className
   return (
     <span
       aria-label={`${meta.label} logo`}
-      className={cn('flex shrink-0 items-center justify-center rounded-md border bg-background', className)}
+      className={cn('flex shrink-0 items-center justify-center rounded-control border bg-card', className)}
       style={{ color: meta.color }}
     >
       <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5">
@@ -318,7 +318,7 @@ function McpLogoPath({ logo }: { logo: McpClientLogo }) {
 
 function KeyUse({ prefix, title, body }: { prefix: string; title: string; body: string }) {
   return (
-    <div className="rounded-md border bg-muted/20 p-3.5">
+    <div className="rounded-panel border bg-muted/20 p-3.5">
       <Badge variant="outline" className="font-mono">{prefix}</Badge>
       <div className="font-medium mt-2">{title}</div>
       <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{body}</p>
@@ -348,7 +348,7 @@ function DangerZone({ slug, env }: { slug: string; env: string }) {
   return (
     <Card className="border-destructive/40 py-0 gap-0 overflow-hidden">
       <div className="px-5 py-3.5 border-b border-destructive/20"><h3 className="serif text-lg text-destructive">Danger zone · {env}</h3></div>
-      {result && <div className="m-4 rounded-md border bg-muted/40 px-4 py-3 text-sm">{result}</div>}
+      {result && <div className="m-4 rounded-panel border bg-muted/40 px-4 py-3 text-sm">{result}</div>}
       {rows.map((r) => (
         <div key={r.scope} className="flex items-center justify-between gap-4 px-5 py-3.5 border-b last:border-0">
           <div><div className="text-sm">{r.t}</div><div className="text-xs text-muted-foreground mt-0.5">{r.d}</div></div>
@@ -393,7 +393,7 @@ function CodeBlock({ code }: { code: string }) {
   return (
     <div className="relative">
       <Button variant="outline" size="sm" className="absolute top-2 right-2 h-9 z-10" onClick={copy}>{copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}{copied ? 'Copied' : 'Copy'}</Button>
-      <pre className="rounded-md border bg-background p-4 pr-20 text-xs leading-relaxed overflow-auto">{code}</pre>
+      <pre className="rounded-panel border bg-card p-4 pr-20 text-xs leading-relaxed overflow-auto">{code}</pre>
     </div>
   );
 }

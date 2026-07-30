@@ -83,7 +83,7 @@ export function Panel({ title, right, children }: { title?: ReactNode; right?: R
   return (
     <Card className="gap-0 py-0 overflow-hidden">
       {(title || right) && (
-        <CardHeader className="flex flex-row items-center justify-between border-b py-3.5 px-5 [.border-b]:pb-3.5">
+        <CardHeader className="flex flex-row items-center justify-between border-b bg-muted/20 py-3.5 px-5 [.border-b]:pb-3.5">
           {/* Heading is serif; any inline subtitle inside should pass font-sans. */}
           {title ? <CardTitle className="serif text-lg font-normal">{title}</CardTitle> : <span />}
           {right}
@@ -115,7 +115,7 @@ export function EmptyState({ headline, lead, action }: { headline: string; lead?
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-14 text-center text-muted-foreground">
       <div className="serif text-xl text-foreground/70">{headline}</div>
-      {lead && <div className="text-sm">{lead}</div>}
+      {lead && <div className="max-w-sm text-sm text-pretty">{lead}</div>}
       {action && <div className="flex gap-2 mt-1">{action}</div>}
     </div>
   );
@@ -126,13 +126,13 @@ export function Loading({ what }: { what?: string }) {
 }
 
 export function ErrorNote({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">⚠ {children}</div>;
+  return <div role="alert" className="rounded-panel border border-destructive/35 bg-destructive/8 px-4 py-3 text-sm text-destructive">{children}</div>;
 }
 
 export function Meter({ value }: { value: number }) {
   const safe = Number.isFinite(value) ? value : 0; // never render width: NaN%
   const pct = Math.max(0, Math.min(1, safe)) * 100;
-  const color = safe >= 0.99 ? 'bg-emerald-500' : safe >= 0.6 ? 'bg-amber-500' : 'bg-destructive';
+  const color = safe >= 0.99 ? 'bg-success' : safe >= 0.6 ? 'bg-warning' : 'bg-destructive';
   return <div className="h-1.5 rounded-full bg-muted overflow-hidden"><div className={cn('h-full rounded-full', color)} style={{ width: `${pct}%` }} /></div>;
 }
 
@@ -166,7 +166,7 @@ export function FilterChips({ chips, onRemove, onClear }: { chips: Chip[]; onRem
       {chips.map((c) => (
         <Badge key={c.key} variant="secondary" className="gap-1 pr-1 font-normal">
           {c.label}
-          <button onClick={() => onRemove(c.key)} className="hover:text-foreground"><X className="size-3" /></button>
+          <button onClick={() => onRemove(c.key)} className="rounded-full hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Remove ${c.label} filter`}><X className="size-3" /></button>
         </Badge>
       ))}
       <button className="text-xs text-primary hover:underline" onClick={onClear}>clear all</button>
@@ -212,7 +212,7 @@ export function Overflow({ items }: { items: Array<{ label: string; onClick: () 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-7"><MoreHorizontal className="size-4" /></Button>
+        <Button variant="ghost" size="icon-sm" aria-label="More actions"><MoreHorizontal className="size-4" /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {items.map((it, i) => (
@@ -236,7 +236,7 @@ export function Confirm({ title, body, confirmLabel, tone = 'neutral', onConfirm
         <DialogHeader><DialogTitle className="serif font-normal text-xl">{title}</DialogTitle><DialogDescription>{body}</DialogDescription></DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button onClick={go} disabled={busy} className={tone === 'warn' ? 'bg-amber-500 text-black hover:bg-amber-400' : ''}>
+          <Button onClick={go} disabled={busy} className={tone === 'warn' ? 'bg-warning text-warning-foreground hover:bg-warning/90' : ''}>
             {busy && <Loader2 className="size-4 animate-spin" />}{confirmLabel}
           </Button>
         </DialogFooter>
@@ -260,12 +260,12 @@ export function DangerConfirm({ title, blastRadius, willDelete, willKeep, matchV
           {blastRadius && <DialogDescription>{blastRadius}</DialogDescription>}
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3 text-xs">
-          <div className="rounded-md border p-3">
+          <div className="rounded-panel border bg-muted/20 p-3">
             <div className="text-xs font-medium text-destructive mb-1.5">Will delete</div>
             <ul className="space-y-1 text-muted-foreground">{willDelete.map((x, i) => <li key={i}>− {x}</li>)}</ul>
           </div>
-          <div className="rounded-md border p-3">
-            <div className="text-xs font-medium text-emerald-500 mb-1.5">Will keep</div>
+          <div className="rounded-panel border bg-muted/20 p-3">
+            <div className="text-xs font-medium text-success mb-1.5">Will keep</div>
             <ul className="space-y-1 text-muted-foreground">{willKeep.map((x, i) => <li key={i}>✓ {x}</li>)}</ul>
           </div>
         </div>
@@ -299,9 +299,9 @@ export function SecretReveal({ token, kind, onDone }: { token: string; kind: str
     <Dialog open onOpenChange={(o) => !o && onDone()}>
       <DialogContent>
         <DialogHeader><DialogTitle className="serif font-normal text-xl">New {kind} key</DialogTitle>
-          <DialogDescription className="text-amber-500">Copy it now — this is the first and last time the full key is shown.</DialogDescription>
+          <DialogDescription className="text-warning-foreground">Copy it now — this is the first and last time the full key is shown.</DialogDescription>
         </DialogHeader>
-        <div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2">
+        <div className="flex items-center gap-2 rounded-panel border bg-muted/20 px-3 py-2">
           <code className="flex-1 break-all text-xs">{shown ? token : masked}</code>
           <Button variant="outline" size="icon" className="size-8" onClick={() => setShown((s) => !s)}>{shown ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</Button>
           <Button variant="outline" size="icon" className="size-8" onClick={copy}>{copied ? <Check className="size-4" /> : <Copy className="size-4" />}</Button>

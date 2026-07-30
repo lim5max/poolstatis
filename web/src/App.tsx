@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { LayoutGrid, List, Database, GridView, KeyRound, Settings, SystemSettings, Target, PackageBox, Check, ChevronsUpDown, Menu, X, type PoolstatisIcon } from '@/components/icons';
 import { auth0Enabled } from './auth0';
 import { useStore } from './store';
@@ -59,7 +59,7 @@ export function App() {
   if (!client) return <Connect />;
   return (
     <Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-      <div className="min-h-screen bg-background md:grid md:h-screen md:grid-cols-[232px_1fr]">
+      <div className="min-h-dvh bg-background md:grid md:h-dvh md:grid-cols-[232px_1fr]">
         <MobileTopbar />
         <Sidebar />
         <MobileNavDrawer onNavigate={() => setMobileNavOpen(false)} />
@@ -88,13 +88,13 @@ function Sidebar() {
 
 function MobileTopbar() {
   return (
-    <header className="sticky top-0 z-30 flex min-h-14 items-center justify-between border-b bg-background/95 px-4 backdrop-blur-md md:hidden">
+    <header className="sticky top-0 z-30 flex min-h-14 items-center justify-between border-b bg-card/95 px-4 backdrop-blur-md md:hidden">
       <div className="flex min-w-0 items-center gap-2.5">
         <img className="size-7 shrink-0" src="/poolstatis-logo.svg" alt="" />
         <span className="brand-wordmark truncate text-xl text-foreground">Poolstatis</span>
       </div>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Open navigation">
+        <Button variant="ghost" size="icon-sm" className="size-11" aria-label="Open navigation">
           <Menu className="size-5" />
         </Button>
       </DialogTrigger>
@@ -120,7 +120,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
             <div className="mt-1 text-xs text-muted-foreground">Headless analytics admin</div>
           </div>
           <DialogClose asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="Close navigation">
+            <Button variant="ghost" size="icon-sm" className="size-11" aria-label="Close navigation">
               <X className="size-4" />
             </Button>
           </DialogClose>
@@ -146,8 +146,8 @@ function NavGroups({ onNavigate }: { onNavigate?: () => void }) {
               to={to}
               end={end}
               onClick={onNavigate}
-              className={({ isActive }) => cn('flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors',
-                isActive ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground')}
+              className={({ isActive }) => cn('flex items-center gap-2.5 rounded-control px-3 py-2 text-sm transition-colors',
+                isActive ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/65 hover:text-foreground')}
             >
               <Icon className="size-4" /> {label}
             </NavLink>
@@ -168,7 +168,7 @@ function ConnectionFooter({ onDisconnect }: { onDisconnect?: () => void }) {
   return (
     <div className="mt-2 flex items-center justify-between border-t px-5 pt-3">
       <span className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className={cn('size-1.5 rounded-full', client ? 'bg-emerald-500' : 'bg-destructive')} /> {tokenKind ?? 'connected'} key
+        <span className={cn('size-1.5 rounded-full', client ? 'bg-success' : 'bg-destructive')} /> {tokenKind ?? 'connected'} key
       </span>
       <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={handleDisconnect}>disconnect</Button>
     </div>
@@ -186,7 +186,7 @@ function HostedConnectionFooter({ onDisconnect }: { onDisconnect?: () => void })
   return (
     <div className="mt-2 flex items-center justify-between border-t px-5 pt-3">
       <span className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className={cn('size-1.5 rounded-full', client ? 'bg-emerald-500' : 'bg-destructive')} /> hosted auth
+        <span className={cn('size-1.5 rounded-full', client ? 'bg-success' : 'bg-destructive')} /> hosted auth
       </span>
       <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={handleDisconnect}>sign out</Button>
     </div>
@@ -196,12 +196,13 @@ function HostedConnectionFooter({ onDisconnect }: { onDisconnect?: () => void })
 function Main() {
   const loc = useLocation();
   const { projects, project, setProject } = useStore();
+  const reduceMotion = useReducedMotion();
   const title = titleFor(loc.pathname);
   const showProject = isProjectScoped(loc.pathname);
 
   return (
-    <div className="min-h-0 md:h-screen md:overflow-y-auto">
-      <div className="sticky top-14 z-10 flex min-h-14 items-center border-b bg-background/85 px-4 py-3 backdrop-blur-md md:top-0 md:px-8">
+    <div className="min-h-0 md:h-dvh md:overflow-y-auto">
+      <div className="sticky top-14 z-10 flex min-h-14 items-center border-b bg-card/90 px-4 py-3 backdrop-blur-md md:top-0 md:px-8">
         <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">Poolstatis</span>
           {showProject && project && (
@@ -226,8 +227,8 @@ function Main() {
           <span className="text-foreground">{title}</span>
         </div>
       </div>
-      <motion.div className="max-w-6xl p-4 pb-20 md:p-8" key={loc.pathname}
-        initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
+      <motion.div className="w-full max-w-6xl p-4 pb-20 md:p-8" key={loc.pathname}
+        initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduceMotion ? 0 : 0.22, ease: 'easeOut' }}>
         <Routes>
           <Route path="/" element={<Projects />} />
           <Route path="/onboarding" element={<Onboarding />} />

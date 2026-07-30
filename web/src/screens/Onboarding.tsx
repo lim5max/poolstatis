@@ -138,7 +138,7 @@ export function Onboarding() {
           <Panel title={<>{selectedClient.name} MCP config <Badge variant="outline" className="ml-2 font-mono">token shown once</Badge></>}>
             <p className="mb-3.5 text-sm text-muted-foreground">{selectedClient.pasteTarget}</p>
             {result.mcp.package_status !== 'published' && (
-              <div className="mb-3.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+              <div className="mb-3.5 rounded-panel border border-warning/35 bg-warning/10 px-4 py-3 text-xs text-warning-foreground">
                 MCP runner is publish-ready but not marked as published for this hosted deploy. {result.mcp.note}
               </div>
             )}
@@ -170,7 +170,7 @@ export function Onboarding() {
 
 function Step({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
   return (
-    <div className="rounded-md border bg-muted/20 p-3.5">
+    <div className="rounded-panel border bg-muted/20 p-3.5">
       <div className="mb-2 flex items-center gap-2 text-sm font-medium">{icon}{title}</div>
       <p className="text-xs leading-relaxed text-muted-foreground">{body}</p>
     </div>
@@ -198,7 +198,7 @@ function TokenBox({ label, value }: { label: string; value: string }) {
     }
   };
   return (
-    <div className="rounded-md border bg-background p-3">
+    <div className="rounded-panel border bg-card p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="text-xs text-muted-foreground">{label}</div>
         <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={copy}>
@@ -228,7 +228,7 @@ function CodeBlock({ code }: { code: string }) {
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         {copied ? 'Copied' : 'Copy'}
       </Button>
-      <pre className="overflow-auto rounded-md border bg-background p-4 pr-20 text-xs leading-relaxed">{code}</pre>
+      <pre className="overflow-auto rounded-panel border bg-card p-4 pr-20 text-xs leading-relaxed">{code}</pre>
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
@@ -115,7 +116,7 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
         left={<SearchInput value={search} onChange={setSearch} placeholder="Search name, key, purpose…" />}
         center={<>
           <CategoryFilter selected={cats} onToggle={(c) => toggle(cats, setCats, c)} />
-          <div className="flex h-9 rounded-md border overflow-hidden text-sm">
+          <div className="flex h-9 rounded-field border overflow-hidden text-sm">
             {STATUS_OPTS.map((s) => (
               <button key={s} onClick={() => toggle(statuses, setStatuses, s)}
                 className={cn('px-3 capitalize border-r last:border-r-0 transition-colors',
@@ -194,18 +195,18 @@ function DeprecateDialog({ metric, onCancel, onConfirm }: { metric: Metric; onCa
         </DialogHeader>
         <div className="space-y-1.5">
           <label className="text-xs text-muted-foreground">Reason</label>
-          <textarea
+          <Textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="Replaced by a more precise activation metric."
-            className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="min-h-24"
             autoFocus
           />
         </div>
         {error && <ErrorNote>{error}</ErrorNote>}
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button onClick={go} disabled={!canSubmit || busy} className="bg-amber-500 text-black hover:bg-amber-400">
+          <Button onClick={go} disabled={!canSubmit || busy} className="bg-warning text-warning-foreground hover:bg-warning/90">
             {busy && <Loader2 className="size-4 animate-spin" />}Deprecate
           </Button>
         </DialogFooter>

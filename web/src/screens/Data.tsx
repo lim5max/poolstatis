@@ -40,7 +40,7 @@ export function Data() {
   return (
     <Tabs value={tab} onValueChange={setTab} className="gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="max-w-full overflow-x-auto pb-1">
+        <div className="min-w-0 max-w-full flex-1 overflow-x-auto pb-1">
           <TabsList className="w-max">
             <TabsTrigger value="health">Data health</TabsTrigger>
             <TabsTrigger value="events">Event stream</TabsTrigger>
@@ -191,7 +191,7 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
           </>
         }
         right={
-          <div className="flex h-9 rounded-md border overflow-hidden text-sm">
+          <div className="flex h-9 rounded-field border overflow-hidden text-sm">
             {(['all', 'reg', 'wild'] as const).map((v) => (
               <button key={v} onClick={() => setRegistered(v)}
                 className={cn('px-3 border-r last:border-r-0', registered === v ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>

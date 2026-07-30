@@ -80,7 +80,7 @@ function IssueKey({ issue, onIssued }: {
       <div className="flex items-end gap-3.5 flex-wrap">
         <div className="space-y-1.5">
           <Label className="text-xs font-medium text-muted-foreground">Kind</Label>
-          <div className="flex rounded-md border overflow-hidden">
+          <div className="flex rounded-field border overflow-hidden">
             {(['ingest', 'secret'] as const).map((k) => <button key={k} className={`h-9 px-3 text-xs ${kind === k ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}`} onClick={() => setKind(k)}>{k} ({k === 'ingest' ? 'pk_' : 'sk_'})</button>)}
           </div>
         </div>

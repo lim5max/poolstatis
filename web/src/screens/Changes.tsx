@@ -69,7 +69,7 @@ function ReleaseAudit({ release, detail, busy, onEvaluate }: { release: Release;
 }
 
 function AuditStep({ number, title, children }: { number: string; title: string; children: React.ReactNode }) {
-  return <section className="min-w-0 rounded-md border bg-muted/20 p-3 text-xs"><div className="mb-2 flex items-center gap-2"><span className="flex size-5 items-center justify-center rounded-full bg-foreground text-background">{number}</span><span className="font-medium">{title}</span></div>{children}</section>;
+  return <section className="min-w-0 rounded-panel border bg-muted/20 p-3 text-xs"><div className="mb-2 flex items-center gap-2"><span className="flex size-5 items-center justify-center rounded-full bg-foreground text-background">{number}</span><span className="font-medium">{title}</span></div>{children}</section>;
 }
 function MetricChange({ detail }: { detail: DecisionDetail }) { const metric = detail.evidence.primary_evidence; const relative = metric.change.relative; return <p><code>{metric.metric.key}</code>: {metric.baseline.value} → {metric.observed.value}{relative !== null && <span className={relative >= 0 ? 'text-emerald-600' : 'text-destructive'}> ({relative >= 0 ? '+' : ''}{Math.round(relative * 100)}%)</span>}</p>; }
 function ReleaseBadge({ status }: { status: Release['status'] }) { return <Badge variant={status === 'decided' ? 'default' : status === 'cancelled' ? 'secondary' : 'outline'}>{status}</Badge>; }

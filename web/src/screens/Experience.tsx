@@ -4,6 +4,7 @@ import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, Loading, Panel } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -48,7 +49,7 @@ function SurfaceForm({ onCreated }: { onCreated: () => void }) {
     <div className="grid gap-3 md:grid-cols-2">
       <Field label="Key"><Input aria-label="Surface key" value={key} onChange={(event) => setKey(event.target.value)} placeholder="checkout" /></Field>
       <Field label="Name"><Input aria-label="Surface name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Checkout" /></Field>
-      <Field label="Purpose" className="md:col-span-2"><textarea aria-label="Surface purpose" value={purpose} onChange={(event) => setPurpose(event.target.value)} placeholder="Understand friction before a buyer completes checkout." className="min-h-20 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50" /></Field>
+      <Field label="Purpose" className="md:col-span-2"><Textarea aria-label="Surface purpose" value={purpose} onChange={(event) => setPurpose(event.target.value)} placeholder="Understand friction before a buyer completes checkout." /></Field>
     </div>
     <div className="mt-4 flex justify-end"><Button onClick={submit} disabled={!valid || busy}>{busy ? <Loader2 className="size-4 animate-spin" /> : <Add className="size-4" />}Create surface</Button></div>
     {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
@@ -99,7 +100,7 @@ function MapResult({ result }: { result: InteractionMapResponse }) {
   const max = Math.max(1, ...result.cells.map((cell) => cell.count));
   const cells = new Map(result.cells.map((cell) => [`${cell.x}:${cell.y}`, cell]));
   return <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
-    <div className="rounded-md border bg-muted/20 p-3"><div className="mb-2 text-xs text-muted-foreground">Surface {result.surface.key} · last 7 days · normalized viewport grid</div><div className="grid gap-0.5" style={{ gridTemplateColumns: `repeat(${result.grid}, minmax(0, 1fr))` }}>{Array.from({ length: result.grid * result.grid }, (_, index) => {
+    <div className="rounded-panel border bg-muted/20 p-3"><div className="mb-2 text-xs text-muted-foreground">Surface {result.surface.key} · last 7 days · normalized viewport grid</div><div className="grid gap-0.5" style={{ gridTemplateColumns: `repeat(${result.grid}, minmax(0, 1fr))` }}>{Array.from({ length: result.grid * result.grid }, (_, index) => {
       const x = index % result.grid; const y = Math.floor(index / result.grid); const cell = cells.get(`${x}:${y}`); const opacity = cell ? Math.max(0.15, cell.count / max) : 0.04;
       return <div key={`${x}:${y}`} title={cell ? `${cell.count} clicks · ${cell.actors} actors` : 'No click'} className="aspect-square rounded-sm bg-primary" style={{ opacity }} />;
     })}</div></div>
@@ -127,7 +128,7 @@ function SessionTimeline({ surfaces, env }: { surfaces: ExperienceSurface[]; env
   return <Panel title="Session timeline" right={<span className="text-xs text-muted-foreground">known session id · no DOM replay</span>}>
     <div className="flex flex-wrap gap-2"><QueryControls surfaces={surfaces} selected={selected} onSurface={changeSurface} /><Input value={sessionId} onChange={(event) => changeSessionId(event.target.value)} placeholder="session id" className="min-w-52 flex-1" /><Button onClick={load} disabled={!selected || !sessionId.trim() || busy}>{busy && <Loader2 className="size-4 animate-spin" />}Load session</Button></div>
     {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
-    {result && <div className="mt-4 space-y-3"><div className="text-xs text-muted-foreground">Surface {result.surface.key} · session <code>{result.session_id}</code> · last 7 days</div><div className="grid gap-2 sm:grid-cols-4">{[['Page views', result.summary.page_views], ['Clicks', result.summary.clicks], ['Max scroll', `${result.summary.max_scroll_depth}%`], ['Client errors', result.summary.client_errors]].map(([label, value]) => <div key={String(label)} className="rounded-md border p-3"><div className="text-xs text-muted-foreground">{label}</div><div className="serif mt-1 text-2xl">{value}</div></div>)}</div><div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Sequence</TableHead><TableHead>Signal</TableHead><TableHead>Route</TableHead><TableHead>Detail</TableHead></TableRow></TableHeader><TableBody>{result.events.map((event) => <TableRow key={`${event.sequence}-${event.kind}`}><TableCell>{event.sequence}</TableCell><TableCell><code className="text-xs">{event.kind}</code></TableCell><TableCell><code className="text-xs">{event.route}</code></TableCell><TableCell className="text-xs text-muted-foreground">{event.label ?? (event.depth !== undefined ? `${event.depth}%` : event.error_type ?? '—')}</TableCell></TableRow>)}</TableBody></Table></div></div>}
+    {result && <div className="mt-4 space-y-3"><div className="text-xs text-muted-foreground">Surface {result.surface.key} · session <code>{result.session_id}</code> · last 7 days</div><div className="grid gap-2 sm:grid-cols-4">{[['Page views', result.summary.page_views], ['Clicks', result.summary.clicks], ['Max scroll', `${result.summary.max_scroll_depth}%`], ['Client errors', result.summary.client_errors]].map(([label, value]) => <div key={String(label)} className="rounded-panel border p-3"><div className="text-xs text-muted-foreground">{label}</div><div className="serif mt-1 text-2xl">{value}</div></div>)}</div><div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Sequence</TableHead><TableHead>Signal</TableHead><TableHead>Route</TableHead><TableHead>Detail</TableHead></TableRow></TableHeader><TableBody>{result.events.map((event) => <TableRow key={`${event.sequence}-${event.kind}`}><TableCell>{event.sequence}</TableCell><TableCell><code className="text-xs">{event.kind}</code></TableCell><TableCell><code className="text-xs">{event.route}</code></TableCell><TableCell className="text-xs text-muted-foreground">{event.label ?? (event.depth !== undefined ? `${event.depth}%` : event.error_type ?? '—')}</TableCell></TableRow>)}</TableBody></Table></div></div>}
   </Panel>;
 }
 

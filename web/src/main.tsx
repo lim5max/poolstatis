@@ -7,9 +7,6 @@ import { App } from './App';
 import { OptionalAuth0Provider } from './auth0';
 import './index.css';
 
-// The preset ships a light + dark theme; the admin runs dark.
-document.documentElement.classList.add('dark');
-
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <OptionalAuth0Provider>
