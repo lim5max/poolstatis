@@ -2,6 +2,7 @@ import type pg from 'pg';
 import type { EventStore, MetricAggregate, RetentionCohort } from '../stores/eventStore.js';
 import type {
   EntitiesQueryInput,
+  ActorsQueryInput,
   ExperienceSessionQueryInput,
   FunnelQueryInput,
   InteractionMapQueryInput,
@@ -17,7 +18,7 @@ import type {
   PageEngagementQueryInput,
 } from '../schemas.js';
 import { parseDateInput } from '../dates.js';
-import { badRequest } from '../errors.js';
+import { ApiError, badRequest } from '../errors.js';
 import { getFunnel, getMetric, type Metric } from './registry.js';
 import { countEntities, queryEntities } from './entities.js';
 import { getExperienceSurface } from './experience.js';
@@ -25,6 +26,8 @@ import { canonicalQueryKey, type QueryCache } from './queryCache.js';
 import type { PostHogAdapter } from './posthog.js';
 import { assertTrustedAcquisitionProperties } from './acquisitionAttribution.js';
 import { assertTrustedSafeRoute } from './browserAnalytics.js';
+import { decodeActorsCursor, encodeActorsCursor } from './actorCursors.js';
+import { resolveActorIdentity } from './identity.js';
 
 const WEB_DIMENSIONS = {
   route: { property: '$route_key', missingValue: 'unavailable' },
@@ -39,6 +42,34 @@ const WEB_DIMENSIONS = {
 const WEB_FILTER_PROPERTIES = new Set<string>(
   Object.values(WEB_DIMENSIONS).map((dimension) => dimension.property),
 );
+
+export async function hasTrustedBrowserSessionSource(
+  pool: pg.Pool,
+  projectId: string,
+): Promise<boolean> {
+  const { rows } = await pool.query<{ type: string; source: unknown }>(
+    `SELECT type, source
+     FROM metrics
+     WHERE project_id = $1 AND status = 'active'`,
+    [projectId],
+  );
+  return rows.some((row) => {
+    if (row.type !== 'count' || !row.source || typeof row.source !== 'object') return false;
+    const source = row.source as {
+      event?: unknown;
+      filters?: unknown;
+      data_source?: unknown;
+    };
+    if (source.event !== 'page.viewed'
+      || (source.data_source !== undefined && source.data_source !== 'native')
+      || !Array.isArray(source.filters)
+      || source.filters.length !== 1) return false;
+    const filter = source.filters[0] as Record<string, unknown>;
+    return filter.property === '$browser_context'
+      && filter.op === 'eq'
+      && filter.value === '1';
+  });
+}
 
 export interface QueryMeta {
   computed_at: string;
@@ -113,6 +144,34 @@ export type QueryResult =
     }
   | { kind: 'entities'; entities: Array<{ entity_id: string; properties: Record<string, unknown>; updated_at: string }>; meta: QueryMeta }
   | {
+      kind: 'actors';
+      actors: import('../stores/eventStore.js').ActorListItem[];
+      meta: QueryMeta & {
+        limit: number;
+        order: import('../stores/eventStore.js').ActorOrder;
+        next_cursor: string | null;
+        activity_metric: {
+          key: string;
+          source: 'native';
+          population_filter: true;
+        } | null;
+        capabilities: {
+          property_filters: { available: false; reason: string };
+          pinned_properties: { available: false; reason: string };
+          session_count: {
+            source: 'canonical_browser_sessions';
+            unavailable_value: null;
+            project_capability: boolean;
+          };
+        };
+        provenance: {
+          identity_status: string;
+          top_events: { registered_only: true; limit: 8 };
+          pinned_properties: { source: null; fail_closed: true };
+        };
+      };
+    }
+  | {
       kind: 'retention';
       interval: string;
       cohorts: Array<{ cohort: string; size: number; retained: number[]; retained_pct: number[] }>;
@@ -142,6 +201,15 @@ export type QueryResult =
       kind: 'experience_session';
       surface: { key: string; name: string; purpose: string; status: 'active' | 'archived' };
       session_id: string;
+      actor: {
+        requested_distinct_id: string;
+        distinct_id: string;
+        identity_status: import('../stores/eventStore.js').ActorIdentityStatus;
+        raw_distinct_ids: string[];
+        raw_distinct_ids_truncated: boolean;
+        links: import('./identity.js').ActorLink[];
+        links_truncated: boolean;
+      } | null;
       events: Array<{
         timestamp: string; kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
         route: string; sequence: number; label?: string; x?: number; y?: number; depth?: number;
@@ -278,6 +346,8 @@ export class QueryService {
         return this.funnel(projectId, q, now);
       case 'entities':
         return this.entities(projectId, q, now);
+      case 'actors':
+        return this.actors(projectId, q, now);
       case 'retention':
         return this.retention(projectId, q, now);
       case 'lifecycle':
@@ -862,6 +932,135 @@ export class QueryService {
     };
   }
 
+  private async actors(
+    projectId: string,
+    q: ActorsQueryInput,
+    now: Date,
+  ): Promise<QueryResult> {
+    if (q.propertyFilters.length > 0) {
+      throw new ApiError(
+        400,
+        'actors_property_filters_unavailable',
+        'actor property filters are unavailable because this project has no deterministic trusted actor-property source',
+        'remove propertyFilters; registering a property meaning alone does not prove where canonical actor values come from',
+        false,
+      );
+    }
+    const from = parseDateInput(q.from ?? '-30d', now);
+    const to = q.to ? parseDateInput(q.to, now) : now;
+    if (to.getTime() <= from.getTime()) {
+      throw badRequest('actors_range_invalid', 'to must be later than from');
+    }
+    if (to.getTime() - from.getTime() > 366 * 24 * 60 * 60_000) {
+      throw badRequest(
+        'actors_range_too_large',
+        'actors queries are bounded to at most 366 days',
+        'split the analysis into smaller windows',
+      );
+    }
+    const activity = q.activityMetric
+      ? await this.actorActivityMetric(projectId, q.activityMetric)
+      : undefined;
+    const trustedBrowserSessions = await hasTrustedBrowserSessionSource(this.pool, projectId);
+    const cursor = q.cursor ? decodeActorsCursor(q.cursor, q.order) : undefined;
+    const result = await this.eventStore.actors({
+      projectId,
+      env: q.env,
+      from,
+      to,
+      limit: q.limit,
+      order: q.order,
+      ...(cursor ? { cursor } : {}),
+      ...(q.search ? { searchExactId: q.search.value } : {}),
+      ...(activity ? { activity: { event: activity.event, filters: activity.filters } } : {}),
+      trustedBrowserSessions,
+    });
+    const last = result.actors.at(-1);
+    const publicActors = result.actors.map(({
+      distinct_events: _distinctEvents,
+      registered_share: _registeredShare,
+      ...actor
+    }) => actor);
+    const nextCursor = result.hasMore && last
+      ? encodeActorsCursor(q.order, {
+        value: q.order === 'events_desc'
+          ? last.total_events
+          : q.order === 'first_seen_desc'
+            ? last.first_seen
+            : last.last_seen,
+        distinctId: last.distinct_id,
+      })
+      : null;
+    return {
+      kind: 'actors',
+      actors: publicActors,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        limit: q.limit,
+        order: q.order,
+        next_cursor: nextCursor,
+        activity_metric: q.activityMetric
+          ? { key: q.activityMetric, source: 'native', population_filter: true }
+          : null,
+        capabilities: {
+          property_filters: {
+            available: false,
+            reason: 'No deterministic trusted canonical actor-property source exists.',
+          },
+          pinned_properties: {
+            available: false,
+            reason: 'No approved deterministic pinned-property source exists.',
+          },
+          session_count: {
+            source: 'canonical_browser_sessions',
+            unavailable_value: null,
+            project_capability: trustedBrowserSessions,
+          },
+        },
+        provenance: {
+          identity_status: 'linked requires active server-owned link provenance or multiple observed raw IDs; otherwise unknown unless a link conflict is detected',
+          top_events: { registered_only: true, limit: 8 },
+          pinned_properties: { source: null, fail_closed: true },
+        },
+      },
+    };
+  }
+
+  private async actorActivityMetric(
+    projectId: string,
+    metricKey: string,
+  ): Promise<{ event: string; filters: PropertyFilter[] }> {
+    const metric = await getMetric(this.pool, projectId, metricKey);
+    if (metric.status !== 'active') {
+      throw badRequest(
+        'actors_activity_metric_inactive',
+        `activity metric "${metricKey}" must be active`,
+        'activate a reviewed native event metric or omit activityMetric',
+      );
+    }
+    if (metric.type === 'conversion' || metric.type === 'state') {
+      throw badRequest(
+        'actors_activity_metric_invalid',
+        `activity metric "${metricKey}" must be event-based`,
+      );
+    }
+    const source = metric.source as {
+      event?: string;
+      filters?: PropertyFilter[];
+      data_source?: 'native' | 'posthog';
+    };
+    if (!source.event || (source.data_source ?? 'native') !== 'native') {
+      throw badRequest(
+        'actors_activity_metric_unsupported_source',
+        `activity metric "${metricKey}" must use native stored events`,
+      );
+    }
+    return { event: source.event, filters: source.filters ?? [] };
+  }
+
   private async retention(projectId: string, q: RetentionQueryInput, now: Date): Promise<QueryResult> {
     // The two metric lookups are independent — resolve them together.
     const [start, ret] = await Promise.all([
@@ -1007,13 +1206,38 @@ export class QueryService {
     const surface = await getExperienceSurface(this.pool, projectId, q.surface);
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
-    const events = await this.eventStore.experienceSession({
-      projectId, env: q.env, surface: q.surface, sessionId: q.session_id, from, to, limit: q.limit,
+    const result = await this.eventStore.experienceSession({
+      projectId, env: q.env, surface: q.surface, sessionId: q.session_id,
+      ...(q.actor_id ? { actorId: q.actor_id } : {}),
+      from, to, limit: q.limit,
     });
+    if (!q.actor_id && result.actorIds.length > 1) {
+      throw new ApiError(
+        400,
+        'experience_session_actor_ambiguous',
+        `session_id "${q.session_id}" belongs to more than one actor in this project, environment, surface and window`,
+        'repeat the query with the exact actor_id returned by an actor-scoped list or person result',
+        false,
+      );
+    }
+    const requestedActor = q.actor_id ?? result.actorIds[0] ?? null;
+    const actor = requestedActor
+      ? await resolveActorIdentity(this.pool, projectId, q.env, requestedActor)
+      : null;
+    const events = result.events;
     return {
       kind: 'experience_session',
       surface: { key: surface.key, name: surface.name, purpose: surface.purpose, status: surface.status },
       session_id: q.session_id,
+      actor: actor ? {
+        requested_distinct_id: actor.requested_distinct_id,
+        distinct_id: actor.distinct_id,
+        identity_status: actor.status,
+        raw_distinct_ids: actor.raw_distinct_ids,
+        raw_distinct_ids_truncated: actor.raw_distinct_ids_truncated,
+        links: actor.links,
+        links_truncated: actor.links_truncated,
+      } : null,
       events,
       summary: {
         page_views: events.filter((event) => event.kind === 'page_viewed').length,

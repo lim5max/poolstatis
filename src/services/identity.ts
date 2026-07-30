@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { ApiError, notFound } from '../errors.js';
 import type { ActorLinkInput } from '../schemas.js';
+import type { ActorIdentityStatus } from '../stores/eventStore.js';
 
 export interface ActorLink {
   id: string;
@@ -21,6 +22,17 @@ export interface ActorLinkAudit {
   actor: string;
   snapshot: ActorLink;
   created_at: string;
+}
+
+export interface ActorIdentity {
+  requested_distinct_id: string;
+  distinct_id: string;
+  status: ActorIdentityStatus;
+  raw_actor_count: number;
+  raw_distinct_ids: string[];
+  raw_distinct_ids_truncated: boolean;
+  links: ActorLink[];
+  links_truncated: boolean;
 }
 
 const LINK_COLS = `id, env, source_distinct_id, target_distinct_id, status,
@@ -148,6 +160,103 @@ export async function listActorLinks(
     ),
   ]);
   return { links: links.rows, audit: audit.rows };
+}
+
+/**
+ * Resolve one canonical population and its active server-owned link
+ * provenance. No identity class is inferred from ID spelling or entity
+ * properties: without a link, the only truthful status is `unknown`.
+ */
+export async function resolveActorIdentity(
+  pool: pg.Pool,
+  projectId: string,
+  env: string,
+  requestedDistinctId: string,
+  limit = 100,
+): Promise<ActorIdentity> {
+  const canonicalResult = await pool.query<{ distinct_id: string }>(
+    `SELECT poolstatis_resolve_actor($1::uuid, $2, $3) AS distinct_id`,
+    [projectId, env, requestedDistinctId],
+  );
+  const distinctId = canonicalResult.rows[0]!.distinct_id;
+  const [rawCountResult, rawResult, linksResult, conflictResult] = await Promise.all([
+    pool.query<{ count: string }>(
+      `SELECT count(DISTINCT distinct_id)::text AS count
+       FROM events
+       WHERE project_id = $1 AND env = $2
+         AND poolstatis_resolve_actor(project_id, env, distinct_id) = $3`,
+      [projectId, env, distinctId],
+    ),
+    pool.query<{ distinct_id: string }>(
+      `SELECT DISTINCT distinct_id
+       FROM events
+       WHERE project_id = $1 AND env = $2
+         AND poolstatis_resolve_actor(project_id, env, distinct_id) = $3
+       ORDER BY distinct_id
+       LIMIT $4`,
+      [projectId, env, distinctId, limit + 1],
+    ),
+    pool.query<ActorLink>(
+      `WITH RECURSIVE provenance AS (
+         SELECT l.*, ARRAY[l.source_distinct_id, l.target_distinct_id]::text[] AS path
+         FROM actor_links l
+         WHERE l.project_id = $1 AND l.env = $2 AND l.status = 'active'
+           AND l.target_distinct_id = $3
+         UNION ALL
+         SELECT l.*, ARRAY[l.source_distinct_id]::text[] || p.path
+         FROM actor_links l
+         JOIN provenance p ON p.source_distinct_id = l.target_distinct_id
+         WHERE l.project_id = $1 AND l.env = $2 AND l.status = 'active'
+           AND NOT l.source_distinct_id = ANY(p.path)
+       )
+       SELECT ${LINK_COLS}
+       FROM provenance
+       ORDER BY created_at, id
+       LIMIT $4`,
+      [projectId, env, distinctId, limit + 1],
+    ),
+    pool.query<{ ambiguous: boolean }>(
+      `WITH RECURSIVE seeds(actor) AS (
+         SELECT DISTINCT distinct_id
+         FROM events
+         WHERE project_id = $1 AND env = $2
+           AND poolstatis_resolve_actor(project_id, env, distinct_id) = $3
+         UNION SELECT $4::text
+       ), chain(seed, actor, path, cycle) AS (
+         SELECT actor, actor, ARRAY[actor]::text[], false FROM seeds
+         UNION ALL
+         SELECT chain.seed, links.target_distinct_id,
+                chain.path || links.target_distinct_id,
+                links.target_distinct_id = ANY(chain.path)
+         FROM chain
+         JOIN actor_links links
+           ON links.project_id = $1 AND links.env = $2
+          AND links.status = 'active'
+          AND links.source_distinct_id = chain.actor
+         WHERE NOT chain.cycle
+       )
+       SELECT COALESCE(bool_or(cycle), false) AS ambiguous FROM chain`,
+      [projectId, env, distinctId, requestedDistinctId],
+    ),
+  ]);
+  const rawActorCount = Number(rawCountResult.rows[0]?.count ?? 0);
+  const rawRows = rawResult.rows.slice(0, limit);
+  const links = linksResult.rows.slice(0, limit);
+  const ambiguous = conflictResult.rows[0]?.ambiguous === true;
+  return {
+    requested_distinct_id: requestedDistinctId,
+    distinct_id: distinctId,
+    status: ambiguous
+      ? 'ambiguous'
+      : links.length > 0 || rawActorCount > 1
+        ? 'linked'
+        : 'unknown',
+    raw_actor_count: rawActorCount,
+    raw_distinct_ids: rawRows.map((row) => row.distinct_id),
+    raw_distinct_ids_truncated: rawResult.rows.length > limit,
+    links,
+    links_truncated: linksResult.rows.length > limit,
+  };
 }
 
 async function appendAudit(

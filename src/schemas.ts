@@ -725,6 +725,30 @@ export const entitiesQuerySchema = z.object({
   env: z.string().default('prod'),
 });
 
+export const actorsQuerySchema = z.object({
+  kind: z.literal('actors'),
+  env: z.string().trim().min(1).max(100).default('prod'),
+  from: dateStr.optional(),
+  to: dateStr.nullable().optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+  cursor: z.string().trim().min(1).max(2000).optional(),
+  order: z.enum(['last_seen_desc', 'first_seen_desc', 'events_desc']).default('last_seen_desc'),
+  search: z.object({
+    kind: z.literal('exact_id'),
+    value: z.string().trim().min(1).max(200),
+  }).strict().optional(),
+  propertyFilters: z.array(propertyFilterSchema).max(20).default([]),
+  activityMetric: keySchema.optional(),
+}).strict();
+
+export const personQuerySchema = z.object({
+  env: z.string().trim().min(1).max(100).default('prod'),
+  from: dateStr.optional(),
+  to: dateStr.nullable().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().trim().min(1).max(2000).optional(),
+}).strict();
+
 // Retention: of the actors who did `start_metric` in a cohort bucket, how many
 // came back and did `return_metric` in each later bucket. Both reference
 // event-based registry metrics; the actor is distinct_id (the standard mandates
@@ -776,6 +800,7 @@ export const experienceSessionQuerySchema = z.object({
   kind: z.literal('experience_session'),
   surface: keySchema,
   session_id: z.string().min(1).max(200),
+  actor_id: z.string().trim().min(1).max(200).optional(),
   date_from: dateStr.default('-7d'),
   date_to: dateStr.nullable().optional(),
   limit: z.number().int().min(1).max(500).default(200),
@@ -799,6 +824,7 @@ export const querySchema = z.discriminatedUnion('kind', [
   pageEngagementQuerySchema,
   funnelQuerySchema,
   entitiesQuerySchema,
+  actorsQuerySchema,
   retentionQuerySchema,
   lifecycleQuerySchema,
   stickinessQuerySchema,
@@ -813,6 +839,8 @@ export type WebSessionQueryInput = z.infer<typeof webSessionQuerySchema>;
 export type PageEngagementQueryInput = z.infer<typeof pageEngagementQuerySchema>;
 export type FunnelQueryInput = z.infer<typeof funnelQuerySchema>;
 export type EntitiesQueryInput = z.infer<typeof entitiesQuerySchema>;
+export type ActorsQueryInput = z.infer<typeof actorsQuerySchema>;
+export type PersonQueryInput = z.infer<typeof personQuerySchema>;
 export type RetentionQueryInput = z.infer<typeof retentionQuerySchema>;
 export type LifecycleQueryInput = z.infer<typeof lifecycleQuerySchema>;
 export type StickinessQueryInput = z.infer<typeof stickinessQuerySchema>;

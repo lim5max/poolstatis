@@ -65,6 +65,20 @@ anonymous→identified flow поддерживается через `actor_links
 проверяется на циклы/конфликты и может быть отозвана. События не переписываются: canonical
 actor вычисляется при чтении, а создание/отзыв попадают в append-only `actor_link_audit`.
 
+Typed `actors` query агрегирует canonical population в bounded временном окне:
+first/last seen, total events, active days, registered-only top events и
+nullable trusted Browser session count. Это read model поверх immutable
+events, а не новая `users` table. `linked` доказывается active link provenance
+или несколькими raw IDs; без server-owned stable/anonymous provenance статус
+`unknown`, а обнаруженный конфликт даёт `ambiguous`.
+
+Person detail использует ту же canonical population, возвращает bounded raw
+IDs/link provenance и keyset-paginated registered activity. Arbitrary entity
+или event properties не становятся identity/pinned properties автоматически:
+без deterministic mapping, allowlist и masking policy они fail closed.
+GDPR/admin purge по `distinct_id` остаётся exact raw-ID удалением и никогда
+не расширяет blast radius на canonical actor.
+
 ## 3. Entities — «статичные» данные с состоянием
 
 Изменяемые объекты продукта: пользователи, аккаунты, документы — всё, у чего есть текущее состояние, а не поток фактов.

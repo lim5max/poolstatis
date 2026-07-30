@@ -51,8 +51,9 @@ Avoid: \`Signup\`, \`user_signed_up_event\`, \`click\`, \`track\`, \`event1\`.
 
 1. **\`distinct_id\` MUST be a stable user id** from the product's auth system —
    the same value every time that user acts. Never a per-session or random id.
-   (Until identity-merge ships, \`distinct_id\` *is* the actor: stability is
-   what makes retention, funnels and unique counts correct.)
+   When an anonymous ID must later resolve to an authenticated ID, create an
+   audited environment-scoped actor link. Queries resolve it at read time
+   without rewriting immutable events.
 2. **Money** goes in a numeric \`amount\` property, currency in \`currency\`:
    \`{ "amount": 49.0, "currency": "USD" }\`. Never bake the number into the event name.
 3. **Mutable state** (plan, role, lifecycle stage, seat count) belongs on the
@@ -197,7 +198,8 @@ needs a falsifiable \`hypothesis\` and an active registered outcome metric.
    or \`inconclusive\` plus a rationale. Conclusion freezes the observation window.
 
 Flags and experiments currently require stable authenticated \`distinct_id\`.
-Do not use temporary anonymous/session ids until actor identity merge ships.
+Do not use a session id as actor identity. Anonymous-to-authenticated identity
+must use an audited actor link, and the flag still needs the durable target ID.
 
 ---
 

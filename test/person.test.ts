@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { api, createTestEnv, type TestEnv } from './helpers.js';
+import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
 
 let env: TestEnv;
 const P = () => `/api/v1/projects/${env.projectSlug}`;
@@ -7,6 +7,14 @@ const enc = encodeURIComponent;
 
 beforeAll(async () => {
   env = await createTestEnv();
+  await activeMetric(env, {
+    key: 'app_opened',
+    source: { event: 'app.opened', filters: [] },
+  });
+  await activeMetric(env, {
+    key: 'doc_exported',
+    source: { event: 'doc.exported', filters: [] },
+  });
   await api(env, env.secretToken, 'POST', `${P()}/entity-types`, {
     name: 'user', description: 'End users, for the person summary + filter tests.',
   });
@@ -30,15 +38,22 @@ beforeAll(async () => {
 afterAll(() => env.close());
 
 describe('person summary endpoint', () => {
-  it('derives engagement stats + returns the identity entity', async () => {
+  it('derives canonical engagement stats and fails closed on arbitrary identity entities', async () => {
     const res = await api(env, env.secretToken, 'GET', `${P()}/persons/u_a?env=prod`);
     expect(res.status).toBe(200);
     expect(res.body.summary.total_events).toBe(4);
     expect(res.body.summary.distinct_events).toBe(2);
     expect(res.body.summary.first_seen).toBeTruthy();
     expect(res.body.summary.top_events[0]).toEqual({ event: 'app.opened', count: 3 });
-    expect(res.body.entity.properties.name).toBe('Ada');
-    expect(res.body.entity.entity_type).toBe('user');
+    expect(res.body.summary.session_count).toBeNull();
+    expect(res.body.entity).toBeNull();
+    expect(res.body.capabilities.identity_entity).toMatchObject({
+      available: false,
+      source: null,
+    });
+    expect(res.body.activity.events.every((event: any) =>
+      Object.keys(event.properties).length === 0
+    )).toBe(true);
   });
 
   it('returns a zeroed summary + null entity for an unknown actor', async () => {
@@ -47,6 +62,7 @@ describe('person summary endpoint', () => {
     expect(res.body.summary.total_events).toBe(0);
     expect(res.body.summary.first_seen).toBeNull();
     expect(res.body.entity).toBeNull();
+    expect(res.body.identity.status).toBe('unknown');
   });
 });
 

@@ -1,12 +1,19 @@
 import type pg from 'pg';
 import type {
   ActorSummary,
+  ActorActivityQuery,
+  ActorActivityResult,
+  ActorListItem,
+  ActorListRecord,
+  ActorsQuery,
+  ActorsResult,
   EntityStatusEvidence,
   EntityStatusEvidenceQuery,
   ExperimentResultsQuery,
   ExperimentVariantOutcome,
   ExperienceSessionEvent,
   ExperienceSessionQuery,
+  ExperienceSessionResult,
   EventStore,
   IdempotentAppend,
   EventNameStat,
@@ -916,20 +923,46 @@ export class PostgresEventStore implements EventStore {
     };
   }
 
-  async experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]> {
-    const { rows } = await this.pool.query<{ event: string; timestamp: Date; properties: Record<string, unknown> }>(
-      `SELECT event, "timestamp", properties
-       FROM events
-       WHERE project_id = $1 AND env = $2 AND session_id = $3
-         AND event_source = 'experience'
-         AND event IN ('experience.page_viewed', 'experience.element_clicked', 'experience.scroll_depth', 'experience.client_error')
-         AND properties->>'surface' = $4
-         AND "timestamp" >= $5 AND "timestamp" < $6
-       ORDER BY "timestamp", (properties->>'sequence')::int
-       LIMIT $7`,
-      [q.projectId, q.env, q.sessionId, q.surface, q.from, q.to, q.limit],
-    );
-    return rows.map((row) => toExperienceSessionEvent(row));
+  async experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionResult> {
+    const params: unknown[] = [
+      q.projectId, q.env, q.sessionId, q.surface, q.from, q.to,
+    ];
+    const actorFilter = q.actorId
+      ? ` AND poolstatis_resolve_actor(project_id, env, distinct_id)
+          = poolstatis_resolve_actor($1::uuid, $2, $${params.push(q.actorId)})`
+      : '';
+    const where = `project_id = $1 AND env = $2 AND session_id = $3
+      AND event_source = 'experience'
+      AND event IN ('experience.page_viewed', 'experience.element_clicked', 'experience.scroll_depth', 'experience.client_error')
+      AND properties->>'surface' = $4
+      AND "timestamp" >= $5 AND "timestamp" < $6${actorFilter}`;
+    const eventParams = [...params, q.limit];
+    const [actors, events] = await Promise.all([
+      this.pool.query<{ actor_id: string }>(
+        `SELECT DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id) AS actor_id
+         FROM events WHERE ${where}
+         ORDER BY actor_id
+         LIMIT 2`,
+        params,
+      ),
+      this.pool.query<{
+        event: string;
+        timestamp: Date;
+        properties: Record<string, unknown>;
+      }>(
+        `SELECT event, "timestamp", properties
+         FROM events
+         WHERE ${where}
+         ORDER BY "timestamp", (properties->>'sequence')::int,
+                  poolstatis_resolve_actor(project_id, env, distinct_id)
+         LIMIT $${eventParams.length}`,
+        eventParams,
+      ),
+    ]);
+    return {
+      actorIds: actors.rows.map((row) => row.actor_id),
+      events: events.rows.map((row) => toExperienceSessionEvent(row)),
+    };
   }
 
   async purge(projectId: string, env?: string, distinctId?: string): Promise<number> {
@@ -1026,6 +1059,304 @@ export class PostgresEventStore implements EventStore {
       sessions: Number(r.sessions),
       registered_share: Number(r.registered_share),
       top_events: top.rows.map((t) => ({ event: t.event, count: Number(t.count) })),
+    };
+  }
+
+  async actors(q: ActorsQuery): Promise<ActorsResult> {
+    const params: unknown[] = [q.projectId, q.env, q.from, q.to];
+    const windowWhere = [
+      'e.project_id = $1',
+      'e.env = $2',
+      'e."timestamp" >= $3',
+      'e."timestamp" < $4',
+    ];
+    let populationSql = 'SELECT DISTINCT actor_id FROM window_events';
+    if (q.activity) {
+      params.push(q.activity.event);
+      const activityWhere = [
+        `w.event = $${params.length}`,
+        ...compileFilters(q.activity.filters, 'w.properties', params),
+      ].join(' AND ');
+      populationSql = `SELECT DISTINCT w.actor_id
+        FROM window_events w WHERE ${activityWhere}`;
+    }
+    if (q.searchExactId) {
+      params.push(q.searchExactId);
+      populationSql = `SELECT actor_id FROM (${populationSql}) exact_population
+        WHERE actor_id = poolstatis_resolve_actor($1::uuid, $2, $${params.length})`;
+    }
+    const restrictPopulation = Boolean(q.activity || q.searchExactId);
+    const selectedEventsSql = restrictPopulation
+      ? `SELECT e.*, selected_raw.actor_id
+         FROM selected_raw
+         JOIN events e ON e.distinct_id = selected_raw.raw_id
+         WHERE ${windowWhere.join(' AND ')}`
+      : 'SELECT * FROM window_events';
+    const selectedRawSql = restrictPopulation
+      ? `SELECT actor_map.raw_id, actor_map.actor_id
+         FROM actor_map
+         JOIN population ON population.actor_id = actor_map.actor_id`
+      : 'SELECT raw_id, actor_id FROM actor_map';
+
+    const browserCondition = q.trustedBrowserSessions
+      ? `(w.registered = true
+          AND w.event_source = 'ingest'
+          AND w.event = 'page.viewed'
+          AND w.properties->>'$browser_context' = '1')`
+      : 'false';
+    const sortColumn = q.order === 'first_seen_desc'
+      ? 'first_seen'
+      : q.order === 'events_desc'
+        ? 'total_events'
+        : 'last_seen';
+    let keysetSql = '';
+    if (q.cursor) {
+      params.push(q.cursor.value, q.cursor.distinctId);
+      const valueParam = `$${params.length - 1}`;
+      const idParam = `$${params.length}`;
+      const cast = q.order === 'events_desc' ? '::int' : '::timestamptz';
+      keysetSql = `WHERE (
+        aggregates.${sortColumn} < ${valueParam}${cast}
+        OR (
+          aggregates.${sortColumn} = ${valueParam}${cast}
+          AND aggregates.distinct_id > ${idParam}
+        )
+      )`;
+    }
+    params.push(q.limit + 1);
+    const { rows } = await this.pool.query<{
+      distinct_id: string;
+      raw_actor_count: number;
+      first_seen: Date;
+      last_seen: Date;
+      total_events: number;
+      distinct_events: number;
+      active_days: number;
+      registered_share: number;
+      session_count: number | null;
+      top_events: Array<{ event: string; count: number }>;
+      identity_status: ActorListItem['identity_status'];
+    }>(
+      `WITH RECURSIVE raw_actors AS MATERIALIZED (
+         SELECT DISTINCT e.distinct_id
+         FROM events e
+         WHERE ${windowWhere.join(' AND ')}
+       ), actor_chain(raw_id, current_id, path, depth, cycle, linked) AS (
+         SELECT distinct_id, distinct_id, ARRAY[distinct_id]::text[], 0, false, false
+         FROM raw_actors
+         UNION ALL
+         SELECT chain.raw_id, links.target_distinct_id,
+                chain.path || links.target_distinct_id,
+                chain.depth + 1,
+                links.target_distinct_id = ANY(chain.path),
+                true
+         FROM actor_chain chain
+         JOIN actor_links links
+           ON links.project_id = $1 AND links.env = $2
+          AND links.status = 'active'
+          AND links.source_distinct_id = chain.current_id
+         WHERE NOT chain.cycle
+       ), actor_map AS MATERIALIZED (
+         SELECT DISTINCT ON (raw_id)
+                raw_id, current_id AS actor_id
+         FROM actor_chain
+         WHERE NOT cycle
+         ORDER BY raw_id, depth DESC, current_id
+       ), window_events AS MATERIALIZED (
+         SELECT e.*, actor_map.actor_id
+         FROM events e
+         JOIN actor_map ON actor_map.raw_id = e.distinct_id
+         WHERE ${windowWhere.join(' AND ')}
+       ), population AS (
+         ${populationSql}
+       ), selected_raw AS MATERIALIZED (
+         ${selectedRawSql}
+       ), selected_events AS MATERIALIZED (
+         ${selectedEventsSql}
+       ), identity_flags AS (
+         SELECT selected_raw.actor_id,
+                COALESCE(bool_or(actor_chain.cycle), false) AS ambiguous,
+                COALESCE(bool_or(actor_chain.linked), false) AS linked
+         FROM selected_raw
+         JOIN actor_chain ON actor_chain.raw_id = selected_raw.raw_id
+         GROUP BY selected_raw.actor_id
+       ), aggregates AS (
+         SELECT w.actor_id AS distinct_id,
+                count(DISTINCT w.distinct_id)::int AS raw_actor_count,
+                min(w."timestamp") AS first_seen,
+                max(w."timestamp") AS last_seen,
+                count(*)::int AS total_events,
+                count(DISTINCT w.event)::int AS distinct_events,
+                count(DISTINCT date_trunc('day', w."timestamp"))::int AS active_days,
+                COALESCE(avg(w.registered::int), 0)::float AS registered_share,
+                CASE
+                  WHEN count(*) FILTER (WHERE ${browserCondition}) > 0
+                    AND count(*) FILTER (
+                      WHERE ${browserCondition}
+                        AND (w.session_id IS NULL OR w.session_id = '')
+                    ) = 0
+                  THEN count(DISTINCT w.session_id) FILTER (WHERE ${browserCondition})::int
+                  ELSE NULL
+                END AS session_count
+         FROM selected_events w
+         GROUP BY w.actor_id
+       ), event_counts AS (
+         SELECT w.actor_id, w.event, count(*)::int AS count
+         FROM selected_events w
+         WHERE w.registered = true
+         GROUP BY w.actor_id, w.event
+       ), ranked_events AS (
+         SELECT actor_id, event, count,
+                row_number() OVER (
+                  PARTITION BY actor_id ORDER BY count DESC, event
+                ) AS rank
+         FROM event_counts
+       ), top_events AS (
+         SELECT actor_id,
+                jsonb_agg(jsonb_build_object('event', event, 'count', count)
+                  ORDER BY count DESC, event) AS events
+         FROM ranked_events
+         WHERE rank <= 8
+         GROUP BY actor_id
+       ), top_events_map AS (
+         SELECT COALESCE(
+           jsonb_object_agg(actor_id, events),
+           '{}'::jsonb
+         ) AS actors
+         FROM top_events
+       )
+       SELECT aggregates.*,
+              COALESCE(
+                top_events_map.actors -> aggregates.distinct_id,
+                '[]'::jsonb
+              ) AS top_events,
+              CASE
+                WHEN identity_flags.ambiguous THEN 'ambiguous'
+                WHEN aggregates.raw_actor_count > 1 OR identity_flags.linked THEN 'linked'
+                ELSE 'unknown'
+              END AS identity_status
+       FROM aggregates
+       JOIN identity_flags ON identity_flags.actor_id = aggregates.distinct_id
+       CROSS JOIN top_events_map
+       ${keysetSql}
+       ORDER BY aggregates.${sortColumn} DESC, aggregates.distinct_id
+       LIMIT $${params.length}`,
+      params,
+    );
+    const hasMore = rows.length > q.limit;
+    return {
+      actors: rows.slice(0, q.limit).map((row): ActorListRecord => ({
+        distinct_id: row.distinct_id,
+        raw_actor_count: Number(row.raw_actor_count),
+        first_seen: toIso(row.first_seen),
+        last_seen: toIso(row.last_seen),
+        total_events: Number(row.total_events),
+        distinct_events: Number(row.distinct_events),
+        active_days: Number(row.active_days),
+        registered_share: Number(row.registered_share),
+        session_count: row.session_count === null ? null : Number(row.session_count),
+        top_events: row.top_events.map((entry) => ({
+          event: entry.event,
+          count: Number(entry.count),
+        })),
+        pinned_properties: {},
+        identity_status: row.identity_status,
+      })),
+      hasMore,
+    };
+  }
+
+  async actorActivity(q: ActorActivityQuery): Promise<ActorActivityResult> {
+    const params: unknown[] = [q.projectId, q.env, q.distinctId, q.from, q.to];
+    let cursorSql = '';
+    if (q.cursor) {
+      params.push(
+        q.cursor.timestamp,
+        q.cursor.ingestedAt,
+        q.cursor.event,
+        q.cursor.rawDistinctId,
+        q.cursor.sessionId,
+        q.cursor.propertiesHash,
+        q.cursor.duplicateOrdinal,
+      );
+      const first = params.length - 6;
+      cursorSql = `WHERE (
+        "timestamp", ingested_at, event, raw_distinct_id,
+        session_key, properties_hash, duplicate_ordinal
+      ) < (
+        $${first}::timestamptz, $${first + 1}::timestamptz, $${first + 2},
+        $${first + 3}, $${first + 4}, $${first + 5}, $${first + 6}::int
+      )`;
+    }
+    params.push(q.limit + 1);
+    const { rows } = await this.pool.query<{
+      event: string;
+      timestamp: Date;
+      ingested_at: Date;
+      distinct_id: string;
+      raw_distinct_id: string;
+      session_id: string | null;
+      session_key: string;
+      properties_hash: string;
+      duplicate_ordinal: number;
+      env: string;
+    }>(
+      `WITH base AS (
+         SELECT e.event, e."timestamp", e.ingested_at,
+                poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id) AS distinct_id,
+                e.distinct_id AS raw_distinct_id,
+                e.session_id,
+                COALESCE(e.session_id, '') AS session_key,
+                md5(e.properties::text) AS properties_hash,
+                e.env
+         FROM events e
+         WHERE e.project_id = $1 AND e.env = $2
+           AND poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id)
+             = poolstatis_resolve_actor($1::uuid, $2, $3)
+           AND e."timestamp" >= $4 AND e."timestamp" < $5
+           AND e.registered = true
+       ), numbered AS (
+         SELECT base.*,
+                row_number() OVER (
+                  PARTITION BY "timestamp", ingested_at, event, raw_distinct_id,
+                               session_key, properties_hash
+                  ORDER BY raw_distinct_id
+                )::int AS duplicate_ordinal
+         FROM base
+       )
+       SELECT * FROM numbered
+       ${cursorSql}
+       ORDER BY "timestamp" DESC, ingested_at DESC, event DESC,
+                raw_distinct_id DESC, session_key DESC, properties_hash DESC,
+                duplicate_ordinal DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    const visible = rows.slice(0, q.limit);
+    const last = visible.at(-1);
+    return {
+      events: visible.map((row) => ({
+        event: row.event,
+        timestamp: toIso(row.timestamp),
+        distinct_id: row.distinct_id,
+        raw_distinct_id: row.raw_distinct_id,
+        session_id: row.session_id,
+        properties: {},
+        registered: true,
+        env: row.env,
+      })),
+      hasMore: rows.length > q.limit,
+      ...(last ? {
+        lastKey: {
+          timestamp: toIso(last.timestamp),
+          ingestedAt: toIso(last.ingested_at),
+          event: last.event,
+          rawDistinctId: last.raw_distinct_id,
+          sessionId: last.session_key,
+          propertiesHash: last.properties_hash,
+          duplicateOrdinal: Number(last.duplicate_ordinal),
+        },
+      } : {}),
     };
   }
 

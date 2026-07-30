@@ -243,8 +243,10 @@ variants `{key, rollout_percentage, payload?}`. Проценты не могут
 `POST /query` поддерживает `kind: "interaction_map"` с `{surface, date_from,
 date_to?, grid?, env?}` и возвращает нормализованные click cells + labelled
 totals. `kind: "experience_session"` принимает `{surface, session_id,
-date_from?, date_to?, limit?, env?}` и возвращает privacy-safe timeline с
-summary. Оба запроса учитывают только события, принятые typed Experience
+actor_id?, date_from?, date_to?, limit?, env?}` и возвращает privacy-safe
+timeline с summary и canonical actor/link provenance. Повторно использованный
+`session_id` не смешивает людей: без `actor_id` несколько найденных акторов
+дают `experience_session_actor_ambiguous`. Оба запроса учитывают только события, принятые typed Experience
 endpoint; generic `/i/v1/events` с похожим именем не попадает в эти результаты.
 Как и любой `pk_` write key, typed endpoint не является anti-fraud границей:
 доверяй данным как product telemetry, а не как доказательству действий пользователя.
@@ -281,6 +283,20 @@ endpoint; generic `/i/v1/events` с похожим именем не попад�
   "order_by": { "property": "seats", "dir": "desc" },
   "limit": 50
 }
+
+// Actors: canonical event-derived population, not a users table
+{
+  "kind": "actors",
+  "env": "prod",
+  "from": "-30d",                       // default: trailing 30 days
+  "to": null,
+  "limit": 50,                          // max 100
+  "cursor": null,                       // opaque keyset cursor
+  "order": "last_seen_desc",            // first_seen_desc | events_desc
+  "search": { "kind": "exact_id", "value": "user-123" },
+  "activityMetric": "activation_started", // registry key, never raw event
+  "propertyFilters": []
+}
 ```
 
 Операторы фильтров: `eq, ne, gt, gte, lt, lte, in, contains, is_set, is_not_set`.
@@ -288,6 +304,28 @@ endpoint; generic `/i/v1/events` с похожим именем не попад�
 Ответ любого запроса включает `meta`: `{computed_at, date_range, sampling: null}` — задел под кеширование и сэмплирование без смены контракта.
 
 Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки.
+
+`actors` также принимает только registry key в `activityMetric`. Search —
+только exact ID; substring scan отсутствует. Пока нет детерминированного
+trusted canonical actor-property source, `propertyFilters` возвращает typed
+`actors_property_filters_unavailable`, а `pinned_properties` остаётся `{}` с
+capability/provenance metadata. `linked` требует active server-owned link или
+несколько observed raw IDs; без explicit stable/anonymous provenance статус
+равен `unknown`. `top_events` bounded и включает только event names,
+помеченные `registered` при ingest. `session_count` равен `null`, если strict
+canonical Browser session evidence для actor/window не доказан.
+
+`GET /api/v1/projects/{slug}/persons/{distinctId}` принимает `env`, `from`,
+`to`, `limit≤100`, opaque `cursor`. Он возвращает canonical `distinct_id`,
+requested ID, bounded raw IDs, active link provenance и keyset activity всей
+resolved population. Activity показывает только registered event names, а
+properties fail closed в `{}`. Identity entity отсутствует, пока не появится
+явное deterministic entity-to-actor правило.
+
+Destructive purge остаётся отдельным exact-raw-ID действием:
+`POST /data/purge` с `scope:"events"` и `distinct_id` не расширяется до
+canonical actor или связанных raw IDs. Response явно содержит
+`identity_scope:"exact_raw_distinct_id"` и `canonical_expansion:false`.
 
 `query_funnel` возвращает семантику каждого шага вместе с числами:
 

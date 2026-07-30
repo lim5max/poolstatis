@@ -16,7 +16,7 @@ import {
   defineFunnel, deleteFunnel, deleteMetric, deprecateMetric, listFunnels, listMetrics,
   registerEntityType, registerMetric, updateMetric,
 } from '../services/registry.js';
-import { deleteEntities, getIdentityEntity, upsertEntities } from '../services/entities.js';
+import { deleteEntities, upsertEntities } from '../services/entities.js';
 import { createInsight, listInsights, setInsightStatus } from '../services/insights.js';
 import { clearIngestWarnings, listIngestWarnings, type WarningKind } from '../services/warnings.js';
 import { listDataQualityIssues } from '../services/dataQuality.js';
@@ -32,6 +32,7 @@ import {
   archiveExperienceSurface, captureExperienceEvents, createExperienceSurface, listExperienceSurfaces,
 } from '../services/experience.js';
 import { createActorLink, listActorLinks, revokeActorLink } from '../services/identity.js';
+import { getPerson } from '../services/person.js';
 import {
   createPropertyDefinition, listPropertyDefinitions, updatePropertyDefinition,
   type PropertyDefinition,
@@ -61,7 +62,7 @@ import {
 import {
   deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
   actorLinkSchema, browserAnalyticsSetupSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
-  querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
+  personQuerySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
 } from '../schemas.js';
 
@@ -781,7 +782,16 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     }
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
-    return { events_deleted, entities_deleted, env: body.env };
+    return {
+      events_deleted,
+      entities_deleted,
+      env: body.env,
+      ...(body.distinct_id ? {
+        distinct_id: body.distinct_id,
+        identity_scope: 'exact_raw_distinct_id',
+        canonical_expansion: false,
+      } : {}),
+    };
   });
 
   app.post('/api/v1/projects/:slug/query', async (req) => {
@@ -1309,12 +1319,13 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const { distinctId } = req.params as { distinctId: string };
-    const env = (req.query as { env?: string }).env ?? 'prod';
-    const [summary, entity] = await Promise.all([
-      ctx.eventStore.actorSummary(project.id, env, distinctId),
-      getIdentityEntity(ctx.pool, project.id, env, distinctId),
-    ]);
-    return { distinct_id: distinctId, env, summary, entity };
+    return getPerson(
+      ctx.pool,
+      ctx.eventStore,
+      project.id,
+      distinctId,
+      personQuerySchema.parse(req.query),
+    );
   });
 
   app.get('/api/v1/projects/:slug/ingest-warnings', async (req) => {

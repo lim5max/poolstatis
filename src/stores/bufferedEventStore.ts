@@ -1,12 +1,16 @@
 import { ApiError } from '../errors.js';
 import type {
   ActorSummary,
+  ActorActivityQuery,
+  ActorActivityResult,
+  ActorsQuery,
+  ActorsResult,
   EntityStatusEvidence,
   EntityStatusEvidenceQuery,
   ExperimentResultsQuery,
   ExperimentVariantOutcome,
-  ExperienceSessionEvent,
   ExperienceSessionQuery,
+  ExperienceSessionResult,
   EventNameStat,
   EventStatsQuery,
   EventStore,
@@ -185,7 +189,7 @@ export class BufferedEventStore implements EventStore {
     return this.inner.interactionMap(q);
   }
 
-  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]> {
+  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionResult> {
     return this.inner.experienceSession(q);
   }
 
@@ -219,6 +223,14 @@ export class BufferedEventStore implements EventStore {
 
   actorSummary(projectId: string, env: string, distinctId: string): Promise<ActorSummary> {
     return this.inner.actorSummary(projectId, env, distinctId);
+  }
+
+  actors(q: ActorsQuery): Promise<ActorsResult> {
+    return this.inner.actors(q);
+  }
+
+  actorActivity(q: ActorActivityQuery): Promise<ActorActivityResult> {
+    return this.inner.actorActivity(q);
   }
 
   private scheduleFlush(): void {
