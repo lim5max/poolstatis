@@ -2,6 +2,9 @@ name: Publish MCP package
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/event-backfill-revisions
 
 permissions:
   contents: read
@@ -9,7 +12,7 @@ permissions:
 
 jobs:
   publish:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/event-backfill-revisions'
     runs-on: ubuntu-latest
     services:
       postgres:
