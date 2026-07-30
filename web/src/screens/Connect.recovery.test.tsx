@@ -87,17 +87,29 @@ describe('hosted connection recovery', () => {
     await waitFor(() => expect(store.connectHosted).toHaveBeenCalledOnce());
   });
 
-  it('shows sign in only after auth resolves unauthenticated', () => {
+  it('starts sign in automatically after auth resolves unauthenticated', async () => {
     auth.isAuthenticated = false;
     auth.isLoading = true;
+    auth.login.mockResolvedValue(undefined);
     const view = render(<HostedConnect />);
 
     auth.isLoading = false;
     view.rerender(<HostedConnect />);
 
-    expect(screen.queryByTestId('auth-boot-shell')).not.toBeInTheDocument();
-    expect(screen.getByText('Sign in to your workspace.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to sign in' })).toBeEnabled();
+    expect(screen.getByTestId('auth-boot-shell')).toBeInTheDocument();
+    expect(screen.queryByText('Sign in to your workspace.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue to sign in' })).not.toBeInTheDocument();
+    await waitFor(() => expect(auth.login).toHaveBeenCalledOnce());
+  });
+
+  it('starts one automatic sign in under StrictMode', async () => {
+    auth.isAuthenticated = false;
+    auth.login.mockResolvedValue(undefined);
+
+    render(<StrictMode><HostedConnect /></StrictMode>);
+
+    await waitFor(() => expect(auth.login).toHaveBeenCalledOnce());
+    expect(screen.getByTestId('auth-boot-shell')).toBeInTheDocument();
   });
 
   it('keeps a deep-link restore neutral while the hosted workspace request is pending', async () => {

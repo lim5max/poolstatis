@@ -18,7 +18,7 @@ export const hostedAuthConfig = {
 
 export const hostedAuthScope = 'openid profile email offline_access poolstatis:customer';
 export const hostedSessionMarkerKey = 'poolstatis.customer.sso';
-export const hostedLogoutUrl = 'https://poolstatis.xyz/login';
+export const hostedLogoutUrl = 'https://auth.poolstatis.xyz/login';
 const hostedRestoreMarkerKey = 'poolstatis.customer.restore';
 const callbackPromises = new WeakMap<UserManager, Promise<User>>();
 export const hostedAuthEnabled = Boolean(
