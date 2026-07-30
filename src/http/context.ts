@@ -11,6 +11,9 @@ import { QueryService } from '../services/query.js';
 import { QueryCache, type QueryCacheOptions } from '../services/queryCache.js';
 import { PostHogAdapter } from '../services/posthog.js';
 import { WebhookService } from '../services/webhooks.js';
+import type { OutboundPolicyOptions } from '../security/outbound.js';
+import { LocalArtifactStore, type ArtifactStore } from '../stores/artifactStore.js';
+import type { CountryResolver } from '../services/country.js';
 
 /** Shared service wiring for the HTTP server, CLI, and tests. */
 export interface AppContext {
@@ -20,29 +23,38 @@ export interface AppContext {
   query: QueryService;
   posthog: PostHogAdapter;
   webhooks: WebhookService;
+  artifacts: ArtifactStore;
 }
 
 export interface CreateContextOptions {
   ingestBuffer?: BufferedEventStoreOptions | false;
+  manageEventPartitions?: boolean;
   queryCache?: QueryCacheOptions | false;
   connectorEncryptionKey?: string;
+  outboundPolicy?: OutboundPolicyOptions;
+  artifactStore?: ArtifactStore;
+  artifactDir?: string;
+  countryAttribution?: CountryResolver['attribution'];
 }
 
 export function createContext(pool: pg.Pool, options: CreateContextOptions = {}): AppContext {
-  const rawEventStore = new PostgresEventStore(pool);
+  const rawEventStore = new PostgresEventStore(pool, {
+    managePartitions: options.manageEventPartitions ?? true,
+  });
   const eventStore = options.ingestBuffer === false
     ? rawEventStore
     : new BufferedEventStore(rawEventStore, options.ingestBuffer ?? DEFAULT_BUFFERED_EVENT_STORE_OPTIONS);
   const queryCache = options.queryCache === false
     ? undefined
     : new QueryCache(options.queryCache ?? { ttlMs: 1_000, maxEntries: 1_000 });
-  const posthog = new PostHogAdapter(pool, options.connectorEncryptionKey);
+  const posthog = new PostHogAdapter(pool, options.connectorEncryptionKey, options.outboundPolicy);
   return {
     pool,
     eventStore,
     ingest: new IngestService(pool, eventStore),
-    query: new QueryService(pool, eventStore, queryCache, posthog),
+    query: new QueryService(pool, eventStore, queryCache, posthog, options.countryAttribution),
     posthog,
-    webhooks: new WebhookService(pool, options.connectorEncryptionKey),
+    webhooks: new WebhookService(pool, options.connectorEncryptionKey, options.outboundPolicy),
+    artifacts: options.artifactStore ?? new LocalArtifactStore(options.artifactDir ?? './data/experience-artifacts'),
   };
 }

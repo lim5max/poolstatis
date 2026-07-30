@@ -25,7 +25,7 @@ try {
     orgId: org.id, projectId: project.id, kind: 'secret', label: 'bootstrap',
   });
   const personal = await createApiKey(pool, {
-    orgId: org.id, projectId: null, kind: 'personal', label: 'bootstrap',
+    orgId: org.id, projectId: null, kind: 'personal', label: 'bootstrap', legacySelfHost: true,
   });
 
   console.log(`org:        ${orgName} (${org.id})`);

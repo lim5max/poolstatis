@@ -96,12 +96,13 @@ describe('BufferedEventStore', () => {
     const originalAppend = delegate.append.bind(delegate);
     let calls = 0;
     delegate.append = async (events) => {
-      await originalAppend(events);
+      const result = await originalAppend(events);
       calls += 1;
       if (calls === 1) {
         firstStarted();
         await firstGate;
       }
+      return result;
     };
     const store = new BufferedEventStore(delegate, {
       maxEvents: 2,
@@ -128,6 +129,7 @@ describe('BufferedEventStore', () => {
       delegate.appends.push(events);
       started();
       await gate;
+      return { inserted: events.length };
     };
     const store = new BufferedEventStore(delegate, {
       maxEvents: 2,
@@ -158,13 +160,13 @@ describe('BufferedEventStore', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const started = new Promise<void>((resolve) => { twoStarted = resolve; });
     const delegate = fakeEventStore();
-    delegate.appendIdempotent = async () => {
+    delegate.appendIdempotent = async (batch) => {
       active += 1;
       peak = Math.max(peak, active);
       if (active === 2) twoStarted();
       await gate;
       active -= 1;
-      return true;
+      return { inserted: batch.events.length };
     };
     const store = new BufferedEventStore(delegate, {
       maxEvents: 2,
@@ -183,7 +185,9 @@ describe('BufferedEventStore', () => {
     } satisfies Partial<ApiError>);
 
     release();
-    await expect(Promise.all([first, second, queued])).resolves.toEqual([true, true, true]);
+    await expect(Promise.all([first, second, queued])).resolves.toEqual([
+      { inserted: 1 }, { inserted: 1 }, { inserted: 1 },
+    ]);
     expect(peak).toBe(2);
   });
 
@@ -191,7 +195,7 @@ describe('BufferedEventStore', () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const delegate = fakeEventStore();
-    delegate.appendIdempotent = async () => { await gate; return true; };
+    delegate.appendIdempotent = async (batch) => { await gate; return { inserted: batch.events.length }; };
     const store = new BufferedEventStore(delegate, {
       maxEvents: 2,
       maxDelayMs: 10,
@@ -219,6 +223,7 @@ function fakeEventStore(options: { fail?: Error } = {}): FakeEventStore {
     append: async (events: StorableEvent[]) => {
       appends.push(events);
       if (options.fail) throw options.fail;
+      return { inserted: events.length };
     },
     trend: vi.fn(),
     funnel: vi.fn(),

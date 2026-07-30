@@ -25,6 +25,19 @@ export interface IdempotentAppend {
   events: StorableEvent[];
 }
 
+/** Durable append outcome. `inserted` is the exact number of event rows committed. */
+export interface AppendResult {
+  inserted: number;
+  duplicate?: boolean;
+  warnings?: UsageWarning[];
+}
+
+export interface UsageWarning {
+  meter: 'events_stored';
+  threshold: number;
+  quantity: number;
+}
+
 export interface TrendQuery {
   projectId: string;
   env: string;
@@ -44,6 +57,121 @@ export interface TrendPoint {
   bucket: string; // ISO timestamp of bucket start
   value: number;
   breakdown_value?: string;
+}
+
+export interface WebAnalyticsQuery {
+  projectId: string;
+  env: string;
+  event: string;
+  filters: PropertyFilter[];
+  from: Date;
+  to: Date;
+  dimensions: Array<{ key: string; property: string; missingValue: string }>;
+  keyMetric?: FunnelStepQuery;
+}
+
+export interface WebAnalyticsCounts {
+  visitors: number;
+  sessions: number;
+  page_views: number;
+}
+
+export interface WebAnalyticsResult {
+  summary: WebAnalyticsCounts;
+  engagement: WebEngagementSummary;
+  breakdowns: Record<string, Array<WebAnalyticsCounts & { value: string }>>;
+  truncatedDimensions: string[];
+}
+
+export interface WebEngagementSummary {
+  measured_sessions: number;
+  incomplete_sessions: number;
+  unknown_sessions: number;
+  engaged_sessions: number;
+  bounce_sessions: number;
+  measured_session_coverage: number | null;
+  engaged_rate: number | null;
+  bounce_rate: number | null;
+  single_page_sessions: number;
+  timed_page_views: number;
+  total_page_views: number;
+  timed_page_coverage: number | null;
+  foreground_ms: number;
+  session_span_ms: number;
+}
+
+export interface WebEngagementBaseQuery {
+  projectId: string;
+  env: string;
+  event: string;
+  filters: PropertyFilter[];
+  from: Date;
+  to: Date;
+  keyMetric?: FunnelStepQuery;
+}
+
+export interface WebSessionsQuery extends WebEngagementBaseQuery {
+  limit: number;
+}
+
+export interface WebSessionQuery extends WebEngagementBaseQuery {
+  sessionId: string;
+  actorId?: string;
+  pageLimit: number;
+}
+
+export interface PageEngagementQuery extends WebEngagementBaseQuery {
+  pageViewId: string;
+  actorId?: string;
+}
+
+export interface WebPageEngagement {
+  page_view_id: string;
+  session_id: string;
+  actor_id: string;
+  path: string;
+  viewed_at: string;
+  last_snapshot_at: string | null;
+  sequence: number | null;
+  foreground_ms: number | null;
+  elapsed_ms: number | null;
+  max_scroll_pct: number | null;
+  interaction_count: number | null;
+  reason: string | null;
+  timed: boolean;
+  complete: boolean;
+}
+
+export interface WebSessionSummary {
+  session_id: string;
+  actor_id: string;
+  started_at: string;
+  ended_at: string;
+  page_views: number;
+  timed_page_views: number;
+  foreground_ms: number;
+  session_span_ms: number;
+  engaged: boolean | null;
+  bounce: boolean | null;
+  single_page: boolean;
+  complete: boolean;
+}
+
+export interface WebSessionsResult {
+  sessions: WebSessionSummary[];
+  total: number;
+}
+
+export interface WebSessionResult {
+  summary: WebSessionSummary | null;
+  pages: WebPageEngagement[];
+  total: number;
+  ambiguous_actor: boolean;
+}
+
+export interface WebPageEngagementResult {
+  page: WebPageEngagement | null;
+  ambiguous_actor: boolean;
 }
 
 export interface FunnelStepQuery {
@@ -270,7 +398,7 @@ export interface ExperienceSessionQuery {
 
 export interface ExperienceSessionEvent {
   timestamp: string;
-  kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
+  kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'section_exposed' | 'client_error';
   route: string;
   sequence: number;
   label?: string;
@@ -278,6 +406,49 @@ export interface ExperienceSessionEvent {
   y?: number;
   depth?: number;
   error_type?: 'error' | 'unhandled_rejection';
+  section?: string;
+  top?: number;
+}
+
+export interface VisualExperienceQuery {
+  projectId: string;
+  env: string;
+  surface: string;
+  route: string;
+  version: string;
+  device: 'desktop' | 'mobile';
+  viewportWidth?: number;
+  viewportHeight?: number;
+  documentWidth?: number;
+  documentHeight?: number;
+  from: Date;
+  to: Date;
+  grid: number;
+}
+
+export interface VisualExperienceResult {
+  summary: {
+    events: number;
+    page_views: number;
+    sessions: number;
+    actors: number;
+    clicks: number;
+    max_document_width: number;
+    max_document_height: number;
+  };
+  click_cells: Array<{ x: number; y: number; count: number; sessions: number; actors: number }>;
+  click_labels: Array<{ label: string; count: number; sessions: number; actors: number }>;
+  click_labels_truncated: boolean;
+  scroll_coverage: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+  sections: Array<{
+    section: string;
+    top: number;
+    sessions: number;
+    actors: number;
+    percentage: number;
+    dropoff_percentage: number;
+  }>;
+  sections_truncated: boolean;
 }
 
 /**
@@ -286,10 +457,14 @@ export interface ExperienceSessionEvent {
  * ClickHouse — that constraint is what keeps the Query DSL small.
  */
 export interface EventStore {
-  append(events: StorableEvent[]): Promise<void>;
-  /** Returns false when the batch was already durably appended. */
-  appendIdempotent(batch: IdempotentAppend): Promise<boolean>;
+  append(events: StorableEvent[]): Promise<AppendResult>;
+  /** Returns `duplicate` when the batch was already durably appended. */
+  appendIdempotent(batch: IdempotentAppend): Promise<AppendResult>;
   trend(q: TrendQuery): Promise<TrendPoint[]>;
+  webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult>;
+  webSessions(q: WebSessionsQuery): Promise<WebSessionsResult>;
+  webSession(q: WebSessionQuery): Promise<WebSessionResult>;
+  pageEngagement(q: PageEngagementQuery): Promise<WebPageEngagementResult>;
   funnel(q: FunnelQuery): Promise<number[]>; // actor count per step
   retention(q: RetentionQuery): Promise<RetentionCohort[]>;
   lifecycle(q: IntervalActivityQuery): Promise<LifecyclePoint[]>;
@@ -297,6 +472,8 @@ export interface EventStore {
   experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]>;
   interactionMap(q: InteractionMapQuery): Promise<InteractionMapResult>;
   experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]>;
+  experienceLastCaptures(projectId: string, env: string, surfaces: string[]): Promise<Record<string, string>>;
+  visualExperience(q: VisualExperienceQuery): Promise<VisualExperienceResult>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;

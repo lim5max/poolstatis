@@ -46,11 +46,15 @@ describe('browser experience surfaces and ingest', () => {
     expect(events.body.events).toEqual(expect.arrayContaining([
       expect.objectContaining({
         event: 'experience.element_clicked', session_id: 'session-1', registered: true,
-        properties: { surface: 'checkout', route: 'checkout', sequence: 2, label: 'pay_now', x: 0.25, y: 0.5 },
+        properties: expect.objectContaining({
+          surface: 'checkout', route: 'checkout', sequence: 2, label: 'pay_now', x: 0.25, y: 0.5,
+        }),
       }),
       expect.objectContaining({
         event: 'experience.client_error',
-        properties: { surface: 'checkout', route: 'checkout', sequence: 4, error_type: 'unhandled_rejection' },
+        properties: expect.objectContaining({
+          surface: 'checkout', route: 'checkout', sequence: 4, error_type: 'unhandled_rejection',
+        }),
       }),
     ]));
 
@@ -72,6 +76,12 @@ describe('browser experience surfaces and ingest', () => {
       cells: [{ x: 1, y: 2, count: 1, actors: 1 }],
       labels: [{ label: 'pay_now', count: 1, actors: 1 }],
     }));
+
+    const surfaces = await api(env, env.secretToken, 'GET', `${P()}/experience/surfaces?env=prod`);
+    expect(surfaces.status).toBe(200);
+    expect(surfaces.body.surfaces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'checkout', last_capture_at: expect.any(String) }),
+    ]));
 
     const session = await api(env, env.secretToken, 'POST', `${P()}/query`, {
       kind: 'experience_session', surface: 'checkout', session_id: 'session-1', date_from: '-1d', env: 'prod',

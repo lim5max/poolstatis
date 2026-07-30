@@ -11,6 +11,21 @@ export interface JwtAuthOptions {
   audience: string;
   jwksUri?: string;
   jwks?: () => Promise<JSONWebKeySet> | JSONWebKeySet;
+  claims?: {
+    email: string;
+    emailVerified: string;
+    displayName: string;
+    picture: string;
+  };
+  connectionStrategy?: string;
+  /** Exact OAuth client ids accepted in the JWT `azp` claim. */
+  allowedClientIds?: string[];
+  /** OAuth scopes that must all be present in the space-delimited `scope` claim. */
+  requiredScopes?: string[];
+  /** Explicit operator opt-in for adopting pre-017 rows with no issuer binding. */
+  legacyIssuer?: string | null;
+  /** Fail closed until an external hosted policy is durably activated. */
+  requireOrganizationPolicy?: boolean;
 }
 
 export interface AuthContext {
@@ -23,6 +38,35 @@ export interface AuthContext {
   userId?: string;
   userEmail?: string | null;
   userRole?: 'owner' | 'admin' | 'member';
+  user?: {
+    id: string;
+    email: string | null;
+    emailVerified: boolean;
+    displayName: string | null;
+    picture: string | null;
+    connectionStrategy: string;
+  };
+}
+
+const standardClaimNames = {
+  email: 'email',
+  emailVerified: 'email_verified',
+  displayName: 'name',
+  picture: 'picture',
+};
+
+function stringClaim(payload: Record<string, unknown>, name: string): string | null {
+  const value = payload[name];
+  return typeof value === 'string' ? value : null;
+}
+
+function verifiedEmailClaim(payload: Record<string, unknown>, name: string): string | null {
+  const email = stringClaim(payload, name)?.trim();
+  return email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+function hostedUnauthorized(): ApiError {
+  return new ApiError(401, 'unauthorized', 'authentication failed');
 }
 
 function bearer(header: string | undefined): string {
@@ -52,21 +96,51 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
     verifierCache.set(options, key);
   }
   let payload;
+  const strictTokenPolicy = (options.allowedClientIds?.length ?? 0) > 0
+    || (options.requiredScopes?.length ?? 0) > 0;
   try {
     const verified = await jwtVerify(token, key, {
       issuer: options.issuer,
       audience: options.audience,
+      requiredClaims: strictTokenPolicy ? ['sub', 'exp', 'iat'] : ['sub', 'exp'],
     });
     payload = verified.payload;
   } catch {
-    throw unauthorized('invalid hosted auth token');
+    throw hostedUnauthorized();
   }
-  if (!payload.sub) throw unauthorized('hosted auth token is missing subject');
+  if (typeof payload.sub !== 'string' || !payload.sub.trim()) throw hostedUnauthorized();
+  if (strictTokenPolicy) {
+    if (!Number.isInteger(payload.iat) || (payload.iat as number) <= 0) throw hostedUnauthorized();
+    const authorizedParty = typeof payload.azp === 'string' ? payload.azp.trim() : '';
+    if (!authorizedParty || !options.allowedClientIds?.includes(authorizedParty)) {
+      throw hostedUnauthorized();
+    }
+    if (typeof payload.scope !== 'string') throw hostedUnauthorized();
+    const scopes = new Set(payload.scope.split(/\s+/).filter(Boolean));
+    if (!options.requiredScopes?.every((scope) => scopes.has(scope))) {
+      throw hostedUnauthorized();
+    }
+  }
+  const claims = options.claims ?? standardClaimNames;
+  const email = verifiedEmailClaim(payload, claims.email);
+  if (payload[claims.emailVerified] !== true || !email) {
+    throw new ApiError(
+      403,
+      'email_verification_required',
+      'email verification is required',
+      'verify the email address with your identity provider before signing in',
+    );
+  }
   const account = await getOrCreateAuthenticatedAccount(pool, {
+    issuer: options.issuer,
     subject: payload.sub,
-    email: typeof payload.email === 'string' ? payload.email : null,
-    name: typeof payload.name === 'string' ? payload.name : null,
-    pictureUrl: typeof payload.picture === 'string' ? payload.picture : null,
+    email,
+    emailVerified: true,
+    displayName: stringClaim(payload, claims.displayName),
+    pictureUrl: stringClaim(payload, claims.picture),
+    connectionStrategy: options.connectionStrategy ?? 'oidc',
+    legacyIssuer: options.legacyIssuer ?? null,
+    requireOrganizationPolicy: options.requireOrganizationPolicy ?? false,
   });
   return {
     keyId: null,
@@ -77,6 +151,14 @@ async function authenticateJwt(pool: pg.Pool, token: string, options: JwtAuthOpt
     userId: account.user.id,
     userEmail: account.user.email,
     userRole: account.organization.role,
+    user: {
+      id: account.user.id,
+      email: account.user.email,
+      emailVerified: account.user.email_verified,
+      displayName: account.user.display_name,
+      picture: account.user.picture_url,
+      connectionStrategy: account.user.connection_strategy,
+    },
   };
 }
 
@@ -87,20 +169,43 @@ export async function authenticate(
 ): Promise<AuthContext> {
   const token = bearer(header);
   const { rows } = await pool.query(
-    `SELECT id, org_id, project_id, kind, env FROM api_keys
-     WHERE token_hash = $1 AND revoked_at IS NULL`,
+    `SELECT k.id, k.org_id, k.project_id, k.kind, k.env, k.issued_by_user_id,
+            om.role AS issued_user_role
+     FROM api_keys k
+     LEFT JOIN organization_members om
+       ON om.org_id = k.org_id AND om.user_id = k.issued_by_user_id
+     WHERE k.token_hash = $1 AND k.revoked_at IS NULL`,
     [hashToken(token)],
   );
   if (!rows[0]) {
     if (jwtOptions) return authenticateJwt(pool, token, jwtOptions);
     throw unauthorized('unknown or revoked API key');
   }
+  const key = rows[0];
+  if (key.kind === 'personal' && !key.issued_by_user_id && jwtOptions) {
+    throw unauthorized('ownerless personal tokens are not accepted by hosted authentication');
+  }
+  // NULL owner is compatible only for self-host mode (without hosted JWT
+  // auth). Hosted personal tokens require a current membership.
+  if (key.kind === 'personal' && key.issued_by_user_id && !key.issued_user_role) {
+    throw unauthorized('personal token owner no longer belongs to this organization');
+  }
+  if (key.kind === 'personal') {
+    await pool.query(
+      'UPDATE api_keys SET last_used_at = now() WHERE id = $1 AND revoked_at IS NULL',
+      [key.id],
+    );
+  }
   return {
-    keyId: rows[0].id,
-    orgId: rows[0].org_id,
-    projectId: rows[0].project_id,
-    kind: rows[0].kind,
-    env: rows[0].env,
+    keyId: key.id,
+    orgId: key.org_id,
+    projectId: key.project_id,
+    kind: key.kind,
+    env: key.env,
+    ...(key.issued_by_user_id && key.issued_user_role ? {
+      userId: key.issued_by_user_id as string,
+      userRole: key.issued_user_role as NonNullable<AuthContext['userRole']>,
+    } : {}),
   };
 }
 

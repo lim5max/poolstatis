@@ -28,4 +28,9 @@ export default defineConfig({
       '/health': { target: API_TARGET, changeOrigin: true },
     },
   },
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/test-setup.ts',
+    globals: true,
+  },
 });

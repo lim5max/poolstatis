@@ -46,7 +46,7 @@ describe('event ingest', () => {
     expect(replay.body).toEqual({ accepted: 0, unregistered: 0, duplicate: true });
   });
 
-  it('treats a batch_id replay as new once the 24h window has passed', async () => {
+  it('treats a batch_id replay as new once the 35-day window has passed', async () => {
     const payload = {
       batch_id: 'batch-expiring',
       events: [{ event: 'doc.exported', distinct_id: 'u-exp' }],
@@ -54,7 +54,7 @@ describe('event ingest', () => {
     await api(env, env.ingestToken, 'POST', '/i/v1/events', payload);
     // Age the dedup row past the window.
     await env.pool.query(
-      `UPDATE ingest_batches SET received_at = now() - interval '25 hours' WHERE batch_id = $1`,
+      `UPDATE ingest_batches SET received_at = now() - interval '36 days' WHERE batch_id = $1`,
       ['batch-expiring'],
     );
     const replay = await api(env, env.ingestToken, 'POST', '/i/v1/events', payload);
@@ -228,11 +228,12 @@ function failFirstAppendEventStore(): EventStore & { appends: StorableEvent[][] 
     append: async (events: StorableEvent[]) => {
       appends.push(events);
       if (appends.length === 1) throw new Error('database down');
+      return { inserted: events.length };
     },
     appendIdempotent: async (batch) => {
       appends.push(batch.events);
       if (appends.length === 1) throw new Error('database down');
-      return true;
+      return { inserted: batch.events.length };
     },
     trend: async () => [],
     funnel: async () => [],
@@ -277,6 +278,7 @@ function blockingAppendEventStore(): EventStore & {
       appends.push(events);
       started();
       await releasePromise;
+      return { inserted: events.length };
     },
     appendIdempotent: async (batch) => {
       if (processing) {
@@ -287,14 +289,14 @@ function blockingAppendEventStore(): EventStore & {
           'retry shortly',
         );
       }
-      if (completed) return false;
+      if (completed) return { inserted: 0, duplicate: true };
       processing = true;
       appends.push(batch.events);
       started();
       await releasePromise;
       processing = false;
       completed = true;
-      return true;
+      return { inserted: batch.events.length };
     },
     trend: async () => [],
     funnel: async () => [],

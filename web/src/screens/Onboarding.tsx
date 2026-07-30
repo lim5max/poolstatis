@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { Check, Copy, KeyRound, Loader2, Settings, Target } from '@/components/icons';
+import { Check, Copy, KeyRound, Loader2, Settings } from '@/components/icons';
 import { useStore } from '../store';
 import { MCP_CLIENTS, mcpClientById, mcpServerConfig, type McpClientId } from '../mcpClients';
 import type { HostedOnboardingResult } from '../api/types';
@@ -20,8 +20,7 @@ function slugify(value: string): string {
 }
 
 export function Onboarding() {
-  const { client, refreshProjects, setProject } = useStore();
-  const [workspace, setWorkspace] = useState('My workspace');
+  const { account, client, refreshProjects, setProject } = useStore();
   const [projectName, setProjectName] = useState('My product');
   const [projectSlug, setProjectSlug] = useState('my-product');
   const [clientId, setClientId] = useState<McpClientId>('claude-code');
@@ -41,7 +40,7 @@ export function Onboarding() {
     setErr(null);
     try {
       const created = await client.completeOnboarding({
-        workspace_name: workspace.trim(),
+        workspace_name: account?.organization.name ?? 'Poolstatis workspace',
         project_name: projectName.trim(),
         project_slug: projectSlug.trim(),
       });
@@ -62,18 +61,13 @@ export function Onboarding() {
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-      <Panel title="Set up your agent workspace">
-        <div className="mb-5 grid gap-3 md:grid-cols-3">
-          <Step icon={<Target className="size-4" />} title="Workspace" body="Name the org your agent will manage." />
+      <Panel title="Create your first project">
+        <div className="mb-5 grid gap-3 md:grid-cols-2">
           <Step icon={<KeyRound className="size-4" />} title="Project" body="Create the first data boundary." />
           <Step icon={<Settings className="size-4" />} title="MCP" body="Choose the client and copy the config." />
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-1.5 md:col-span-2">
-            <Label htmlFor="workspace-name" className="text-xs font-medium text-muted-foreground">Workspace name</Label>
-            <Input id="workspace-name" value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
-          </div>
           <div className="space-y-1.5">
             <Label htmlFor="project-name" className="text-xs font-medium text-muted-foreground">Project name</Label>
             <Input
@@ -115,8 +109,8 @@ export function Onboarding() {
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-3">
-          <Button onClick={submit} disabled={busy || !workspace.trim() || !projectName.trim() || !projectSlug.trim()}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : 'Create workspace'}
+          <Button onClick={submit} disabled={busy || !projectName.trim() || !projectSlug.trim()}>
+            {busy ? <Loader2 className="size-4 animate-spin" /> : 'Create first project'}
           </Button>
           <span className="text-xs text-muted-foreground">Tokens are shown once. Store them before leaving this screen.</span>
         </div>
@@ -125,7 +119,7 @@ export function Onboarding() {
 
       <Panel title="What this creates">
         <div className="space-y-3 text-sm text-muted-foreground">
-          <ChecklistItem>One organization on the free $0 plan.</ChecklistItem>
+          <ChecklistItem>The existing organization remains the tenant boundary.</ChecklistItem>
           <ChecklistItem>One project with prod ingest key.</ChecklistItem>
           <ChecklistItem>One personal token for MCP clients.</ChecklistItem>
           <ChecklistItem>{selectedClient.name} instructions stay visible after setup.</ChecklistItem>
@@ -139,7 +133,7 @@ export function Onboarding() {
             <p className="mb-3.5 text-sm text-muted-foreground">{selectedClient.pasteTarget}</p>
             {result.mcp.package_status !== 'published' && (
               <div className="mb-3.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-                MCP runner is publish-ready but not marked as published for this hosted deploy. {result.mcp.note}
+                Registry install is disabled for this deploy. {result.mcp.note}
               </div>
             )}
             <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">

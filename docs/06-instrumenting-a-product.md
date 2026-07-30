@@ -46,7 +46,7 @@ for the client you use; the paste location depends on the host.
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.2.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_…"
@@ -59,27 +59,73 @@ for the client you use; the paste location depends on the host.
 `--silent` is required — otherwise pnpm prints a banner to stdout and corrupts the
 stdio MCP protocol.
 
-Until `@poolstatis/mcp` is published or the hosted deploy sets a real MCP runner,
-the UI should show this as a publish-ready template, not a verified copy-paste
-command.
+`@poolstatis/mcp@0.2.0` passed a fresh registry install, initialize, tool-list,
+and project-scoped read smoke. Hosted deployments may enable this exact pin;
+future versions remain fail-closed until they pass the same checks.
 
-### 2. Run the instrumentation skill
+Verify the connection from the MCP client itself: ask it to call
+`get_onboarding_status` with the target `project` and explicit `env`, then
+refresh **Setup & MCP**.
+The server records that MCP-marked request and its time. Copying config is not
+connection proof, and the recorded request is last-use evidence rather than a
+heartbeat or transport attestation.
 
-In your **product's** repo (with the MCP connected), invoke the
-[`poolstatis-instrument`](../.claude/skills/poolstatis-instrument/SKILL.md) skill, or
-just ask: *"instrument this app with Poolstatis."* The agent will:
+### 2. Install the agent skills
+
+MCP supplies live tools and project data. Skills supply the standards and
+documentation workflow for using them. Install all three in the **product repo**:
+
+```bash
+# Portable: every agent supported by the skills CLI
+pnpm dlx skills add https://github.com/lim5max/poolstatis \
+  --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
+  --agent '*' -y
+
+# Or target one runtime
+pnpm dlx skills add https://github.com/lim5max/poolstatis \
+  --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
+  --agent codex -y
+pnpm dlx skills add https://github.com/lim5max/poolstatis \
+  --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
+  --agent claude-code -y
+```
+
+For an approved local Core checkout, replace the GitHub URL with its absolute
+path. Verify project-scope installation:
+
+```bash
+pnpm dlx skills list --json
+```
+
+The list must include `poolstatis-instrument`, `poolstatis-analyze`, and
+`poolstatis-maintain`. The canonical copies are under `.agents/skills`; the
+`.claude/skills` copies are kept byte-identical for direct Claude discovery.
+
+### 3. Run the instrumentation skill
+
+With MCP connected, invoke `poolstatis-instrument` or ask:
+*"instrument this app with Poolstatis."* The skill routes the agent to:
 
 1. read `poolstatis://standard/instrumentation` and `get_project_schema`,
-2. pick a north-star metric + activation funnel for your product type,
+2. choose category definitions from the project schema, then pick a north-star
+   metric + activation funnel for your product type,
 3. `register_metric` each (as `proposed`) with a real `purpose`,
 4. add tracking calls to your code,
 5. verify with `sample_events`, and
 6. hand back the list of metrics for you to activate.
 
-### 3. Activate
+The public references are the [quickstart](https://poolstatis.xyz/docs/quickstart),
+[instrumentation standard](https://poolstatis.xyz/docs/standard), and
+[MCP tool reference](https://poolstatis.xyz/docs/mcp-tools).
+
+### 4. Activate
 
 Open the admin **Registry** tab → metrics arrive as `proposed` → click **activate**
 on the ones you want counted. (Or `update_metric` with `{status:"active"}` via MCP.)
+The **Categories** tab shows the grouped Product/Business/Technical system
+library and project custom definitions. Edit metric taxonomy with a purpose
+category and namespaced tags such as `surface:checkout`; represent journeys as
+funnels, not feature-specific categories.
 When a metric is replaced, use `deprecate_metric` with a real reason instead of
 hard-deleting it; future agents need that context.
 
@@ -109,30 +155,36 @@ curl -X PATCH "$POOLSTATIS_URL/api/v1/projects/my-app/metrics/signup" \
   -d '{"status":"active"}'
 ```
 
-### 2. Send events with the SDK (JS/TS — recommended)
+### 2. Send events
 
-Use [`@poolstatis/sdk`](../sdk/README.md) — it batches, retries, and flushes on page
-unload so events aren't lost. Don't hand-roll a fetch client.
+The public ingest API is the available install-free path. The source tree also
+contains an [`sdk/`](../sdk/README.md) package for workspace/local integration,
+but `@poolstatis/sdk` is not currently published in npm. Do not run or recommend
+`npm add @poolstatis/sdk` until `npm view @poolstatis/sdk version` succeeds.
 
-```bash
-pnpm add @poolstatis/sdk
-```
+Use the HTTP examples below from one shared product integration module. Keep only
+the write-only `pk_` ingest key in product runtime code; never ship `sk_` or `pt_`.
+If the target already consumes an explicitly approved local/git SDK source,
+follow that installed version's guide instead.
 
-```ts
-// tracking.ts — one shared client, ingest key only (safe in client/server code)
-import { createClient } from "@poolstatis/sdk";
+### 2.0 Browser landing attribution (optional)
 
-export const ph = createClient({
-  url: process.env.POOLSTATIS_URL!,
-  ingestKey: process.env.POOLSTATIS_INGEST_KEY!, // pk_…
-});
-```
+Для consented browser-продукта сначала вызови MCP
+`propose_acquisition_properties` (или `POST /properties/acquisition-attribution`)
+с platform credential. Это создаст пять `$utm_*` definitions как `proposed`;
+ингест-ключ в браузере не может и не должен менять реестр. Затем подключи
+локальный/одобренный `@poolstatis/sdk/attribution`, как показано в
+[SDK guide](../sdk/README.md#browser-acquisition-attribution-optional-module).
+Не обещайте npm-установку, пока registry lookup пакета не проходит.
 
-```ts
-// at the signup site — distinct_id is the STABLE user id
-ph.track("signup.completed", user.id, { plan: "free" });
-ph.identify("account", user.accountId, { plan: "free", seats: 1 }); // mutable state → entity
-```
+Модуль пишет только pathname landing, origin referrer и стандартные UTM; raw URL,
+full referrer, click ids и unknown query params не отправляются. Для SPA вызывай
+`pageViewed()` после навигации. Передай обязательный `subscribeConsent` callback,
+который синхронно вызывает listener при отзыве product-analytics consent: модуль сам
+вызовет `stop()` и удалит unsent/retrying attribution events.
+Связь anonymous→authenticated делается отдельно через audited actor link: история
+immutable events не переписывается. UTM trend — только session landing association,
+не доказательство причинного эффекта кампании.
 
 ### 2.1 Roll out and measure a product change
 
@@ -141,6 +193,14 @@ matching MCP tools). The experiment needs a 100%-allocated flag and an active
 `count`/`unique_actors` metric as outcome.
 
 ```ts
+// Resolve @poolstatis/sdk from the approved local/git dependency described above.
+import { createClient } from "@poolstatis/sdk";
+
+const ph = createClient({
+  url: "https://api.poolstatis.com",
+  ingestKey: "pk_…",
+});
+
 const variant = await ph.getFeatureFlag("checkout_copy", user.id, {
   sessionId: session.id,
 });
@@ -151,6 +211,63 @@ if (variant?.key === "test") {
   showCheckoutCta("Checkout");
 }
 ```
+
+### 2.1a 1C-Bitrix browser integration
+
+Poolstatis does not need a Bitrix plugin. Build one browser asset in the
+product repository, then include the compiled file from the Bitrix site
+template. The source asset imports the same package as any other site:
+
+```ts
+import { createClient } from '@poolstatis/sdk';
+import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
+
+const hostWindow = window as Window & {
+  productConsent?: { analytics: boolean };
+};
+
+const client = createClient({
+  url: 'https://api.example.com',
+  ingestKey: 'pk_…', // write-only project key; never place sk_ or pt_ here
+});
+
+const analytics = createBrowserAnalytics({
+  client,
+  consentPolicy: 'external',
+  hasConsent: () => hostWindow.productConsent?.analytics === true,
+  subscribeConsent: (listener) => {
+    const handler = () => listener();
+    window.addEventListener('product-consent', handler);
+    return () => window.removeEventListener('product-consent', handler);
+  },
+  captureAcquisition: true,
+});
+analytics.start();
+```
+
+Do not paste this TypeScript or a bare npm import directly into a production
+template. Bundle it first with the product's normal JS build. In a D7 template,
+Bitrix documents loading that built asset with:
+
+```php
+<?php
+use Bitrix\Main\Page\Asset;
+Asset::getInstance()->addJs(SITE_TEMPLATE_PATH . '/js/poolstatis-browser.js');
+```
+
+Official reference:
+https://dev.1c-bitrix.ru/api_d7/bitrix/main/page/asset/addjs.php
+
+Server-side Bitrix/PHP code can send trusted backend events through the same
+HTTP ingest API, keeping `sk_`/`pt_` out of browser output. MCP is separate:
+install the version-pinned Poolstatis MCP runner in Codex, Claude, Cursor or
+another developer agent. The agent registers semantics and queries evidence;
+MCP does not run inside the visitor's Bitrix request.
+
+This is the integration contract, not a claim that the npm release is already
+available. Run `npm view @poolstatis/sdk version` and the package consumer smoke
+before recommending npm installation. Until that passes, use only an explicitly
+reviewed local/git package source.
 
 Do not add `variant` manually to your outcome events: Poolstatis records the
 first `$feature_flag_called` exposure itself and only counts outcomes that occur
@@ -225,3 +342,9 @@ Query kinds: `trend`, `funnel`, `entities`, `retention`, `lifecycle`, `stickines
 - [03-mcp-server.md](03-mcp-server.md) — every MCP tool.
 - [04-http-api.md](04-http-api.md) — ingest + query API reference.
 - [05-gap-analysis.md](05-gap-analysis.md) — what's built vs PostHog, and what's next.
+Для web analytics сначала прочитайте также
+`poolstatis://standard/browser-analytics`, затем вызовите
+`propose_browser_analytics`. Browser capture подключается только через отдельный
+локальный/одобренный `@poolstatis/sdk/browser` entrypoint и только после consent;
+base SDK не меняет поведение. Публичную npm-доступность перед инструкцией по
+установке нужно проверять отдельно.

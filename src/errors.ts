@@ -9,17 +9,19 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly hint?: string,
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 
-  toBody(): { error: { code: string; message: string; hint?: string } } {
+  toBody(): { error: { code: string; message: string; hint?: string; details?: Record<string, unknown> } } {
     return {
       error: {
         code: this.code,
         message: this.message,
         ...(this.hint ? { hint: this.hint } : {}),
+        ...(this.details ? { details: this.details } : {}),
       },
     };
   }
@@ -33,3 +35,42 @@ export const badRequest = (code: string, message: string, hint?: string) =>
 
 export const unauthorized = (message = 'invalid or missing API key') =>
   new ApiError(401, 'unauthorized', message, 'pass the key as `Authorization: Bearer <token>`');
+
+export const organizationWriteDisabled = () =>
+  new ApiError(
+    402,
+    'organization_write_disabled',
+    'writes are disabled for this organization',
+    'read access remains available; ask an organization operator to restore writes',
+  );
+
+/**
+ * Stable database-policy SQLSTATE contract for hosted overlays.
+ *
+ * Match only dedicated codes. PostgreSQL messages/details are deliberately
+ * ignored so a trigger cannot leak tenant data, credentials, or policy
+ * implementation details through the public API.
+ */
+export function databasePolicyError(error: unknown): ApiError | null {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === 'PSQ01') {
+    return new ApiError(
+      402,
+      'billing_limit_reached',
+      'the accepted event batch would exceed an organization storage policy',
+      'reduce the batch or ask an organization operator to change the storage policy',
+    );
+  }
+  if (code === 'PSP01') {
+    return new ApiError(
+      402,
+      'project_limit_reached',
+      'the organization project policy does not allow another project',
+      'reuse an existing project or ask an organization operator to change the project policy',
+    );
+  }
+  if (code === 'PSO01') {
+    return organizationWriteDisabled();
+  }
+  return null;
+}

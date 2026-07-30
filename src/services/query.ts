@@ -11,14 +11,34 @@ import type {
   RetentionQueryInput,
   StickinessQueryInput,
   TrendQueryInput,
+  WebSessionsQueryInput,
+  WebSessionQueryInput,
+  PageEngagementQueryInput,
+  VisualExperienceCompareInput,
+  VisualExperienceQueryInput,
+  WebAnalyticsQueryInput,
 } from '../schemas.js';
 import { parseDateInput } from '../dates.js';
 import { badRequest } from '../errors.js';
 import { getFunnel, getMetric, type Metric } from './registry.js';
 import { countEntities, queryEntities } from './entities.js';
-import { getExperienceSurface } from './experience.js';
+import { getExactExperienceSnapshot, getExperienceSurface } from './experience.js';
 import { canonicalQueryKey, type QueryCache } from './queryCache.js';
 import type { PostHogAdapter } from './posthog.js';
+import { assertRegisteredAcquisitionProperties } from './acquisitionAttribution.js';
+import { assertBrowserAnalyticsProperties } from './browserAnalytics.js';
+import type { CountryResolver } from './country.js';
+
+const SESSION_ATTRIBUTION_NOTE = 'Session landing attribution: this associates events with the tagged landing in the same browser session; it is not causal campaign credit.';
+const WEB_DIMENSIONS = {
+  country: { property: '$country', missingValue: 'unknown' },
+  device: { property: '$device_class', missingValue: 'unknown' },
+  browser: { property: '$browser_family', missingValue: 'unknown' },
+  os: { property: '$os_family', missingValue: 'unknown' },
+  language: { property: '$language', missingValue: 'unknown' },
+  timezone: { property: '$timezone', missingValue: 'unknown' },
+  source: { property: '$utm_source', missingValue: 'direct / unknown' },
+} as const;
 
 export interface QueryMeta {
   computed_at: string;
@@ -28,8 +48,154 @@ export interface QueryMeta {
   source?: 'native' | 'posthog';
 }
 
+interface VisualEvidenceRef {
+  type: 'experience_snapshot';
+  id: string;
+  evidence_ref: string;
+}
+
+interface VisualAgentContext {
+  scope: {
+    surface: string;
+    route: string;
+    version: string;
+    device: 'desktop' | 'mobile';
+    purpose: string;
+  };
+  sample_size: {
+    events: number;
+    page_views: number;
+    sessions: number;
+    actors: number;
+    clicks: number;
+  };
+  section_order: string[];
+  largest_section_reach_decreases: Array<{
+    from_section: string;
+    to_section: string;
+    from_sessions: number;
+    to_sessions: number;
+    session_count_decrease: number;
+    percentage_point_decrease: number;
+  }>;
+  click_concentration: Array<{
+    label: string;
+    count: number;
+    actors: number;
+    percentage_of_all_clicks: number;
+  }>;
+  scroll_reach: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+  output_coverage: {
+    click_labels_returned: number;
+    click_labels_truncated: boolean;
+    sections_returned: number;
+    sections_truncated: boolean;
+  };
+  snapshot_coverage: {
+    status: 'fresh' | 'stale' | 'future' | 'missing';
+    exact_viewport_match: boolean;
+    snapshot_id: string | null;
+    evidence_ref: string | null;
+    captured_at: string | null;
+    expires_at: string | null;
+    age_seconds: number | null;
+  };
+  evidence_refs: VisualEvidenceRef[];
+  data_quality: {
+    status: 'ok' | 'limited' | 'empty';
+    caveats: string[];
+  };
+  suggested_next_actions: Array<{
+    action: 'list_versions' | 'compare_explicit_cohorts';
+    tool: 'list_visual_experience_versions' | 'compare_visual_experience';
+    reason: string;
+    known_parameters: Record<string, unknown>;
+    requires: string[];
+  }>;
+}
+
+interface VisualCompareAgentContext {
+  scope: { surface: string; route: string; purpose: string };
+  sample_sizes: {
+    baseline: VisualAgentContext['sample_size'];
+    comparison: VisualAgentContext['sample_size'];
+  };
+  largest_section_changes: Array<{
+    section: string;
+    baseline_percentage: number;
+    comparison_percentage: number;
+    percentage_points: number;
+  }>;
+  section_taxonomy_mismatches: Array<{
+    section: string;
+    baseline_present: boolean;
+    comparison_present: boolean;
+  }>;
+  evidence_refs: VisualEvidenceRef[];
+  data_quality: VisualAgentContext['data_quality'];
+  suggested_next_actions: Array<{
+    action: 'inspect_baseline_map' | 'inspect_comparison_map';
+    tool: 'get_visual_experience_map';
+    reason: string;
+    query: Omit<VisualExperienceQueryInput, 'kind'>;
+  }>;
+}
+
 export type QueryResult =
   | { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value?: string }>; meta: QueryMeta }
+  | {
+      kind: 'web_analytics';
+      summary: { visitors: number; sessions: number; page_views: number };
+      engagement: import('../stores/eventStore.js').WebEngagementSummary;
+      breakdowns: Record<string, Array<{
+        value: string; visitors: number; sessions: number; page_views: number; percentage: number;
+      }>>;
+      meta: QueryMeta & {
+        truncated_dimensions: string[];
+        definitions: {
+          visitors: string;
+          sessions: string;
+          page_views: string;
+          measured_sessions: string;
+          unknown_sessions: string;
+          engaged_sessions: string;
+          bounce_sessions: string;
+          engaged_rate: string;
+          bounce_rate: string;
+          single_page_sessions: string;
+          foreground_ms: string;
+          session_span_ms: string;
+        };
+        accepted_event_accounting: string;
+        privacy: string;
+        country_attribution?: NonNullable<CountryResolver['attribution']>;
+      };
+    }
+  | {
+      kind: 'web_sessions';
+      sessions: import('../stores/eventStore.js').WebSessionSummary[];
+      meta: QueryMeta & {
+        total: number;
+        truncated: boolean;
+        definitions: { foreground_ms: string; session_span_ms: string; bounce: string };
+      };
+    }
+  | {
+      kind: 'web_session';
+      summary: import('../stores/eventStore.js').WebSessionSummary | null;
+      pages: import('../stores/eventStore.js').WebPageEngagement[];
+      meta: QueryMeta & {
+        no_data_reason?: string;
+        privacy: string;
+        total_pages: number;
+        truncated: boolean;
+      };
+    }
+  | {
+      kind: 'page_engagement';
+      page: import('../stores/eventStore.js').WebPageEngagement | null;
+      meta: QueryMeta & { no_data_reason?: string };
+    }
   | {
       kind: 'funnel';
       steps: Array<{
@@ -75,11 +241,51 @@ export type QueryResult =
       surface: { key: string; name: string; purpose: string; status: 'active' | 'archived' };
       session_id: string;
       events: Array<{
-        timestamp: string; kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
+        timestamp: string; kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'section_exposed' | 'client_error';
         route: string; sequence: number; label?: string; x?: number; y?: number; depth?: number;
-        error_type?: 'error' | 'unhandled_rejection';
+        error_type?: 'error' | 'unhandled_rejection'; section?: string; top?: number;
       }>;
       summary: { page_views: number; clicks: number; max_scroll_depth: number; client_errors: number };
+      meta: QueryMeta;
+    }
+  | {
+      kind: 'visual_experience';
+      surface: { key: string; name: string; purpose: string; status: 'active' | 'archived' };
+      route: string;
+      version: string;
+      device: 'desktop' | 'mobile';
+      grid: number;
+      snapshot: Awaited<ReturnType<typeof getExactExperienceSnapshot>>;
+      summary: Awaited<ReturnType<EventStore['visualExperience']>>['summary'];
+      click_cells: Awaited<ReturnType<EventStore['visualExperience']>>['click_cells'];
+      click_labels: Awaited<ReturnType<EventStore['visualExperience']>>['click_labels'];
+      click_labels_truncated: boolean;
+      scroll_coverage: Awaited<ReturnType<EventStore['visualExperience']>>['scroll_coverage'];
+      sections: Awaited<ReturnType<EventStore['visualExperience']>>['sections'];
+      sections_truncated: boolean;
+      agent_context: VisualAgentContext;
+      causality: string;
+      meta: QueryMeta;
+    }
+  | {
+      kind: 'visual_experience_compare';
+      baseline: Extract<QueryResult, { kind: 'visual_experience' }>;
+      comparison: Extract<QueryResult, { kind: 'visual_experience' }>;
+      delta: {
+        events: number;
+        page_views: number;
+        sessions: number;
+        clicks: number;
+        actors: number;
+        sections: Array<{
+          section: string;
+          baseline_present: boolean;
+          comparison_present: boolean;
+          percentage_points: number | null;
+        }>;
+      };
+      agent_context: VisualCompareAgentContext;
+      causality: string;
       meta: QueryMeta;
     };
 
@@ -89,6 +295,7 @@ export class QueryService {
     private readonly eventStore: EventStore,
     private readonly cache?: QueryCache,
     private readonly posthog?: PostHogAdapter,
+    private readonly countryAttribution?: CountryResolver['attribution'],
   ) {}
 
   async run(projectId: string, q: QueryInput, now: Date = new Date()): Promise<QueryResult> {
@@ -198,6 +405,14 @@ export class QueryService {
     switch (q.kind) {
       case 'trend':
         return this.trend(projectId, q, now);
+      case 'web_analytics':
+        return this.webAnalytics(projectId, q, now);
+      case 'web_sessions':
+        return this.webSessions(projectId, q, now);
+      case 'web_session':
+        return this.webSession(projectId, q, now);
+      case 'page_engagement':
+        return this.pageEngagement(projectId, q, now);
       case 'funnel':
         return this.funnel(projectId, q, now);
       case 'entities':
@@ -212,7 +427,260 @@ export class QueryService {
         return this.interactionMap(projectId, q, now);
       case 'experience_session':
         return this.experienceSession(projectId, q, now);
+      case 'visual_experience':
+        return this.visualExperience(projectId, q, now);
+      case 'visual_experience_compare':
+        return this.visualExperienceCompare(projectId, q, now);
     }
+  }
+
+  private async webAnalytics(projectId: string, q: WebAnalyticsQueryInput, now: Date): Promise<QueryResult> {
+    const source = await this.webPageViewSource(projectId, q.metric);
+    const keyMetric = q.key_metric ? await this.webKeyMetricSource(projectId, q.key_metric) : undefined;
+    const dimensions = q.dimensions.map((key) => ({ key, ...WEB_DIMENSIONS[key] }));
+    const requestedProperties = [
+      ...q.filters.map((filter) => filter.property),
+      ...dimensions.map((dimension) => dimension.property),
+    ];
+    await assertBrowserAnalyticsProperties(this.pool, projectId, requestedProperties);
+    await assertRegisteredAcquisitionProperties(this.pool, projectId, requestedProperties);
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const result = await this.eventStore.webAnalytics({
+      projectId,
+      env: q.env,
+      event: source.event,
+      filters: [...(source.filters ?? []), ...q.filters],
+      from,
+      to,
+      dimensions,
+      ...(keyMetric ? { keyMetric } : {}),
+    });
+    const breakdowns = Object.fromEntries(Object.entries(result.breakdowns).map(([key, rows]) => [
+      key,
+      rows.map((row) => ({
+        ...row,
+        percentage: result.summary.page_views === 0
+          ? 0
+          : Math.round((row.page_views / result.summary.page_views) * 1_000) / 10,
+      })),
+    ]));
+    return {
+      kind: 'web_analytics',
+      summary: result.summary,
+      engagement: result.engagement,
+      breakdowns,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        truncated_dimensions: result.truncatedDimensions,
+        definitions: {
+          visitors: 'Unique resolved actors with page-view events; audited actor links deduplicate anonymous visitors after authentication.',
+          sessions: 'Distinct resolved-actor and non-empty session_id pairs on page-view events; a session is not a visitor or authenticated user.',
+          page_views: 'Accepted stored page-view events; enrichment does not create additional billable events.',
+          measured_sessions: 'Sessions with a known tri-state engagement result: positive evidence or a complete negative lifecycle.',
+          unknown_sessions: 'Sessions without positive engagement evidence and without a complete lifecycle boundary.',
+          engaged_sessions: 'Sessions with at least 10 seconds of foreground time, at least two page views, or the selected key metric. Incomplete sessions without positive evidence remain unknown.',
+          bounce_sessions: 'Count of lifecycle-complete sessions that did not meet any engagement rule; heartbeat-only or missing exits are never counted as bounces.',
+          engaged_rate: 'Engaged sessions divided by measured sessions; unavailable when no session has a known classification.',
+          bounce_rate: 'Lifecycle-complete negative sessions divided by measured sessions; unavailable when no session has a known classification.',
+          single_page_sessions: 'Sessions with exactly one accepted page-view event, independent of engagement.',
+          foreground_ms: 'Cumulative visible and focused browser time from the latest sequence for each measured page view.',
+          session_span_ms: 'Wall-clock span between the first page view and latest page snapshot; kept separate from foreground time.',
+        },
+        accepted_event_accounting: 'Every accepted stored page.viewed, page.engagement and key-metric event remains one billable stored event; reads and enrichment add none.',
+        privacy: 'Country is coarse server-side enrichment from a configured trusted proxy. Raw IP, full URL, query string, DOM text and full user agent are not stored.',
+        ...(this.countryAttribution ? { country_attribution: this.countryAttribution } : {}),
+      },
+    };
+  }
+
+  private async webSessions(projectId: string, q: WebSessionsQueryInput, now: Date): Promise<QueryResult> {
+    const source = await this.webPageViewSource(projectId, q.metric);
+    const keyMetric = q.key_metric ? await this.webKeyMetricSource(projectId, q.key_metric) : undefined;
+    await assertBrowserAnalyticsProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const result = await this.eventStore.webSessions({
+      projectId,
+      env: q.env,
+      event: source.event,
+      filters: [...source.filters, ...q.filters],
+      ...(keyMetric ? { keyMetric } : {}),
+      from,
+      to,
+      limit: q.limit,
+    });
+    return {
+      kind: 'web_sessions',
+      sessions: result.sessions,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        total: result.total,
+        truncated: result.total > result.sessions.length,
+        definitions: {
+          foreground_ms: 'Visible and focused browser time, deduplicated to the latest cumulative page snapshot.',
+          session_span_ms: 'Wall-clock session span, not active time.',
+          bounce: 'Only known when every page view has a lifecycle boundary snapshot; heartbeat-only or missing exits remain incomplete.',
+        },
+      },
+    };
+  }
+
+  private async webSession(projectId: string, q: WebSessionQueryInput, now: Date): Promise<QueryResult> {
+    const source = await this.webPageViewSource(projectId, q.metric);
+    const keyMetric = q.key_metric ? await this.webKeyMetricSource(projectId, q.key_metric) : undefined;
+    await assertBrowserAnalyticsProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const result = await this.eventStore.webSession({
+      projectId,
+      env: q.env,
+      event: source.event,
+      filters: [...source.filters, ...q.filters],
+      ...(keyMetric ? { keyMetric } : {}),
+      from,
+      to,
+      sessionId: q.session_id,
+      ...(q.actor_id ? { actorId: q.actor_id } : {}),
+      pageLimit: q.page_limit,
+    });
+    if (result.ambiguous_actor) {
+      throw badRequest(
+        'web_session_actor_ambiguous',
+        `session_id "${q.session_id}" belongs to more than one actor in this query scope`,
+        'list web sessions first, then repeat this request with the returned actor_id',
+      );
+    }
+    return {
+      kind: 'web_session',
+      summary: result.summary,
+      pages: result.pages,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        total_pages: result.total,
+        truncated: result.total > result.pages.length,
+        ...(result.summary ? {} : { no_data_reason: 'No matching accepted page-view session exists in this project, environment and period.' }),
+        privacy: 'Returns bounded page paths and aggregate timing only; never DOM, page text, full URLs, raw IP or replay.',
+      },
+    };
+  }
+
+  private async pageEngagement(projectId: string, q: PageEngagementQueryInput, now: Date): Promise<QueryResult> {
+    const source = await this.webPageViewSource(projectId, q.metric);
+    await assertBrowserAnalyticsProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    await assertRegisteredAcquisitionProperties(this.pool, projectId, q.filters.map((filter) => filter.property));
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const result = await this.eventStore.pageEngagement({
+      projectId,
+      env: q.env,
+      event: source.event,
+      filters: [...source.filters, ...q.filters],
+      from,
+      to,
+      pageViewId: q.page_view_id,
+      ...(q.actor_id ? { actorId: q.actor_id } : {}),
+    });
+    if (result.ambiguous_actor) {
+      throw badRequest(
+        'page_engagement_actor_ambiguous',
+        `page_view_id "${q.page_view_id}" belongs to more than one actor in this query scope`,
+        'list web sessions first, then repeat this request with the returned actor_id',
+      );
+    }
+    const page = result.page;
+    return {
+      kind: 'page_engagement',
+      page,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        ...(page ? {} : { no_data_reason: 'No matching accepted page view exists in this project, environment and period.' }),
+      },
+    };
+  }
+
+  private async webPageViewSource(
+    projectId: string,
+    metricKey: string,
+  ): Promise<{ event: string; filters: PropertyFilter[] }> {
+    const metric = await getMetric(this.pool, projectId, metricKey);
+    if (metric.status !== 'active') {
+      throw badRequest(
+        'web_analytics_metric_inactive',
+        `metric "${metricKey}" must be active before it can drive web analytics`,
+        'activate the reviewed metric or select an active replacement',
+      );
+    }
+    if (metric.type !== 'count') {
+      throw badRequest(
+        'web_analytics_metric_invalid',
+        `metric "${metricKey}" must be a count metric`,
+        'register and activate a count metric whose source is the page.viewed event',
+      );
+    }
+    const source = metric.source as {
+      event: string;
+      filters?: PropertyFilter[];
+      data_source?: 'native' | 'posthog';
+    };
+    if (source.data_source === 'posthog') {
+      throw badRequest('web_analytics_source_invalid', 'web analytics currently requires native stored events');
+    }
+    if (source.event !== 'page.viewed') {
+      throw badRequest(
+        'web_analytics_metric_invalid',
+        `metric "${metricKey}" must source the canonical page.viewed event`,
+        'use the proposed web_page_views metric or an exactly compatible active replacement',
+      );
+    }
+    const filters = source.filters ?? [];
+    const hasBrowserContextFilter = filters.some((filter) =>
+      filter.property === '$browser_context' && filter.op === 'eq' && filter.value === '1');
+    if (!hasBrowserContextFilter) {
+      throw badRequest(
+        'web_analytics_metric_invalid',
+        `metric "${metricKey}" must filter $browser_context = "1"`,
+        'use the canonical web_page_views metric so legacy or manual page.viewed events are excluded',
+      );
+    }
+    return { event: source.event, filters };
+  }
+
+  private async webKeyMetricSource(
+    projectId: string,
+    metricKey: string,
+  ): Promise<{ event: string; filters: PropertyFilter[] }> {
+    const metric = await getMetric(this.pool, projectId, metricKey);
+    if (metric.status !== 'active') {
+      throw badRequest(
+        'web_analytics_key_metric_inactive',
+        `key metric "${metricKey}" must be active before it can classify engagement`,
+        'activate the reviewed key metric or omit key_metric',
+      );
+    }
+    const source = await this.eventSource(projectId, metricKey);
+    if (source.dataSource !== 'native') {
+      throw badRequest(
+        'web_analytics_source_invalid',
+        `key metric "${metricKey}" must use native stored events`,
+        'use a native event-based key metric so session classification stays inside one event store',
+      );
+    }
+    return { event: source.event, filters: source.filters };
   }
 
   /** Resolve a registry metric to an event-based source, or fail with a teaching hint. */
@@ -250,6 +718,15 @@ export class QueryService {
   }
 
   private async trend(projectId: string, q: TrendQueryInput, now: Date): Promise<QueryResult> {
+    const queryProperties = [...q.filters.map((filter) => filter.property), ...(q.breakdown ? [q.breakdown.property] : [])];
+    await assertRegisteredAcquisitionProperties(
+      this.pool,
+      projectId,
+      queryProperties,
+    );
+    const attributionNote = queryProperties.some((property) => property.startsWith('$utm_'))
+      ? SESSION_ATTRIBUTION_NOTE
+      : undefined;
     const metric = await getMetric(this.pool, projectId, q.metric);
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
@@ -312,7 +789,7 @@ export class QueryService {
         interval: q.interval,
         ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
       });
-      return { kind: 'trend', series, meta: meta({ source: 'posthog' }) };
+      return { kind: 'trend', series, meta: meta({ source: 'posthog', ...(attributionNote ? { note: attributionNote } : {}) }) };
     }
     const agg =
       metric.type === 'count'
@@ -332,7 +809,7 @@ export class QueryService {
       interval: q.interval,
       ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
     });
-    return { kind: 'trend', series, meta: meta({ source: 'native' }) };
+    return { kind: 'trend', series, meta: meta({ source: 'native', ...(attributionNote ? { note: attributionNote } : {}) }) };
   }
 
   private async funnel(projectId: string, q: FunnelQueryInput, now: Date): Promise<QueryResult> {
@@ -623,6 +1100,375 @@ export class QueryService {
       meta: { computed_at: now.toISOString(), date_range: { from: from.toISOString(), to: to.toISOString() }, sampling: null, source: 'native' },
     };
   }
+
+  private async visualExperience(
+    projectId: string,
+    q: VisualExperienceQueryInput,
+    now: Date,
+  ): Promise<Extract<QueryResult, { kind: 'visual_experience' }>> {
+    const surface = await getExperienceSurface(this.pool, projectId, q.surface);
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const snapshot = await getExactExperienceSnapshot(
+      this.pool,
+      projectId,
+      {
+        surface: q.surface,
+        route: q.route,
+        env: q.env,
+        version: q.version,
+        device: q.device,
+      },
+      now,
+    );
+    const result = await this.eventStore.visualExperience({
+      projectId,
+      env: q.env,
+      surface: q.surface,
+      route: q.route,
+      version: q.version,
+      device: q.device,
+      ...(snapshot
+        ? {
+            viewportWidth: snapshot.viewport_width,
+            viewportHeight: snapshot.viewport_height,
+            documentWidth: snapshot.document_width,
+            documentHeight: snapshot.document_height,
+          }
+        : {}),
+      from,
+      to,
+      grid: q.grid,
+    });
+    const agentContext = buildVisualAgentContext(surface, q, result, snapshot, from, to, now);
+    return {
+      kind: 'visual_experience',
+      surface: { key: surface.key, name: surface.name, purpose: surface.purpose, status: surface.status },
+      route: q.route,
+      version: q.version,
+      device: q.device,
+      grid: q.grid,
+      snapshot,
+      ...result,
+      agent_context: agentContext,
+      causality: 'Aggregated interaction evidence shows where observed sessions clicked or reached; it does not prove why users stopped or that a page change caused a difference.',
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        source: 'native',
+        note: snapshot
+          ? 'Events match the snapshot viewport exactly. Accepted events may still exclude signals discarded by client consent and rate guards.'
+          : 'No immutable snapshot matches these route, version, device and env filters; events are not restricted to one viewport.',
+      },
+    };
+  }
+
+  private async visualExperienceCompare(
+    projectId: string,
+    q: VisualExperienceCompareInput,
+    now: Date,
+  ): Promise<Extract<QueryResult, { kind: 'visual_experience_compare' }>> {
+    const [baseline, comparison] = await Promise.all([
+      this.visualExperience(projectId, {
+        kind: 'visual_experience',
+        surface: q.surface,
+        route: q.route,
+        version: q.baseline.version,
+        device: q.baseline.device,
+        date_from: q.baseline.date_from,
+        date_to: q.baseline.date_to,
+        grid: q.grid,
+        env: q.env,
+      }, now),
+      this.visualExperience(projectId, {
+        kind: 'visual_experience',
+        surface: q.surface,
+        route: q.route,
+        version: q.comparison.version,
+        device: q.comparison.device,
+        date_from: q.comparison.date_from,
+        date_to: q.comparison.date_to,
+        grid: q.grid,
+        env: q.env,
+      }, now),
+    ]);
+    const baselineSections = new Map(baseline.sections.map((item) => [item.section, item.percentage]));
+    const comparisonSections = new Map(comparison.sections.map((item) => [item.section, item.percentage]));
+    const sectionKeys = [...new Set([...baselineSections.keys(), ...comparisonSections.keys()])].sort();
+    const sectionDeltas = sectionKeys.map((section) => {
+      const baselinePresent = baselineSections.has(section);
+      const comparisonPresent = comparisonSections.has(section);
+      return {
+        section,
+        baseline_present: baselinePresent,
+        comparison_present: comparisonPresent,
+        percentage_points: baselinePresent && comparisonPresent
+          ? Number((comparisonSections.get(section)! - baselineSections.get(section)!).toFixed(2))
+          : null,
+      };
+    });
+    return {
+      kind: 'visual_experience_compare',
+      baseline,
+      comparison,
+      delta: {
+        events: comparison.summary.events - baseline.summary.events,
+        page_views: comparison.summary.page_views - baseline.summary.page_views,
+        sessions: comparison.summary.sessions - baseline.summary.sessions,
+        clicks: comparison.summary.clicks - baseline.summary.clicks,
+        actors: comparison.summary.actors - baseline.summary.actors,
+        sections: sectionDeltas,
+      },
+      agent_context: buildVisualCompareAgentContext(q, baseline, comparison, sectionDeltas),
+      causality: 'This is a descriptive comparison across selected cohorts. Traffic mix, instrumentation, seasonality and concurrent changes can explain differences.',
+      meta: { computed_at: now.toISOString(), sampling: null, source: 'native' },
+    };
+  }
+}
+
+function buildVisualAgentContext(
+  surface: { key: string; purpose: string },
+  q: VisualExperienceQueryInput,
+  result: Awaited<ReturnType<EventStore['visualExperience']>>,
+  snapshot: Awaited<ReturnType<typeof getExactExperienceSnapshot>>,
+  from: Date,
+  to: Date,
+  now: Date,
+): VisualAgentContext {
+  const sectionReachDecreases = result.sections.slice(1).map((section, index) => {
+    const previous = result.sections[index]!;
+    return {
+      from_section: previous.section,
+      to_section: section.section,
+      from_sessions: previous.sessions,
+      to_sessions: section.sessions,
+      session_count_decrease: previous.sessions - section.sessions,
+      percentage_point_decrease: Number((previous.percentage - section.percentage).toFixed(2)),
+    };
+  }).filter((item) => item.percentage_point_decrease > 0 || item.session_count_decrease > 0)
+    .sort((a, b) =>
+    b.percentage_point_decrease - a.percentage_point_decrease
+    || b.session_count_decrease - a.session_count_decrease
+    || a.from_section.localeCompare(b.from_section)
+    || a.to_section.localeCompare(b.to_section)
+  ).slice(0, 5);
+  const labelledClicks = result.click_labels.reduce((sum, item) => sum + item.count, 0);
+  const caveats = [
+    'Accepted event totals can exclude signals withheld by client consent or discarded by rate guards.',
+    'This evidence is descriptive and non-causal; verify instrumentation and cohort differences before acting.',
+  ];
+  let quality: VisualAgentContext['data_quality']['status'] = 'ok';
+  const capturedAt = snapshot ? new Date(snapshot.captured_at).toISOString() : null;
+  const expiresAt = snapshot ? new Date(snapshot.expires_at).toISOString() : null;
+  const snapshotAgeSeconds = capturedAt === null
+    ? null
+    : Math.floor((now.getTime() - new Date(capturedAt).getTime()) / 1000);
+  const snapshotStatus: VisualAgentContext['snapshot_coverage']['status'] = !snapshot
+    ? 'missing'
+    : snapshotAgeSeconds !== null && snapshotAgeSeconds < 0
+      ? 'future'
+      : snapshot.stale
+        ? 'stale'
+        : 'fresh';
+  if (!snapshot) {
+    quality = 'limited';
+    caveats.push('No exact snapshot matched, so events are not restricted to one viewport and document size.');
+  } else if (snapshotStatus === 'future') {
+    quality = 'limited';
+    caveats.push('The matching snapshot captured_at is in the future; verify capture clock skew before using its coordinates.');
+  } else if (snapshotStatus === 'stale') {
+    quality = 'limited';
+    caveats.push('The matching snapshot is stale; confirm the route still renders this version before interpreting coordinates.');
+  }
+  if (result.summary.sessions === 0) {
+    quality = 'empty';
+    caveats.push('No eligible page-view sessions matched this exact scope and period.');
+  } else {
+    if (result.sections.length === 0) {
+      quality = 'limited';
+      caveats.push('No stable section exposure labels were observed, so section reach and drop-off are unavailable.');
+    }
+    if (result.sections_truncated) {
+      quality = 'limited';
+      caveats.push('Section output reached the 200-label bound; section order and drop-off omit additional labels.');
+    }
+    if (result.click_labels_truncated) {
+      quality = 'limited';
+      caveats.push('Click-label output reached the top-100 bound; remaining safe labels are omitted from concentration output.');
+    } else if (labelledClicks < result.summary.clicks) {
+      quality = 'limited';
+      caveats.push(`${result.summary.clicks - labelledClicks} click(s) lacked a safe stable label and are excluded from label concentration.`);
+    }
+  }
+  const evidenceRefs: VisualEvidenceRef[] = snapshot ? [{
+    type: 'experience_snapshot',
+    id: snapshot.id,
+    evidence_ref: snapshot.evidence_ref,
+  }] : [];
+  return {
+    scope: {
+      surface: surface.key,
+      route: q.route,
+      version: q.version,
+      device: q.device,
+      purpose: surface.purpose,
+    },
+    sample_size: {
+      events: result.summary.events,
+      page_views: result.summary.page_views,
+      sessions: result.summary.sessions,
+      actors: result.summary.actors,
+      clicks: result.summary.clicks,
+    },
+    section_order: result.sections.map((section) => section.section),
+    largest_section_reach_decreases: sectionReachDecreases,
+    click_concentration: result.click_labels.map((item) => ({
+      ...item,
+      percentage_of_all_clicks: percentage(item.count, result.summary.clicks),
+    })),
+    scroll_reach: result.scroll_coverage,
+    output_coverage: {
+      click_labels_returned: result.click_labels.length,
+      click_labels_truncated: result.click_labels_truncated,
+      sections_returned: result.sections.length,
+      sections_truncated: result.sections_truncated,
+    },
+    snapshot_coverage: {
+      status: snapshotStatus,
+      exact_viewport_match: snapshot !== null,
+      snapshot_id: snapshot?.id ?? null,
+      evidence_ref: snapshot?.evidence_ref ?? null,
+      captured_at: capturedAt,
+      expires_at: expiresAt,
+      age_seconds: snapshotAgeSeconds,
+    },
+    evidence_refs: evidenceRefs,
+    data_quality: { status: quality, caveats },
+    suggested_next_actions: [
+      {
+        action: 'list_versions',
+        tool: 'list_visual_experience_versions',
+        reason: 'Discover explicit snapshot-backed versions and devices before choosing a comparison cohort.',
+        known_parameters: { surface: q.surface, route: q.route, env: q.env },
+        requires: [],
+      },
+      {
+        action: 'compare_explicit_cohorts',
+        tool: 'compare_visual_experience',
+        reason: 'Compare this bounded cohort only after selecting another explicit version, device or period; do not infer causation.',
+        known_parameters: {
+          surface: q.surface,
+          route: q.route,
+          env: q.env,
+          baseline: {
+            version: q.version,
+            device: q.device,
+            date_from: from.toISOString(),
+            date_to: to.toISOString(),
+          },
+        },
+        requires: ['comparison.version', 'comparison.device', 'comparison.date_from'],
+      },
+    ],
+  };
+}
+
+function buildVisualCompareAgentContext(
+  q: VisualExperienceCompareInput,
+  baseline: Extract<QueryResult, { kind: 'visual_experience' }>,
+  comparison: Extract<QueryResult, { kind: 'visual_experience' }>,
+  sectionDeltas: Array<{
+    section: string;
+    baseline_present: boolean;
+    comparison_present: boolean;
+    percentage_points: number | null;
+  }>,
+): VisualCompareAgentContext {
+  const baselineSections = new Map(baseline.sections.map((item) => [item.section, item.percentage]));
+  const comparisonSections = new Map(comparison.sections.map((item) => [item.section, item.percentage]));
+  const evidenceRefs = [...baseline.agent_context.evidence_refs, ...comparison.agent_context.evidence_refs]
+    .filter((item, index, all) => all.findIndex((candidate) => candidate.evidence_ref === item.evidence_ref) === index);
+  const taxonomyMismatches = sectionDeltas.filter((item) =>
+    !item.baseline_present || !item.comparison_present
+  ).map(({ section, baseline_present, comparison_present }) => ({
+    section,
+    baseline_present,
+    comparison_present,
+  }));
+  const caveats = [
+    ...baseline.agent_context.data_quality.caveats.map((item) => `Baseline: ${item}`),
+    ...comparison.agent_context.data_quality.caveats.map((item) => `Comparison: ${item}`),
+    'Deltas are descriptive and non-causal; traffic mix, instrumentation, seasonality and concurrent changes may differ.',
+    ...(taxonomyMismatches.length > 0
+      ? ['Section labels differ between cohorts; unmatched labels are reported as taxonomy mismatches, not behavioral deltas.']
+      : []),
+  ];
+  const statuses = [baseline.agent_context.data_quality.status, comparison.agent_context.data_quality.status];
+  const quality = statuses.includes('empty')
+    ? 'empty'
+    : statuses.includes('limited') || taxonomyMismatches.length > 0
+      ? 'limited'
+      : 'ok';
+  return {
+    scope: {
+      surface: baseline.surface.key,
+      route: q.route,
+      purpose: baseline.surface.purpose,
+    },
+    sample_sizes: {
+      baseline: baseline.agent_context.sample_size,
+      comparison: comparison.agent_context.sample_size,
+    },
+    largest_section_changes: sectionDeltas.filter((item) => item.percentage_points !== null).map((item) => ({
+      section: item.section,
+      baseline_percentage: baselineSections.get(item.section)!,
+      comparison_percentage: comparisonSections.get(item.section)!,
+      percentage_points: item.percentage_points!,
+    })).sort((a, b) =>
+      Math.abs(b.percentage_points) - Math.abs(a.percentage_points)
+      || a.section.localeCompare(b.section)
+    ).slice(0, 5),
+    section_taxonomy_mismatches: taxonomyMismatches,
+    evidence_refs: evidenceRefs,
+    data_quality: { status: quality, caveats: [...new Set(caveats)] },
+    suggested_next_actions: [
+      {
+        action: 'inspect_baseline_map',
+        tool: 'get_visual_experience_map',
+        reason: 'Inspect the bounded baseline counts, percentages, reach and evidence before interpreting a delta.',
+        query: {
+          surface: q.surface,
+          route: q.route,
+          version: q.baseline.version,
+          device: q.baseline.device,
+          date_from: baseline.meta.date_range!.from,
+          date_to: baseline.meta.date_range!.to,
+          grid: q.grid,
+          env: q.env,
+        },
+      },
+      {
+        action: 'inspect_comparison_map',
+        tool: 'get_visual_experience_map',
+        reason: 'Inspect the bounded comparison counts, percentages, reach and evidence before interpreting a delta.',
+        query: {
+          surface: q.surface,
+          route: q.route,
+          version: q.comparison.version,
+          device: q.comparison.device,
+          date_from: comparison.meta.date_range!.from,
+          date_to: comparison.meta.date_range!.to,
+          grid: q.grid,
+          env: q.env,
+        },
+      },
+    ],
+  };
+}
+
+function percentage(num: number, denom: number): number {
+  return denom === 0 ? 0 : Number((num * 100 / denom).toFixed(2));
 }
 
 function ratio(num: number, denom: number): number {

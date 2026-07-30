@@ -1,21 +1,27 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
-import { ZodError } from 'zod';
+import cors from '@fastify/cors';
+import { ZodError, z } from 'zod';
 import type pg from 'pg';
-import { ApiError, badRequest, notFound } from '../errors.js';
+import { ApiError, badRequest, databasePolicyError, notFound } from '../errors.js';
 import { authenticate, requireKind, type AuthContext, type JwtAuthOptions } from './auth.js';
 import { createContext, type AppContext, type CreateContextOptions } from './context.js';
 import {
-  completeHostedOnboarding, getBillingSummary, organizationHasProjects, type McpRunnerConfig,
+  completeHostedOnboarding, getAuthenticatedProfile, getBillingSummary, organizationHasProjects,
+  requireOrganizationWriteReadiness, updateAuthenticatedProfile, type McpRunnerConfig,
 } from '../services/accounts.js';
+import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
-  createApiKey, createProject, getProjectBySlug, listApiKeys,
-  listProjectsWithStats, revokeApiKey, type Project,
+  createApiKey, createProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
+  listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
 } from '../services/projects.js';
 import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
 import {
   defineFunnel, deleteFunnel, deleteMetric, deprecateMetric, listFunnels, listMetrics,
   registerEntityType, registerMetric, updateMetric,
 } from '../services/registry.js';
+import {
+  createMetricCategory, deleteMetricCategory, listMetricCategories, updateMetricCategory,
+} from '../services/metricCategories.js';
 import { deleteEntities, getIdentityEntity, upsertEntities } from '../services/entities.js';
 import { createInsight, listInsights, setInsightStatus } from '../services/insights.js';
 import { clearIngestWarnings, listIngestWarnings, type WarningKind } from '../services/warnings.js';
@@ -29,13 +35,23 @@ import {
   concludeExperiment, createExperiment, getExperimentResults, listExperiments, startExperiment, updateExperiment,
 } from '../services/experiments.js';
 import {
-  archiveExperienceSurface, captureExperienceEvents, createExperienceSurface, listExperienceSurfaces,
+  archiveExperienceSurface, captureExperienceEvents, createExperienceSnapshot, createExperienceSurface,
+  deleteExperienceSnapshot, listExperienceRoutes, listExperienceSnapshots, listExperienceSurfaces,
+  purgeExperienceSnapshots, readExperienceSnapshot, registerExperienceRoute,
 } from '../services/experience.js';
 import { createActorLink, listActorLinks, revokeActorLink } from '../services/identity.js';
 import {
   createPropertyDefinition, listPropertyDefinitions, updatePropertyDefinition,
   type PropertyDefinition,
 } from '../services/properties.js';
+import { preflightAcquisitionProperties, proposeAcquisitionProperties } from '../services/acquisitionAttribution.js';
+import {
+  preflightBrowserAnalyticsMetrics,
+  preflightBrowserAnalyticsProperties,
+  proposeBrowserAnalyticsMetrics,
+  proposeBrowserAnalyticsProperties,
+} from '../services/browserAnalytics.js';
+import { UNKNOWN_COUNTRY_RESOLVER, type CountryResolver } from '../services/country.js';
 import { assessMeasurementTrust } from '../services/measurementTrust.js';
 import {
   applyDeclaration, diffDeclaration, exportDeclaration, getContract, listContracts,
@@ -49,6 +65,8 @@ import {
   approveAction, getAction, listActions, prepareAction, rejectAction, retryAction,
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
+import type { OutboundPolicyOptions } from '../security/outbound.js';
+import { getOrganizationUsage } from '../services/usage.js';
 import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
 import {
   acknowledgeOnboardingGate, getOnboardingStatus, recordAgentObservation, recordQueryRun,
@@ -59,9 +77,10 @@ import {
 } from '../services/rateLimiter.js';
 import {
   deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
-  actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
-  querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
+  actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
+  createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
+  createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -76,20 +95,91 @@ export interface ServerOptions {
   publicUrl?: string;
   mcpRunner?: McpRunnerConfig;
   ingestBuffer?: CreateContextOptions['ingestBuffer'];
+  manageEventPartitions?: boolean;
   queryCache?: CreateContextOptions['queryCache'];
   rateLimit?: TenantRateLimitOptions | false;
   connectorEncryptionKey?: string;
+  corsOrigins?: string[];
+  outboundPolicy?: OutboundPolicyOptions;
+  artifactStore?: CreateContextOptions['artifactStore'];
+  artifactDir?: string;
+  countryResolver?: CountryResolver;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
+const PUBLIC_BROWSER_WRITE_CORS_ROUTES = new Set([
+  '/i/v1/events',
+  '/i/v1/experience/events',
+  '/i/v1/flags/evaluate',
+]);
+const PUBLIC_BROWSER_WRITE_CORS_HEADERS = new Set([
+  'authorization',
+  'content-type',
+  'x-poolstatis-client',
+]);
+
+function requestPath(req: FastifyRequest): string {
+  return req.url.split('?', 1)[0] ?? req.url;
+}
+
+function isCanonicalHttpsOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'https:' && url.origin === origin;
+  } catch {
+    return false;
+  }
+}
+
+function hasPublicIngestBearer(req: FastifyRequest): boolean {
+  return /^Bearer\s+pk_/i.test(req.headers.authorization ?? '');
+}
+
+function hasAllowedPublicPreflightHeaders(req: FastifyRequest): boolean {
+  const requested = req.headers['access-control-request-headers'];
+  if (typeof requested !== 'string') return false;
+  const headers = requested.split(',').map((header) => header.trim().toLowerCase()).filter(Boolean);
+  return headers.includes('authorization')
+    && headers.every((header) => PUBLIC_BROWSER_WRITE_CORS_HEADERS.has(header));
+}
+
+function isPublicBrowserWriteCorsRequest(
+  req: FastifyRequest,
+  origin: string,
+  configuredOrigins: ReadonlySet<string>,
+): boolean {
+  if (configuredOrigins.has(origin)
+    || !PUBLIC_BROWSER_WRITE_CORS_ROUTES.has(requestPath(req))
+    || !isCanonicalHttpsOrigin(origin)) {
+    return false;
+  }
+  if (req.method === 'OPTIONS') {
+    return req.headers['access-control-request-method']?.toUpperCase() === 'POST'
+      && hasAllowedPublicPreflightHeaders(req);
+  }
+  return req.method === 'POST' && !req.headers.cookie && hasPublicIngestBearer(req);
+}
 
 function authOwner(auth: AuthContext): string {
   return auth.keyId ? `key:${auth.keyId}` : `user:${auth.userId}`;
 }
 
+/** Hosted identities fail closed without a current owner/admin role. */
+export function hasOrganizationManagementRole(auth: AuthContext): boolean {
+  if (auth.kind === 'user') {
+    return auth.userRole === 'owner' || auth.userRole === 'admin';
+  }
+  if (auth.kind === 'personal') {
+    // Ownerless personal tokens predate hosted auth and remain self-host compatible.
+    return auth.userId === undefined || auth.userRole === 'owner' || auth.userRole === 'admin';
+  }
+  return false;
+}
+
 function requirePlatformAccess(auth: AuthContext): void {
   requireKind(auth, 'secret', 'personal', 'user');
-  if (auth.kind === 'user' && auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+  if ((auth.kind === 'user' || auth.kind === 'personal')
+    && !hasOrganizationManagementRole(auth)) {
     throw new ApiError(
       403,
       'insufficient_role',
@@ -97,6 +187,27 @@ function requirePlatformAccess(auth: AuthContext): void {
       'ask an owner or admin to upgrade your workspace role',
     );
   }
+}
+
+/** Usage is organization-wide: never expose it through a project secret key. */
+function requireUsageReadAccess(auth: AuthContext): void {
+  if ((auth.kind === 'user' || auth.kind === 'personal')
+    && auth.projectId === null
+    && hasOrganizationManagementRole(auth)) return;
+  if (auth.kind === 'user' || auth.kind === 'personal') {
+    throw new ApiError(
+      403,
+      'insufficient_role',
+      'this hosted account role cannot read organization usage',
+      'ask an owner or admin to upgrade your workspace role',
+    );
+  }
+  throw new ApiError(
+    403,
+    'insufficient_scope',
+    'organization usage requires a hosted user or organization-wide personal token',
+    'use a hosted user session or a personal token with no project scope',
+  );
 }
 
 function requireTokenIssuanceAccess(auth: AuthContext): void {
@@ -107,6 +218,33 @@ function requireTokenIssuanceAccess(auth: AuthContext): void {
       'insufficient_role',
       'this hosted account role cannot issue MCP tokens',
       'ask an owner or admin to issue a personal token',
+    );
+  }
+}
+
+/** A hosted user may always inspect or revoke only their own personal tokens. */
+function requireOwnedTokenAccess(auth: AuthContext): void {
+  requireKind(auth, 'user');
+}
+
+/** Organization-scoped mutations must never be authorized by an exact-project secret key. */
+function requireOrganizationManagementAccess(auth: AuthContext): void {
+  if (auth.kind === 'secret') {
+    throw new ApiError(
+      403,
+      'insufficient_scope',
+      'a secret key is scoped to one project and cannot create organization projects',
+      'use a personal token or hosted owner/admin account',
+    );
+  }
+  requireKind(auth, 'personal', 'user');
+  if ((auth.kind === 'user' || auth.kind === 'personal')
+    && !hasOrganizationManagementRole(auth)) {
+    throw new ApiError(
+      403,
+      'insufficient_role',
+      'this hosted account role cannot manage organization projects',
+      'ask an owner or admin to upgrade your workspace role',
     );
   }
 }
@@ -149,12 +287,26 @@ function parsePropFilter(token: string): PropertyFilter {
 export function buildServer(pool: pg.Pool, options: ServerOptions = {}): FastifyInstance {
   const contextOptions: CreateContextOptions = {};
   if (options.ingestBuffer !== undefined) contextOptions.ingestBuffer = options.ingestBuffer;
+  if (options.manageEventPartitions !== undefined) {
+    contextOptions.manageEventPartitions = options.manageEventPartitions;
+  }
   if (options.queryCache !== undefined) contextOptions.queryCache = options.queryCache;
   if (options.connectorEncryptionKey !== undefined) {
     contextOptions.connectorEncryptionKey = options.connectorEncryptionKey;
   }
+  if (options.outboundPolicy !== undefined) contextOptions.outboundPolicy = options.outboundPolicy;
+  if (options.artifactStore !== undefined) contextOptions.artifactStore = options.artifactStore;
+  if (options.artifactDir !== undefined) contextOptions.artifactDir = options.artifactDir;
+  if (options.countryResolver?.attribution !== undefined) {
+    contextOptions.countryAttribution = options.countryResolver.attribution;
+  }
   const ctx = createContext(pool, contextOptions);
-  const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
+  const app = Fastify({ logger: false });
+  (app as FastifyInstance & { countryResolver?: CountryResolver }).countryResolver =
+    options.countryResolver ?? UNKNOWN_COUNTRY_RESOLVER;
+  app.addContentTypeParser(['image/png', 'image/webp'], { parseAs: 'buffer' }, (_req, body, done) => {
+    done(null, body);
+  });
   const rateLimiter = options.rateLimit === false || options.rateLimit === undefined
     ? null
     : new TenantRateLimiter(options.rateLimit);
@@ -164,27 +316,76 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   const publicUrl = (options.publicUrl ?? 'https://api.poolstatis.com').replace(/\/$/, '');
   const mcpRunner = options.mcpRunner ?? {
     command: 'pnpm',
-    args: ['--silent', 'dlx', '@poolstatis/mcp'],
+    args: ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'],
     packageStatus: 'publish_pending' as const,
-    note: 'Publish or configure the MCP runner before treating this template as copy-paste ready.',
+    note: 'Registry install is disabled. Replace <path-to-poolstatis-core> with an exact local Core checkout path.',
   };
+  const corsOrigins = new Set(options.corsOrigins ?? []);
 
-  // The dashboard SPA is served from a different origin (vite dev or static
-  // host). Bearer tokens, not cookies, carry auth — so reflecting the origin
-  // is safe here. Preflight OPTIONS is exempted from the auth hook below.
-  void app.register(import('@fastify/cors'), {
-    origin: true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
+  void app.register(cors, {
+    delegator(req, callback) {
+      const origin = req.headers.origin;
+      const configured = !origin || corsOrigins.has(origin);
+      const publicBrowserWrite = origin
+        ? isPublicBrowserWriteCorsRequest(req, origin, corsOrigins)
+        : false;
+      callback(null, {
+        origin: configured || publicBrowserWrite,
+        methods: publicBrowserWrite ? ['POST'] : ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
+        credentials: false,
+      });
+    },
+  });
+
+  // Authentication runs in an onRequest hook and can reject before a route
+  // handler is reached. Set the actual-response CORS headers in the root scope
+  // before authentication so browser clients can read neutral 4xx/5xx bodies.
+  app.addHook('onRequest', async (req, reply) => {
+    const origin = req.headers.origin;
+    if (!origin) return;
+    void reply.header('vary', 'Origin');
+    if (corsOrigins.has(origin) || isPublicBrowserWriteCorsRequest(req, origin, corsOrigins)) {
+      void reply.header('access-control-allow-origin', origin);
+    }
+  });
+
+  app.addHook('onRequest', async (req) => {
+    const origin = req.headers.origin;
+    if (!origin || corsOrigins.has(origin) || req.method === 'OPTIONS') return;
+    if (PUBLIC_BROWSER_WRITE_CORS_ROUTES.has(requestPath(req))
+      && isCanonicalHttpsOrigin(origin)
+      && req.headers.cookie) {
+      throw new ApiError(
+        403,
+        'browser_credentials_forbidden',
+        'public browser ingest does not accept cookies',
+        'send only a write-only pk_ ingest key in the Authorization header',
+      );
+    }
   });
 
   // Unauthenticated liveness probe the dashboard uses to check the base URL
   // before a token is entered.
   app.get('/health', async () => ({ status: 'ok', service: 'poolstatis' }));
+  app.get('/ready', async (_req, reply) => {
+    try {
+      await pool.query('SELECT 1');
+      return { status: 'ready', service: 'poolstatis' };
+    } catch {
+      return reply.status(503).send({
+        error: { code: 'dependencies_not_ready', message: 'dependencies are not ready' },
+      });
+    }
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ApiError) {
       return reply.status(err.statusCode).send(err.toBody());
+    }
+    const policyError = databasePolicyError(err);
+    if (policyError) {
+      return reply.status(policyError.statusCode).send(policyError.toBody());
     }
     if (err instanceof ZodError) {
       const issue = err.issues[0];
@@ -207,44 +408,67 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   });
 
   app.addHook('onRequest', async (req) => {
-    // CORS preflight and the public health probe carry no token.
-    if (req.method === 'OPTIONS' || req.url === '/health') return;
+    // CORS preflight and public probes carry no token.
+    if (req.method === 'OPTIONS' || req.url === '/health' || req.url === '/ready') return;
     req.auth = await authenticate(pool, req.headers.authorization, options.auth);
+  });
+
+  if (credentialAttemptLimiter) {
+    app.addHook('preHandler', async (req, reply) => {
+      if (req.method === 'OPTIONS' || req.url === '/health' || req.url === '/ready') return;
+      const lane = req.url.startsWith('/i/v1/') ? 'ingest' as const : 'api' as const;
+      try {
+        credentialAttemptLimiter.consume({
+          lane,
+          tenantId: req.auth.orgId,
+          keyId: authOwner(req.auth),
+          projectId: lane === 'ingest'
+            ? req.auth.projectId ?? `org:${req.auth.orgId}`
+            : 'credential-attempts',
+          cost: 1,
+        });
+      } catch (error) {
+        if (!(error instanceof RateLimitExceeded)) throw error;
+        void reply.header('retry-after', String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))));
+        throw new ApiError(
+          429,
+          'rate_limited',
+          'credential request-attempt limit exceeded',
+          `retry after approximately ${Math.max(1, Math.ceil(error.retryAfterMs / 1_000))} seconds`,
+        );
+      }
+    });
+  }
+
+  // Keep this hook unconditional: hosted writes must still fail closed when
+  // rate limiting is disabled. A configured bounded credential-attempt lane
+  // runs first, while project lookup and body validation remain after policy.
+  app.addHook('preHandler', async (req) => {
+    if (options.auth?.requireOrganizationPolicy === true
+      && requiresOrganizationWriteReadiness(req.method, req.routeOptions.url)) {
+      await requireOrganizationWriteReadiness(pool, req.auth.orgId);
+    }
   });
 
   if (rateLimiter) {
     app.addHook('preHandler', async (req, reply) => {
-      if (req.method === 'OPTIONS' || req.url === '/health') return;
+      if (req.method === 'OPTIONS' || req.url === '/health' || req.url === '/ready') return;
       const lane = req.url.startsWith('/i/v1/') ? 'ingest' as const : 'api' as const;
       const slug = (req.params as { slug?: string } | undefined)?.slug;
-      if (lane === 'api' && credentialAttemptLimiter) {
-        try {
-          credentialAttemptLimiter.consume({
-            lane: 'api',
-            tenantId: req.auth.orgId,
-            keyId: authOwner(req.auth),
-            projectId: 'credential-attempts',
-            cost: 1,
-          });
-        } catch (error) {
-          if (!(error instanceof RateLimitExceeded)) throw error;
-          void reply.header('retry-after', String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))));
-          throw new ApiError(
-            429,
-            'rate_limited',
-            'credential request-attempt limit exceeded',
-            `retry after approximately ${Math.max(1, Math.ceil(error.retryAfterMs / 1_000))} seconds`,
-          );
-        }
-      }
       if (lane === 'ingest') {
         requireKind(req.auth, 'ingest');
       } else {
         const route = req.routeOptions.url;
         if (route === '/api/v1/me' || route === '/api/v1/onboarding') {
           requireKind(req.auth, 'user');
-        } else if (route === '/api/v1/me/tokens') {
+        } else if (route === '/api/v1/me/usage') {
+          requireUsageReadAccess(req.auth);
+        } else if (route === '/api/v1/me/tokens' && req.method === 'POST') {
           requireTokenIssuanceAccess(req.auth);
+        } else if (route === '/api/v1/me/tokens' || route === '/api/v1/me/tokens/:id') {
+          requireOwnedTokenAccess(req.auth);
+        } else if (route === '/api/v1/projects' && req.method === 'POST') {
+          requireOrganizationManagementAccess(req.auth);
         } else {
           requirePlatformAccess(req.auth);
         }
@@ -297,17 +521,19 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
 }
 
 function credentialAttemptLimits(options: TenantRateLimitOptions): TenantRateLimitOptions {
-  const key = {
-    ratePerSecond: options.api.key.ratePerSecond,
-    burst: Math.max(10, options.api.key.burst * 2),
-  };
-  const project = {
-    ratePerSecond: Math.max(key.ratePerSecond, options.api.project.ratePerSecond),
-    burst: Math.max(21, options.api.project.burst * 2),
-  };
+  const attemptLane = (lane: TenantRateLimitOptions['api']) => ({
+    key: {
+      ratePerSecond: lane.key.ratePerSecond,
+      burst: Math.max(10, lane.key.burst * 2),
+    },
+    project: {
+      ratePerSecond: Math.max(lane.key.ratePerSecond, lane.project.ratePerSecond),
+      burst: Math.max(21, lane.project.burst * 2),
+    },
+  });
   return {
-    ingest: { key, project },
-    api: { key, project },
+    ingest: attemptLane(options.ingest),
+    api: attemptLane(options.api),
     maxEntries: options.maxEntries,
     maxEntriesPerTenant: options.maxEntriesPerTenant,
     idleTtlMs: options.idleTtlMs,
@@ -333,7 +559,12 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
     requireKind(req.auth, 'ingest');
     const project = await ingestProject(ctx, req.auth);
     const body = ingestEnvelopeSchema.parse(req.body);
-    const result = await ctx.ingest.processBatch(project, req.auth.env, body);
+    const country = (app as FastifyInstance & { countryResolver?: CountryResolver }).countryResolver
+      ?.resolve({
+        headers: req.headers as Record<string, string | string[] | undefined>,
+        ...(req.socket.remoteAddress ? { remoteAddress: req.socket.remoteAddress } : {}),
+      }) ?? 'unknown';
+    const result = await ctx.ingest.processBatch(project, req.auth.env, body, new Date(), { country });
     if (result.accepted > 0) ctx.query.invalidateProject(project.id);
     return reply.status(result.errors ? 207 : 200).send(result);
   });
@@ -387,63 +618,82 @@ function registerAccountRoutes(
 ): void {
   app.get('/api/v1/me', async (req) => {
     requireKind(req.auth, 'user');
-    const { rows } = await ctx.pool.query(
-      `SELECT au.id, au.subject, au.email, au.name, au.picture_url,
-         o.id AS org_id, o.name AS org_name, om.role
-       FROM auth_users au
-       JOIN organization_members om ON om.user_id = au.id
-       JOIN organizations o ON o.id = om.org_id
-       WHERE au.id = $1 AND o.id = $2
-       LIMIT 1`,
-      [req.auth.userId, req.auth.orgId],
-    );
-    const row = rows[0];
-    if (!row) throw notFound('auth_user');
-    return {
-      user: {
-        id: row.id,
-        subject: row.subject,
-        email: row.email,
-        name: row.name,
-        picture_url: row.picture_url,
-      },
-      organization: {
-        id: row.org_id,
-        name: row.org_name,
-        role: row.role,
-      },
-      billing: await getBillingSummary(ctx.pool, req.auth.orgId),
-      onboarding: {
-        completed: await organizationHasProjects(ctx.pool, req.auth.orgId),
-      },
-    };
+    return hostedAccountResponse(ctx, req.auth);
+  });
+
+  app.patch('/api/v1/me', async (req) => {
+    requireKind(req.auth, 'user');
+    const input = updateProfileSchema.parse(req.body);
+    await updateAuthenticatedProfile(ctx.pool, req.auth.userId!, input.display_name);
+    return hostedAccountResponse(ctx, req.auth);
   });
 
   app.post('/api/v1/onboarding', async (req, reply) => {
     requireKind(req.auth, 'user');
-    const body = req.body as { workspace_name?: string; project_slug?: string; project_name?: string };
-    if (!body?.workspace_name || !body?.project_slug || !body?.project_name) {
-      throw badRequest('validation_error', 'workspace_name, project_slug and project_name are required');
-    }
-    const result = await completeHostedOnboarding(ctx.pool, req.auth.orgId, {
-      workspace_name: body.workspace_name,
-      project_slug: body.project_slug,
-      project_name: body.project_name,
-    }, publicUrl, mcpRunner);
+    requireOrganizationManagementAccess(req.auth);
+    const body = hostedOnboardingSchema.parse(req.body);
+    const result = await completeHostedOnboarding(ctx.pool, req.auth.orgId, req.auth.userId!, body, publicUrl, mcpRunner);
     return reply.status(201).send(result);
   });
 
   app.post('/api/v1/me/tokens', async (req, reply) => {
     requireTokenIssuanceAccess(req.auth);
-    const body = req.body as { label?: string } | null;
+    const body = createPersonalTokenSchema.parse(req.body ?? {});
     const created = await createApiKey(ctx.pool, {
       orgId: req.auth.orgId,
       projectId: null,
       kind: 'personal',
-      label: body?.label?.trim() || 'hosted MCP token',
+      label: body.label ?? 'hosted MCP token',
+      issuedByUserId: req.auth.userId!,
     });
     return reply.status(201).send(created);
   });
+
+  app.get('/api/v1/me/tokens', async (req) => {
+    requireOwnedTokenAccess(req.auth);
+    return { tokens: await listPersonalApiKeys(ctx.pool, req.auth.orgId, req.auth.userId!) };
+  });
+
+  app.delete('/api/v1/me/tokens/:id', async (req) => {
+    requireOwnedTokenAccess(req.auth);
+    const id = z.string().uuid().parse((req.params as { id: string }).id);
+    await revokePersonalApiKey(ctx.pool, req.auth.orgId, req.auth.userId!, id);
+    return { revoked: true };
+  });
+}
+
+async function hostedAccountResponse(ctx: AppContext, auth: AuthContext) {
+  const account = await getAuthenticatedProfile(ctx.pool, auth.userId!, auth.orgId);
+  if (!account) throw notFound('auth_user');
+  return {
+    user: {
+      id: account.user.id,
+      subject: account.user.subject,
+      email: account.user.email,
+      email_verified: account.user.email_verified,
+      display_name: account.user.display_name,
+      name: account.user.name,
+      picture_url: account.user.picture_url,
+      connection_strategy: account.user.connection_strategy,
+    },
+    identity: {
+      issuer: account.user.identity_issuer,
+      subject: account.user.subject,
+    },
+    organization: {
+      id: account.organization.id,
+      name: account.organization.name,
+      role: account.organization.role,
+    },
+    membership: {
+      organization_id: account.organization.id,
+      role: account.organization.role,
+    },
+    billing: await getBillingSummary(ctx.pool, auth.orgId),
+    onboarding: {
+      completed: await organizationHasProjects(ctx.pool, auth.orgId),
+    },
+  };
 }
 
 // ===== Platform (/api/v1, sk_/pt_ keys) =====
@@ -465,6 +715,17 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     return project;
   };
 
+  app.get('/api/v1/me/usage', async (req) => {
+    requireUsageReadAccess(req.auth);
+    const { period } = req.query as { period?: string };
+    if (!period || !usagePeriodSchema.safeParse(period).success) {
+      throw badRequest('invalid_query_param', 'period must be a UTC month in YYYY-MM format');
+    }
+    // The organization comes only from the authenticated credential. Caller
+    // query parameters never widen an organization-scoped usage read.
+    return getOrganizationUsage(ctx.pool, req.auth.orgId, period);
+  });
+
   app.get('/api/v1/projects', async (req) => {
     platform(req);
     const all = await listProjectsWithStats(ctx.pool, req.auth.orgId);
@@ -478,11 +739,8 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.post('/api/v1/projects', async (req, reply) => {
-    platform(req);
-    const body = req.body as { slug?: string; name?: string; timezone?: string };
-    if (!body?.slug || !body?.name) {
-      throw badRequest('validation_error', 'slug and name are required');
-    }
+    requireOrganizationManagementAccess(req.auth);
+    const body = createProjectSchema.parse(req.body);
     if (!/^[a-z][a-z0-9-]*$/.test(body.slug)) {
       throw badRequest('invalid_slug', 'slug must be lowercase letters, digits and hyphens, starting with a letter');
     }
@@ -559,7 +817,8 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/api/v1/projects/:slug/experience/surfaces', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    return { surfaces: await listExperienceSurfaces(ctx.pool, project.id) };
+    const { env = req.auth.env } = req.query as { env?: string };
+    return { surfaces: await listExperienceSurfaces(ctx.pool, ctx.eventStore, project.id, env) };
   });
 
   app.post('/api/v1/projects/:slug/experience/surfaces/:key/archive', async (req) => {
@@ -569,6 +828,92 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const surface = await archiveExperienceSurface(ctx.pool, project.id, key);
     ctx.query.invalidateProject(project.id);
     return surface;
+  });
+
+  app.post('/api/v1/projects/:slug/experience/surfaces/:key/routes', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const route = await registerExperienceRoute(
+      ctx.pool,
+      project.id,
+      key,
+      experienceRouteRegistrationSchema.parse(req.body),
+    );
+    return reply.status(201).send(route);
+  });
+
+  app.get('/api/v1/projects/:slug/experience/routes', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { surface } = req.query as { surface?: string };
+    return { routes: await listExperienceRoutes(ctx.pool, project.id, surface) };
+  });
+
+  app.post('/api/v1/projects/:slug/experience/snapshots', {
+    bodyLimit: 6 * 1024 * 1024,
+  }, async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const query = req.query as Record<string, string | undefined>;
+    const meta = experienceSnapshotMetaSchema.parse({
+      surface: query.surface,
+      route: query.route,
+      version: query.version,
+      device: query.device,
+      env: query.env ?? req.auth.env,
+      release_hash: query.release_hash,
+      viewport_width: query.viewport_width ? Number(query.viewport_width) : undefined,
+      viewport_height: query.viewport_height ? Number(query.viewport_height) : undefined,
+      document_width: query.document_width ? Number(query.document_width) : undefined,
+      document_height: query.document_height ? Number(query.document_height) : undefined,
+      captured_at: query.captured_at,
+      retention_days: query.retention_days ? Number(query.retention_days) : undefined,
+    });
+    const mimeType = String(req.headers['content-type'] ?? '').split(';')[0]!;
+    if (!Buffer.isBuffer(req.body)) throw badRequest('snapshot_body_invalid', 'snapshot body must be raw PNG or WebP bytes');
+    return reply.status(201).send(await createExperienceSnapshot(
+      ctx.pool,
+      ctx.artifacts,
+      project.id,
+      meta,
+      mimeType,
+      req.body,
+    ));
+  });
+
+  app.get('/api/v1/projects/:slug/experience/snapshots', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { surface, route, env } = req.query as { surface?: string; route?: string; env?: string };
+    return {
+      snapshots: await listExperienceSnapshots(ctx.pool, project.id, {
+        ...(surface ? { surface } : {}),
+        ...(route ? { route } : {}),
+        ...(env ? { env } : {}),
+      }),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/experience/snapshots/:id/image', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const { snapshot, bytes } = await readExperienceSnapshot(ctx.pool, ctx.artifacts, project.id, id);
+    return reply
+      .header('content-type', snapshot.mime_type)
+      .header('content-length', String(snapshot.byte_size))
+      .header('cache-control', 'private, max-age=31536000, immutable')
+      .header('x-content-type-options', 'nosniff')
+      .send(bytes);
+  });
+
+  app.delete('/api/v1/projects/:slug/experience/snapshots/:id', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    await deleteExperienceSnapshot(ctx.pool, ctx.artifacts, project.id, id);
+    return reply.status(204).send();
   });
 
   // ----- feature delivery -----
@@ -660,6 +1005,42 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
     return reply.status(201).send(metric);
+  });
+
+  app.get('/api/v1/projects/:slug/metric-categories', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { categories: await listMetricCategories(ctx.pool, project.id) };
+  });
+
+  app.post('/api/v1/projects/:slug/metric-categories', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const category = await createMetricCategory(
+      ctx.pool,
+      project.id,
+      createMetricCategorySchema.parse(req.body),
+    );
+    return reply.status(201).send(category);
+  });
+
+  app.patch('/api/v1/projects/:slug/metric-categories/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return updateMetricCategory(
+      ctx.pool,
+      project.id,
+      key,
+      updateMetricCategorySchema.parse(req.body),
+    );
+  });
+
+  app.delete('/api/v1/projects/:slug/metric-categories/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return { deleted: true, ...await deleteMetricCategory(ctx.pool, project.id, key) };
   });
 
   app.patch('/api/v1/projects/:slug/metrics/:key', async (req) => {
@@ -772,15 +1153,24 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     }
     let events_deleted = 0;
     let entities_deleted = 0;
+    let snapshots_deleted = 0;
     if (body.scope === 'events' || body.scope === 'all') {
       events_deleted = await ctx.eventStore.purge(project.id, body.env, body.distinct_id);
     }
     if (body.scope === 'entities' || body.scope === 'all') {
       entities_deleted = await deleteEntities(ctx.pool, project.id, body.env);
     }
+    if (body.scope === 'all') {
+      snapshots_deleted = await purgeExperienceSnapshots(
+        ctx.pool,
+        ctx.artifacts,
+        project.id,
+        body.env,
+      );
+    }
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
-    return { events_deleted, entities_deleted, env: body.env };
+    return { events_deleted, entities_deleted, snapshots_deleted, env: body.env };
   });
 
   app.post('/api/v1/projects/:slug/query', async (req) => {
@@ -827,7 +1217,7 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     if (req.headers['x-poolstatis-client'] !== 'mcp') {
       throw badRequest(
         'mcp_observation_required',
-        'agent connection is recorded only from a real MCP-originated call',
+        'agent use is recorded only from a request marked by the MCP transport',
         'call get_onboarding_status through the configured MCP client',
       );
     }
@@ -925,6 +1315,94 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
       authOwner(req.auth),
     );
     return reply.status(201).send(property);
+  });
+
+  app.post('/api/v1/projects/:slug/properties/acquisition-attribution', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return {
+      properties: await proposeAcquisitionProperties(ctx.pool, project.id, authOwner(req.auth)),
+    };
+  });
+
+  app.post('/api/v1/projects/:slug/properties/browser-analytics', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const actor = authOwner(req.auth);
+    const client = await ctx.pool.connect();
+    const setupLock = `browser-analytics-setup:${project.id}`;
+    let lockAcquired = false;
+    let destroyClient = false;
+    let result: {
+      properties: Awaited<ReturnType<typeof proposeBrowserAnalyticsProperties>>;
+      metrics: Awaited<ReturnType<typeof proposeBrowserAnalyticsMetrics>>;
+    } | undefined;
+    try {
+      await client.query(
+        'SELECT pg_advisory_lock(hashtextextended($1, 0))',
+        [setupLock],
+      );
+      lockAcquired = true;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+          await preflightBrowserAnalyticsProperties(client, project.id);
+          await preflightAcquisitionProperties(client, project.id);
+          await preflightBrowserAnalyticsMetrics(client, project.id);
+          result = {
+            properties: [
+              ...await proposeBrowserAnalyticsProperties(client, project.id, actor),
+              ...await proposeAcquisitionProperties(client, project.id, actor),
+            ],
+            metrics: await proposeBrowserAnalyticsMetrics(client, project.id, actor),
+          };
+          await client.query('COMMIT');
+          break;
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => {});
+          const code = (error as { code?: unknown } | null)?.code;
+          const retryable = code === '40001' || code === '40P01';
+          if (!retryable) throw error;
+          if (attempt === 3) {
+            throw new ApiError(
+              503,
+              'browser_analytics_setup_retryable',
+              'browser analytics setup could not acquire a stable database snapshot',
+              'retry the complete setup request; no partial definitions were committed',
+              { retryable: true },
+            );
+          }
+        }
+      }
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      if (lockAcquired) {
+        try {
+          const { rows } = await client.query<{ unlocked: boolean }>(
+            'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
+            [setupLock],
+          );
+          destroyClient = rows[0]?.unlocked !== true;
+        } catch {
+          destroyClient = true;
+        }
+      }
+      client.release(destroyClient);
+    }
+    if (!result) {
+      throw new ApiError(
+        503,
+        'browser_analytics_setup_retryable',
+        'browser analytics setup did not complete',
+        'retry the complete setup request; no partial definitions were committed',
+        { retryable: true },
+      );
+    }
+    ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
+    return result;
   });
 
   app.get('/api/v1/projects/:slug/properties', async (req) => {

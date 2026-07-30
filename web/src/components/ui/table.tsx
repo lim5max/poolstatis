@@ -2,6 +2,7 @@
 
 import * as React from "react"
 
+import { ArrowDown, ArrowUp, ChevronsUpDown } from "@/components/icons"
 import { cn } from "@/lib/utils"
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
@@ -78,6 +79,52 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
   )
 }
 
+type SortDirection = "asc" | "desc" | null
+
+function SortableTableHead({
+  className,
+  direction,
+  label,
+  onSort,
+  ...props
+}: Omit<React.ComponentProps<"th">, "aria-sort" | "children"> & {
+  direction: SortDirection
+  label: string
+  onSort: () => void
+}) {
+  const SortIcon = direction === "asc"
+    ? ArrowUp
+    : direction === "desc"
+      ? ArrowDown
+      : ChevronsUpDown
+
+  return (
+    <TableHead
+      aria-sort={direction === "asc" ? "ascending" : direction === "desc" ? "descending" : "none"}
+      className={cn("p-0", className)}
+      {...props}
+    >
+      <button
+        type="button"
+        aria-label={`Sort by ${label}`}
+        className="inline-flex h-10 w-full items-center justify-start gap-1.5 px-2 text-left font-medium text-foreground transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        onClick={onSort}
+      >
+        <span>{label}</span>
+        <SortIcon
+          aria-hidden="true"
+          className={cn(
+            "size-4 shrink-0 transition-colors",
+            direction ? "text-foreground" : "text-muted-foreground/50",
+          )}
+          data-direction={direction ?? "none"}
+          data-sort-icon
+        />
+      </button>
+    </TableHead>
+  )
+}
+
 function TableCell({ className, ...props }: React.ComponentProps<"td">) {
   return (
     <td
@@ -110,6 +157,7 @@ export {
   TableBody,
   TableFooter,
   TableHead,
+  SortableTableHead,
   TableRow,
   TableCell,
   TableCaption,

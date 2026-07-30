@@ -30,7 +30,7 @@ export async function createTestEnv(serverOptions: ServerOptions = {}): Promise<
   const ingest = await createApiKey(pool, { orgId: org.id, projectId: project.id, kind: 'ingest', env: 'prod' });
   const ingestDev = await createApiKey(pool, { orgId: org.id, projectId: project.id, kind: 'ingest', env: 'dev' });
   const secret = await createApiKey(pool, { orgId: org.id, projectId: project.id, kind: 'secret' });
-  const personal = await createApiKey(pool, { orgId: org.id, projectId: null, kind: 'personal' });
+  const personal = await createApiKey(pool, { orgId: org.id, projectId: null, kind: 'personal', legacySelfHost: true });
 
   return {
     pool,

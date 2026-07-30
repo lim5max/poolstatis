@@ -15,6 +15,7 @@ export type McpClientId =
   | 'custom';
 
 export type McpClientLogo =
+  | 'claude-code'
   | 'claude'
   | 'codex'
   | 'cursor'
@@ -45,7 +46,7 @@ export const MCP_CLIENTS: McpClientProfile[] = [
     id: 'claude-code',
     name: 'Claude Code',
     group: 'Popular MCP hosts',
-    logo: 'claude',
+    logo: 'claude-code',
     badge: 'Preset',
     description: 'Use this when the product repo is edited through Claude Code.',
     pasteTarget: 'Paste the stdio command, args, and env into your Claude Code MCP configuration.',
@@ -232,8 +233,17 @@ export function mcpClientById(id: McpClientId): McpClientProfile {
   return MCP_CLIENTS.find((client) => client.id === id) ?? MCP_CLIENTS[0]!;
 }
 
-function parseRunnerArgs(raw: string | undefined): string[] {
-  if (!raw?.trim()) return ['--silent', 'dlx', '@poolstatis/mcp'];
+export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.2.0';
+
+function parseRunnerArgs(
+  raw: string | undefined,
+  packageStatus: 'published' | 'publish_pending',
+): string[] {
+  if (!raw?.trim()) {
+    return packageStatus === 'published'
+      ? ['--silent', 'dlx', MCP_PACKAGE_SPEC]
+      : ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'];
+  }
   const trimmed = raw.trim();
   if (trimmed.startsWith('[')) {
     const parsed = JSON.parse(trimmed) as unknown;
@@ -242,13 +252,40 @@ function parseRunnerArgs(raw: string | undefined): string[] {
   return trimmed.split(/\s+/);
 }
 
-export const MCP_RUNNER = {
-  command: (import.meta.env.VITE_POOLSTATIS_MCP_COMMAND as string | undefined) ?? 'pnpm',
-  args: parseRunnerArgs(import.meta.env.VITE_POOLSTATIS_MCP_ARGS as string | undefined),
-  packageStatus: import.meta.env.VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true'
+export function resolveMcpRunner(env: {
+  VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED?: string;
+  VITE_POOLSTATIS_MCP_COMMAND?: string;
+  VITE_POOLSTATIS_MCP_ARGS?: string;
+}) {
+  const packageStatus = env.VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true'
     ? 'published'
-    : 'publish_pending',
-};
+    : 'publish_pending';
+  const command = env.VITE_POOLSTATIS_MCP_COMMAND ?? 'pnpm';
+  const args = parseRunnerArgs(env.VITE_POOLSTATIS_MCP_ARGS, packageStatus);
+  if (packageStatus === 'published'
+      && (command !== 'pnpm'
+        || args.length !== 3
+        || args[0] !== '--silent'
+        || args[1] !== 'dlx'
+        || args[2] !== MCP_PACKAGE_SPEC)) {
+    throw new Error(
+      `VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true requires pnpm dlx pinned to ${MCP_PACKAGE_SPEC}`,
+    );
+  }
+  if (packageStatus === 'publish_pending'
+      && args.some((arg) => arg.includes('@poolstatis/mcp'))) {
+    throw new Error(
+      'VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED must be true before VITE_POOLSTATIS_MCP_ARGS can use @poolstatis/mcp',
+    );
+  }
+  return { command, args, packageStatus };
+}
+
+export const MCP_RUNNER = resolveMcpRunner(import.meta.env as {
+  VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED?: string;
+  VITE_POOLSTATIS_MCP_COMMAND?: string;
+  VITE_POOLSTATIS_MCP_ARGS?: string;
+});
 
 export function mcpServerConfig(command: string, args: string[], url: string, token: string): string {
   return JSON.stringify({

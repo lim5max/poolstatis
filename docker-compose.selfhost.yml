@@ -28,6 +28,7 @@ services:
       HOST: 0.0.0.0
       PORT: 3300
       POOLSTATIS_PUBLIC_URL: ${POOLSTATIS_PUBLIC_URL:-http://localhost:8080}
+      OUTBOUND_ALLOW_LOCAL_HTTP: ${OUTBOUND_ALLOW_LOCAL_HTTP:-false}
       INGEST_BUFFER_MAX_EVENTS: ${INGEST_BUFFER_MAX_EVENTS:-1000}
       INGEST_BUFFER_MAX_DELAY_MS: ${INGEST_BUFFER_MAX_DELAY_MS:-10}
       INGEST_BUFFER_MAX_PENDING_EVENTS: ${INGEST_BUFFER_MAX_PENDING_EVENTS:-50000}
@@ -54,6 +55,9 @@ services:
       RETENTION_MAX_ROWS_PER_RUN: ${RETENTION_MAX_ROWS_PER_RUN:-100000}
       RETENTION_MAX_RUN_MS: ${RETENTION_MAX_RUN_MS:-5000}
       POOLSTATIS_MCP_PACKAGE_PUBLISHED: ${POOLSTATIS_MCP_PACKAGE_PUBLISHED:-false}
+      POOLSTATIS_EXPERIENCE_ARTIFACT_DIR: /var/lib/poolstatis/experience-artifacts
+    volumes:
+      - poolstatis_artifacts:/var/lib/poolstatis/experience-artifacts
     ports:
       - "${POOLSTATIS_API_PORT:-3300}:3300"
     healthcheck:
@@ -75,3 +79,4 @@ services:
 
 volumes:
   poolstatis_pgdata:
+  poolstatis_artifacts:

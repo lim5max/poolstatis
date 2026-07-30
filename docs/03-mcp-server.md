@@ -12,6 +12,7 @@
 | URI | Содержание |
 |-----|------------|
 | `poolstatis://standard/instrumentation` | Стандарт инструментации: именование событий, обязательные свойства, какие метрики ставить по типу продукта. Версионируется. (Контент — этап 2.) |
+| `poolstatis://standard/browser-analytics` | Нормативные определения Visitors / Sessions / Page views, consent и privacy/GeoIP границы browser-модуля. |
 | `poolstatis://{project}/schema` | Живая схема проекта: метрики реестра, воронки, типы сущностей, фактические имена событий за 30 дней с пометкой registered/unregistered. |
 
 Схема как ресурс — ключевой UX-ход: агент получает полный контекст проекта одним чтением, без цепочки list-вызовов.
@@ -30,7 +31,14 @@ get_project_schema(project)          → то же, что ресурс schema (
 ```
 register_metric(project, {key, name, purpose, category, tags?, type, source})
   → {id, status: 'proposed'}
-  // purpose обязателен; tags — свободные метки (фича/north-star), нормализуются (lowercase, dedupe)
+  // category = зачем; namespaced tags = где/что; funnel = путь
+  // category берётся из definitions проекта; NULL остаётся совместимым uncategorized
+
+list_metric_categories(project)
+create_metric_category(project, {key, name, description, domain:'custom', color})
+update_metric_category(project, key, {name?, description?, color?})
+delete_metric_category(project, key)
+  // system definitions locked; referenced custom category returns 409
 
 update_metric(project, key, patch)   // включая активацию {status:'active'} и tags
 deprecate_metric(project, key, reason)
@@ -105,6 +113,49 @@ fingerprint; исполнение требует отдельного human appr
 `$feature_flag_called` при первом evaluation, MCP-tool намеренно этого не
 делает.
 
+### Browser acquisition attribution
+
+```
+propose_acquisition_properties(project)
+assess_measurement_trust(project, input)
+```
+
+Идемпотентно создаёт предложенные definitions для `$utm_source`, `$utm_medium`,
+`$utm_campaign`, `$utm_term`, `$utm_content`. `list_properties` возвращает те же
+name/purpose/type/trust state, что Platform API и admin. Перед decision contract
+owner отдельно переводит нужное property в `trusted`. Для analysis используй
+обычный `query_trend` с `filters`/`breakdown`; ответ маркирует результат как
+session landing attribution, а не causal campaign impact.
+`assess_measurement_trust` с UTM `target_filters` возвращает его coverage и
+trust state для конкретной зарегистрированной метрики.
+
+### Web engagement (browser-tab sessions)
+
+```
+get_web_overview(project, {metric, key_metric?, date_from, date_to?, dimensions?, filters?, env?})
+list_web_sessions(project, {metric, key_metric?, date_from, date_to?, filters?, limit?, env?})
+get_web_session(project, {metric, key_metric?, actor_id?, session_id, date_from, date_to?, filters?, page_limit?, env?})
+get_session_engagement(project, {metric, key_metric?, actor_id?, session_id, date_from, date_to?, filters?, env?})
+get_page_engagement(project, {metric, actor_id?, page_view_id, date_from, date_to?, filters?, env?})
+get_click_map(project, {surface, route, version, device, date_from, date_to?, grid?, env?})
+get_scroll_map(project, {surface, route, version, device, date_from, date_to?, grid?, env?})
+```
+
+Session tools read cumulative `page.engagement` snapshots and deduplicate them
+by actor and the highest sequence per page. They keep visible/focused foreground
+time separate from wall span. Positive evidence classifies engagement
+immediately; a complete negative classifies a bounce, while unresolved sessions
+return nullable engagement and bounce. Overview rates use measured sessions,
+not all sessions, as their denominator. A missing exit snapshot is not a zero.
+When the same session or page id exists for more than one actor, omitting
+`actor_id` fails closed; first call `list_web_sessions` and reuse its exact
+`actor_id`.
+Click/scroll maps require an exact
+surface/version/route/device cohort and default to unique-session aggregation;
+event counts remain secondary. All responses are project/environment isolated
+and bounded, with sample size, truncation and no-data reasons. These tools never
+return DOM/video replay.
+
 ### Browser Experience (consent → interaction evidence)
 
 ```
@@ -113,6 +164,10 @@ list_experience_surfaces(project)
 archive_experience_surface(project, key)
 query_interaction_map(project, {surface, date_from, date_to?, grid?, env?})
 get_experience_session(project, {surface, session_id, date_from?, date_to?, limit?, env?})
+register_experience_route(project, {surface, route:{key,name,path_pattern}})
+list_visual_experience_versions(project, {surface?, route?, env?})
+get_visual_experience_map(project, {surface, route, version, device, date_from, date_to?, grid?, env?})
+compare_visual_experience(project, {surface, route, baseline, comparison, grid?, env?})
 ```
 
 Surface обязана иметь реальный `purpose`; без active surface SDK не примет
@@ -121,12 +176,29 @@ Timeline содержит только developer-provided stable route key, stab
 координаты, scroll depth и тип клиентской ошибки — DOM, URL/path, текст, input
 values, stacks и network data в Poolstatis не отправляются.
 
+Visual map tools additionally return an agent-ready `agent_context`: the
+purpose-tagged scope, sample sizes, ordered section labels, counts and
+percentages, largest adjacent-section aggregate reach decreases, safe-label click concentration,
+scroll reach, snapshot freshness/coverage, evidence references, explicit
+data-quality caveats and deterministic next actions. Comparison includes count
+and section percentage-point deltas plus exact follow-up map queries for both
+cohorts using resolved ISO periods. Renamed/missing section labels are reported
+as taxonomy mismatches with no behavioral delta; top-100 click-label and
+200-section truncation is explicit. MCP never returns DOM, page text, form values, image bytes or PII and
+never invents a cause; comparison output is explicitly descriptive and
+non-causal.
+
 ### Запросы (analysis-time)
 
 Все запросы — Query DSL за `EventStore` (см. [04-http-api.md](04-http-api.md)):
 
 ```
 query_trend(project, {metric, date_from, date_to?, interval, breakdown?, env?})
+query_web_analytics(project, {metric, date_from, date_to?, dimensions?, filters?, env?})
+get_web_overview(project, {metric, key_metric?, date_from, date_to?, dimensions?, filters?, env?})
+list_web_sessions(project, {metric, key_metric?, date_from, date_to?, filters?, limit?, env?})
+get_web_session(project, {metric, key_metric?, actor_id?, session_id, date_from, date_to?, filters?, page_limit?, env?})
+get_page_engagement(project, {metric, actor_id?, page_view_id, date_from, date_to?, filters?, env?})
 query_funnel(project, {funnel | steps, date_from, date_to?, env?})
   // каждый step возвращает metric_key, purpose, category, actors и conversion_*
 query_retention(project, {start_metric, return_metric?, interval, periods, date_from, env?})
@@ -160,4 +232,4 @@ resolve_insight(project, id, {status: 'ack'|'resolved'})
 
 ## Транспорт
 
-MVP: stdio-сервер (publish-ready npm-пакет `@poolstatis/mcp`, токен в env). Поддерживаемые template presets в hosted onboarding: Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers и custom MCP host. Все они используют один stdio shape: command, args, env. До публикации npm-пакета hosted deploy должен держать runner status как `publish_pending`, чтобы UI не обещал copy-paste ready setup. Streamable HTTP — отдельный этап после hosted-стабилизации.
+MVP: stdio-сервер и публичный version-pinned npm-пакет `@poolstatis/mcp@0.2.0` (токен только в env). Пакет прошёл fresh-install initialize/list-tools и project-scoped Visual Experience read smoke, поэтому hosted deploy может включить этот точный pin. Новые версии остаются `publish_pending` до повторения тех же проверок. Поддерживаемые presets: Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers и custom MCP host. Streamable HTTP — отдельный этап после hosted-стабилизации.

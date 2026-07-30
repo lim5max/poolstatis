@@ -21,7 +21,7 @@ describe('Milestone A decision-loop E2E', () => {
     await new Promise<void>((resolve) => posthog.listen(0, '127.0.0.1', resolve));
     posthogHost = `http://127.0.0.1:${(posthog.address() as AddressInfo).port}`;
     native = await createTestEnv();
-    external = await createTestEnv({ connectorEncryptionKey: 'decision-loop-a-e2e-key' });
+    external = await createTestEnv({ connectorEncryptionKey: 'decision-loop-a-e2e-key', outboundPolicy: { allowLocalHttp: true } });
   });
 
   afterAll(async () => {

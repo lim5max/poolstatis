@@ -31,6 +31,7 @@ describe('read-only PostHog adapter', () => {
     host = 'http://127.0.0.1:' + address.port;
     env = await createTestEnv({
       connectorEncryptionKey: 'test-only-posthog-encryption-key',
+      outboundPolicy: { allowLocalHttp: true },
     });
   });
 

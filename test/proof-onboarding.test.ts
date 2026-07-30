@@ -18,6 +18,7 @@ describe('proof-gated onboarding', () => {
     expect(initial.status).toBe(200);
     expect(gate(initial.body, 'workspace_created').complete).toBe(true);
     expect(gate(initial.body, 'data_source_connected').complete).toBe(true);
+    expect(gate(initial.body, 'data_source_connected').evidence.native_key_created_at).toBeTruthy();
     expect(gate(initial.body, 'agent_connected').complete).toBe(false);
     expect(gate(initial.body, 'first_event_observed').complete).toBe(false);
     expect(gate(initial.body, 'metrics_activated').complete).toBe(false);
@@ -48,6 +49,9 @@ describe('proof-gated onboarding', () => {
       payload: { client: 'codex' },
     });
     expect(observed.statusCode).toBe(200);
+    const afterMcpMarkedRequest = await api(env, env.secretToken, 'GET', statusUrl());
+    expect(gate(afterMcpMarkedRequest.body, 'agent_connected').evidence).toMatchObject({ client: 'codex' });
+    expect(gate(afterMcpMarkedRequest.body, 'agent_connected').evidence.observed_at).toBeTruthy();
 
     const wild = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
       batch_id: 'onboarding-wild',
@@ -56,6 +60,7 @@ describe('proof-gated onboarding', () => {
     expect(wild.status).toBe(200);
     const afterWild = await api(env, env.secretToken, 'GET', statusUrl());
     expect(gate(afterWild.body, 'first_event_observed').complete).toBe(true);
+    expect(gate(afterWild.body, 'first_event_observed').evidence.observation_source).toBe('native');
     expect(gate(afterWild.body, 'metrics_activated').complete).toBe(false);
 
     await activeMetric(env, {
@@ -114,6 +119,15 @@ describe('proof-gated onboarding', () => {
 
     const reloaded = await api(env, env.secretToken, 'GET', statusUrl());
     expect(reloaded.body).toEqual(completed.body);
+
+    await env.pool.query(
+      `UPDATE api_keys SET revoked_at = now()
+       WHERE project_id = $1 AND kind = 'ingest' AND env = 'prod'`,
+      [env.projectId],
+    );
+    const afterRevoke = await api(env, env.secretToken, 'GET', statusUrl());
+    expect(gate(afterRevoke.body, 'data_source_connected').evidence.native).toBe(false);
+    expect(gate(afterRevoke.body, 'data_source_connected').evidence.native_key_created_at).toBeNull();
   });
 });
 

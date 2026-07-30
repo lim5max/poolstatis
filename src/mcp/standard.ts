@@ -50,9 +50,12 @@ Avoid: \`Signup\`, \`user_signed_up_event\`, \`click\`, \`track\`, \`event1\`.
 ## 3. Required properties & identity
 
 1. **\`distinct_id\` MUST be a stable user id** from the product's auth system —
-   the same value every time that user acts. Never a per-session or random id.
-   (Until identity-merge ships, \`distinct_id\` *is* the actor: stability is
-   what makes retention, funnels and unique counts correct.)
+   the same value every time that user acts. Never use a session id as the actor.
+   The one supported anonymous exception is the consent-gated
+   \`@poolstatis/sdk/browser\` first-party visitor id: after authentication,
+   switch to the stable product user id and create the explicit audited actor
+   link returned by the browser module. Sessions remain separate in
+   \`session_id\`; query-time identity resolution preserves immutable events.
 2. **Money** goes in a numeric \`amount\` property, currency in \`currency\`:
    \`{ "amount": 49.0, "currency": "USD" }\`. Never bake the number into the event name.
 3. **Mutable state** (plan, role, lifecycle stage, seat count) belongs on the
@@ -85,30 +88,33 @@ Funnel steps and the retention/lifecycle/stickiness query types require
 
 ---
 
-## 5. Categories & the north star
+## 5. Metric taxonomy & the north star
 
-Tag each metric with one AARRR category (or \`quality\`):
+The three taxonomy axes are independent:
 
-- **acquisition** — getting users in the door (signups, installs).
-- **activation** — the first real value moment (the "aha"). Usually the most
-  important thing to instrument well.
-- **retention** — coming back (active users, repeat actions).
-- **revenue** — money (checkouts, MRR-driving events).
-- **referral** — users bringing users (invites, shares).
-- **quality** — health/friction (errors, latency, failed actions).
+- Category answers **why** the metric exists. Choose a project definition returned
+  by \`get_project_schema\` or \`list_metric_categories\`.
+- Prefer **namespaced tags** for where and what:
+  \`surface:checkout\`, \`component:payment-form\`, \`channel:telegram\`,
+  \`capability:voice\`. Existing plain tags remain valid.
+- Funnels answer **which journey** is measured. Do not create journey-specific
+  or per-feature categories.
+
+The system library is grouped by purpose domain:
+
+- **Product:** \`acquisition\`, \`activation\`, \`adoption\`, \`engagement\`,
+  \`retention\`, \`referral\`, \`satisfaction\`.
+- **Business:** \`revenue\`, \`cost\`, \`efficiency\`.
+- **Technical:** \`quality\`, \`reliability\`, \`performance\`, \`delivery\`,
+  \`security\`, \`data_quality\`.
+
+System category semantics are locked. Create a custom category only when the
+metric's purpose cannot be expressed by that library. A null category remains
+readable as \`uncategorized\`, but new work should reconcile it when the purpose
+is known.
 
 Pick **one north-star metric** the whole product optimises, and make sure the
 funnel from acquisition → that metric is fully instrumented.
-
-### Tags (the open facet)
-
-The 6 categories are the curated funnel-stage facet. For everything else, add
-free-form **tags** (lowercased, multiple per metric) — most usefully the
-**product feature** a metric belongs to (\`checkout\`, \`search\`, \`onboarding\`),
-plus labels like \`north-star\`, \`performance\`, \`b2b\`. Tags are how a client
-later groups/segments metrics ("show me all checkout metrics") without a rigid
-enum. Pass \`tags\` to \`register_metric\`/\`update_metric\`. Prefer tagging every
-metric with its feature.
 
 ---
 
@@ -217,4 +223,56 @@ Do not use temporary anonymous/session ids until actor identity merge ships.
 7. **Define funnels** (\`define_funnel\`) from the registered metrics, with goals.
 8. **Hand off**: ask the owner to activate the proposed metrics (or activate in
    the admin panel's Registry tab).
+`;
+
+export const BROWSER_ANALYTICS_STANDARD = `# Poolstatis Browser Analytics Context (v1)
+
+Browser Analytics is an optional browser-only SDK entrypoint. It does nothing before
+explicit consent. The base SDK remains browser and Node neutral.
+
+Definitions:
+- Visitors: unique query-time resolved actors with page-view events. Audited actor links
+  can join an opaque first-party visitor to a stable authenticated product user.
+- Sessions: distinct non-empty session_id values on page-view events. The default browser
+  inactivity timeout is 30 minutes.
+- Page views: accepted stored page.viewed events. Country/device enrichment never creates
+  another event and therefore does not change accepted stored-event billing semantics.
+- Page engagement: cumulative page.engagement snapshots share one stable $page_view_id
+  with the owning page view. Core keeps only the highest sequence per page, so retries and
+  out-of-order lifecycle flushes cannot double-count foreground time.
+- Canonical web queries include only events marked $browser_context = "1"; legacy/manual
+  page.viewed events are not silently mixed into the consented browser population.
+- Foreground time advances only while the document is visible and focused, using a
+  monotonic clock with a 10-second heartbeat and a 30-second cap on one suspended gap.
+- A browser-tab session is engaged when foreground time is at least 10 seconds, it has
+  at least two page views, or it contains the selected active native key metric. The
+  classification is tri-state: positive evidence is true, false requires a complete
+  negative lifecycle, and everything else remains null. Engagement and bounce rates use
+  measured (non-null) sessions as their denominator and stay unavailable when it is zero.
+
+Privacy boundary:
+- Captures pathname only, never query strings, fragments, full URLs, DOM, text or inputs.
+- Sends coarse device/browser/OS families, primary language, timezone, and coarse
+  viewport/screen buckets. It never sends full User-Agent, versions, precise dimensions,
+  canvas/fonts/hardware concurrency or other fingerprinting material.
+- Country is never inferred from locale. Core accepts a coarse ISO country only from a
+  configured directly trusted reverse proxy and otherwise records unknown. Raw IP is
+  neither stored nor returned. GeoIP can be wrong for VPNs, relays and mobile networks;
+  city and region are intentionally not collected.
+- Use resetIdentity on logout/account switch. For combined UTM + browser context, enable
+  the browser entrypoint's composed acquisition option; do not also run the attribution
+  page-view owner or each navigation would intentionally emit two billable events.
+
+Use propose_browser_analytics before activation. Canonical browser and bounded UTM
+properties plus the web_page_views and web_visitors metrics start proposed. The owner
+reviews and activates them. Query with
+query_web_analytics using the page-view count metric; responses keep visitors, sessions and
+page views separate and return counts plus page-view percentages for requested dimensions.
+Use get_web_overview, list_web_sessions, get_web_session, get_session_engagement and
+get_page_engagement for bounded timing evidence. get_click_map and get_scroll_map require
+an exact surface/version/route/device cohort and default to unique-session aggregation.
+Session detail returns at most page_limit pages (default 100, maximum 200) and reports
+total_pages plus truncated; request another bounded analytic rather than treating it as replay.
+These tools do not expose video or DOM replay. Every accepted page.viewed and
+page.engagement snapshot is one stored billable event; reads create none.
 `;

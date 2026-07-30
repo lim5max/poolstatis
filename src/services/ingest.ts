@@ -1,8 +1,11 @@
 import type pg from 'pg';
-import type { EventStore, StorableEvent } from '../stores/eventStore.js';
+import type { AppendResult, EventStore, StorableEvent } from '../stores/eventStore.js';
 import { ingestEventSchema, type IngestEnvelope } from '../schemas.js';
 import { registeredEventNames } from './registry.js';
 import { recordWarnings, type WarningDelta } from './warnings.js';
+import { randomUUID } from 'node:crypto';
+import { validateAcquisitionProperties } from './acquisitionAttribution.js';
+import { validateAndEnrichBrowserProperties } from './browserAnalytics.js';
 
 const CLOCK_SKEW_FUTURE_MS = 5 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 30_000;
@@ -12,6 +15,7 @@ export interface IngestResult {
   unregistered: number;
   duplicate?: boolean;
   errors?: Array<{ index: number; message: string }>;
+  warnings?: AppendResult['warnings'];
 }
 
 interface CacheEntry {
@@ -37,6 +41,7 @@ export class IngestService {
     env: string,
     batch: IngestEnvelope,
     now: Date = new Date(),
+    enrichment: { country: string } = { country: 'unknown' },
   ): Promise<IngestResult> {
     const rawEvents = batch.events;
     {
@@ -70,6 +75,25 @@ export class IngestService {
         }
         const e = parsed.data;
         const properties: Record<string, unknown> = { ...e.properties };
+        const acquisitionError = validateAcquisitionProperties(properties, e.session_id);
+        if (acquisitionError) {
+          errors.push({ index, message: acquisitionError });
+          // Do not retain the rejected payload: attribution must never turn a
+          // raw URL into an observability log entry.
+          bump('rejected', e.event, acquisitionError);
+          return;
+        }
+        const browserError = validateAndEnrichBrowserProperties(
+          e.event,
+          properties,
+          e.session_id,
+          enrichment.country,
+        );
+        if (browserError) {
+          errors.push({ index, message: browserError });
+          bump('rejected', e.event, browserError);
+          return;
+        }
 
         let timestamp = e.timestamp ? new Date(e.timestamp) : now;
         if (timestamp.getTime() > now.getTime() + CLOCK_SKEW_FUTURE_MS || timestamp < retentionFloor) {
@@ -96,25 +120,25 @@ export class IngestService {
         });
       });
 
-      if (batch.batch_id) {
-        const appended = await this.eventStore.appendIdempotent({
-          dedupe: 'ingest_24h',
-          projectId: project.id,
-          env,
-          batchId: batch.batch_id,
-          events: storable,
-        });
-        if (!appended) return { accepted: 0, unregistered: 0, duplicate: true };
-      } else {
-        await this.eventStore.append(storable);
-      }
+      // Even a request without a caller-supplied batch id gets a server-only
+      // claim. That keeps one HTTP batch, its quota check, and its durable
+      // writes indivisible through BufferedEventStore.
+      const appended = await this.eventStore.appendIdempotent({
+        dedupe: 'ingest_24h',
+        projectId: project.id,
+        env,
+        batchId: batch.batch_id ?? `server:${randomUUID()}`,
+        events: storable,
+      });
+      if (appended.duplicate) return { accepted: 0, unregistered: 0, duplicate: true };
       if (warn.size > 0) {
         // Best-effort: a warnings-log failure must never fail ingestion.
         await recordWarnings(this.pool, project.id, env, [...warn.values()]).catch(() => {});
       }
 
-      const result: IngestResult = { accepted: storable.length, unregistered };
+      const result: IngestResult = { accepted: appended.inserted, unregistered };
       if (errors.length > 0) result.errors = errors;
+      if (appended.warnings?.length) result.warnings = appended.warnings;
       return result;
     }
   }

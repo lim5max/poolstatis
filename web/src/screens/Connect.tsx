@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
-import { useAuth0 } from '@auth0/auth0-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Loader2 } from '@/components/icons';
-import { auth0Config, auth0Enabled, auth0Incomplete, useHostedToken } from '../auth0';
+import {
+  hostedAuthConfig,
+  hostedAuthEnabled,
+  hostedAuthIncomplete,
+  useHostedAuth,
+  useHostedToken,
+} from '../oidc';
+import { ApiError } from '../api/client';
 import { useStore } from '../store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -10,44 +16,137 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 export function Connect() {
-  if (auth0Enabled) return <HostedConnect />;
+  if (hostedAuthEnabled) return <HostedConnect />;
   return <TokenConnect />;
 }
 
-function HostedConnect() {
+export function HostedConnect() {
   const { connectHosted } = useStore();
-  const { isAuthenticated, isLoading, loginWithRedirect, user, error } = useAuth0();
+  const { isAuthenticated, isLoading, login, logout, error } = useHostedAuth();
   const getToken = useHostedToken();
   const attempted = useRef(false);
   const [err, setErr] = useState<string | null>(null);
+  const [needsReauthentication, setNeedsReauthentication] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (!isAuthenticated || attempted.current) return;
+  const connectWorkspace = useCallback(() => {
+    if (attempted.current) return;
     attempted.current = true;
+    setErr(null);
+    setNeedsReauthentication(false);
     setBusy(true);
-    connectHosted({ baseUrl: auth0Config.apiUrl, getToken })
-      .catch((ex) => setErr((ex as Error).message))
+    void connectHosted({ baseUrl: hostedAuthConfig.apiUrl, getToken })
+      .catch((ex) => {
+        setErr(hostedConnectionError(ex));
+        setNeedsReauthentication(hostedConnectionNeedsReauthentication(ex));
+      })
       .finally(() => setBusy(false));
-  }, [connectHosted, getToken, isAuthenticated]);
+  }, [connectHosted, getToken]);
 
-  const signIn = () => loginWithRedirect({ appState: { returnTo: window.location.pathname } });
+  useEffect(() => {
+    if (isAuthenticated) {
+      connectWorkspace();
+      return;
+    }
+    attempted.current = false;
+    setBusy(false);
+    setErr(null);
+    setNeedsReauthentication(false);
+  }, [connectWorkspace, isAuthenticated]);
+
+  const signIn = () => login();
+  const signOutAndRetry = () => {
+    attempted.current = false;
+    setErr(null);
+    void logout();
+  };
+  const retryConnection = () => {
+    attempted.current = false;
+    connectWorkspace();
+  };
+
+  if (isLoading || (isAuthenticated && !err)) {
+    return <AuthBootShell />;
+  }
+
+  if (isAuthenticated && err) {
+    return (
+      <ConnectShell>
+        <Brand />
+        <h1 className="serif text-3xl">Workspace could not be restored.</h1>
+        <p className="mt-2 mb-6 text-sm text-muted-foreground">
+          Your identity is still protected. Retry the workspace connection or sign in again if the session has expired.
+        </p>
+        <Button
+          className="h-10 w-full"
+          onClick={needsReauthentication ? signOutAndRetry : retryConnection}
+          disabled={busy}
+        >
+          {busy
+            ? <Loader2 className="size-4 animate-spin" />
+            : needsReauthentication
+              ? 'Sign out and try again'
+              : 'Try again'}
+        </Button>
+        <div className="mt-4 text-xs text-destructive" role="alert">{err}</div>
+      </ConnectShell>
+    );
+  }
 
   return (
     <ConnectShell>
-      <div className="mb-4 flex items-center gap-2.5">
-        <img className="size-6" src="/poolstatis-logo.svg" alt="" />
-        <span className="text-xs font-medium text-muted-foreground">Poolstatis · Hosted admin</span>
-      </div>
+      <Brand />
       <h1 className="serif text-3xl">Sign in to your workspace.</h1>
       <p className="mt-2 mb-6 text-sm text-muted-foreground">
         Use hosted auth, then create an MCP token during onboarding. No database keys are needed in the browser.
       </p>
-      <Button className="h-10 w-full" onClick={signIn} disabled={isLoading || busy}>
-        {isLoading || busy ? <Loader2 className="size-4 animate-spin" /> : isAuthenticated ? `Continue as ${user?.email ?? 'workspace user'}` : 'Continue with Auth0'}
+      <Button
+        className="h-10 w-full"
+        onClick={signIn}
+        disabled={busy}
+      >
+        {busy
+          ? <Loader2 className="size-4 animate-spin" />
+          : 'Continue to sign in'}
       </Button>
-      {(err || error) && <div className="mt-4 text-xs text-destructive">{err ?? error?.message}</div>}
+      {error && <div className="mt-4 text-xs text-destructive" role="alert">{error.message}</div>}
     </ConnectShell>
+  );
+}
+
+export function hostedConnectionError(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401 || error.code === 'authentication_failed') {
+      return 'Your sign-in session is unavailable or expired. Verify your email, then sign in again.';
+    }
+    if (error.status === 403) {
+      return 'Your account is signed in but does not have access to this workspace.';
+    }
+  }
+  return error instanceof Error ? error.message : 'The hosted sign-in could not be completed.';
+}
+
+function hostedConnectionNeedsReauthentication(error: unknown): boolean {
+  return error instanceof ApiError
+    && (error.status === 401 || error.code === 'authentication_failed');
+}
+
+function Brand() {
+  return (
+    <div className="mb-4 flex items-center gap-2.5">
+      <img className="size-6" src="/poolstatis-logo.svg" alt="" />
+      <span className="text-xs font-medium text-muted-foreground">Poolstatis · Hosted admin</span>
+    </div>
+  );
+}
+
+export function AuthBootShell() {
+  return (
+    <div
+      className="min-h-screen bg-background"
+      data-testid="auth-boot-shell"
+      aria-busy="true"
+    />
   );
 }
 
@@ -56,7 +155,7 @@ function TokenConnect() {
   const [token, setToken] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const baseUrl = auth0Config.apiUrl;
+  const baseUrl = hostedAuthConfig.apiUrl;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,8 +173,8 @@ function TokenConnect() {
       </div>
       <h1 className="serif text-3xl">Connect the instrument.</h1>
       <p className="text-muted-foreground mt-2 mb-6 text-sm">
-        {auth0Incomplete
-          ? 'Hosted auth is partially configured. Add Auth0 domain, client id, audience, and API URL to enable the sign-in flow.'
+        {hostedAuthIncomplete
+          ? 'Hosted auth is partially configured. Add the OIDC authority, client id, audience, and API URL to enable the sign-in flow.'
           : 'Hosted auth is not configured in this environment. Paste a personal token (pt_) or a project secret key (sk_) to continue.'}
       </p>
       <form onSubmit={submit} className="space-y-4">

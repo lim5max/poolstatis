@@ -224,7 +224,7 @@ describe('PostHog-backed release evaluation', () => {
   beforeAll(async () => {
     await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
     host = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
-    env = await createTestEnv({ connectorEncryptionKey: 'posthog-decision-test-key' });
+    env = await createTestEnv({ connectorEncryptionKey: 'posthog-decision-test-key', outboundPolicy: { allowLocalHttp: true } });
   });
 
   afterAll(async () => {

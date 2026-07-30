@@ -105,7 +105,7 @@ export async function runRetentionOnce(
             record: (count) => { result.ingestBatchesDeleted += count; },
           },
           {
-            apply: (limit) => deletePolicyBatch(client, 'experience_batches', project.id, now, limit),
+            apply: (limit) => deleteExperienceBatch(client, project.id, now, limit),
             record: (count) => { result.experienceBatchesDeleted += count; },
           },
           {
@@ -297,11 +297,32 @@ async function deleteIngestBatch(
   const result = await client.query(
     `WITH doomed AS MATERIALIZED (
        SELECT ctid FROM ingest_batches
-       WHERE project_id = $1 AND received_at < $2::timestamptz - interval '24 hours'
+       WHERE project_id = $1 AND received_at < $2::timestamptz - interval '35 days'
        LIMIT $3
        FOR UPDATE SKIP LOCKED
      )
      DELETE FROM ingest_batches AS target
+     USING doomed
+     WHERE target.ctid = doomed.ctid`,
+    [projectId, now, batchSize],
+  );
+  return result.rowCount ?? 0;
+}
+
+async function deleteExperienceBatch(
+  client: pg.PoolClient,
+  projectId: string,
+  now: Date,
+  batchSize: number,
+): Promise<number> {
+  const result = await client.query(
+    `WITH doomed AS MATERIALIZED (
+       SELECT ctid FROM experience_batches
+       WHERE project_id = $1 AND received_at < $2::timestamptz - interval '35 days'
+       LIMIT $3
+       FOR UPDATE SKIP LOCKED
+     )
+     DELETE FROM experience_batches AS target
      USING doomed
      WHERE target.ctid = doomed.ctid`,
     [projectId, now, batchSize],

@@ -72,6 +72,83 @@ The `distinctId` must be a stable authenticated product id, never a generated
 session id. The evaluation request is an exposure event, so do not call it in a
 tight loop; a single shared `Poolstatis` client handles this automatically.
 
+## Browser Analytics Context (optional module)
+
+`@poolstatis/sdk/browser` adds policy-gated first-party visitors, 30-minute
+browser-tab sessions, SPA-safe `page.viewed` events, cumulative
+`page.engagement` snapshots and coarse browser context. The
+backward-compatible default is `opt-in`; `opt-out` must be selected explicitly,
+and `external` delegates the decision to a host CMP. Global Privacy Control
+always disables collection. It never
+sends query strings, full URLs/referrers, DOM/text, full User-Agent or precise
+screen dimensions. The base SDK remains browser/Node neutral.
+
+```ts
+import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
+
+const browser = createBrowserAnalytics({
+  client: ph,
+  consentPolicy: 'external',
+  hasConsent: () => consent.has('product_analytics'),
+  subscribeConsent: (listener) => consent.onChange(listener),
+  captureAcquisition: true, // reuses the bounded attribution snapshot
+  mapPagePath: (pathname) => publicRouteVocabulary(pathname),
+  contextProperties: ['$device_class', '$browser_family', '$os_family'],
+});
+browser.start();
+
+// After authentication, send this handoff to a trusted backend that calls the
+// audited Poolstatis actor-link API with an sk_/pt_ token.
+const actorLink = browser.identify(user.id);
+
+// On logout/account switch, rotate visitor + session before another identify.
+browser.resetIdentity();
+```
+
+The module owns exactly one `page.viewed` event per initial load or SPA route.
+Each page gets one stable `$page_view_id`. While the document is visible and
+focused, the SDK emits a cumulative `page.engagement` snapshot every 10 seconds
+and on hide, blur, route change, pagehide, freeze and destroy. A snapshot
+contains `sequence`, `foreground_ms`, `elapsed_ms`, `max_scroll_pct`,
+`interaction_count` and `reason`. Core keeps only the highest sequence per
+page, so retries, duplicate flushes and out-of-order arrival do not add time.
+Custom `engagementHeartbeatMs` values must be integer milliseconds from one
+second up to, but not including, seven days. One suspended foreground gap is
+capped at 30 seconds. A long-lived page is finalized and rotated before Core's
+seven-day ceiling, and foreground time is never emitted above elapsed time.
+Core accepts a maximum
+seven-day monotonic duration per page and rejects impossible snapshots where
+foreground time exceeds elapsed time.
+
+Foreground time is not wall-clock time and Poolstatis does not record video or
+DOM session replay. A session is engaged when it has at least 10 seconds of
+measured foreground time, at least two page views, or an explicitly selected
+key-metric event. Bounce is reported only for fully measured sessions; missing
+terminal timing remains incomplete instead of becoming a false zero/bounce.
+Every accepted `page.viewed` and `page.engagement` remains one stored,
+billable event.
+
+If the host loads a persisted decline or GPC state before creating the client,
+call `clearBrowserAnalyticsIdentity()` to remove an older first-party
+visitor/session without starting capture.
+
+For a host-owned, reversible opt-out policy, set `consentPolicy: 'opt-out'`.
+Without callbacks it starts immediately; provide `hasConsent` and
+`subscribeConsent` when the host persists a Disable/Enable choice. Omitting
+`consentPolicy` keeps the existing opt-in contract and requires both callbacks.
+Use `mapPagePath` when public routes can contain user-provided slugs. Its
+finite result is used for both `$page_path` and `landing_path`; mapper failures
+fall back to `/other` instead of sending the raw path.
+`contextProperties` can only narrow the SDK's typed coarse context list.
+Unknown property names are ignored at runtime and cannot expand capture.
+
+Composed acquisition uses the same session and page-view event. Do not also
+start `createAttributionClient`, which is the acquisition-only alternative and
+owns its own page views.
+
+See [Browser Analytics Context](../docs/13-browser-analytics.md) for reserved
+properties, country proxy configuration, definitions and rollout.
+
 ## Browser Experience (optional module)
 
 The `@poolstatis/sdk/experience` entrypoint is deliberately separate from the
@@ -94,6 +171,7 @@ const experience = new BrowserExperience({
   surface: 'checkout',
   distinctId: () => currentUser.id,
   route: () => 'checkout', // stable key; never pass window.location.pathname
+  version: import.meta.env.VITE_RELEASE_SHA,
   hasConsent: () => consent.has('product_analytics'),
 });
 
@@ -102,9 +180,55 @@ await experience.start();
 // Call `experience.stop()` if consent is withdrawn or the app unmounts.
 ```
 
+For visual maps the module also sends desktop/mobile, viewport/document
+dimensions and normalized document click coordinates. Mark real blocks with
+`data-poolstatis-section="pricing"` and clickable targets with
+`data-poolstatis-label="pricing.choose_pro"`.
+
+The module does not collect the section's text or DOM. It sends one safe named
+exposure per section, batches at most 25 signals per request, and defaults to a
+120-signals/minute browser guard.
+
 The agent can use `query_interaction_map` for normalised click cells and
 `get_experience_session` for a known session id. These are interaction maps,
 not gaze or full session replay.
+
+## Browser acquisition attribution (optional module)
+
+`@poolstatis/sdk/attribution` is a separate, consent-gated browser entrypoint.
+The base client never reads `location`, referrer or URL parameters. First use a
+Platform API credential or MCP `propose_acquisition_properties` to add the five
+canonical `$utm_*` event definitions as `proposed`; an owner must trust one
+before using it in a measurement contract or decision target.
+
+```ts
+import { createClient } from '@poolstatis/sdk';
+import { createAttributionClient } from '@poolstatis/sdk/attribution';
+
+const client = createClient({ url: 'https://analytics.example.com', ingestKey: 'pk_…' });
+const analytics = createAttributionClient({
+  client,
+  distinctId: () => currentActorId(), // can change from anonymous to authenticated
+  hasConsent: () => consent.has('product_analytics'),
+  subscribeConsent: (listener) => consent.onChange(listener), // must synchronously call on withdrawal
+  route: () => router.currentPathname(), // safe product route/path provider
+});
+
+await analytics.start(); // exactly one session.started + initial page.viewed
+analytics.track('signup.completed', { plan: 'pro' });
+// On SPA navigation: analytics.pageViewed();  It preserves the original landing snapshot.
+// `subscribeConsent` calls stop automatically on withdrawal and drops unsent/retrying attribution events.
+```
+
+The helper owns and exposes `analytics.sessionId`; it snapshots only `pathname`,
+referrer **origin**, and first valid `utm_source`, `utm_medium`, `utm_campaign`,
+`utm_term`, `utm_content` (trimmed, NFC, max 256). It discards unknown query
+parameters, query/hash from the path, full referrer URLs, click IDs and all
+previous-session values. It does not link anonymous and authenticated actors:
+use Poolstatis's audited actor-link API/MCP flow for that query-time resolution.
+
+UTM trends are labelled **session landing attribution**. They are associations,
+not causal campaign credit or an ad-attribution model.
 
 ## Notes
 

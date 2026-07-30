@@ -54,6 +54,7 @@ describe('api key admin', () => {
     expect(res.body.keys.length).toBeGreaterThanOrEqual(3); // ingest prod, ingest dev, secret
     expect(res.body.keys[0]).not.toHaveProperty('token');
     expect(res.body.keys[0]).not.toHaveProperty('token_hash');
+    expect(res.body.keys[0].masked_token).toMatch(/^(pk|sk)_\.\.\.[a-f0-9]{4}$/);
   });
 
   it('issues an ingest key and returns the token exactly once', async () => {

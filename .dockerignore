@@ -13,6 +13,8 @@ sdk/dist/
 *.png
 .DS_Store
 **/.DS_Store
+._*
+**/._*
 *.tsbuildinfo
 .playwright-mcp/
 web/.playwright-mcp/

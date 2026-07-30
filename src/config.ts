@@ -2,11 +2,14 @@ import type { TenantRateLimitOptions } from './services/rateLimiter.js';
 
 export interface Config {
   databaseUrl: string;
+  migrationDatabaseUrl: string | null;
   databasePoolMax: number;
   port: number;
   host: string;
   publicUrl: string;
   connectorEncryptionKey: string | null;
+  outboundPolicy: { allowLocalHttp: boolean };
+  experienceArtifactDir: string;
   ingestBuffer: {
     maxEvents: number;
     maxDelayMs: number;
@@ -57,11 +60,43 @@ export interface Config {
     issuer: string;
     audience: string;
     jwksUri: string;
+    claims: {
+      email: string;
+      emailVerified: string;
+      displayName: string;
+      picture: string;
+    };
+    connectionStrategy: string;
+    allowedClientIds: string[];
+    requiredScopes: string[];
+    legacyIssuer: string | null;
+    requireOrganizationPolicy: boolean;
   } | null;
+  corsOrigins: string[];
+  browserCountry:
+    | { mode: 'trusted_header'; header: string; trustedProxyCidrs: string[] }
+    | { mode: 'local_mmdb'; databasePath: string; clientIpHeader: string; trustedProxyCidrs: string[] }
+    | null;
 }
 
-function parseArgs(raw: string | undefined): string[] {
-  if (!raw?.trim()) return ['--silent', 'dlx', '@poolstatis/mcp'];
+export function assertHostedApiCredentialBoundary(config: Config): void {
+  if (config.auth?.requireOrganizationPolicy === true
+      && config.migrationDatabaseUrl !== null) {
+    throw new Error(
+      'MIGRATION_DATABASE_URL must not be present in the hosted API process; run prepare-hosted separately',
+    );
+  }
+}
+
+export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.2.0';
+const LOCAL_MCP_ARGS = ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'];
+
+function parseArgs(raw: string | undefined, packageStatus: 'published' | 'publish_pending'): string[] {
+  if (!raw?.trim()) {
+    return packageStatus === 'published'
+      ? ['--silent', 'dlx', MCP_PACKAGE_SPEC]
+      : LOCAL_MCP_ARGS;
+  }
   const trimmed = raw.trim();
   if (trimmed.startsWith('[')) {
     const parsed = JSON.parse(trimmed) as unknown;
@@ -96,12 +131,119 @@ function booleanValue(raw: string | undefined, fallback: boolean, name: string):
   throw new Error(`${name} must be true or false`);
 }
 
+function requiredText(raw: string | undefined, fallback: string, name: string): string {
+  const value = raw === undefined ? fallback : raw.trim();
+  if (!value) throw new Error(`${name} must not be empty`);
+  return value;
+}
+
+function exactList(raw: string | undefined, name: string): string[] {
+  if (raw === undefined) return [];
+  const values = raw.split(',').map((value) => value.trim());
+  if (values.some((value) => !value)
+      || values.some((value) => value.length > 128 || !/^[A-Za-z0-9:._~/-]+$/.test(value))) {
+    throw new Error(`${name} must contain comma-separated values`);
+  }
+  const unique = [...new Set(values)];
+  if (unique.length > 32) throw new Error(`${name} must contain at most 32 values`);
+  return unique;
+}
+
+function databaseCredential(raw: string, name: string): {
+  username: string;
+  target: string;
+} {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${name} must be a PostgreSQL URL`);
+  }
+  if ((url.protocol !== 'postgres:' && url.protocol !== 'postgresql:')
+      || !url.username || !url.hostname || url.pathname.length <= 1) {
+    throw new Error(`${name} must be a PostgreSQL URL with username, host, and database`);
+  }
+  return {
+    username: decodeURIComponent(url.username),
+    target: `${url.hostname.toLowerCase()}:${url.port || '5432'}${url.pathname}`,
+  };
+}
+
+function parseCorsOrigins(raw: string | undefined, production: boolean): string[] {
+  const values = raw === undefined
+    ? (production ? [] : ['http://localhost:5273', 'http://127.0.0.1:5273', 'http://[::1]:5273'])
+    : raw.split(',').map((value) => value.trim()).filter(Boolean);
+  return [...new Set(values.map((value) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error('POOLSTATIS_CORS_ORIGINS must contain comma-separated HTTP(S) origins');
+    }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:')
+      || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+      throw new Error('POOLSTATIS_CORS_ORIGINS must contain origins without paths, credentials, queries, or fragments');
+    }
+    return url.origin;
+  }))];
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const issuer = env.AUTH_JWT_ISSUER;
   const audience = env.AUTH_JWT_AUDIENCE;
+  const legacyIssuer = env.AUTH_JWT_LEGACY_ISSUER === undefined
+    ? null
+    : requiredText(env.AUTH_JWT_LEGACY_ISSUER, '', 'AUTH_JWT_LEGACY_ISSUER');
+  if (legacyIssuer !== null && legacyIssuer !== issuer) {
+    throw new Error('AUTH_JWT_LEGACY_ISSUER must equal AUTH_JWT_ISSUER');
+  }
   const jwksUri = env.AUTH_JWKS_URI ?? (issuer ? new URL('.well-known/jwks.json', issuer).toString() : undefined);
   const packageStatus = env.POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true' ? 'published' : 'publish_pending';
+  const mcpCommand = env.POOLSTATIS_MCP_COMMAND ?? 'pnpm';
+  const mcpArgs = parseArgs(env.POOLSTATIS_MCP_ARGS, packageStatus);
+  if (packageStatus === 'published'
+      && (mcpCommand !== 'pnpm'
+        || mcpArgs.length !== 3
+        || mcpArgs[0] !== '--silent'
+        || mcpArgs[1] !== 'dlx'
+        || mcpArgs[2] !== MCP_PACKAGE_SPEC)) {
+    throw new Error(
+      `POOLSTATIS_MCP_PACKAGE_PUBLISHED=true requires pnpm dlx pinned to ${MCP_PACKAGE_SPEC}`,
+    );
+  }
+  if (packageStatus === 'publish_pending'
+      && mcpArgs.some((arg) => arg.includes('@poolstatis/mcp'))) {
+    throw new Error(
+      'POOLSTATIS_MCP_PACKAGE_PUBLISHED must be true before POOLSTATIS_MCP_ARGS can use @poolstatis/mcp',
+    );
+  }
   const databasePoolMax = positiveInt(env.DATABASE_POOL_MAX, 10, 'DATABASE_POOL_MAX');
+  const production = env.NODE_ENV === 'production';
+  const corsOrigins = parseCorsOrigins(env.POOLSTATIS_CORS_ORIGINS, production);
+  const countryHeader = env.POOLSTATIS_COUNTRY_HEADER?.trim().toLowerCase();
+  const countryMmdbPath = env.POOLSTATIS_COUNTRY_MMDB_PATH?.trim();
+  const clientIpHeader = env.POOLSTATIS_CLIENT_IP_HEADER?.trim().toLowerCase();
+  const trustedProxyCidrs = exactList(env.POOLSTATIS_TRUSTED_PROXY_CIDRS, 'POOLSTATIS_TRUSTED_PROXY_CIDRS');
+  if (countryHeader && (countryMmdbPath || clientIpHeader)) {
+    throw new Error('trusted country-header and local MMDB country modes are mutually exclusive');
+  }
+  if (countryHeader && !/^[a-z0-9-]+$/.test(countryHeader)) {
+    throw new Error('POOLSTATIS_COUNTRY_HEADER must be a valid lowercase HTTP header name');
+  }
+  if (clientIpHeader && !/^[a-z0-9-]+$/.test(clientIpHeader)) {
+    throw new Error('POOLSTATIS_CLIENT_IP_HEADER must be a valid lowercase HTTP header name');
+  }
+  if (countryMmdbPath && !countryMmdbPath.startsWith('/')) {
+    throw new Error('POOLSTATIS_COUNTRY_MMDB_PATH must be an absolute path');
+  }
+  const trustedHeaderMode = Boolean(countryHeader);
+  const localMmdbMode = Boolean(countryMmdbPath || clientIpHeader);
+  if ((trustedHeaderMode || localMmdbMode) !== (trustedProxyCidrs.length > 0)) {
+    throw new Error('country enrichment and POOLSTATIS_TRUSTED_PROXY_CIDRS must be configured together');
+  }
+  if (localMmdbMode && (!countryMmdbPath || !clientIpHeader)) {
+    throw new Error('POOLSTATIS_COUNTRY_MMDB_PATH and POOLSTATIS_CLIENT_IP_HEADER must be configured together');
+  }
   const ingestBuffer = {
     maxEvents: positiveInt(
       env.INGEST_BUFFER_MAX_EVENTS,
@@ -163,15 +305,53 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (retentionMaxBatches < 4) {
     throw new Error('RETENTION_MAX_BATCHES must be at least 4');
   }
+  const databaseUrl =
+    env.DATABASE_URL ??
+    'postgres://poolsatis:poolsatis@localhost:5444/poolsatis';
+  const requireOrganizationPolicy = booleanValue(
+    env.HOSTED_POLICY_REQUIRED,
+    false,
+    'HOSTED_POLICY_REQUIRED',
+  );
+  if (requireOrganizationPolicy && (!issuer || !audience || !jwksUri)) {
+    throw new Error('HOSTED_POLICY_REQUIRED requires configured JWT authentication');
+  }
+  const allowedClientIds = exactList(env.AUTH_JWT_ALLOWED_CLIENT_IDS, 'AUTH_JWT_ALLOWED_CLIENT_IDS');
+  const requiredScopes = exactList(env.AUTH_JWT_REQUIRED_SCOPES, 'AUTH_JWT_REQUIRED_SCOPES');
+  if (requireOrganizationPolicy && allowedClientIds.length === 0) {
+    throw new Error('HOSTED_POLICY_REQUIRED requires AUTH_JWT_ALLOWED_CLIENT_IDS');
+  }
+  if (requireOrganizationPolicy && requiredScopes.length === 0) {
+    throw new Error('HOSTED_POLICY_REQUIRED requires AUTH_JWT_REQUIRED_SCOPES');
+  }
+  const migrationDatabaseUrl = env.MIGRATION_DATABASE_URL === undefined
+    ? (requireOrganizationPolicy ? null : databaseUrl)
+    : requiredText(env.MIGRATION_DATABASE_URL, '', 'MIGRATION_DATABASE_URL');
+  if (requireOrganizationPolicy && migrationDatabaseUrl !== null) {
+    const runtimeCredential = databaseCredential(databaseUrl, 'DATABASE_URL');
+    const migrationCredential = databaseCredential(
+      migrationDatabaseUrl,
+      'MIGRATION_DATABASE_URL',
+    );
+    if (migrationCredential.target !== runtimeCredential.target) {
+      throw new Error('MIGRATION_DATABASE_URL must target the same database as DATABASE_URL');
+    }
+    if (migrationCredential.username === runtimeCredential.username) {
+      throw new Error(
+        'MIGRATION_DATABASE_URL must use a different database credential from DATABASE_URL in hosted mode',
+      );
+    }
+  }
   return {
-    databaseUrl:
-      env.DATABASE_URL ??
-      'postgres://poolsatis:poolsatis@localhost:5444/poolsatis',
+    databaseUrl,
+    migrationDatabaseUrl,
     databasePoolMax,
     port: env.PORT ? Number(env.PORT) : 3300,
     host: env.HOST ?? '127.0.0.1',
     publicUrl: (env.POOLSTATIS_PUBLIC_URL ?? 'https://api.poolstatis.com').replace(/\/$/, ''),
     connectorEncryptionKey: env.POOLSTATIS_CONNECTOR_ENCRYPTION_KEY?.trim() || null,
+    outboundPolicy: { allowLocalHttp: booleanValue(env.OUTBOUND_ALLOW_LOCAL_HTTP, false, 'OUTBOUND_ALLOW_LOCAL_HTTP') },
+    experienceArtifactDir: env.POOLSTATIS_EXPERIENCE_ARTIFACT_DIR?.trim() || './data/experience-artifacts',
     ingestBuffer,
     queryCache: {
       ttlMs: positiveInt(env.QUERY_CACHE_TTL_MS, 1_000, 'QUERY_CACHE_TTL_MS'),
@@ -222,13 +402,34 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       requestTimeoutMs: positiveInt(env.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000, 'WEBHOOK_REQUEST_TIMEOUT_MS', 60_000),
     },
     mcpRunner: {
-      command: env.POOLSTATIS_MCP_COMMAND ?? 'pnpm',
-      args: parseArgs(env.POOLSTATIS_MCP_ARGS),
+      command: mcpCommand,
+      args: mcpArgs,
       packageStatus,
       note: packageStatus === 'published'
-        ? 'The configured MCP runner is marked published for this hosted deployment.'
-        : 'Publish or configure the MCP runner before treating this template as copy-paste ready.',
+        ? `The configured MCP runner is pinned to ${MCP_PACKAGE_SPEC}.`
+        : 'Registry install is disabled. Replace <path-to-poolstatis-core> with an exact local Core checkout path.',
     },
-    auth: issuer && audience && jwksUri ? { issuer, audience, jwksUri } : null,
+    auth: issuer && audience && jwksUri ? {
+      issuer,
+      audience,
+      jwksUri,
+      claims: {
+        email: requiredText(env.AUTH_JWT_EMAIL_CLAIM, 'https://poolstatis.xyz/email', 'AUTH_JWT_EMAIL_CLAIM'),
+        emailVerified: requiredText(env.AUTH_JWT_EMAIL_VERIFIED_CLAIM, 'https://poolstatis.xyz/email_verified', 'AUTH_JWT_EMAIL_VERIFIED_CLAIM'),
+        displayName: requiredText(env.AUTH_JWT_DISPLAY_NAME_CLAIM, 'https://poolstatis.xyz/name', 'AUTH_JWT_DISPLAY_NAME_CLAIM'),
+        picture: requiredText(env.AUTH_JWT_PICTURE_CLAIM, 'https://poolstatis.xyz/picture', 'AUTH_JWT_PICTURE_CLAIM'),
+      },
+      connectionStrategy: requiredText(env.AUTH_CONNECTION_STRATEGY, 'oidc', 'AUTH_CONNECTION_STRATEGY'),
+      allowedClientIds,
+      requiredScopes,
+      legacyIssuer,
+      requireOrganizationPolicy,
+    } : null,
+    corsOrigins,
+    browserCountry: countryHeader
+      ? { mode: 'trusted_header', header: countryHeader, trustedProxyCidrs }
+      : countryMmdbPath && clientIpHeader
+        ? { mode: 'local_mmdb', databasePath: countryMmdbPath, clientIpHeader, trustedProxyCidrs }
+        : null,
   };
 }

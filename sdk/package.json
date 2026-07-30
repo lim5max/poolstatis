@@ -1,17 +1,35 @@
 {
   "name": "@poolstatis/sdk",
   "version": "0.1.0",
-  "description": "Tiny browser + Node client for sending events and entities to Poolstatis.",
+  "description": "Zero-dependency Poolstatis SDK for Node, browser analytics, engagement, attribution and privacy-safe experience evidence.",
   "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lim5max/poolstatis.git",
+    "directory": "sdk"
+  },
+  "homepage": "https://github.com/lim5max/poolstatis/tree/main/sdk#readme",
+  "bugs": {
+    "url": "https://github.com/lim5max/poolstatis/issues"
+  },
+  "keywords": [
+    "analytics",
+    "product-analytics",
+    "browser-analytics",
+    "mcp",
+    "poolstatis"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./experience": { "types": "./dist/experience.d.ts", "import": "./dist/experience.js" }
+    "./experience": { "types": "./dist/experience.d.ts", "import": "./dist/experience.js" },
+    "./attribution": { "types": "./dist/attribution.d.ts", "import": "./dist/attribution.js" },
+    "./browser": { "types": "./dist/browser.d.ts", "import": "./dist/browser.js" }
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md", "LICENSE"],
   "sideEffects": false,
   "engines": { "node": ">=18" },
   "scripts": {

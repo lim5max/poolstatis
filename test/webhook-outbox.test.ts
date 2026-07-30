@@ -28,7 +28,7 @@ describe('encrypted webhook outbox and decision inbox', () => {
   beforeAll(async () => {
     await new Promise<void>((resolve) => receiver.listen(0, '127.0.0.1', resolve));
     host = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}`;
-    env = await createTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY });
+    env = await createTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY, outboundPolicy: { allowLocalHttp: true } });
     const anchor = new Date(Date.now() - 3 * DAY);
     await activeMetric(env, {
       key: 'activation_completed', type: 'unique_actors',
@@ -159,7 +159,7 @@ describe('encrypted webhook outbox and decision inbox', () => {
     return new WebhookOutbox(env.pool, ENCRYPTION_KEY, {
       batchSize: 10, maxAttempts: 5, baseRetryMs: 100, maxRetryMs: 1_000,
       leaseMs: 10_000, requestTimeoutMs: 2_000, projectId: env.projectId, ...patch,
-    });
+    }, { allowLocalHttp: true });
   }
   function path(suffix: string) { return `/api/v1/projects/${env.projectSlug}${suffix}`; }
   function routeReceiver(req: IncomingMessage, res: ServerResponse) {

@@ -3,39 +3,76 @@ import { useNavigate } from 'react-router-dom';
 import { Loader2, ChevronRight, ChevronDown } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import {
-  Loading, ErrorNote, CategoryChip, StatusBadge, TypeTag, EmptyState, Panel,
-  Toolbar, SearchInput, FilterChips, CategoryFilter, GroupBy, Overflow,
-  DangerConfirm, NumberedStepChips, VerticalStepper, type Chip,
+  Loading, ErrorNote, RecoverableError, StatusBadge, TypeTag, EmptyState, Panel,
+  Toolbar, SearchInput, FilterChips, GroupBy, Overflow,
+  DangerConfirm, VerticalStepper, type Chip,
 } from '../components/ui';
+import {
+  CategorySelector,
+  MetricCategoriesPanel,
+  MetricCategoryChip,
+  MetricCategoryFilter,
+  UNCATEGORIZED_CATEGORY_FILTER,
+  type CustomMetricCategoryInput,
+} from '../components/metric-categories';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { SortableTableHead, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { cn } from '@/lib/utils';
-import type { Funnel, Metric, MetricStatus } from '../api/types';
+import { cn, isRedundantKey } from '@/lib/utils';
+import type { Funnel, Metric, MetricCategoryDefinition, MetricStatus } from '../api/types';
 
 export function Registry() {
   const { client, project, env } = useStore();
   const { data, error, loading, reload } = useAsync(() => client!.schema(project!, env), [project, env]);
 
   if (loading) return <Loading what="reading registry…" />;
-  if (error) return <ErrorNote>{error}</ErrorNote>;
+  if (error) return <RecoverableError onRetry={reload}>{error}</RecoverableError>;
   if (!data) return null;
+  const categories = data.metric_categories ?? [];
+
+  const createCategory = async (input: CustomMetricCategoryInput) => {
+    await client!.createMetricCategory(project!, input);
+    reload();
+  };
+  const updateCategory = async (
+    key: string,
+    patch: Pick<CustomMetricCategoryInput, 'name' | 'description' | 'color'>,
+  ) => {
+    await client!.updateMetricCategory(project!, key, patch);
+    reload();
+  };
+  const deleteCategory = async (key: string) => {
+    await client!.deleteMetricCategory(project!, key);
+    reload();
+  };
 
   return (
     <Tabs defaultValue="metrics" className="gap-4">
       <div className="max-w-full overflow-x-auto pb-1">
         <TabsList className="w-max">
           <TabsTrigger value="metrics">Metrics · {data.metrics.length}</TabsTrigger>
+          <TabsTrigger value="categories">Categories · {categories.length}</TabsTrigger>
           <TabsTrigger value="funnels">Funnels · {data.funnels.length}</TabsTrigger>
           <TabsTrigger value="entities">Entity types · {data.entity_types.length}</TabsTrigger>
         </TabsList>
       </div>
-      <TabsContent value="metrics"><MetricsTable metrics={data.metrics} onChanged={reload} /></TabsContent>
+      <TabsContent value="metrics">
+        <MetricsTable metrics={data.metrics} categories={categories} onChanged={reload} />
+      </TabsContent>
+      <TabsContent value="categories">
+        <MetricCategoriesPanel
+          categories={categories}
+          onRetry={reload}
+          onCreate={createCategory}
+          onUpdate={updateCategory}
+          onDelete={deleteCategory}
+        />
+      </TabsContent>
       <TabsContent value="funnels"><FunnelsTable funnels={data.funnels} /></TabsContent>
       <TabsContent value="entities"><EntityTypesTable types={data.entity_types} /></TabsContent>
     </Tabs>
@@ -53,7 +90,15 @@ function metricEvent(m: Metric): string | null {
   return s.event ?? null;
 }
 
-function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: () => void }) {
+function MetricsTable({
+  metrics,
+  categories,
+  onChanged,
+}: {
+  metrics: Metric[];
+  categories: MetricCategoryDefinition[];
+  onChanged: () => void;
+}) {
   const { client, project } = useStore();
   const nav = useNavigate();
   const openEvents = (ev: string) => nav(`/data?tab=events&event=${encodeURIComponent(ev)}`);
@@ -74,7 +119,7 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
     const q = search.trim().toLowerCase();
     const rows = metrics.filter((m) => {
       if (q && !`${m.name} ${m.key} ${m.purpose} ${(m.tags ?? []).join(' ')}`.toLowerCase().includes(q)) return false;
-      if (cats.size && !(m.category ? cats.has(m.category) : cats.has('uncategorized'))) return false;
+      if (cats.size && !(m.category ? cats.has(m.category) : cats.has(UNCATEGORIZED_CATEGORY_FILTER))) return false;
       if (statuses.size && !statuses.has(m.status)) return false;
       if (tagSel.size && !(m.tags ?? []).some((t) => tagSel.has(t))) return false;
       return true;
@@ -90,21 +135,34 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
   const groups = useMemo(() => groupRows(filtered, groupBy), [filtered, groupBy]);
   const toggle = (set: Set<string>, setter: (s: Set<string>) => void, v: string) => { const n = new Set(set); n.has(v) ? n.delete(v) : n.add(v); setter(n); };
   const chips: Chip[] = [
-    ...[...cats].map((c) => ({ key: `cat:${c}`, label: c })),
+    ...[...cats].map((c) => ({
+      key: `cat:${c}`,
+      label: c === UNCATEGORIZED_CATEGORY_FILTER ? 'Uncategorized' : c,
+    })),
     ...[...statuses].map((s) => ({ key: `st:${s}`, label: s })),
     ...[...tagSel].map((t) => ({ key: `tag:${t}`, label: `#${t}` })),
   ];
   const removeChip = (k: string) => {
-    const [kind, v] = k.split(':') as [string, string];
+    const separator = k.indexOf(':');
+    const kind = k.slice(0, separator);
+    const v = k.slice(separator + 1);
     if (kind === 'cat') toggle(cats, setCats, v); else if (kind === 'st') toggle(statuses, setStatuses, v); else toggle(tagSel, setTagSel, v);
   };
 
   const setStatus = async (key: string, status: Exclude<MetricStatus, 'deprecated'>) => { setBusy(key); try { await client!.setMetricStatus(project!, key, status); onChanged(); } finally { setBusy(null); } };
   const deprecate = async (key: string, reason: string) => { setBusy(key); try { await client!.deprecateMetric(project!, key, reason); onChanged(); } finally { setBusy(null); } };
   const del = async (key: string) => { setBusy(key); try { await client!.deleteMetric(project!, key); onChanged(); } finally { setBusy(null); } };
-  const saveTags = async (key: string, tags: string[]) => { setBusy(key); try { await client!.setMetricTags(project!, key, tags); onChanged(); } finally { setBusy(null); } };
+  const saveTaxonomy = async (key: string, category: string | null, tags: string[]) => {
+    setBusy(key);
+    try {
+      await client!.updateMetricTaxonomy(project!, key, { category, tags });
+      onChanged();
+    } finally {
+      setBusy(null);
+    }
+  };
   const clickSort = (k: SortKey) => setSort((s) => ({ key: k, dir: s.key === k && s.dir === 'asc' ? 'desc' : 'asc' }));
-  const caret = (k: SortKey) => <span className={cn('ml-1 text-xs', sort.key === k ? 'text-primary' : 'text-muted-foreground/40')}>{sort.key === k && sort.dir === 'desc' ? '▾' : '▴'}</span>;
+  const sortDirection = (k: SortKey) => sort.key === k ? sort.dir : null;
 
   return (
     <Card className="gap-0 py-0 overflow-hidden">
@@ -114,7 +172,11 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
       <Toolbar
         left={<SearchInput value={search} onChange={setSearch} placeholder="Search name, key, purpose…" />}
         center={<>
-          <CategoryFilter selected={cats} onToggle={(c) => toggle(cats, setCats, c)} />
+          <MetricCategoryFilter
+            categories={categories}
+            selected={cats}
+            onToggle={(c) => toggle(cats, setCats, c)}
+          />
           <div className="flex h-9 rounded-md border overflow-hidden text-sm">
             {STATUS_OPTS.map((s) => (
               <button key={s} onClick={() => toggle(statuses, setStatuses, s)}
@@ -134,16 +196,28 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('name')}>Metric{caret('name')}</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('category')}>Category{caret('category')}</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('type')}>Type{caret('type')}</TableHead>
+                <SortableTableHead label="Metric" direction={sortDirection('name')} onSort={() => clickSort('name')} />
+                <SortableTableHead label="Category" direction={sortDirection('category')} onSort={() => clickSort('category')} />
+                <SortableTableHead label="Type" direction={sortDirection('type')} onSort={() => clickSort('type')} />
                 <TableHead>Source</TableHead><TableHead>Purpose</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('status')}>Status{caret('status')}</TableHead>
+                <SortableTableHead label="Status" direction={sortDirection('status')} onSort={() => clickSort('status')} />
                 <TableHead className="w-12" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {groups.map((g) => <Section key={g.label ?? '_'} group={g} busy={busy} onActivate={(k) => setStatus(k, 'active')} onDeprecate={setDeprecating} onDelete={setDeleting} onEditTags={setEditing} onOpenEvents={openEvents} />)}
+              {groups.map((g) => (
+                <Section
+                  key={g.label ?? '_'}
+                  group={g}
+                  categories={categories}
+                  busy={busy}
+                  onActivate={(k) => setStatus(k, 'active')}
+                  onDeprecate={setDeprecating}
+                  onDelete={setDeleting}
+                  onEditTaxonomy={setEditing}
+                  onOpenEvents={openEvents}
+                />
+              ))}
             </TableBody>
           </Table>
         </div>
@@ -160,9 +234,13 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
           onCancel={() => setDeleting(null)} onConfirm={async () => { await del(deleting.key); setDeleting(null); }} />
       )}
       {editing && (
-        <TagEditor metric={editing} suggestions={allTags}
+        <TaxonomyEditor metric={editing} categories={categories} suggestions={allTags}
           onCancel={() => setEditing(null)}
-          onSave={async (tags) => { await saveTags(editing.key, tags); setEditing(null); }} />
+          onSave={async (category, tags) => {
+            await saveTaxonomy(editing.key, category, tags);
+            setEditing(null);
+          }}
+        />
       )}
     </Card>
   );
@@ -229,37 +307,81 @@ function TagFilter({ all, selected, onToggle }: { all: string[]; selected: Set<s
   );
 }
 
-function TagEditor({ metric, suggestions, onCancel, onSave }: { metric: Metric; suggestions: string[]; onCancel: () => void; onSave: (tags: string[]) => void }) {
+function TaxonomyEditor({
+  metric,
+  categories,
+  suggestions,
+  onCancel,
+  onSave,
+}: {
+  metric: Metric;
+  categories: MetricCategoryDefinition[];
+  suggestions: string[];
+  onCancel: () => void;
+  onSave: (category: string | null, tags: string[]) => Promise<void>;
+}) {
+  const [category, setCategory] = useState(metric.category);
   const [text, setText] = useState((metric.tags ?? []).join(', '));
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const parse = (s: string) => [...new Set(s.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean))];
-  const go = async () => { setBusy(true); try { await onSave(parse(text)); } finally { setBusy(false); } };
+  const go = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(category, parse(text));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'taxonomy update failed');
+    } finally {
+      setBusy(false);
+    }
+  };
   const add = (t: string) => setText((cur) => [...new Set([...parse(cur), t])].join(', '));
   return (
     <Dialog open onOpenChange={(o) => !o && onCancel()}>
       <DialogContent>
-        <DialogHeader><DialogTitle className="serif font-normal text-xl">Tags · {metric.name}</DialogTitle>
-          <DialogDescription>Free-form labels (e.g. a feature like <code>checkout</code>, or <code>north-star</code>). Comma-separated; lowercased.</DialogDescription>
+        <DialogHeader><DialogTitle className="serif font-normal text-xl">Taxonomy · {metric.name}</DialogTitle>
+          <DialogDescription>
+            Category explains why. Namespaced tags such as <code>surface:checkout</code> and
+            <code> component:payment-form</code> explain where and what.
+          </DialogDescription>
         </DialogHeader>
-        <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="checkout, product, north-star" autoFocus />
+        <div className="grid gap-1.5">
+          <span className="text-xs text-muted-foreground">Purpose category</span>
+          <CategorySelector categories={categories} value={category} onChange={setCategory} />
+        </div>
+        <div className="grid gap-1.5">
+          <label htmlFor="metric-taxonomy-tags" className="text-xs text-muted-foreground">
+            Namespaced tags
+          </label>
+          <Input
+            id="metric-taxonomy-tags"
+            aria-label="Namespaced tags"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="surface:checkout, component:payment-form"
+          />
+        </div>
         {suggestions.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {suggestions.slice(0, 12).map((t) => <button key={t} className="text-xs rounded-full border px-2 py-0.5 text-muted-foreground hover:text-foreground hover:border-foreground/30" onClick={() => add(t)}>#{t}</button>)}
           </div>
         )}
+        {error && <ErrorNote>{error}</ErrorNote>}
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button onClick={go} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}Save tags</Button>
+          <Button onClick={go} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}Save taxonomy</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function Section({ group, busy, onActivate, onDeprecate, onDelete, onEditTags, onOpenEvents }: {
+function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, onEditTaxonomy, onOpenEvents }: {
   group: { label: string | null; rows: Metric[] }; busy: string | null;
+  categories: MetricCategoryDefinition[];
   onActivate: (k: string) => void; onDeprecate: (m: Metric) => void; onDelete: (m: Metric) => void;
-  onEditTags: (m: Metric) => void; onOpenEvents: (ev: string) => void;
+  onEditTaxonomy: (m: Metric) => void; onOpenEvents: (ev: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -279,14 +401,14 @@ function Section({ group, busy, onActivate, onDeprecate, onDelete, onEditTags, o
             {metricEvent(m)
               ? <button className="font-medium text-left hover:text-primary hover:underline underline-offset-2" title="See this metric's events" onClick={() => onOpenEvents(metricEvent(m)!)}>{m.name}</button>
               : <div className="font-medium">{m.name}</div>}
-            <div className="text-xs text-muted-foreground">{m.key}</div>
+            {!isRedundantKey(m.name, m.key) && <div className="text-xs text-muted-foreground">{m.key}</div>}
             {(m.tags ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1">
                 {m.tags.map((t) => <span key={t} className="text-[11px] rounded-full border px-1.5 py-px text-muted-foreground">#{t}</span>)}
               </div>
             )}
           </TableCell>
-          <TableCell><CategoryChip category={m.category} /></TableCell>
+          <TableCell><MetricCategoryChip categoryKey={m.category} categories={categories} /></TableCell>
           <TableCell><TypeTag type={m.type} /></TableCell>
           <TableCell className="text-xs text-muted-foreground whitespace-nowrap font-mono">{sourceSummary(m)}</TableCell>
           <TableCell className="max-w-sm"><div className="truncate text-xs text-muted-foreground italic" title={m.purpose}>{m.purpose}</div></TableCell>
@@ -303,7 +425,7 @@ function Section({ group, busy, onActivate, onDeprecate, onDelete, onEditTags, o
               <div className="inline-flex items-center gap-1.5">
                 {m.status !== 'active' && <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onActivate(m.key)}>activate</Button>}
                 <Overflow items={[
-                  { label: 'Edit tags', onClick: () => onEditTags(m) },
+                  { label: 'Edit category & tags', onClick: () => onEditTaxonomy(m) },
                   ...(m.status !== 'deprecated' ? [{ label: 'Deprecate', onClick: () => onDeprecate(m) }] : []),
                   ...(m.status === 'deprecated' ? [{ label: 'Delete metric', onClick: () => onDelete(m), danger: true }] : []),
                 ]} />
@@ -338,12 +460,9 @@ function groupRows(rows: Metric[], by: string): Array<{ label: string | null; ro
 function FunnelsTable({ funnels }: { funnels: Funnel[] }) {
   if (funnels.length === 0) return <Panel><EmptyState headline="No funnels" lead="defined from registry metrics via MCP or API" /></Panel>;
   return (
-    <Panel title="Funnels">
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader><TableRow><TableHead className="w-7" /><TableHead>Funnel</TableHead><TableHead>Goal</TableHead><TableHead>Steps</TableHead><TableHead>Window</TableHead></TableRow></TableHeader>
-          <TableBody>{funnels.map((f) => <FunnelRow key={f.key} funnel={f} />)}</TableBody>
-        </Table>
+    <Panel title={<>Funnels <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{funnels.length}</span></>}>
+      <div className="divide-y">
+        {funnels.map((f) => <FunnelRow key={f.key} funnel={f} />)}
       </div>
     </Panel>
   );
@@ -352,16 +471,36 @@ function FunnelsTable({ funnels }: { funnels: Funnel[] }) {
 function FunnelRow({ funnel }: { funnel: Funnel }) {
   const [open, setOpen] = useState(false);
   return (
-    <>
-      <TableRow>
-        <TableCell><button onClick={() => setOpen((o) => !o)} className="text-muted-foreground">{open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</button></TableCell>
-        <TableCell><div className="font-medium">{funnel.name}</div><div className="text-xs text-muted-foreground">{funnel.key}</div></TableCell>
-        <TableCell><div className="text-xs text-muted-foreground italic max-w-sm">{funnel.goal}</div></TableCell>
-        <TableCell><NumberedStepChips steps={funnel.steps} /></TableCell>
-        <TableCell className="text-xs">{Math.round(funnel.window_seconds / 86400)}d</TableCell>
-      </TableRow>
-      {open && <TableRow><TableCell /><TableCell colSpan={4} className="bg-background"><VerticalStepper steps={funnel.steps} /></TableCell></TableRow>}
-    </>
+    <section data-testid={`funnel-summary-${funnel.key}`} className="grid min-w-0 gap-3 px-5 py-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(16rem,2fr)_auto] lg:items-start">
+      <div className="min-w-0">
+        <div className="font-medium break-words">{funnel.name}</div>
+        <code className="text-xs text-muted-foreground break-all">{funnel.key}</code>
+      </div>
+      <div className="min-w-0">
+        <div className="text-xs font-medium text-muted-foreground">Goal</div>
+        <p className="mt-1 text-sm text-muted-foreground break-words">{funnel.goal}</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        <Badge variant="outline">{funnel.steps.length} steps</Badge>
+        <Badge variant="outline">{Math.round(funnel.window_seconds / 86400)}d window</Badge>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={open}
+          aria-controls={`funnel-${funnel.key}-steps`}
+          aria-label={`${open ? 'Hide' : 'Show'} ${funnel.name} steps`}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          {open ? 'Hide steps' : 'Review steps'}
+        </Button>
+      </div>
+      {open && (
+        <div id={`funnel-${funnel.key}-steps`} className="min-w-0 rounded-md border bg-muted/20 p-4 lg:col-span-3">
+          <VerticalStepper steps={funnel.steps} />
+        </div>
+      )}
+    </section>
   );
 }
 

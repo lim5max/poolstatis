@@ -21,7 +21,7 @@ describe('Milestone B product decision loop E2E', () => {
     await new Promise<void>((resolve) => posthog.listen(0, '127.0.0.1', resolve));
     posthogHost = `http://127.0.0.1:${(posthog.address() as AddressInfo).port}`;
     native = await createTestEnv();
-    external = await createTestEnv({ connectorEncryptionKey: 'decision-loop-b-e2e-encryption-key' });
+    external = await createTestEnv({ connectorEncryptionKey: 'decision-loop-b-e2e-encryption-key', outboundPolicy: { allowLocalHttp: true } });
     anchor = new Date(Date.now() - 4 * DAY);
   });
 

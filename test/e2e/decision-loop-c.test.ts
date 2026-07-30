@@ -37,8 +37,8 @@ describe('full P0/P1 continuous product decision loop E2E', () => {
     await new Promise<void>((resolve) => webhook.listen(0, '127.0.0.1', resolve));
     posthogHost = `http://127.0.0.1:${(posthog.address() as AddressInfo).port}`;
     webhookHost = `http://127.0.0.1:${(webhook.address() as AddressInfo).port}`;
-    native = await createTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY });
-    external = await createTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY });
+    native = await createTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY, outboundPolicy: { allowLocalHttp: true } });
+    external = await createTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY, outboundPolicy: { allowLocalHttp: true } });
     anchor = new Date(Date.now() - 3 * DAY);
   });
 
@@ -159,7 +159,7 @@ describe('full P0/P1 continuous product decision loop E2E', () => {
   });
 
   function releaseMonitor(env: TestEnv) {
-    const context = createContext(env.pool, { ingestBuffer: false, queryCache: false, connectorEncryptionKey: ENCRYPTION_KEY });
+    const context = createContext(env.pool, { ingestBuffer: false, queryCache: false, connectorEncryptionKey: ENCRYPTION_KEY, outboundPolicy: { allowLocalHttp: true } });
     return new ReleaseMonitor(env.pool, context.query, {
       batchSize: 10, maxAttempts: 5, baseRetryMs: 100, maxRetryMs: 1_000,
       leaseMs: 10_000, actor: 'worker:e2e-release-monitor', projectId: env.projectId,
@@ -169,7 +169,7 @@ describe('full P0/P1 continuous product decision loop E2E', () => {
     return new WebhookOutbox(env.pool, ENCRYPTION_KEY, {
       batchSize: 10, maxAttempts: 5, baseRetryMs: 100, maxRetryMs: 1_000,
       leaseMs: 10_000, requestTimeoutMs: 2_000, projectId: env.projectId,
-    });
+    }, { allowLocalHttp: true });
   }
   function makeDeclaration(key: string, metric: string) {
     return { version: 1 as const, contracts: [{

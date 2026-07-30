@@ -13,30 +13,45 @@ import {
   actorLinkSchema,
   applyMeasurementDeclarationSchema,
   concludeExperimentSchema, createExperimentSchema,
+  createMetricCategorySchema,
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
-  experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
-  editDecisionSchema, measurementDeclarationSchema, posthogConnectionSchema, propertyDefinitionSchema,
+  experienceRouteRegistrationSchema, experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
+  editDecisionSchema, measurementDeclarationSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
   registerReleaseSchema, reviewDecisionSchema,
-  retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, updateExperimentSchema, updateFeatureFlagSchema,
-  updateMetricSchema, updatePropertyDefinitionSchema,
+  retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, webAnalyticsQuerySchema,
+  webSessionsQuerySchema, webSessionQuerySchema, pageEngagementQuerySchema,
+  updateExperimentSchema, updateFeatureFlagSchema,
+  updateMetricCategorySchema, updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
 } from '../schemas.js';
-import { INSTRUMENTATION_STANDARD } from './standard.js';
+import { BROWSER_ANALYTICS_STANDARD, INSTRUMENTATION_STANDARD } from './standard.js';
 
-const BASE_URL = process.env.POOLSTATIS_URL ?? 'http://127.0.0.1:3300';
-const TOKEN = process.env.POOLSTATIS_TOKEN;
+export interface McpConfig { baseUrl: string; token: string; }
 
-if (!TOKEN) {
-  console.error('POOLSTATIS_TOKEN is required (a pt_ personal token or sk_ secret key)');
-  process.exit(1);
+/** Configuration is checked before stdio opens so a broken launcher cannot leak a token to protocol output. */
+export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOKEN?: string }): McpConfig {
+  const token = env.POOLSTATIS_TOKEN?.trim();
+  if (!token || !/^(pt|sk)_[a-f0-9]{16,}$/i.test(token)) {
+    throw new Error('POOLSTATIS_TOKEN must be a non-empty pt_ personal token or sk_ secret key');
+  }
+  const raw = env.POOLSTATIS_URL?.trim() || 'http://127.0.0.1:3300';
+  let url: URL;
+  try { url = new URL(raw); } catch { throw new Error('POOLSTATIS_URL must be an HTTP(S) origin'); }
+  const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]';
+  if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))
+    || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('POOLSTATIS_URL must be a clean HTTPS origin or loopback HTTP origin');
+  }
+  return { baseUrl: url.origin, token };
 }
 
+export function createMcpServer(config: Readonly<McpConfig>): McpServer {
 async function api(method: string, path: string, body?: unknown): Promise<unknown> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(`${config.baseUrl}${path}`, {
     method,
     headers: {
-      authorization: `Bearer ${TOKEN}`,
+      authorization: `Bearer ${config.token}`,
       'x-poolstatis-client': 'mcp',
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
@@ -75,7 +90,7 @@ function wrap<A>(fn: (args: A) => Promise<unknown>): (args: A) => Promise<ToolRe
   };
 }
 
-const server = new McpServer({ name: 'poolstatis', version: '0.1.0' });
+const server = new McpServer({ name: 'poolstatis', version: '0.2.0' });
 const project = z.string().describe('project slug, see list_projects');
 
 function asStructuredContent(data: unknown): Record<string, unknown> {
@@ -116,7 +131,7 @@ jsonTool(
 
 jsonTool(
   'get_onboarding_status',
-  'Read evidence-backed setup gates and the first real decision result. This call also proves that the configured MCP client reached the project; copied configuration alone does not complete the agent gate.',
+  'Read evidence-backed setup gates and the first real decision result. This call persists an MCP-marked request and its time; it is last-use evidence, not heartbeat or transport attestation. Copied configuration alone does not complete the agent gate.',
   { project, env: z.string().default('prod') },
   wrap(async ({ project: slug, env }) => {
     await api('POST', `/api/v1/projects/${slug}/onboarding/observe-agent`, {
@@ -171,6 +186,27 @@ jsonTool(
     if (status) qs.set('status', status);
     return api('GET', `/api/v1/projects/${slug}/properties${qs.size ? `?${qs}` : ''}`);
   }),
+);
+
+jsonTool(
+  'propose_acquisition_properties',
+  'Idempotently propose the five reserved browser acquisition UTM event properties. They remain proposed until an owner explicitly reviews and trusts a definition for decision contracts.',
+  { project },
+  wrap(({ project: slug }) => api('POST', `/api/v1/projects/${slug}/properties/acquisition-attribution`, {})),
+);
+
+jsonTool(
+  'propose_browser_analytics',
+  'Idempotently propose the canonical privacy-bounded browser properties plus page-view and visitor metrics. Everything remains proposed until owner review.',
+  { project },
+  wrap(({ project: slug }) => api('POST', `/api/v1/projects/${slug}/properties/browser-analytics`, {})),
+);
+
+jsonTool(
+  'assess_measurement_trust',
+  'Read evidence-backed metric, identity and target-property coverage before a decision. Use target_filters for a property-specific coverage and trust read-back.',
+  { project, input: measurementTrustSchema },
+  wrap(({ project: slug, input }) => api('POST', `/api/v1/projects/${slug}/measurement/trust`, input)),
 );
 
 jsonTool(
@@ -421,8 +457,47 @@ jsonTool(
 // ===== Registry (design-time) =====
 
 jsonTool(
+  'list_metric_categories',
+  'List this project’s metric purpose categories and definitions before registering metrics. Category answers why; namespaced tags answer where/what; funnels represent journeys.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/metric-categories`)),
+);
+
+jsonTool(
+  'create_metric_category',
+  'Create a project custom purpose category only when the system library cannot express why the metric exists. Do not create categories for features, surfaces, buttons, or journeys; use namespaced tags and funnels.',
+  { project, category: createMetricCategorySchema },
+  wrap(({ project: slug, category }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/metric-categories`,
+    category,
+  )),
+);
+
+jsonTool(
+  'update_metric_category',
+  'Update the name, description, or color of a project custom category. System category semantics and all category keys are immutable.',
+  { project, key: z.string(), patch: updateMetricCategorySchema },
+  wrap(({ project: slug, key, patch }) => api(
+    'PATCH',
+    `/api/v1/projects/${slug}/metric-categories/${key}`,
+    patch,
+  )),
+);
+
+jsonTool(
+  'delete_metric_category',
+  'Delete an unused project custom category. System categories are locked and referenced categories return metric_category_in_use.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api(
+    'DELETE',
+    `/api/v1/projects/${slug}/metric-categories/${key}`,
+  )),
+);
+
+jsonTool(
   'register_metric',
-  'Register a metric in the project registry. `purpose` must be a real sentence — what decision does this metric inform? New metrics start as status=proposed; the project owner activates them.',
+  'Register a metric in the project registry. Read list_metric_categories first: category is why, namespaced tags are where/what, and funnels are journeys. `purpose` must be a real sentence. New metrics start as status=proposed.',
   { project, metric: registerMetricSchema },
   wrap(({ project: slug, metric }) => api('POST', `/api/v1/projects/${slug}/metrics`, metric)),
 );
@@ -528,6 +603,35 @@ jsonTool(
   wrap(({ project: slug, key }) => api('POST', `/api/v1/projects/${slug}/experience/surfaces/${encodeURIComponent(key)}/archive`)),
 );
 
+jsonTool(
+  'register_experience_route',
+  'Register a safe canonical route key/path pattern under a Browser Experience surface. Query strings and hashes are refused.',
+  { project, surface: z.string(), route: experienceRouteRegistrationSchema },
+  wrap(({ project: slug, surface, route }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/experience/surfaces/${encodeURIComponent(surface)}/routes`,
+    route,
+  )),
+);
+
+jsonTool(
+  'list_visual_experience_versions',
+  'Enumerate project-scoped surfaces, canonical routes, immutable page/app versions and desktop/mobile snapshot metadata. Returns evidence references only, never image bytes.',
+  { project, surface: z.string().optional(), route: z.string().optional(), env: z.string().default('prod') },
+  wrap(async ({ project: slug, surface, route, env }) => {
+    const routeParams = new URLSearchParams();
+    if (surface) routeParams.set('surface', surface);
+    const snapshotParams = new URLSearchParams({ env });
+    if (surface) snapshotParams.set('surface', surface);
+    if (route) snapshotParams.set('route', route);
+    const [routes, snapshots] = await Promise.all([
+      api('GET', `/api/v1/projects/${slug}/experience/routes?${routeParams}`),
+      api('GET', `/api/v1/projects/${slug}/experience/snapshots?${snapshotParams}`),
+    ]);
+    return { routes: (routes as { routes: unknown }).routes, snapshots: (snapshots as { snapshots: unknown }).snapshots };
+  }),
+);
+
 // ===== Feature delivery =====
 
 jsonTool(
@@ -626,6 +730,136 @@ jsonTool(
 );
 
 jsonTool(
+  'query_web_analytics',
+  'Return distinct visitors, sessions and page views plus count-and-percentage breakdowns by country, device, browser, OS, language, timezone or acquisition source. Definitions and privacy caveats are included.',
+  { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_analytics', ...query })),
+);
+
+jsonTool(
+  'get_web_overview',
+  'Return a bounded web overview with visitors, sessions, page views, measured engagement, bounce only for complete sessions, single-page sessions, foreground time, wall-clock span, breakdown truncation and privacy/accounting definitions.',
+  { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_analytics', ...query })),
+);
+
+jsonTool(
+  'list_web_sessions',
+  'List recent browser-tab sessions in one project/environment and period. Results are bounded and report truncation; incomplete timing remains explicit.',
+  { project, query: webSessionsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_sessions', ...query })),
+);
+
+jsonTool(
+  'get_web_session',
+  'Read one privacy-bounded browser-tab session with ordered page paths, foreground timing, wall-clock span and completeness. This is not DOM/video replay.',
+  { project, query: webSessionQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_session', ...query })),
+);
+
+jsonTool(
+  'get_session_engagement',
+  'Explain measured engagement for one known browser-tab session. Returns the same bounded server evidence as get_web_session and never invents bounce for incomplete sessions.',
+  { project, query: webSessionQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_session', ...query })),
+);
+
+jsonTool(
+  'get_page_engagement',
+  'Read the latest cumulative snapshot for one page_view_id. Duplicate or out-of-order snapshots are reduced by highest sequence; missing evidence stays explicit.',
+  { project, query: pageEngagementQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'page_engagement', ...query })),
+);
+
+jsonTool(
+  'get_click_map',
+  'Return a bounded, exact surface/route/version/device click map. The default decision grain is unique sessions; event counts remain secondary. Reports sample size, truncation and missing-snapshot caveats.',
+  { project, query: visualExperienceQuerySchema.omit({ kind: true }) },
+  wrap(async ({ project: slug, query }) => {
+    const result = await api(
+      'POST',
+      `/api/v1/projects/${slug}/query`,
+      { kind: 'visual_experience', ...query },
+    ) as {
+      surface: unknown;
+      route: string;
+      version: string;
+      device: string;
+      grid: number;
+      snapshot: unknown;
+      summary: { sessions: number; clicks: number };
+      click_cells: Array<{ x: number; y: number; count: number; sessions: number; actors: number }>;
+      click_labels: Array<{ label: string; count: number; sessions: number; actors: number }>;
+      click_labels_truncated: boolean;
+      meta: unknown;
+    };
+    return {
+      kind: 'click_map',
+      aggregation: 'unique_sessions',
+      surface: result.surface,
+      route: result.route,
+      version: result.version,
+      device: result.device,
+      grid: result.grid,
+      snapshot: result.snapshot,
+      sample_size: { sessions: result.summary.sessions, click_events: result.summary.clicks },
+      cells: result.click_cells.map((cell) => ({
+        x: cell.x, y: cell.y, sessions: cell.sessions, click_events: cell.count, actors: cell.actors,
+      })),
+      labels: result.click_labels.map((label) => ({
+        label: label.label, sessions: label.sessions, click_events: label.count, actors: label.actors,
+      })),
+      truncated: result.click_labels_truncated,
+      no_data_reason: result.summary.sessions === 0
+        ? 'No matching accepted experience sessions exist for this exact surface, route, version, device and period.'
+        : null,
+      meta: result.meta,
+    };
+  }),
+);
+
+jsonTool(
+  'get_scroll_map',
+  'Return bounded scroll reach and section drop-off for an exact surface/route/version/device tuple. Reach is unique-session based and descriptive, not causal.',
+  { project, query: visualExperienceQuerySchema.omit({ kind: true }) },
+  wrap(async ({ project: slug, query }) => {
+    const result = await api(
+      'POST',
+      `/api/v1/projects/${slug}/query`,
+      { kind: 'visual_experience', ...query },
+    ) as {
+      surface: unknown;
+      route: string;
+      version: string;
+      device: string;
+      snapshot: unknown;
+      summary: { sessions: number };
+      scroll_coverage: unknown[];
+      sections: unknown[];
+      sections_truncated: boolean;
+      meta: unknown;
+    };
+    return {
+      kind: 'scroll_map',
+      aggregation: 'unique_sessions',
+      surface: result.surface,
+      route: result.route,
+      version: result.version,
+      device: result.device,
+      snapshot: result.snapshot,
+      sample_size: { sessions: result.summary.sessions },
+      scroll_reach: result.scroll_coverage,
+      section_dropoff: result.sections,
+      truncated: result.sections_truncated,
+      no_data_reason: result.summary.sessions === 0
+        ? 'No matching accepted experience sessions exist for this exact surface, route, version, device and period.'
+        : null,
+      meta: result.meta,
+    };
+  }),
+);
+
+jsonTool(
   'query_funnel',
   'Step-by-step conversion for a saved funnel (by key) or inline steps (registry metric keys).',
   { project, query: funnelQuerySchema.omit({ kind: true }) },
@@ -672,6 +906,20 @@ jsonTool(
   'Read the privacy-safe ordered interaction timeline for one known Browser Experience session. It contains only paths, stable labels, coordinates, scroll depth and coarse error type — never DOM/text.',
   { project, query: experienceSessionQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'experience_session', ...query })),
+);
+
+jsonTool(
+  'get_visual_experience_map',
+  'Explain one bounded surface/route/version/device/period using purpose, sample sizes, ordered safe section labels, counts and percentages, largest adjacent-section aggregate reach decreases, safe-label click concentration, scroll reach, snapshot freshness/coverage, evidence references, truncation/data-quality caveats and deterministic next actions with resolved periods. Returns aggregates only: never DOM, page text, input values, image bytes or PII. Reach counts do not track the same sessions between sections; evidence is descriptive and non-causal.',
+  { project, query: visualExperienceQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'visual_experience', ...query })),
+);
+
+jsonTool(
+  'compare_visual_experience',
+  'Compare two explicit bounded version/device/period cohorts for one purpose-tagged route. Returns both sample sizes, count deltas, matched-label section percentage-point changes, taxonomy mismatches, snapshot evidence/freshness, truncation/data-quality caveats and deterministic map follow-ups with resolved ISO periods. It never invents causes or returns DOM, page text, input values, image bytes or PII; all differences are descriptive and non-causal.',
+  { project, query: visualExperienceCompareSchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'visual_experience_compare', ...query })),
 );
 
 jsonTool(
@@ -777,6 +1025,14 @@ server.resource(
 );
 
 server.resource(
+  'browser-analytics-standard',
+  'poolstatis://standard/browser-analytics',
+  async (uri) => ({
+    contents: [{ uri: uri.href, mimeType: 'text/markdown', text: BROWSER_ANALYTICS_STANDARD }],
+  }),
+);
+
+server.resource(
   'project-schema',
   new ResourceTemplate('poolstatis://{project}/schema', { list: undefined }),
   async (uri, { project: slug }) => {
@@ -787,4 +1043,10 @@ server.resource(
   },
 );
 
-await server.connect(new StdioServerTransport());
+return server;
+}
+
+/** The root CLI and package CLI call this exact runner; the tool registry stays single-sourced above. */
+export async function runMcpServer(config: McpConfig): Promise<void> {
+  await createMcpServer(config).connect(new StdioServerTransport());
+}

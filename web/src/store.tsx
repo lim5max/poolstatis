@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { PoolstatisClient } from './api/client';
-import type { KeyKind, ProjectWithStats } from './api/types';
+import type { AccountMe, KeyKind, ProjectWithStats } from './api/types';
+import { markHostedSessionConnected } from './oidc';
 
 const LS_KEY = 'poolstatis.conn';
 
@@ -19,6 +20,8 @@ interface Store {
   baseUrl: string;
   token: string;
   tokenKind: KeyKind | null;
+  projectScope: 'org' | 'project' | null;
+  account: AccountMe | null;
   projects: ProjectWithStats[];
   project: string | null;
   env: string;
@@ -26,6 +29,7 @@ interface Store {
   setEnv: (e: string) => void;
   setProject: (slug: string) => void;
   refreshProjects: () => Promise<void>;
+  refreshAccount: () => Promise<void>;
   connect: (c: Conn) => Promise<void>;
   connectHosted: (c: HostedConn) => Promise<void>;
   disconnect: () => void;
@@ -57,6 +61,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState(saved?.token ?? '');
   const [hostedToken, setHostedToken] = useState<(() => Promise<string>) | null>(null);
   const [explicitKind, setExplicitKind] = useState<KeyKind | null>(saved ? kindOf(saved.token) : null);
+  const [projectScope, setProjectScope] = useState<'org' | 'project' | null>(null);
+  const [account, setAccount] = useState<AccountMe | null>(null);
   const [projects, setProjects] = useState<ProjectWithStats[]>([]);
   const [project, setProjectState] = useState<string | null>(null);
   const [env, setEnvState] = useState(() => localStorage.getItem(ENV_KEY) ?? 'prod');
@@ -74,27 +80,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const connect = useCallback(async (c: Conn) => {
     const probe = new PoolstatisClient(c.baseUrl, c.token);
-    const { projects: list } = await probe.listProjects(); // throws on bad token / unreachable
+    const { projects: list, scope } = await probe.listProjects(); // throws on bad token / unreachable
     localStorage.setItem(LS_KEY, JSON.stringify(c));
     setBaseUrl(c.baseUrl);
     setToken(c.token);
     setHostedToken(null);
     setExplicitKind(kindOf(c.token));
+    setProjectScope(scope);
+    setAccount(null);
     setProjects(list);
     setProjectState(list[0]?.slug ?? null);
   }, []);
 
   const connectHosted = useCallback(async (c: HostedConn) => {
     const probe = new PoolstatisClient(c.baseUrl, c.getToken);
-    await probe.me(); // creates/refreshes the hosted user and org.
-    const { projects: list } = await probe.listProjects();
+    const profile = await probe.me(); // creates/refreshes the hosted user and org.
+    const canReadProjects = profile.membership.role === 'owner' || profile.membership.role === 'admin';
+    const projectResponse = canReadProjects ? await probe.listProjects() : { projects: [], scope: 'org' as const };
     localStorage.removeItem(LS_KEY);
     setBaseUrl(c.baseUrl);
     setToken('');
     setHostedToken(() => c.getToken);
     setExplicitKind('user');
-    setProjects(list);
-    setProjectState(list[0]?.slug ?? null);
+    setProjectScope(projectResponse.scope);
+    setAccount(profile);
+    setProjects(projectResponse.projects);
+    setProjectState(projectResponse.projects[0]?.slug ?? null);
+    markHostedSessionConnected();
   }, []);
 
   const disconnect = useCallback(() => {
@@ -102,16 +114,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setToken('');
     setHostedToken(null);
     setExplicitKind(null);
+    setProjectScope(null);
+    setAccount(null);
     setProjects([]);
     setProjectState(null);
   }, []);
 
   const refreshProjects = useCallback(async () => {
     if (!client) return;
-    const { projects: list } = await client.listProjects();
+    const { projects: list, scope } = await client.listProjects();
     setProjects(list);
+    setProjectScope(scope);
     setProjectState((p) => p ?? list[0]?.slug ?? null);
   }, [client]);
+
+  const refreshAccount = useCallback(async () => {
+    if (!client || explicitKind !== 'user') return;
+    setAccount(await client.me());
+  }, [client, explicitKind]);
 
   // Derive which environments actually exist from the selected project's keys
   // (the env switcher hides when there's only one). Falls back to ['prod'].
@@ -128,24 +148,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => { alive = false; };
   }, [client, project]);
 
-  // Re-hydrate the project list when a saved connection exists on first load.
+  // Re-hydrate a persisted key session. Hosted sessions are never persisted and
+  // connectHosted already establishes the allowed project scope for that role.
   useEffect(() => {
-    if (client && projects.length === 0) {
+    if (client && explicitKind !== 'user' && projects.length === 0) {
       client.listProjects()
-        .then(({ projects: list }) => {
+        .then(({ projects: list, scope }) => {
           setProjects(list);
+          setProjectScope(scope);
           setProjectState((p) => p ?? list[0]?.slug ?? null);
         })
         .catch(() => disconnect());
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [client, disconnect, explicitKind, projects.length]);
 
   const value: Store = {
-    client, baseUrl, token, tokenKind: explicitKind, projects, project, env, availableEnvs,
+    client, baseUrl, token, tokenKind: explicitKind, projectScope, account, projects, project, env, availableEnvs,
     setEnv,
     setProject: setProjectState,
-    refreshProjects,
+    refreshProjects, refreshAccount,
     connect, connectHosted, disconnect,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

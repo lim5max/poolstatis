@@ -51,6 +51,7 @@ separate repositories.
 | [docs/09-product-decision-loop.md](docs/09-product-decision-loop.md) | Contracts, releases, evidence, approvals, workers, actions, outbox, and decision memory |
 | [docs/10-self-host.md](docs/10-self-host.md) | Short Docker Compose self-hosting path |
 | [docs/11-repository-split.md](docs/11-repository-split.md) | System, site, and Cloud repository boundaries |
+| [docs/12-mcp-package-release.md](docs/12-mcp-package-release.md) | Public MCP package release and provenance gates |
 | [sdk/README.md](sdk/README.md) | `@poolstatis/sdk` client usage |
 | [.claude/skills/poolstatis-instrument](.claude/skills/poolstatis-instrument/SKILL.md) | Agent skill for product instrumentation |
 
@@ -59,6 +60,7 @@ separate repositories.
 ```bash
 docker compose up -d
 pnpm install
+pnpm build
 pnpm migrate
 pnpm bootstrap "Poolstatis" poolstatis "Local project"
 pnpm serve
@@ -102,7 +104,7 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.2.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_..."
@@ -115,9 +117,31 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
 `--silent` is required because `pnpm` can print a banner to stdout, which breaks
 the stdio MCP protocol.
 
-Until `@poolstatis/mcp` is published, treat the JSON above as the publish-ready
-template. Hosted deployments should expose copy-paste setup only after the real
-MCP runner command and arguments are configured.
+The public runner is version-pinned so a hosted deploy cannot silently change
+its MCP runtime. `@poolstatis/mcp@0.2.0` passed a fresh registry install,
+initialize, tool-list, and project-scoped read smoke.
+
+Verify MCP from the configured client by calling `get_onboarding_status` with
+the target project and environment, then refresh **Setup & MCP**. A copied
+config is not server evidence.
+
+Install the three Poolstatis workflow skills in the product repo. MCP supplies
+live tools and project data; skills tell Codex, Claude, and other compatible
+agents to read the standard, project schema, and current documentation before
+they instrument, analyze, or maintain measurement:
+
+```bash
+pnpm dlx skills add https://github.com/lim5max/poolstatis \
+  --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
+  --agent '*' -y
+pnpm dlx skills list --json
+```
+
+Use `--agent codex` or `--agent claude-code` instead of `'*'` to target one
+runtime. An absolute local Core checkout path can replace the GitHub URL.
+See the public [quickstart](https://poolstatis.xyz/docs/quickstart),
+[instrumentation standard](https://poolstatis.xyz/docs/standard), and
+[MCP reference](https://poolstatis.xyz/docs/mcp-tools).
 
 Send product events through the ingest API:
 

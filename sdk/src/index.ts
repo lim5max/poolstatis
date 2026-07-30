@@ -36,12 +36,26 @@ export interface PoolstatisEvent {
   properties?: Record<string, unknown>;
 }
 
+export interface ExperienceEventContext {
+  distinct_id: string;
+  session_id: string;
+  route: string;
+  version: string;
+  device: 'desktop' | 'mobile';
+  viewport_width: number;
+  viewport_height: number;
+  document_width: number;
+  document_height: number;
+  sequence: number;
+}
+
 /** Narrow wire contract consumed by the optional Browser Experience module. */
 export type ExperienceCaptureEvent =
-  | { kind: 'page_viewed'; distinct_id: string; session_id: string; route: string; sequence: number }
-  | { kind: 'element_clicked'; distinct_id: string; session_id: string; route: string; sequence: number; label: string; x: number; y: number }
-  | { kind: 'scroll_depth'; distinct_id: string; session_id: string; route: string; sequence: number; depth: number }
-  | { kind: 'client_error'; distinct_id: string; session_id: string; route: string; sequence: number; error_type: 'error' | 'unhandled_rejection' };
+  | ({ kind: 'page_viewed' } & ExperienceEventContext)
+  | ({ kind: 'element_clicked'; label: string; x: number; y: number; viewport_x: number; viewport_y: number } & ExperienceEventContext)
+  | ({ kind: 'scroll_depth'; depth: number } & ExperienceEventContext)
+  | ({ kind: 'section_exposed'; section: string; top: number } & ExperienceEventContext)
+  | ({ kind: 'client_error'; error_type: 'error' | 'unhandled_rejection' } & ExperienceEventContext);
 
 export interface ExperienceCaptureBatch {
   surface: string;
@@ -89,6 +103,11 @@ const MAX_RETRY_BATCHES = 100;
 
 /** A formed-but-unsent request, kept verbatim so retries reuse the same batch_id. */
 interface PendingBatch { path: string; body: unknown }
+
+function isEventBatch(body: unknown): body is { batch_id?: string; events: PoolstatisEvent[] } {
+  return typeof body === 'object' && body !== null
+    && Array.isArray((body as { events?: unknown }).events);
+}
 
 function uuid(): string {
   const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
@@ -140,6 +159,16 @@ export class Poolstatis {
     this.events.push(e);
     if (this.events.length > this.maxQueue) this.events.splice(0, this.events.length - this.maxQueue);
     if (this.events.length >= this.maxBatchSize) void this.flush();
+  }
+
+  /** Remove locally queued events selected by an explicit privacy boundary. */
+  discardQueuedEvents(predicate: (event: PoolstatisEvent) => boolean): void {
+    this.events = this.events.filter((event) => !predicate(event));
+    this.retries = this.retries.flatMap((batch) => {
+      if (batch.path !== '/i/v1/events' || !isEventBatch(batch.body)) return [batch];
+      const events = batch.body.events.filter((event) => !predicate(event));
+      return events.length > 0 ? [{ ...batch, body: { ...batch.body, events } }] : [];
+    });
   }
 
   /** Upsert mutable entity state (user/account/…). Merge semantics; null deletes a key. */

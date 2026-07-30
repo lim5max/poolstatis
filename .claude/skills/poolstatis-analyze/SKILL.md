@@ -1,63 +1,34 @@
 ---
 name: poolstatis-analyze
-description: >-
-  Answer a product question from Poolstatis data — pick the right query type, run it through
-  the MCP, and interpret the result using each metric's declared purpose. Use when the user
-  asks "how is X doing", "did Y change", "what's our retention/activation/conversion", "are
-  users sticky", "why did this metric move", "build me a number for Z", or wants insight from
-  an instrumented project. Requires the Poolstatis MCP (get_project_schema, query_trend,
-  query_funnel, query_retention, query_lifecycle, query_stickiness, query_entities,
-  get_person, list_funnels, create_insight).
+description: Use when answering a product question from Poolstatis trends, funnels, retention, lifecycle, stickiness, entities, people, browser analytics, web engagement, experience maps, releases, or saved insights.
 ---
 
-# Answering product questions with Poolstatis
+# Analyze Poolstatis data
 
-Poolstatis is headless: you pull data through the query tools and reason over the JSON.
-The registry's `purpose`/`goal` fields are the key — every number is self-describing, so
-your job is to map the question to the right query and explain the answer in those terms.
+Use the declared metric purpose, query grain, and current project schema. Never substitute a raw event name or an invented metric for a registry key.
 
-## Step 1 — Ground in the registry
+<!-- published-mcp-required: list_projects,get_onboarding_status,get_project_schema,query_trend,query_funnel,query_retention,query_lifecycle,query_stickiness,query_entities,get_person,list_releases,get_release,evaluate_release,list_insights,list_visual_experience_versions,get_visual_experience_map,compare_visual_experience,query_interaction_map -->
 
-`get_project_schema(project)` first. Answer questions using **registered metric keys**,
-never raw event names (the DSL only accepts keys). If no metric fits the question, say so
-and propose registering one (hand off to the instrument workflow) rather than guessing.
+## Required context
 
-## Step 2 — Pick the query type
+1. Call `list_projects`, resolve the target project and environment, and ask only when more than one plausible target remains.
+2. Call `get_onboarding_status` with the resolved `project` and explicit `env`; state any measurement blocker that affects the answer.
+3. Read `poolstatis://standard/instrumentation`.
+4. For `prod`, read `poolstatis://{project}/schema`; for any other environment, call `get_project_schema` with the resolved `project` and explicit `env` because the resource form is prod-only.
+5. Consult the [MCP reference](https://poolstatis.xyz/docs/mcp-tools) and [instrumentation standard](https://poolstatis.xyz/docs/standard) for current query contracts and semantics.
 
-| Question shape | Query | Notes |
-|----------------|-------|-------|
-| "how many / how much of X over time" | `query_trend` | add `breakdown` by a property for splits |
-| "what share go from A to B" (ordered) | `query_funnel` | saved funnel key, or inline metric-key steps |
-| "do users come back after doing X" | `query_retention` | `start_metric` (+ optional `return_metric`), interval, periods |
-| "is growth healthy underneath the total" | `query_lifecycle` | new / returning / resurrecting / dormant |
-| "how habitual is the product" | `query_stickiness` | distinct active intervals per actor |
-| "which entities are in state S" | `query_entities` | filter on current entity properties |
-| "what do we know about this one user" | `get_person` | engagement summary (recency/frequency/tenure) + identity entity |
+## Workflow
 
-Defaults: weekly interval and `-30d`/`-90d` ranges unless the question implies otherwise.
-Retention/lifecycle/stickiness need an **event-based** metric (count/unique_actors/value),
-not a conversion or state metric.
+1. Restate the question as a measurable outcome, population, environment, and time range.
+2. Route current measurement questions to the matching typed query: trend, funnel, retention, lifecycle, stickiness, entities, or person history. Use schema metric keys only.
+3. The pinned public MCP runner does not yet expose specialized browser aggregates, session/page engagement, or click/scroll map reads. Do not substitute a generic trend for visitors, sessions, bounce, duration, or completeness. A trend over a page-view metric can answer event counts only, and must be labelled as that narrower grain.
+4. Route captured visual experience questions through `list_visual_experience_versions`, `get_visual_experience_map`, or `compare_visual_experience`; resolve the exact surface, route, version, and device for those snapshot reads. Use `query_interaction_map` only at its aggregate surface, environment, period, and grid grain, and state that it does not isolate route, version, or device.
+5. Route release questions through `list_releases`, `get_release`, and `evaluate_release`; route saved findings through `list_insights`. Do not replace those persisted records with an unrelated fresh query.
+6. Run the selected read/evaluation with the resolved project and environment; pass explicit `env` wherever the tool supports it. Inspect data-quality or onboarding blockers before interpreting it.
+7. Report the exact grain: events, unique actors, entities, funnel entrants, retained cohort, visual snapshot or interaction-map evidence, release evidence, or saved-insight scope; include date range, filters, comparison basis, and incomplete data.
+8. Map the result back to the metric's `purpose` and funnel `goal`. Separate observed facts from inference and recommended action.
+9. Save a reproducible insight only when the user asks or when the current workflow explicitly requires persistence.
 
-## Step 3 — Interpret, don't just dump
+## Completion evidence
 
-Translate the result back into the metric's purpose and the funnel's goal. "Week-2
-retention is 41%" is data; "41% of new signups still open the app two weeks later — the
-activation funnel's goal is first export within 14 days, and that's where the drop
-concentrates" is an answer. Quote the actual numbers, name the date range, and state the
-one thing the user should take away.
-
-## Step 4 — Persist what matters
-
-When a finding is worth keeping, `create_insight(project, {title, body, query})` so it's
-reproducible — store the exact Query DSL alongside the prose. This is how a one-off answer
-becomes a tracked insight.
-
-## Gotchas
-
-- The DSL takes **metric keys, not event names** — `query_trend` on `"signup.completed"`
-  fails; use the metric key (e.g. `signup`).
-- A `conversion`-type metric can't be trended — query it as a funnel instead.
-- `distinct_id` is the actor. Per-user numbers (retention/stickiness) are only as correct
-  as the stability of that id; if the project's instrumentation is shaky, check
-  `poolstatis-maintain` before trusting per-user results.
-- Dates accept relative (`-30d`, `-12w`) or ISO — don't hand-compute timestamps.
+An answer must include the tool or query used, relevant metric keys, project/environment, date range or persisted evidence window, grain, result, and caveats. For browser questions outside the pinned runner's published capability, state the unsupported grain and use `—` instead of inventing visitors, sessions, bounce, duration, or completeness. Visual snapshot answers must state surface, route, version, and device; aggregate interaction-map answers must state surface, environment, period, grid, and the lack of route/version/device isolation. A plausible narrative without a successful current read or evaluation is not analysis.

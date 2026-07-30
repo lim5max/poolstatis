@@ -15,7 +15,7 @@ const issuer = 'https://auth.poolstatis.test/';
 const audience = 'https://api.poolstatis.test/';
 
 async function authToken(sub: string, email: string, name: string): Promise<string> {
-  return new SignJWT({ email, name })
+  return new SignJWT({ email, email_verified: true, name })
     .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
     .setIssuer(issuer)
     .setAudience(audience)
@@ -61,7 +61,7 @@ afterAll(async () => {
 });
 
 describe('hosted auth onboarding', () => {
-  it('creates a hosted user, default org, and returns free billing meters on first /me', async () => {
+  it('creates a hosted user, default org, and exposes only the generic events_stored meter on first /me', async () => {
     const res = await authApi('GET', '/api/v1/me');
 
     expect(res.status).toBe(200);
@@ -76,25 +76,21 @@ describe('hosted auth onboarding', () => {
       price_cents: 0,
       currency: 'USD',
     });
-    expect(res.body.billing.meters.map((m: any) => m.key)).toEqual([
-      'events',
-      'monthly_tracked_users',
-      'retained_entities',
-      'projects',
-      'retention_months',
-      'seats',
-    ]);
+    expect(res.body.billing.meters.map((m: any) => m.key)).toEqual(['events_stored']);
     expect(res.body.onboarding.completed).toBe(false);
   });
 
   it('creates the first project and one-time MCP tokens', async () => {
+    const before = await authApi('GET', '/api/v1/me');
     const res = await authApi('POST', '/api/v1/onboarding', {
-      workspace_name: 'Analytical Engines',
+      workspace_name: 'Attacker-controlled replacement name',
       project_slug: 'agent-product',
       project_name: 'Agent Product',
     });
 
     expect(res.status).toBe(201);
+    expect(res.body.organization.id).toBe(before.body.organization.id);
+    expect(res.body.organization.name).toBe(before.body.organization.name);
     expect(res.body.project).toMatchObject({
       slug: 'agent-product',
       name: 'Agent Product',
@@ -132,10 +128,11 @@ describe('hosted auth onboarding', () => {
   it('does not allow read-only members to manage platform routes', async () => {
     const owner = await authApi('GET', '/api/v1/me');
     const { rows } = await pool.query(
-      `INSERT INTO auth_users (subject, email, name)
-       VALUES ($1, $2, $3)
+      `INSERT INTO auth_users (
+         identity_issuer, subject, email, email_verified, display_name, name
+       ) VALUES ($1, $2, $3, true, $4, $4)
        RETURNING id`,
-      ['auth0|member-1', 'member@example.com', 'Member User'],
+      [issuer, 'auth0|member-1', 'member@example.com', 'Member User'],
     );
     await pool.query(
       'INSERT INTO organization_members (org_id, user_id, role) VALUES ($1, $2, $3)',
@@ -147,5 +144,8 @@ describe('hosted auth onboarding', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('insufficient_role');
+    const usage = await authApiAs(memberToken, 'GET', `/api/v1/me/usage?period=${new Date().toISOString().slice(0, 7)}`);
+    expect(usage.status).toBe(403);
+    expect(usage.body.error.code).toBe('insufficient_role');
   });
 });

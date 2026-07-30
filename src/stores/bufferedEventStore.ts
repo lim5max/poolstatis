@@ -10,6 +10,7 @@ import type {
   EventNameStat,
   EventStatsQuery,
   EventStore,
+  AppendResult,
   IdempotentAppend,
   FunnelQuery,
   IntervalActivityQuery,
@@ -28,6 +29,16 @@ import type {
   StorableEvent,
   TrendPoint,
   TrendQuery,
+  VisualExperienceQuery,
+  VisualExperienceResult,
+  WebAnalyticsQuery,
+  WebAnalyticsResult,
+  WebSessionsQuery,
+  WebSessionsResult,
+  WebSessionQuery,
+  WebSessionResult,
+  PageEngagementQuery,
+  WebPageEngagementResult,
 } from './eventStore.js';
 
 export interface BufferedEventStoreOptions {
@@ -39,14 +50,14 @@ export interface BufferedEventStoreOptions {
 
 interface PendingAppend {
   events: StorableEvent[];
-  resolve: () => void;
+  resolve: (result: AppendResult) => void;
   reject: (err: unknown) => void;
 }
 
 interface PendingIdempotentAppend {
   batch: IdempotentAppend;
   weight: number;
-  resolve: (appended: boolean) => void;
+  resolve: (result: AppendResult) => void;
   reject: (err: unknown) => void;
 }
 
@@ -77,8 +88,8 @@ export class BufferedEventStore implements EventStore {
     this.options = validateOptions(options);
   }
 
-  async append(events: StorableEvent[]): Promise<void> {
-    if (events.length === 0) return;
+  async append(events: StorableEvent[]): Promise<AppendResult> {
+    if (events.length === 0) return { inserted: 0 };
     if (events.length > this.options.maxEvents) {
       throw new ApiError(
         413,
@@ -108,7 +119,7 @@ export class BufferedEventStore implements EventStore {
     });
   }
 
-  appendIdempotent(batch: IdempotentAppend): Promise<boolean> {
+  appendIdempotent(batch: IdempotentAppend): Promise<AppendResult> {
     if (batch.events.length > this.options.maxEvents) {
       return Promise.reject(new ApiError(
         413,
@@ -137,6 +148,22 @@ export class BufferedEventStore implements EventStore {
     return this.inner.trend(q);
   }
 
+  webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult> {
+    return this.inner.webAnalytics(q);
+  }
+
+  webSessions(q: WebSessionsQuery): Promise<WebSessionsResult> {
+    return this.inner.webSessions(q);
+  }
+
+  webSession(q: WebSessionQuery): Promise<WebSessionResult> {
+    return this.inner.webSession(q);
+  }
+
+  pageEngagement(q: PageEngagementQuery): Promise<WebPageEngagementResult> {
+    return this.inner.pageEngagement(q);
+  }
+
   funnel(q: FunnelQuery): Promise<number[]> {
     return this.inner.funnel(q);
   }
@@ -163,6 +190,14 @@ export class BufferedEventStore implements EventStore {
 
   experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]> {
     return this.inner.experienceSession(q);
+  }
+
+  experienceLastCaptures(projectId: string, env: string, surfaces: string[]): Promise<Record<string, string>> {
+    return this.inner.experienceLastCaptures(projectId, env, surfaces);
+  }
+
+  visualExperience(q: VisualExperienceQuery): Promise<VisualExperienceResult> {
+    return this.inner.visualExperience(q);
   }
 
   sample(q: SampleQuery): Promise<RawEvent[]> {
@@ -248,8 +283,14 @@ export class BufferedEventStore implements EventStore {
 
         this.inFlightEvents += batchEvents;
         try {
-          await this.inner.append(batch.flatMap((item) => item.events));
-          batch.forEach((item) => item.resolve());
+          const result = await this.inner.append(batch.flatMap((item) => item.events));
+          let offset = 0;
+          batch.forEach((item) => {
+            const expected = item.events.length;
+            const inserted = Math.max(0, Math.min(expected, result.inserted - offset));
+            offset += expected;
+            item.resolve({ inserted });
+          });
         } catch (err) {
           batch.forEach((item) => item.reject(err));
         } finally {

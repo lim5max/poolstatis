@@ -11,6 +11,11 @@ export interface Project {
   retention_months: number;
 }
 
+export type CreateApiKeyInput =
+  | { orgId: string; projectId: null; kind: 'personal'; env?: string; label?: string; issuedByUserId: string; legacySelfHost?: never }
+  | { orgId: string; projectId: null; kind: 'personal'; env?: string; label?: string; legacySelfHost: true; issuedByUserId?: never }
+  | { orgId: string; projectId: string; kind: 'ingest' | 'secret'; env?: string; label?: string; issuedByUserId?: never };
+
 export async function createOrganization(pool: pg.Pool, name: string): Promise<{ id: string }> {
   const { rows } = await pool.query(
     'INSERT INTO organizations (name) VALUES ($1) RETURNING id',
@@ -35,13 +40,24 @@ export async function createProject(
 
 export async function createApiKey(
   pool: pg.Pool,
-  opts: { orgId: string; projectId: string | null; kind: KeyKind; env?: string; label?: string },
+  opts: CreateApiKeyInput,
 ): Promise<{ id: string; token: string }> {
+  if (opts.kind !== 'personal' && 'issuedByUserId' in opts && opts.issuedByUserId !== undefined) {
+    throw new Error('issuedByUserId is only valid for personal keys');
+  }
+  if (opts.kind === 'personal' && !opts.issuedByUserId && opts.legacySelfHost !== true) {
+    throw new Error('personal keys require issuedByUserId unless legacySelfHost is explicitly enabled');
+  }
   const { token, hash } = generateToken(opts.kind);
   const { rows } = await pool.query(
-    `INSERT INTO api_keys (org_id, project_id, kind, env, token_hash, label)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [opts.orgId, opts.projectId, opts.kind, opts.env ?? 'prod', hash, opts.label ?? null],
+    `INSERT INTO api_keys (
+       org_id, project_id, kind, env, token_hash, label,
+       issued_by_user_id, token_prefix, token_suffix
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+    [
+      opts.orgId, opts.projectId, opts.kind, opts.env ?? 'prod', hash, opts.label ?? null,
+      opts.issuedByUserId ?? null, `${token.slice(0, 3)}`, token.slice(-4),
+    ],
   );
   return { id: rows[0].id, token };
 }
@@ -51,18 +67,76 @@ export interface ApiKeyRow {
   kind: KeyKind;
   env: string;
   label: string | null;
+  masked_token: string;
   created_at: string;
   revoked_at: string | null;
+}
+
+export interface PersonalApiKeyRow {
+  id: string;
+  label: string | null;
+  token: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+/** Personal credentials are scoped to their issuing hosted user and never reveal plaintext. */
+export async function listPersonalApiKeys(
+  pool: pg.Pool,
+  orgId: string,
+  userId: string,
+): Promise<PersonalApiKeyRow[]> {
+  const { rows } = await pool.query(
+    `SELECT id, label, token_prefix, token_suffix, created_at, last_used_at, revoked_at
+     FROM api_keys
+     WHERE org_id = $1 AND issued_by_user_id = $2 AND kind = 'personal'
+     ORDER BY created_at DESC`,
+    [orgId, userId],
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    label: row.label,
+    token: row.token_suffix ? `${row.token_prefix ?? 'pt_'}...${row.token_suffix}` : `${row.token_prefix ?? 'pt_'}...`,
+    created_at: row.created_at,
+    last_used_at: row.last_used_at,
+    revoked_at: row.revoked_at,
+  }));
+}
+
+export async function revokePersonalApiKey(
+  pool: pg.Pool,
+  orgId: string,
+  userId: string,
+  id: string,
+): Promise<void> {
+  const { rowCount } = await pool.query(
+    `UPDATE api_keys SET revoked_at = now()
+     WHERE id = $1 AND org_id = $2 AND issued_by_user_id = $3
+       AND kind = 'personal' AND revoked_at IS NULL`,
+    [id, orgId, userId],
+  );
+  if (!rowCount) throw notFound('api_key', 'no active personal token with that id in this organization');
 }
 
 /** Keys for a project, masked — the token itself is shown only once at creation. */
 export async function listApiKeys(pool: pg.Pool, projectId: string): Promise<ApiKeyRow[]> {
   const { rows } = await pool.query(
-    `SELECT id, kind, env, label, created_at, revoked_at
+    `SELECT id, kind, env, label, token_prefix, token_suffix, created_at, revoked_at
      FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC`,
     [projectId],
   );
-  return rows;
+  return rows.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    env: row.env,
+    label: row.label,
+    masked_token: row.token_suffix
+      ? `${row.token_prefix ?? (row.kind === 'ingest' ? 'pk_' : 'sk_')}...${row.token_suffix}`
+      : `${row.token_prefix ?? (row.kind === 'ingest' ? 'pk_' : 'sk_')}...`,
+    created_at: row.created_at,
+    revoked_at: row.revoked_at,
+  }));
 }
 
 export async function revokeApiKey(

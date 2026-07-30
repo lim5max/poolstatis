@@ -10,11 +10,11 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import type { FunnelStep, MetricCategory, MetricStatus, MetricType } from '../api/types';
+import type { FunnelStep, MetricStatus, MetricType } from '../api/types';
 
 // ===== hint (tooltip) =====
 
@@ -28,28 +28,21 @@ export function Hint({ label, children }: { label: ReactNode; children: ReactNod
   );
 }
 
-// ===== category / status / type badges =====
-
-const CATEGORY_HINT: Record<MetricCategory, string> = {
-  acquisition: 'Acquisition — getting users in the door (signups, installs).',
-  activation: 'Activation — the first real value moment (the "aha").',
-  retention: 'Retention — users coming back.',
-  revenue: 'Revenue — money (checkouts, MRR-driving events).',
-  referral: 'Referral — users bringing users (invites, shares).',
-  quality: 'Quality — health/friction (errors, latency, failed actions).',
-};
-
-export function CategoryChip({ category }: { category: MetricCategory | null }) {
-  if (!category) return <span className="text-muted-foreground text-xs">—</span>;
-  const c = `var(--cat-${category})`;
+export function HelpHint({ label, ariaLabel }: { label: ReactNode; ariaLabel: string }) {
   return (
-    <Hint label={CATEGORY_HINT[category]}>
-      <span className="inline-flex items-center gap-1.5 text-xs cursor-help" style={{ color: c }}>
-        <span className="size-1.5 rounded-full" style={{ background: c }} />{category}
-      </span>
+    <Hint label={label}>
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full border text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        ?
+      </button>
     </Hint>
   );
 }
+
+// ===== status / type badges =====
 
 const STATUS_HINT: Record<MetricStatus, string> = {
   proposed: 'Proposed — registered by an agent, not yet counting. Activate it to start matching events.',
@@ -113,7 +106,7 @@ export function Stat({ label, value, sub }: { label: string; value: ReactNode; s
 
 export function EmptyState({ headline, lead, action }: { headline: string; lead?: string; action?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 py-14 text-center text-muted-foreground">
+    <div className="flex flex-col items-center justify-center gap-2 py-14 text-center text-muted-foreground" role="status">
       <div className="serif text-xl text-foreground/70">{headline}</div>
       {lead && <div className="text-sm">{lead}</div>}
       {action && <div className="flex gap-2 mt-1">{action}</div>}
@@ -122,11 +115,29 @@ export function EmptyState({ headline, lead, action }: { headline: string; lead?
 }
 
 export function Loading({ what }: { what?: string }) {
-  return <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> {what ?? 'reading instrument…'}</div>;
+  return <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground" role="status" aria-live="polite" aria-busy="true"><Loader2 className="size-4 animate-spin" /> {what ?? 'Loading…'}</div>;
 }
 
 export function ErrorNote({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">⚠ {children}</div>;
+  return <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground" role="alert">⚠ {children}</div>;
+}
+
+export function RecoverableError({ children, onRetry }: { children: ReactNode; onRetry: () => void }) {
+  return (
+    <div className="space-y-3">
+      <ErrorNote>{children}</ErrorNote>
+      <Button variant="outline" size="sm" onClick={onRetry}>Try again</Button>
+    </div>
+  );
+}
+
+export function WarningNote({ children }: { children: ReactNode }) {
+  return <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100" role="status">⚠ {children}</div>;
+}
+
+/** Keeps wide administrative tables usable inside Panels, including on mobile. */
+export function TableScroll({ children, testId }: { children: ReactNode; testId?: string }) {
+  return <div className="overflow-x-auto" data-testid={testId}>{children}</div>;
 }
 
 export function Meter({ value }: { value: number }) {
@@ -166,29 +177,18 @@ export function FilterChips({ chips, onRemove, onClear }: { chips: Chip[]; onRem
       {chips.map((c) => (
         <Badge key={c.key} variant="secondary" className="gap-1 pr-1 font-normal">
           {c.label}
-          <button onClick={() => onRemove(c.key)} className="hover:text-foreground"><X className="size-3" /></button>
+          <button
+            type="button"
+            aria-label={`Remove ${c.label} filter`}
+            onClick={() => onRemove(c.key)}
+            className="hover:text-foreground"
+          >
+            <X className="size-3" />
+          </button>
         </Badge>
       ))}
       <button className="text-xs text-primary hover:underline" onClick={onClear}>clear all</button>
     </div>
-  );
-}
-
-const CATEGORIES: MetricCategory[] = ['acquisition', 'activation', 'retention', 'revenue', 'referral', 'quality'];
-export function CategoryFilter({ selected, onToggle }: { selected: Set<string>; onToggle: (c: string) => void }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="h-9">{selected.size ? `Category · ${selected.size}` : 'Category'}<ChevronDown className="size-3.5" /></Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        {[...CATEGORIES, 'uncategorized'].map((c) => (
-          <DropdownMenuCheckboxItem key={c} checked={selected.has(c)} onCheckedChange={() => onToggle(c)} onSelect={(e) => e.preventDefault()}>
-            {c}
-          </DropdownMenuCheckboxItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -212,7 +212,7 @@ export function Overflow({ items }: { items: Array<{ label: string; onClick: () 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-7"><MoreHorizontal className="size-4" /></Button>
+        <Button variant="ghost" size="icon" className="size-7" aria-label="More actions"><MoreHorizontal className="size-4" /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {items.map((it, i) => (
@@ -225,8 +225,8 @@ export function Overflow({ items }: { items: Array<{ label: string; onClick: () 
 
 // ===== modals =====
 
-export function Confirm({ title, body, confirmLabel, tone = 'neutral', onConfirm, onCancel }: {
-  title: string; body: ReactNode; confirmLabel: string; tone?: 'neutral' | 'warn'; onConfirm: () => void; onCancel: () => void;
+export function Confirm({ title, body, error, confirmLabel, tone = 'neutral', onConfirm, onCancel }: {
+  title: string; body: ReactNode; error?: ReactNode; confirmLabel: string; tone?: 'neutral' | 'warn'; onConfirm: () => void; onCancel: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const go = async () => { setBusy(true); try { await onConfirm(); } finally { setBusy(false); } };
@@ -234,6 +234,7 @@ export function Confirm({ title, body, confirmLabel, tone = 'neutral', onConfirm
     <Dialog open onOpenChange={(o) => !o && onCancel()}>
       <DialogContent>
         <DialogHeader><DialogTitle className="serif font-normal text-xl">{title}</DialogTitle><DialogDescription>{body}</DialogDescription></DialogHeader>
+        {error && <ErrorNote>{error}</ErrorNote>}
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
           <Button onClick={go} disabled={busy} className={tone === 'warn' ? 'bg-amber-500 text-black hover:bg-amber-400' : ''}>
@@ -308,6 +309,36 @@ export function SecretReveal({ token, kind, onDone }: { token: string; kind: str
           <Button variant="outline" size="icon" className="size-8" onClick={download}><Download className="size-4" /></Button>
         </div>
         <DialogFooter><Button onClick={onDone}>Done</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Ephemeral credential reveal: the owner sees plaintext only in this dialog. */
+export function OneTimeTokenReveal({ token, title, onDismiss }: { token: string; title: string; onDismiss: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && onDismiss()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="serif font-normal text-xl">{title}</DialogTitle>
+          <DialogDescription className="text-amber-600 dark:text-amber-400">This is the only time the full token is shown. Copy it into your agent configuration before closing this dialog.</DialogDescription>
+        </DialogHeader>
+        <div className="rounded-md border bg-muted/40 p-3">
+          <code className="mono block break-all text-sm">{token}</code>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={copy} aria-label="Copy token">{copied ? 'Copied' : 'Copy token'}</Button>
+          <Button onClick={onDismiss}>I copied the token</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

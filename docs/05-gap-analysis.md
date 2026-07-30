@@ -34,8 +34,9 @@ The main remaining product gaps are now:
 4. **Multi-instance operations.** Quotas and bounded workers are safe per process / through
    Postgres claims, but Cloud replicas still need shared quota coordination and explicit
    operational dashboards/alerts.
-5. **Distribution.** The hosted MCP runner/package and copy-paste onboarding must only be
-   called verified after the published artifact and hosted path have been exercised.
+5. **Distribution integration.** `@poolstatis/mcp@0.2.0` is public and independently
+   registry-smoked; each hosted deploy must enable that exact pin and keep future versions
+   fail-closed until their own fresh initialize/list-tools check.
 
 Session Replay, DOM autocapture, caller-provided SQL/HogQL and connector marketplaces remain
 intentional non-goals. They add volume or privacy/infra cost without strengthening the

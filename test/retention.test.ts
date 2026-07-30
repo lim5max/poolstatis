@@ -110,7 +110,7 @@ describe('retention maintenance', () => {
       `INSERT INTO ingest_batches (project_id, env, batch_id, status, received_at)
        VALUES ($1, 'prod', 'stale-ingest', 'completed', $2),
               ($1, 'prod', 'recent-ingest', 'completed', $3)`,
-      [project, '2026-07-14T00:00:00.000Z', '2026-07-16T11:30:00.000Z'],
+      [project, '2026-05-01T00:00:00.000Z', '2026-07-16T11:30:00.000Z'],
     );
     await short.pool.query(
       `INSERT INTO experience_batches (project_id, env, batch_id, status, received_at)

@@ -5,6 +5,7 @@ import { ApiError, notFound } from '../errors.js';
 import type { WebhookDestinationInput } from '../schemas.js';
 import type { DecisionAction } from './actions.js';
 import { getDecision } from './decisions.js';
+import { OutboundPolicyError, requestOutbound, resolveOutboundTarget, sanitizedOutboundError, type OutboundPolicyOptions } from '../security/outbound.js';
 
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -61,9 +62,18 @@ interface ClaimedDelivery extends WebhookDelivery {
 }
 
 export class WebhookService {
-  constructor(private readonly pool: pg.Pool, private readonly encryptionKey?: string) {}
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly encryptionKey?: string,
+    private readonly outboundPolicy: OutboundPolicyOptions = {},
+  ) {}
 
   async configure(projectId: string, input: WebhookDestinationInput, actor: string): Promise<WebhookDestination> {
+    try { await resolveOutboundTarget(input.url, this.outboundPolicy); }
+    catch (error) {
+      if (error instanceof OutboundPolicyError) throw new ApiError(400, error.code, 'webhook destination is not permitted');
+      throw error;
+    }
     const encrypted = encryptSecret(JSON.stringify({
       url: input.url,
       authorization: input.authorization ?? null,
@@ -214,8 +224,8 @@ export class WebhookOutbox {
     private readonly pool: pg.Pool,
     encryptionKey: string,
     private readonly options: WebhookOutboxOptions,
-    private readonly fetcher: typeof fetch = fetch,
-  ) { this.service = new WebhookService(pool, encryptionKey); }
+    private readonly outboundPolicy: OutboundPolicyOptions = {},
+  ) { this.service = new WebhookService(pool, encryptionKey, outboundPolicy); }
 
   async runOnce(now: Date = new Date()): Promise<{ claimed: number; delivered: number; failed: number; dead: number }> {
     const claimed = await this.claim(now);
@@ -281,28 +291,24 @@ export class WebhookOutbox {
   }
 
   private async send(destination: { url: string; authorization: string | null }, delivery: ClaimedDelivery): Promise<Response> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.requestTimeoutMs);
     try {
       const { event, impact, ...context } = delivery.payload;
       const orderedPayload = { event, impact, ...context };
-      const response = await this.fetcher(destination.url, {
-        method: 'POST', redirect: 'error', signal: controller.signal,
-        headers: {
-          'content-type': 'application/json',
-          'x-poolstatis-idempotency-key': delivery.idempotency_key,
-          ...(destination.authorization ? { authorization: destination.authorization } : {}),
-        },
-        body: JSON.stringify(orderedPayload),
+      const headers = {
+        'content-type': 'application/json',
+        'x-poolstatis-idempotency-key': delivery.idempotency_key,
+        ...(destination.authorization ? { authorization: destination.authorization } : {}),
+      };
+      const response = await requestOutbound(destination.url, {
+        ...this.outboundPolicy, method: 'POST', headers, body: JSON.stringify(orderedPayload),
+        timeoutMs: this.options.requestTimeoutMs, maxResponseBytes: MAX_RESPONSE_BYTES,
       });
-      const text = await response.text();
-      if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) throw new ApiError(502, 'webhook_response_too_large', 'webhook response exceeded 64 KiB');
-      if (!response.ok) throw new ApiError(502, 'webhook_http_error', `webhook returned HTTP ${response.status}`);
-      return response;
+      if (response.status < 200 || response.status >= 300) throw new ApiError(502, 'webhook_http_error', `webhook returned HTTP ${response.status}`);
+      return { status: response.status } as Response;
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') throw new ApiError(504, 'webhook_timeout', 'webhook request timed out');
       throw error;
-    } finally { clearTimeout(timeout); }
+    } finally { /* requestOutbound owns the absolute delivery deadline. */ }
   }
 
   private async finishSuccess(delivery: ClaimedDelivery, responseStatus: number, now: Date) {
@@ -422,7 +428,11 @@ function rowToDelivery(row: Record<string, any>): WebhookDelivery { return { id:
 function maskUrl(value: string): string { const url = new URL(value); return `${url.protocol}//${url.host}/…`; }
 function iso(value: Date | string | null | undefined): string | null { return value ? new Date(value).toISOString() : null; }
 function errorCode(error: unknown): string { return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'webhook_delivery_failed'; }
-function sanitizedError(error: unknown): string { return error instanceof Error ? `${errorCode(error)}: ${error.message}`.slice(0, 500) : 'webhook_delivery_failed'; }
+function sanitizedError(error: unknown): string {
+  if (error instanceof ApiError) return `${error.code}: ${error.message}`.slice(0, 500);
+  return sanitizedOutboundError(error);
+}
+
 
 export function startWebhookOutbox(
   outbox: WebhookOutbox,

@@ -150,4 +150,44 @@ describe('property registry and measurement trust', () => {
     );
     expect(crossOrg.status).toBe(404);
   });
+
+  test('rejects a noncanonical existing definition for reserved acquisition UTM keys', async () => {
+    const malformed = await api(
+      other,
+      other.secretToken,
+      'POST',
+      '/api/v1/projects/' + other.projectSlug + '/properties',
+      { key: '$utm_source', scope: 'event', value_type: 'string', purpose: 'An unrelated legacy property with an incompatible meaning.' },
+    );
+    expect(malformed.status).toBe(201);
+    const setup = await api(
+      other,
+      other.secretToken,
+      'POST',
+      '/api/v1/projects/' + other.projectSlug + '/properties/acquisition-attribution',
+      {},
+    );
+    expect(setup.status).toBe(409);
+    expect(setup.body.error.code).toBe('acquisition_property_conflict');
+  });
+
+  test('rejects a noncanonical existing definition for reserved browser keys', async () => {
+    const malformed = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/properties',
+      { key: '$country', scope: 'event', value_type: 'string', purpose: 'A client supplied country inferred from browser locale.' },
+    );
+    expect(malformed.status).toBe(201);
+    const setup = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/properties/browser-analytics',
+      {},
+    );
+    expect(setup.status).toBe(409);
+    expect(setup.body.error.code).toBe('browser_property_conflict');
+  });
 });

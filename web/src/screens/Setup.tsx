@@ -1,60 +1,66 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Check, Copy } from '@/components/icons';
+import { ClaudeCodeLogo } from '@/components/logos/claude-code';
+import { ClaudeLogo } from '@/components/logos/claude';
+import { CodexLogo } from '@/components/logos/codex';
+import { CursorLogo } from '@/components/logos/cursor';
+import { WindsurfLogo } from '@/components/logos/windsurf';
+import { ClineLogo } from '@/components/logos/cline';
+import { ZedLogo } from '@/components/logos/zed';
+import { ContinueLogo } from '@/components/logos/continue';
+import { ReplitLogo } from '@/components/logos/replit';
+import { OpenCodeLogo } from '@/components/logos/opencode';
 import { useStore, useAsync } from '../store';
 import { MCP_CLIENTS, MCP_RUNNER, mcpClientById, mcpServerConfig, type McpClientId, type McpClientLogo } from '../mcpClients';
-import { Panel, Loading, DangerConfirm, ErrorNote } from '../components/ui';
+import { PUBLISHED_MCP_TOOL_GROUPS } from '../mcpPublishedContract';
+import { Panel, Loading, DangerConfirm, ErrorNote, RecoverableError } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import type { OnboardingGateKey } from '../api/types';
+import { siWarp } from 'simple-icons';
 
-const TOOLS = [
-  ['Context', ['list_projects', 'get_project_schema', 'get_onboarding_status']],
-  ['Measurement trust', ['create_actor_link', 'list_actor_links', 'revoke_actor_link', 'register_property', 'list_properties', 'update_property']],
-  ['External sources', ['configure_posthog', 'verify_posthog', 'get_posthog_schema']],
-  ['Decision loop', ['validate_measurement_contracts', 'diff_measurement_contracts', 'apply_measurement_contracts', 'export_measurement_contracts', 'register_release', 'list_releases', 'get_release', 'evaluate_release', 'list_decisions', 'get_decision', 'approve_decision', 'reject_decision', 'edit_decision', 'explain_outcome', 'prepare_action', 'approve_action', 'get_decision_inbox', 'search_decision_history', 'find_similar_changes']],
-  ['Delivery', ['configure_webhook', 'verify_webhook']],
-  ['Registry', ['register_metric', 'update_metric', 'deprecate_metric', 'explain_metric_usage', 'list_metrics', 'delete_metric', 'register_entity_type', 'define_funnel', 'list_funnels', 'delete_funnel']],
-  ['Feature delivery', ['create_feature_flag', 'list_feature_flags', 'update_feature_flag', 'archive_feature_flag', 'evaluate_feature_flag', 'create_experiment', 'list_experiments', 'update_experiment', 'start_experiment', 'conclude_experiment', 'get_experiment_results']],
-  ['Queries', ['query_trend', 'query_funnel', 'query_entities', 'query_retention', 'query_lifecycle', 'query_stickiness', 'sample_events']],
-  ['Diagnostics', ['list_ingest_warnings', 'list_data_quality_issues']],
-  ['Insights', ['list_insights', 'create_insight', 'resolve_insight']],
-];
+const SKILL_NAMES = ['poolstatis-instrument', 'poolstatis-analyze', 'poolstatis-maintain'] as const;
+const SKILLS_SOURCE = 'https://github.com/lim5max/poolstatis';
+const skillInstallCommand = (agent: 'codex' | 'claude-code' | "'*'") =>
+  `pnpm dlx skills add ${SKILLS_SOURCE} --skill ${SKILL_NAMES.join(' ')} --agent ${agent} -y`;
+const SKILLS_VERIFY_COMMAND = 'pnpm dlx skills list --json';
+type QueryPromptId = 'quick' | 'compare' | 'diagnose';
 
-const GATE_LABELS: Record<OnboardingGateKey, string> = {
-  workspace_created: 'Workspace created',
-  agent_connected: 'Agent connected',
-  data_source_connected: 'Data source connected',
-  first_event_observed: 'First real observation',
-  metrics_activated: 'Metrics reviewed and active',
-  data_quality_accepted: 'Data quality accepted',
-  first_query_produced: 'First query produced',
-  first_decision_saved: 'First decision saved',
-};
-
-function gateLabel(key: OnboardingGateKey) {
-  return GATE_LABELS[key];
+function skillAgentForClient(clientId: McpClientId): 'codex' | 'claude-code' | "'*'" {
+  if (clientId === 'codex') return 'codex';
+  if (clientId === 'claude-code') return 'claude-code';
+  return "'*'";
 }
 
 export function Setup() {
-  const { client, baseUrl, token, tokenKind, project, env } = useStore();
+  const { client, baseUrl, project, env } = useStore();
   const [clientId, setClientId] = useState<McpClientId>('claude-code');
+  const [configCopied, setConfigCopied] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [queryPromptId, setQueryPromptId] = useState<QueryPromptId>('quick');
   const publicUrl =
     (import.meta.env.VITE_POOLSTATIS_PUBLIC_URL as string | undefined) ||
     (import.meta.env.VITE_POOLSTATIS_API_URL as string | undefined) ||
     'https://api.poolstatis.com';
   const serverUrl = baseUrl || publicUrl;
   const slug = project ?? 'your-project';
-  const std = useAsync(() => client!.standard(), []);
+  const std = useAsync(
+    () => advancedOpen ? client!.standard() : Promise.resolve(null),
+    [advancedOpen],
+  );
   const proof = useAsync(
     () => project ? client!.onboardingStatus(project, env) : Promise.resolve(null),
     [project, env],
   );
   const selectedClient = mcpClientById(clientId);
 
-  const mcpToken = tokenKind === 'user' ? '<replace-with-pt-or-sk>' : token;
+  const mcpToken = '<replace-with-pt-or-sk>';
   const normalizedServerUrl = serverUrl.replace(/\/$/, '');
   const mcpConfig = mcpServerConfig(MCP_RUNNER.command, MCP_RUNNER.args, normalizedServerUrl, mcpToken);
   const mcpCommand = [MCP_RUNNER.command, ...MCP_RUNNER.args].join(' ');
@@ -63,128 +69,362 @@ export function Setup() {
   -H 'Authorization: Bearer pk_…' \\
   -H 'content-type: application/json' \\
   -d '{"events":[{"event":"signup.completed","distinct_id":"u_123","properties":{"plan":"pro"}}]}'`;
+  const queryPrompts: Array<{ id: QueryPromptId; label: string; prompt: string }> = [
+    {
+      id: 'quick',
+      label: 'Quick trend',
+      prompt: `For Poolstatis project "${slug}" in env "${env}", call list_metrics for active metrics, choose one, and run query_trend for the last 7 days with a daily interval. Then call get_onboarding_status. Report the metric purpose, date range, grain, and result.`,
+    },
+    {
+      id: 'compare',
+      label: 'Compare periods',
+      prompt: `For Poolstatis project "${slug}" in env "${env}", call list_metrics for active metrics, choose one, and run query_trend for the last 7 complete days and the preceding 7 days with the same daily interval. Report both totals, the descriptive change, grain, and date ranges. Do not claim causality.`,
+    },
+    {
+      id: 'diagnose',
+      label: 'Diagnose gaps',
+      prompt: `For Poolstatis project "${slug}" in env "${env}", inspect get_project_schema and list_ingest_warnings, choose an active metric, then run query_trend for the last 7 days. If the query cannot run, report the exact blocker and next action instead of inventing a result. Finish with get_onboarding_status.`,
+    },
+  ];
+  const selectedQueryPrompt = queryPrompts.find((option) => option.id === queryPromptId) ?? queryPrompts[0]!;
 
   return (
-    <div className="space-y-4 max-w-4xl">
-      <SectionLabel>Proof of connection</SectionLabel>
-      <Panel title="Setup gates" right={proof.data ? <Badge variant={proof.data.complete ? 'default' : 'outline'}>{proof.data.complete ? 'complete' : 'in progress'}</Badge> : undefined}>
-        {!project ? <p className="text-sm text-muted-foreground">Select a project to inspect server-verified setup evidence.</p> : proof.loading ? <Loading what="checking setup evidence…" /> : proof.error ? <ErrorNote>{proof.error}</ErrorNote> : proof.data ? <div className="space-y-2">
-          {proof.data.gates.map((gate) => <div key={gate.key} className="flex flex-col gap-2 rounded-md border bg-muted/20 p-3 sm:flex-row sm:items-start">
-            <span className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border text-xs ${gate.complete ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600' : 'border-amber-500/40 bg-amber-500/10 text-amber-600'}`}>{gate.complete ? '✓' : '·'}</span>
-            <div className="min-w-0 flex-1"><div className="text-sm font-medium">{gateLabel(gate.key)}</div>{gate.blocker && <div className="mt-1 text-xs text-muted-foreground">{gate.blocker}</div>}{gate.next_action && <div className="mt-1 text-xs">Next: {gate.next_action}</div>}</div>
-          </div>)}
-          {proof.data.final_result && <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-4"><div className="text-sm font-medium">First real result · <code>{proof.data.final_result.metric_key}</code></div><div className="mt-1 text-xs text-muted-foreground">{proof.data.final_result.metric_purpose} · {proof.data.final_result.source} · {proof.data.final_result.query_window.from} → {proof.data.final_result.query_window.to}</div><div className="mt-2 text-sm">Next: {proof.data.final_result.next_action}</div></div>}
-        </div> : null}
+    <div className="max-w-5xl space-y-5">
+      <header className="max-w-2xl">
+        <h1 className="serif text-3xl tracking-tight text-balance">Connect Poolstatis in four steps</h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          Add one MCP config, call a tool through your client, then verify data and a query. Poolstatis only marks work complete from server evidence.
+        </p>
+      </header>
+
+      <Panel
+        title="Verified progress"
+        right={<div className="flex items-center gap-2">
+          <Badge variant="outline" className="hidden sm:inline-flex">server evidence</Badge>
+          <Button variant="ghost" size="sm" onClick={proof.reload} disabled={proof.loading}>Refresh</Button>
+        </div>}
+      >
+        {!project
+          ? <p className="text-sm text-muted-foreground">Choose a project to read its setup proof.</p>
+          : proof.loading
+            ? <Loading what="Checking setup proof…" />
+            : proof.error
+              ? <div className="space-y-3"><ErrorNote>{proof.error}</ErrorNote><Button variant="outline" size="sm" onClick={proof.reload}>Try again</Button></div>
+              : proof.data
+                ? <ProofSummary gates={proof.data.gates} />
+                : null}
       </Panel>
-      <SectionLabel>Connection</SectionLabel>
-      <Panel title="Key map">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-          <KeyUse prefix="sk_" title="Admin console" body="Paste this on the connect screen. It reads and manages one project: registry, Data, Keys, purge." />
-          <KeyUse prefix="pk_" title="Product runtime" body="Use this in the SDK or HTTP ingest. It only writes events/entities for one env." />
-          <KeyUse prefix="pt_" title="MCP agents" body="Use this in agent config for org-wide project discovery. A project sk_ also works when you want a narrow scope." />
+
+      <Panel title={<h2>1. Connect MCP</h2>}>
+        <p className="mb-4 text-sm text-muted-foreground">Choose your agent, copy its config, then restart it.</p>
+        <div className="max-w-sm">
+          <div className="mb-2 text-xs font-medium text-muted-foreground">Coding agent</div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="h-11 w-full justify-start px-3" aria-label={`Coding agent: ${selectedClient.name}`}>
+                <McpClientLogoMark logo={selectedClient.logo} className="size-7" />
+                <span className="min-w-0 flex-1 truncate text-left">{selectedClient.name}</span>
+                <span className="text-xs text-muted-foreground">Change</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-72 w-72 overflow-y-auto">
+              {MCP_CLIENTS.map((profile) => (
+                <DropdownMenuItem
+                  key={profile.id}
+                  onClick={() => setClientId(profile.id)}
+                  className="gap-3 py-2"
+                >
+                  <McpClientLogoMark logo={profile.logo} className="size-7" />
+                  <span className="min-w-0 flex-1 truncate">{profile.name}</span>
+                  {profile.id === clientId && <Check className="size-4 shrink-0" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <p className="mt-2 text-xs text-muted-foreground">{selectedClient.pasteTarget}</p>
         </div>
-        <p className="text-xs text-muted-foreground mt-3.5">After the product sends data, inspect it in <strong className="text-foreground font-normal">Data → Event stream</strong>. Data health shows registered coverage and entity/event consistency; ingest warnings have their own Warnings tab.</p>
-      </Panel>
-      <Panel title="Connect a coding agent over MCP">
-        <p className="text-muted-foreground text-sm mb-3.5">Choose where Poolstatis should appear. The selected card controls the setup guide below; copy the full JSON when the host accepts JSON, or copy command/env separately for form-based settings.</p>
         {MCP_RUNNER.packageStatus !== 'published' && (
-          <div className="mb-3.5 break-words rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 [&_code]:break-all">
-            MCP runner is not marked published for this deploy. Use the command below for this self-host build. Set <code>VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true</code> only after the public runner package exists.
+          <div className="mt-4 break-words rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-950 dark:text-amber-100 [&_code]:break-all">
+            Registry install is disabled for this deploy. The config below uses the exact local Core runner; replace <code>&lt;path-to-poolstatis-core&gt;</code> with its checkout path. Set <code>VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true</code> only after the pinned public package is verified.
           </div>
         )}
-        <div className="mb-3.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {MCP_CLIENTS.map((profile) => (
-            <button
-              key={profile.id}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <CopyButton value={mcpConfig} onCopied={() => setConfigCopied(true)} onFailed={() => setConfigOpen(true)}>Copy MCP config</CopyButton>
+          <CopyButton value={mcpCommand} onFailed={() => setConfigOpen(true)}>Copy command</CopyButton>
+          <CopyButton value={mcpEnv} onFailed={() => setConfigOpen(true)}>Copy environment</CopyButton>
+        </div>
+        <div aria-live="polite" role="status" className="mt-3 min-h-5 text-xs text-muted-foreground">
+          {configCopied ? 'Config copied. This action does not verify MCP use.' : 'No server evidence changes until an MCP-marked request reaches the server.'}
+        </div>
+        <div className="mt-4 rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+          Replace <code>&lt;replace-with-pt-or-sk&gt;</code> with a personal <code>pt_</code> token or project <code>sk_</code> key in your local MCP client. Setup never copies the current session credential.
+        </div>
+        <div className="mt-4 rounded-md border bg-muted/20">
+          <button
+            type="button"
+            className="w-full rounded-md px-4 py-3 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            aria-expanded={configOpen}
+            aria-controls="mcp-config-details"
+            onClick={() => setConfigOpen((value) => !value)}
+          >
+            {configOpen ? 'Hide config and client steps' : 'View config and client steps'}
+          </button>
+          {configOpen && <div id="mcp-config-details" className="space-y-4 border-t p-4">
+            <ol className="grid gap-2 md:grid-cols-3">
+              {selectedClient.setupSteps.map((step, index) => (
+                <li key={step} className="rounded-md bg-background p-3 text-xs leading-relaxed text-muted-foreground">
+                  <span className="mr-2 font-medium text-foreground">{index + 1}.</span>{step}
+                </li>
+              ))}
+            </ol>
+            <CodeBlock code={mcpConfig} />
+          </div>}
+        </div>
+      </Panel>
+
+      <Panel title={<h2>2. Verify MCP</h2>}>
+        <p className="text-sm text-muted-foreground">
+          Ask the agent to call <code>get_onboarding_status</code> with project <code>{slug}</code> and env <code>{env}</code>, then refresh the server proof. Poolstatis records a request marked by the MCP client and its time. This is last-use evidence, not a heartbeat or transport attestation.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={proof.reload} disabled={proof.loading}>Refresh server proof</Button>
+          <Button asChild variant="ghost" size="sm"><Link to="/keys">Review MCP tokens</Link></Button>
+        </div>
+      </Panel>
+
+      <Panel title={<h2>3. Send your first event</h2>}>
+        <div className="mb-4 rounded-md border bg-muted/20 p-4">
+          <div className="text-sm font-medium">Activate a metric before sending</div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Register the metric through MCP, then review and activate it. New agent-created metrics stay proposed until you approve them.
+          </p>
+          <Button asChild variant="outline" size="sm" className="mt-3"><Link to="/registry">Review and activate metric</Link></Button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Use a write-only <code>pk_</code> key and replace the example with a real event covered by an active metric. The placeholder below never exposes a saved credential.
+        </p>
+        <div className="mt-4"><CodeBlock code={ingestCurl} /></div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button asChild size="sm"><Link to="/data">Inspect accepted data</Link></Button>
+          <Button asChild variant="outline" size="sm"><Link to="/registry">Review metrics</Link></Button>
+        </div>
+      </Panel>
+
+      <Panel title={<h2>4. Run your first query</h2>}>
+        <div className="flex flex-wrap gap-2" aria-label="Query prompt">
+          {queryPrompts.map((option) => (
+            <Button
+              key={option.id}
               type="button"
-              onClick={() => setClientId(profile.id)}
-              aria-pressed={clientId === profile.id}
-              className={cn(
-                'rounded-md border p-3 text-left transition-colors',
-                clientId === profile.id
-                  ? 'border-primary bg-primary/10 text-foreground'
-                  : 'bg-muted/20 text-muted-foreground hover:bg-accent/50 hover:text-foreground',
-              )}
+              variant={queryPromptId === option.id ? 'default' : 'outline'}
+              size="sm"
+              aria-pressed={queryPromptId === option.id}
+              onClick={() => setQueryPromptId(option.id)}
             >
-              <div className="flex items-start gap-3">
-                <McpClientLogoMark logo={profile.logo} className="size-9" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="break-words text-sm font-medium">{profile.name}</span>
-                    {profile.badge && <Badge variant="outline" className="text-xs">{profile.badge}</Badge>}
-                  </div>
-                  <div className="mt-1 text-xs leading-relaxed">{profile.pasteTarget}</div>
-                </div>
-              </div>
-            </button>
+              {option.label}
+            </Button>
           ))}
         </div>
-        <div className="mb-3.5 rounded-md border bg-muted/20 p-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex items-start gap-3">
-              <McpClientLogoMark logo={selectedClient.logo} className="size-11" />
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-base font-medium">{selectedClient.name}</h3>
-                  <Badge variant="outline">Selected</Badge>
-                </div>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{selectedClient.description}</p>
-              </div>
-            </div>
-            <div className="flex shrink-0 flex-wrap gap-2">
-              <CopyButton value={mcpConfig}>Copy JSON</CopyButton>
-              <CopyButton value={mcpCommand}>Copy command</CopyButton>
-              <CopyButton value={mcpEnv}>Copy env</CopyButton>
-            </div>
-          </div>
-          <ol className="mt-4 grid gap-2 md:grid-cols-3">
-            {selectedClient.setupSteps.map((step, index) => (
-              <li key={step} className="rounded-md border bg-background p-3">
-                <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                  <span className="flex size-6 items-center justify-center rounded-full border bg-muted/40 text-foreground">{index + 1}</span>
-                  Step {index + 1}
-                </div>
-                <p className="text-xs leading-relaxed text-muted-foreground">{step}</p>
-              </li>
-            ))}
-          </ol>
+        <div className="mt-4 rounded-md border bg-muted/20 p-4 text-sm leading-relaxed">
+          {selectedQueryPrompt.prompt}
         </div>
-        {tokenKind === 'user' && (
-          <div className="mb-3.5 rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
-            This is a config template. Replace <code>&lt;replace-with-pt-or-sk&gt;</code> with the one-time <code>pt_</code> from onboarding, a newly issued personal token from Keys, or a project <code>sk_</code>.
-          </div>
-        )}
-        <CodeBlock code={mcpConfig} />
-        <p className="text-xs text-muted-foreground mt-2.5">{selectedClient.pasteTarget} Use a personal token (<code>pt_</code>) for org-wide discovery, or a project secret key (<code>sk_</code>) for a narrower scope.</p>
-      </Panel>
-      <Panel title="Send events from your product (HTTP)">
-        <p className="text-muted-foreground text-sm mb-3.5">Issue an ingest key (<code>pk_</code>) on the Keys tab — write-only, safe in client code. It encodes the project and env.</p>
-        <CodeBlock code={ingestCurl} />
-      </Panel>
-      {project && <WebhookSetup project={project} />}
-
-      <SectionLabel>MCP tools the agent gets</SectionLabel>
-      <Panel>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-          {TOOLS.map(([group, tools]) => (
-            <div key={group as string} className="min-w-0">
-              <div className="text-xs font-medium text-muted-foreground mb-2">{group}</div>
-              <div className="flex flex-wrap gap-1.5">{(tools as string[]).map((t) => <Badge key={t} variant="outline" className="max-w-full whitespace-normal break-all font-normal font-mono text-xs">{t}</Badge>)}</div>
-            </div>
-          ))}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <CopyButton value={selectedQueryPrompt.prompt}>Copy {selectedQueryPrompt.label.toLowerCase()} prompt</CopyButton>
+          <Button asChild variant="outline" size="sm"><Link to="/measurement">Check measurement trust</Link></Button>
         </div>
-        <p className="text-xs text-muted-foreground mt-3.5">Plus resources <code>poolstatis://standard/instrumentation</code> and <code>poolstatis://{slug}/schema</code>.</p>
       </Panel>
 
-      <SectionLabel>The instrumentation standard</SectionLabel>
-      <Panel>
-        {std.loading ? <Loading /> : <pre className="rounded-md border bg-background p-4 text-xs leading-relaxed overflow-auto max-h-96 whitespace-pre-wrap">{std.error ? `could not load standard: ${std.error}` : std.data}</pre>}
-      </Panel>
+      <SkillsInstall clientId={clientId} />
 
-      <SectionLabel danger>Danger zone</SectionLabel>
-      <DangerZone slug={slug} env={env} />
+      <section className="rounded-xl border bg-card">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-4 rounded-xl px-5 py-4 text-left outline-none transition-colors hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring/50"
+          aria-expanded={advancedOpen}
+          aria-controls="advanced-setup"
+          aria-label={advancedOpen ? 'Hide advanced setup' : 'Show advanced setup'}
+          onClick={() => setAdvancedOpen((value) => !value)}
+        >
+          <span>
+            <span className="block text-sm font-medium">Advanced setup</span>
+            <span className="mt-1 block text-xs text-muted-foreground">Key roles, HTTP, webhooks, tool reference, standard, and data deletion.</span>
+          </span>
+          <span className="text-xs text-muted-foreground">{advancedOpen ? 'Hide' : 'Show'}</span>
+          <span className="sr-only">{advancedOpen ? 'Hide advanced setup' : 'Show advanced setup'}</span>
+        </button>
+        {advancedOpen && <div id="advanced-setup" className="space-y-4 border-t p-4 md:p-5">
+          <Panel title="Key roles">
+            <div className="grid grid-cols-1 gap-3.5 md:grid-cols-3">
+              <KeyUse prefix="sk_" title="Project admin" body="Reads and manages one project." />
+              <KeyUse prefix="pk_" title="Product ingest" body="Writes events and entities for one environment." />
+              <KeyUse prefix="pt_" title="Organization MCP" body="Lets an agent discover projects across the organization." />
+            </div>
+          </Panel>
+          <Panel title="HTTP ingest">
+            <p className="mb-3 text-sm text-muted-foreground">Issue a <code>pk_</code> key in Keys, then send a real event.</p>
+            <CodeBlock code={ingestCurl} />
+          </Panel>
+          {project && <WebhookSetup project={project} />}
+          <Panel title="MCP tool reference">
+            <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+              {PUBLISHED_MCP_TOOL_GROUPS.map(([group, tools]) => (
+                <div key={group} className="min-w-0">
+                  <div className="mb-2 text-xs font-medium text-muted-foreground">{group}</div>
+                  <div className="flex flex-wrap gap-1.5">{tools.map((tool) => <Badge key={tool} variant="outline" className="max-w-full whitespace-normal break-all font-mono text-xs font-normal">{tool}</Badge>)}</div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3.5 text-xs text-muted-foreground">Resources: <code>poolstatis://standard/instrumentation</code> and <code>poolstatis://{slug}/schema</code>.</p>
+          </Panel>
+          <Panel title="Instrumentation standard">
+            {std.loading
+              ? <Loading what="Loading the standard…" />
+              : std.error
+                ? <RecoverableError onRetry={std.reload}>{std.error}</RecoverableError>
+                : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border bg-background p-4 text-xs leading-relaxed">{std.data}</pre>}
+          </Panel>
+          <div>
+            <h2 className="mb-3 text-sm font-medium text-destructive">Data deletion</h2>
+            <DangerZone slug={slug} env={env} />
+          </div>
+        </div>}
+      </section>
     </div>
   );
+}
+
+function SkillsInstall({ clientId }: { clientId: McpClientId }) {
+  const client = mcpClientById(clientId);
+  const command = skillInstallCommand(skillAgentForClient(clientId));
+
+  return (
+    <Panel title={<h2>Install Poolstatis skills</h2>}>
+      <div className="grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
+        <div>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Add the Poolstatis workflow to the same agent you selected above.
+          </p>
+          <div className="mt-4 grid gap-2">
+            <SkillSummary name="poolstatis-instrument" body="Plan, register, implement, and verify purpose-first tracking." />
+            <SkillSummary name="poolstatis-analyze" body="Choose a typed query and interpret its grain and purpose." />
+            <SkillSummary name="poolstatis-maintain" body="Audit drift, warnings, coverage, and metric lifecycle." />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs">
+            <a className="text-primary underline-offset-4 hover:underline" href="https://poolstatis.xyz/docs/quickstart" target="_blank" rel="noreferrer">Public quickstart</a>
+            <a className="text-primary underline-offset-4 hover:underline" href="https://poolstatis.xyz/docs/standard" target="_blank" rel="noreferrer">Instrumentation standard</a>
+            <a className="text-primary underline-offset-4 hover:underline" href="https://poolstatis.xyz/docs/mcp-tools" target="_blank" rel="noreferrer">MCP reference</a>
+          </div>
+        </div>
+        <div className="min-w-0 space-y-3">
+          <div className="min-w-0 rounded-md border bg-muted/20 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                <McpClientLogoMark logo={client.logo} className="size-9" />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">{client.name}</div>
+                  <p className="mt-1 text-xs text-muted-foreground">Run in the product repository.</p>
+                </div>
+              </div>
+              <CopyButton value={command}>Copy {client.name} install</CopyButton>
+            </div>
+            <code className="mt-3 block overflow-x-auto whitespace-pre rounded-md bg-background p-3 text-xs">{command}</code>
+          </div>
+          <div className="rounded-md border border-dashed p-4">
+            <div className="text-sm font-medium">Verify installed</div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Run this in the product repo and confirm all three names appear. For a local Core checkout, replace the GitHub URL in the install command with its absolute path.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <CopyButton value={SKILLS_VERIFY_COMMAND}>Copy verify command</CopyButton>
+              <code className="max-w-full overflow-x-auto whitespace-pre rounded-md bg-muted px-3 py-2 text-xs">{SKILLS_VERIFY_COMMAND}</code>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function SkillSummary({ name, body }: { name: string; body: string }) {
+  return (
+    <div className="rounded-md border bg-muted/20 p-3">
+      <code className="text-xs font-medium text-foreground">{name}</code>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{body}</p>
+    </div>
+  );
+}
+
+function ProofSummary({ gates }: { gates: Array<{ key: OnboardingGateKey; complete: boolean; evidence: Record<string, unknown>; blocker: string | null; next_action: string | null }> }) {
+  const byKey = new Map(gates.map((gate) => [gate.key, gate]));
+  const project = byKey.get('workspace_created');
+  const source = byKey.get('data_source_connected');
+  const event = byKey.get('first_event_observed');
+  const query = byKey.get('first_query_produced');
+  const agent = byKey.get('agent_connected');
+  const statuses = [
+    {
+      label: 'Project created',
+      complete: Boolean(project?.complete),
+      detail: project?.complete ? String(project.evidence.project ?? 'Verified by the server') : 'No project exists in this scope.',
+    },
+    {
+      label: source?.evidence.native ? 'Ingest key created' : 'Data source verified',
+      complete: Boolean(source?.complete),
+      detail: source?.complete
+        ? source.evidence.native
+          ? `Active pk_ key · ${formatEvidenceTime(source.evidence.native_key_created_at)}`
+          : `Verified external source · ${formatEvidenceTime(source.evidence.posthog_verified_at)}`
+        : source?.blocker ?? 'No ingest key or verified source.',
+    },
+    {
+      label: 'MCP request last recorded',
+      complete: Boolean(agent?.complete),
+      detail: agent?.complete
+        ? `${String(agent.evidence.client ?? 'MCP client')} · ${formatEvidenceTime(agent.evidence.observed_at)}`
+        : 'Not recorded — no MCP-marked request.',
+    },
+    {
+      label: event?.evidence.observation_source === 'posthog' ? 'External observation verified' : 'First accepted event',
+      complete: Boolean(event?.complete),
+      detail: event?.complete
+        ? event.evidence.observation_source === 'posthog'
+          ? `PostHog query · ${formatEvidenceTime(event.evidence.posthog_query_at)}`
+          : `${Number(event.evidence.native_events ?? 0).toLocaleString()} accepted · ${formatEvidenceTime(event.evidence.last_seen)}`
+        : event?.blocker ?? 'No accepted event yet.',
+    },
+    {
+      label: 'First query completed',
+      complete: Boolean(query?.complete),
+      detail: query?.complete
+        ? `${String(query.evidence.source ?? 'native')} · ${formatEvidenceTime(query.evidence.created_at)}`
+        : query?.blocker ?? 'No typed query result yet.',
+    },
+  ];
+  return (
+    <ol className="divide-y overflow-hidden rounded-lg border" aria-live="polite">
+      {statuses.map((status, index) => (
+        <li key={status.label} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-3 px-4 py-3 sm:grid-cols-[auto_minmax(10rem,0.7fr)_minmax(0,1fr)] sm:items-center">
+          <span
+            className={cn(
+              'flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-medium',
+              status.complete ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600' : 'text-muted-foreground',
+            )}
+            aria-hidden="true"
+          >
+            {status.complete ? <Check className="size-4" /> : index + 1}
+          </span>
+          <div className="text-sm font-medium">{status.label}</div>
+          <p className="col-start-2 text-xs leading-relaxed text-muted-foreground sm:col-start-3">{status.detail}</p>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function formatEvidenceTime(value: unknown) {
+  if (typeof value !== 'string' || !value) return 'time not recorded';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'time not recorded' : date.toLocaleString();
 }
 
 function WebhookSetup({ project }: { project: string }) {
@@ -212,106 +452,87 @@ function WebhookSetup({ project }: { project: string }) {
   return <Panel title="Decision webhook" right={<span className="text-xs text-muted-foreground">encrypted · outbox delivery · approval-gated</span>}>
     <p className="mb-3 text-sm text-muted-foreground">Send sanitized product impact to one generic destination. URL and authorization are write-only; an explicit test must succeed before decision actions can queue delivery.</p>
     <div className="grid gap-2 md:grid-cols-[12rem_1fr_1fr_auto]"><Input aria-label="Webhook name" value={name} onChange={(event) => setName(event.target.value)} placeholder="product_ops" /><Input aria-label="Webhook URL" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://hooks.example.com/…" /><Input aria-label="Webhook authorization" type="password" value={authorization} onChange={(event) => setAuthorization(event.target.value)} placeholder="Authorization (optional)" /><Button onClick={configure} disabled={busy === 'configure' || !url || !name}>{busy === 'configure' ? 'Saving…' : 'Configure'}</Button></div>
-    <div className="mt-4 space-y-2">{destinations.loading ? <Loading what="reading webhook status…" /> : destinations.data?.map((destination) => <div key={destination.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"><div><div className="text-sm font-medium">{destination.name}</div><code className="text-xs text-muted-foreground">{destination.masked_url}</code>{destination.last_error && <div className="mt-1 text-xs text-destructive">{destination.last_error}</div>}</div><div className="flex items-center gap-2"><Badge variant={destination.status === 'verified' ? 'default' : destination.status === 'error' ? 'destructive' : 'outline'}>{destination.status}</Badge><Button size="sm" variant="outline" onClick={() => verify(destination.id)} disabled={busy === destination.id}>{busy === destination.id ? 'Queued…' : 'Queue test'}</Button></div></div>)}</div>
+    <div className="mt-4 space-y-2">
+      {destinations.loading
+        ? <Loading what="reading webhook status…" />
+        : destinations.error
+          ? <RecoverableError onRetry={destinations.reload}>{destinations.error}</RecoverableError>
+          : destinations.data?.map((destination) => <div key={destination.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"><div><div className="text-sm font-medium">{destination.name}</div><code className="text-xs text-muted-foreground">{destination.masked_url}</code>{destination.last_error && <div className="mt-1 text-xs text-destructive">{destination.last_error}</div>}</div><div className="flex items-center gap-2"><Badge variant={destination.status === 'verified' ? 'default' : destination.status === 'error' ? 'destructive' : 'outline'}>{destination.status}</Badge><Button size="sm" variant="outline" onClick={() => verify(destination.id)} disabled={busy === destination.id}>{busy === destination.id ? 'Queued…' : 'Queue test'}</Button></div></div>)}
+    </div>
     {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
   </Panel>;
 }
 
-const MCP_LOGO_META: Record<McpClientLogo, { color: string; label: string }> = {
-  claude: { color: 'var(--cat-referral)', label: 'Claude' },
-  codex: { color: 'var(--foreground)', label: 'Codex' },
-  cursor: { color: 'var(--cat-quality)', label: 'Cursor' },
-  warp: { color: 'var(--cat-acquisition)', label: 'Warp' },
-  windsurf: { color: 'var(--cat-activation)', label: 'Windsurf' },
-  vscode: { color: 'var(--cat-acquisition)', label: 'VS Code' },
-  cline: { color: 'var(--cat-retention)', label: 'Cline' },
-  zed: { color: 'var(--foreground)', label: 'Zed' },
-  continue: { color: 'var(--cat-activation)', label: 'Continue' },
-  replit: { color: 'var(--cat-referral)', label: 'Replit' },
-  opencode: { color: 'var(--cat-quality)', label: 'OpenCode' },
-  hermes: { color: 'var(--cat-revenue)', label: 'Hermes' },
-  custom: { color: 'var(--muted-foreground)', label: 'Custom MCP' },
+const MCP_LOGO_LABELS: Record<McpClientLogo, string> = {
+  'claude-code': 'Claude Code',
+  claude: 'Claude',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  warp: 'Warp',
+  windsurf: 'Windsurf',
+  vscode: 'VS Code',
+  cline: 'Cline',
+  zed: 'Zed',
+  continue: 'Continue',
+  replit: 'Replit',
+  opencode: 'OpenCode',
+  hermes: 'Hermes',
+  custom: 'Custom MCP',
 };
 
 function McpClientLogoMark({ logo, className }: { logo: McpClientLogo; className?: string }) {
-  const meta = MCP_LOGO_META[logo];
   return (
     <span
-      aria-label={`${meta.label} logo`}
+      aria-label={`${MCP_LOGO_LABELS[logo]} logo`}
+      data-brand-logo={logo}
       className={cn('flex shrink-0 items-center justify-center rounded-md border bg-background', className)}
-      style={{ color: meta.color }}
     >
-      <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5">
-        <McpLogoPath logo={logo} />
-      </svg>
+      <McpBrandLogo logo={logo} />
     </span>
   );
 }
 
-function McpLogoPath({ logo }: { logo: McpClientLogo }) {
+function McpBrandLogo({ logo }: { logo: McpClientLogo }) {
   switch (logo) {
+    case 'claude-code':
+      return <ClaudeCodeLogo variant="icon-color" className="size-5" />;
     case 'claude':
-      return (
-        <>
-          <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
-          <path d="M12 5v14M5 12h14M7.2 7.2l9.6 9.6M16.8 7.2l-9.6 9.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-        </>
-      );
+      return <ClaudeLogo aria-hidden="true" className="size-5" />;
     case 'codex':
-      return <path d="M7 7.5 12 4l5 3.5v9L12 20l-5-3.5v-9Zm2 1.1v6.8l3 2.1 3-2.1V8.6l-3-2.1-3 2.1Zm2 1.6 1-0.7 1 0.7v3.6l-1 0.7-1-0.7v-3.6Z" fill="currentColor" />;
+      return <CodexLogo variant="icon-color" className="size-5" />;
     case 'cursor':
-      return <path d="M5 3.8 19.2 11 13.4 13.2 10.9 19.4 5 3.8Zm4.1 5.1 2.1 5.5 1-2.5 2.4-0.9-5.5-2.1Z" fill="currentColor" />;
+      return <CursorLogo className="size-5 text-foreground" />;
     case 'warp':
-      return (
-        <>
-          <path d="M4 8.5c2.4-2 4.8-2 7.2 0s4.8 2 7.2 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          <path d="M5.5 13c2-1.6 4-1.6 6 0s4 1.6 6 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          <path d="M7 17c1.5-1 3-1 4.5 0s3 1 4.5 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-        </>
-      );
+      return <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5" fill={`#${siWarp.hex}`}><path d={siWarp.path} /></svg>;
     case 'windsurf':
-      return <path d="M7 19h10M8 16c2.5-1.2 5.5-1.2 8 0M8 4v10l8-3.2L8 4Zm2 3.6 2.8 2.2L10 11V7.6Z" fill="currentColor" />;
+      return <WindsurfLogo aria-hidden="true" className="size-5" />;
     case 'vscode':
-      return <path d="M19 4.5v15l-4.2-1.8-5.2-4.2-3.1 3L4 15.1 7.9 12 4 8.9l2.5-1.4 3.1 3 5.2-4.2L19 4.5Zm-4 5-3.7 2.5L15 14.5v-5Z" fill="currentColor" />;
+      return <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5" fill="#23A8F2"><path d="M17.583 2.135a1.5 1.5 0 0 1 1.676.292l2.314 2.14A1.5 1.5 0 0 1 22 5.668v12.664a1.5 1.5 0 0 1-.427 1.1l-2.314 2.14a1.5 1.5 0 0 1-1.676.293l-7.24-3.487-4.236 3.306a1 1 0 0 1-1.278-.043l-2.55-2.325a1 1 0 0 1-.063-1.413L5.94 12 2.216 6.097a1 1 0 0 1 .063-1.413l2.55-2.325a1 1 0 0 1 1.278-.043l4.236 3.306 7.24-3.487ZM18 6.386l-5.51 5.615L18 17.614V6.386ZM6.002 7.43 3.94 12l2.062 4.57L9.405 12 6.002 7.43Z" /></svg>;
     case 'cline':
-      return (
-        <>
-          <path d="m5 7 4 5-4 5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M11 17h8" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-        </>
-      );
+      return <ClineLogo aria-hidden="true" className="size-5 text-foreground" />;
     case 'zed':
-      return <text x="12" y="16.5" textAnchor="middle" fontSize="13" fontWeight="700" fontFamily="var(--font-mono)" fill="currentColor">Z</text>;
+      return <ZedLogo className="size-5 text-foreground" />;
     case 'continue':
-      return <path d="M6 8.5h7.5a3.5 3.5 0 1 1 0 7H8.8l2.1 2.1-1.4 1.4L5 14.5 9.5 10l1.4 1.4-2.1 2.1h4.7a1.5 1.5 0 0 0 0-3H6v-2Z" fill="currentColor" />;
+      return <ContinueLogo aria-hidden="true" className="size-5 text-foreground" />;
     case 'replit':
-      return (
-        <>
-          <path d="M9 3h6v6H9V3ZM3 9h6v6H3V9ZM9 15h6v6H9v-6ZM15 9h6v6h-6V9Z" fill="currentColor" />
-        </>
-      );
+      return <ReplitLogo variant="icon-color" className="size-5" />;
     case 'opencode':
-      return (
-        <>
-          <path d="M8.5 6 4 12l4.5 6M15.5 6 20 12l-4.5 6" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="m13.5 5-3 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </>
-      );
+      return <OpenCodeLogo aria-hidden="true" className="size-5 text-foreground" />;
     case 'hermes':
       return (
-        <>
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5 text-foreground">
           <path d="M6 14.5c3.2-6.1 6.8-8.4 12-8.5-1.2 5.2-3.6 8.8-8.5 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M8 8.5H4.5M11 6.2H7.5M15 6h-2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </>
+        </svg>
       );
     case 'custom':
       return (
-        <>
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5 text-muted-foreground">
           <circle cx="7" cy="8" r="2.2" fill="currentColor" />
           <circle cx="17" cy="8" r="2.2" fill="currentColor" />
           <circle cx="12" cy="17" r="2.2" fill="currentColor" />
           <path d="M8.8 9.4 11 15M15.2 9.4 13 15M9.4 8h5.2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </>
+        </svg>
       );
   }
 }
@@ -326,10 +547,6 @@ function KeyUse({ prefix, title, body }: { prefix: string; title: string; body: 
   );
 }
 
-function SectionLabel({ children, danger }: { children: React.ReactNode; danger?: boolean }) {
-  return <div className={`text-xs font-medium pb-2 border-b mt-4 ${danger ? 'text-destructive border-destructive/30' : 'text-muted-foreground'}`}>{children}</div>;
-}
-
 function DangerZone({ slug, env }: { slug: string; env: string }) {
   const { client, tokenKind } = useStore();
   const [action, setAction] = useState<null | { scope: 'events' | 'entities' | 'all'; title: string; del: string[] }>(null);
@@ -342,7 +559,7 @@ function DangerZone({ slug, env }: { slug: string; env: string }) {
   const rows: Array<{ scope: 'events' | 'entities' | 'all'; t: string; d: string; del: string[] }> = [
     { scope: 'events', t: 'Purge event data', d: `Delete all events for the ${env} environment.`, del: [`all events (env: ${env})`, 'computed funnels & health'] },
     { scope: 'entities', t: 'Purge entities', d: `Delete all entity rows for the ${env} environment.`, del: [`all entities (env: ${env})`] },
-    { scope: 'all', t: 'Purge everything', d: `Delete all events AND entities for the ${env} environment.`, del: [`all events + entities (env: ${env})`] },
+    { scope: 'all', t: 'Purge everything', d: `Delete all events, entities and visual snapshots for the ${env} environment.`, del: [`all events + entities (env: ${env})`, 'visual snapshot metadata + image artifacts'] },
   ];
 
   return (
@@ -361,39 +578,57 @@ function DangerZone({ slug, env }: { slug: string; env: string }) {
           willDelete={action.del} willKeep={['metric & funnel definitions', 'API keys', 'entity-type schema']}
           matchValue={slug} matchLabel="Type the project slug to confirm" confirmLabel={action.title}
           onCancel={() => setAction(null)}
-          onConfirm={async () => { const res = await client!.purgeData(slug, { env, scope: action.scope, confirm_slug: slug }); setResult(`Purged ${env}: ${res.events_deleted} events, ${res.entities_deleted} entities removed.`); setAction(null); }} />
+          onConfirm={async () => { const res = await client!.purgeData(slug, { env, scope: action.scope, confirm_slug: slug }); setResult(`Purged ${env}: ${res.events_deleted} events, ${res.entities_deleted} entities, ${res.snapshots_deleted} visual snapshots removed.`); setAction(null); }} />
       )}
     </Card>
   );
 }
 
-function CopyButton({ value, children }: { value: string; children: React.ReactNode }) {
+function CopyButton({ value, children, onCopied, onFailed }: { value: string; children: React.ReactNode; onCopied?: () => void; onFailed?: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(value);
+      setFailed(false);
       setCopied(true);
+      onCopied?.();
       setTimeout(() => setCopied(false), 1400);
     } catch {
-      // Clipboard can be blocked by browser policy.
+      setFailed(true);
+      onFailed?.();
     }
   };
 
   return (
-    <Button variant="outline" size="sm" className="h-8" onClick={copy}>
-      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-      {copied ? 'Copied' : children}
-    </Button>
+    <span>
+      <Button variant="outline" size="sm" className="h-8" onClick={copy}>
+        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        {copied ? 'Copied' : children}
+      </Button>
+      {failed && <span role="alert" className="mt-2 block max-w-xs text-xs text-destructive">Copy blocked. Open the config and select it manually.</span>}
+    </span>
   );
 }
 
 function CodeBlock({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
-  const copy = async () => { try { await navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch { /* blocked */ } };
+  const [failed, setFailed] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setFailed(false);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setFailed(true);
+    }
+  };
   return (
     <div className="relative">
       <Button variant="outline" size="sm" className="absolute top-2 right-2 h-9 z-10" onClick={copy}>{copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}{copied ? 'Copied' : 'Copy'}</Button>
       <pre className="rounded-md border bg-background p-4 pr-20 text-xs leading-relaxed overflow-auto">{code}</pre>
+      {failed && <div role="alert" className="mt-2 text-xs text-destructive">Copy blocked. Select the text manually.</div>}
     </div>
   );
 }

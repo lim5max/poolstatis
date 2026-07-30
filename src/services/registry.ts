@@ -7,6 +7,9 @@ import {
   type UpdateMetricInput,
 } from '../schemas.js';
 import { ApiError, badRequest, notFound } from '../errors.js';
+import { assertMetricCategory } from './metricCategories.js';
+
+type Queryable = pg.Pool | pg.PoolClient;
 
 export interface Metric {
   id: string;
@@ -40,12 +43,13 @@ function normalizeTags(tags: string[] | undefined): string[] {
 }
 
 export async function registerMetric(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   input: RegisterMetricInput,
   owner: string | null,
 ): Promise<Metric> {
   const source = metricSourceSchemas[input.type].parse(input.source);
+  await assertMetricCategory(pool, projectId, input.category);
   await assertMetricSourceConnection(pool, projectId, input.type, source);
   if (input.type === 'state') {
     const { entity_type } = source as { entity_type: string };
@@ -84,12 +88,15 @@ export async function registerMetric(
 }
 
 export async function updateMetric(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   key: string,
   patch: UpdateMetricInput,
 ): Promise<Metric> {
   const existing = await getMetric(pool, projectId, key);
+  if (patch.category !== undefined) {
+    await assertMetricCategory(pool, projectId, patch.category);
+  }
   if ((patch as { status?: string }).status === 'deprecated') {
     throw badRequest(
       'use_deprecate_metric',
@@ -128,7 +135,7 @@ export async function updateMetric(
 }
 
 async function assertMetricSourceConnection(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   type: Metric['type'],
   source: unknown,
@@ -181,7 +188,7 @@ export async function deprecateMetric(
   return rows[0];
 }
 
-export async function getMetric(pool: pg.Pool | pg.PoolClient, projectId: string, key: string): Promise<Metric> {
+export async function getMetric(pool: Queryable, projectId: string, key: string): Promise<Metric> {
   const { rows } = await pool.query(
     `SELECT ${METRIC_COLS} FROM metrics WHERE project_id = $1 AND key = $2`,
     [projectId, key],
@@ -193,7 +200,7 @@ export async function getMetric(pool: pg.Pool | pg.PoolClient, projectId: string
 }
 
 export async function listMetrics(
-  pool: pg.Pool,
+  pool: Queryable,
   projectId: string,
   filter: { status?: string; category?: string } = {},
 ): Promise<Metric[]> {

@@ -1,6 +1,6 @@
 import type {
-  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, WebhookDelivery, WebhookDestination, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse,
+  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage,
+  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 
 export class ApiError extends Error {
@@ -40,8 +40,39 @@ export class PoolstatisClient {
     return json as T;
   }
 
+  private async raw(method: string, path: string, body?: Blob): Promise<Response> {
+    const token = await this.bearer();
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(body ? { 'content-type': body.type } : {}),
+        },
+        ...(body ? { body } : {}),
+      });
+    } catch {
+      throw new ApiError('network', `cannot reach ${this.baseUrl || 'the server'} — is it running?`);
+    }
+    if (!res.ok) {
+      const json = await res.json().catch(() => null);
+      const e = (json as { error?: { code: string; message: string; hint?: string } } | null)?.error;
+      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
+    }
+    return res;
+  }
+
   me() {
     return this.req<AccountMe>('GET', '/api/v1/me');
+  }
+
+  updateProfile(body: { display_name: string }) {
+    return this.req<AccountMe>('PATCH', '/api/v1/me', body);
+  }
+
+  usage(period: string) {
+    return this.req<OrganizationUsage>('GET', `/api/v1/me/usage?period=${encodeURIComponent(period)}`);
   }
 
   completeOnboarding(body: { workspace_name: string; project_slug: string; project_name: string }) {
@@ -86,6 +117,18 @@ export class PoolstatisClient {
   }>) {
     return this.req<PropertyDefinition>(
       'PATCH', `/api/v1/projects/${slug}/properties/${scope}/${encodeURIComponent(key)}`, patch,
+    );
+  }
+
+  proposeAcquisitionProperties(slug: string) {
+    return this.req<{ properties: PropertyDefinition[] }>(
+      'POST', `/api/v1/projects/${slug}/properties/acquisition-attribution`, {},
+    ).then((response) => response.properties);
+  }
+
+  proposeBrowserAnalytics(slug: string) {
+    return this.req<{ properties: PropertyDefinition[]; metrics: Metric[] }>(
+      'POST', `/api/v1/projects/${slug}/properties/browser-analytics`, {},
     );
   }
 
@@ -223,6 +266,40 @@ export class PoolstatisClient {
   }
 
   // ---- registry ----
+  metricCategories(slug: string) {
+    return this.req<{ categories: MetricCategoryDefinition[] }>(
+      'GET',
+      `/api/v1/projects/${slug}/metric-categories`,
+    ).then((response) => response.categories);
+  }
+
+  createMetricCategory(slug: string, body: {
+    key: string; name: string; description: string; domain: 'custom'; color: string;
+  }) {
+    return this.req<MetricCategoryDefinition>(
+      'POST',
+      `/api/v1/projects/${slug}/metric-categories`,
+      body,
+    );
+  }
+
+  updateMetricCategory(slug: string, key: string, patch: {
+    name?: string; description?: string; color?: string;
+  }) {
+    return this.req<MetricCategoryDefinition>(
+      'PATCH',
+      `/api/v1/projects/${slug}/metric-categories/${key}`,
+      patch,
+    );
+  }
+
+  deleteMetricCategory(slug: string, key: string) {
+    return this.req<{ deleted: true; key: string }>(
+      'DELETE',
+      `/api/v1/projects/${slug}/metric-categories/${key}`,
+    );
+  }
+
   metrics(slug: string, filter: { status?: MetricStatus; category?: string } = {}) {
     const qs = new URLSearchParams();
     if (filter.status) qs.set('status', filter.status);
@@ -249,12 +326,19 @@ export class PoolstatisClient {
     return this.req<Metric>('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, { tags });
   }
 
+  updateMetricTaxonomy(slug: string, key: string, patch: {
+    category: string | null;
+    tags: string[];
+  }) {
+    return this.req<Metric>('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, patch);
+  }
+
   deleteMetric(slug: string, key: string) {
     return this.req<{ deleted: boolean }>('DELETE', `/api/v1/projects/${slug}/metrics/${key}`);
   }
 
   purgeData(slug: string, body: { env: string; scope: 'events' | 'entities' | 'all'; confirm_slug: string; distinct_id?: string }) {
-    return this.req<{ events_deleted: number; entities_deleted: number; env: string }>('POST', `/api/v1/projects/${slug}/data/purge`, body);
+    return this.req<{ events_deleted: number; entities_deleted: number; snapshots_deleted: number; env: string }>('POST', `/api/v1/projects/${slug}/data/purge`, body);
   }
 
   funnels(slug: string) {
@@ -307,11 +391,76 @@ export class PoolstatisClient {
   }
 
   // ---- browser experience ----
-  experienceSurfaces(slug: string) {
-    return this.req<{ surfaces: ExperienceSurface[] }>('GET', `/api/v1/projects/${slug}/experience/surfaces`).then((r) => r.surfaces);
+  experienceSurfaces(slug: string, env = 'prod') {
+    return this.req<{ surfaces: ExperienceSurface[] }>('GET', `/api/v1/projects/${slug}/experience/surfaces?env=${encodeURIComponent(env)}`).then((r) => r.surfaces);
   }
 
-  createExperienceSurface(slug: string, body: { key: string; name: string; purpose: string }) {
+  experienceRoutes(slug: string, surface?: string) {
+    const query = surface ? `?surface=${encodeURIComponent(surface)}` : '';
+    return this.req<{ routes: ExperienceRoute[] }>('GET', `/api/v1/projects/${slug}/experience/routes${query}`)
+      .then((response) => response.routes);
+  }
+
+  registerExperienceRoute(slug: string, surface: string, body: { key: string; name: string; path_pattern: string }) {
+    return this.req<ExperienceRoute>(
+      'POST',
+      `/api/v1/projects/${slug}/experience/surfaces/${encodeURIComponent(surface)}/routes`,
+      body,
+    );
+  }
+
+  experienceSnapshots(slug: string, filter: { surface?: string; route?: string; env?: string } = {}) {
+    const query = new URLSearchParams();
+    if (filter.surface) query.set('surface', filter.surface);
+    if (filter.route) query.set('route', filter.route);
+    if (filter.env) query.set('env', filter.env);
+    return this.req<{ snapshots: ExperienceSnapshot[] }>(
+      'GET',
+      `/api/v1/projects/${slug}/experience/snapshots${query.size ? `?${query}` : ''}`,
+    ).then((response) => response.snapshots);
+  }
+
+  async uploadExperienceSnapshot(
+    slug: string,
+    meta: {
+      surface: string; route: string; version: string; device: 'desktop' | 'mobile'; env: string;
+      release_hash: string; viewport_width: number; viewport_height: number;
+      document_width: number; document_height: number; captured_at: string; retention_days: number;
+    },
+    file: File,
+  ): Promise<ExperienceSnapshot> {
+    const query = new URLSearchParams(Object.entries(meta).map(([key, value]) => [key, String(value)]));
+    const response = await this.raw('POST', `/api/v1/projects/${slug}/experience/snapshots?${query}`, file);
+    return response.json() as Promise<ExperienceSnapshot>;
+  }
+
+  async experienceSnapshotImage(slug: string, id: string): Promise<string> {
+    const response = await this.raw('GET', `/api/v1/projects/${slug}/experience/snapshots/${encodeURIComponent(id)}/image`);
+    return URL.createObjectURL(await response.blob());
+  }
+
+  visualExperience(slug: string, body: {
+    surface: string; route: string; version: string; device: 'desktop' | 'mobile';
+    date_from: string; date_to?: string; grid?: number; env: string;
+  }) {
+    return this.req<VisualExperienceResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'visual_experience',
+      ...body,
+    });
+  }
+
+  compareVisualExperience(slug: string, body: {
+    surface: string; route: string; env: string; grid?: number;
+    baseline: { version: string; device: 'desktop' | 'mobile'; date_from: string; date_to?: string };
+    comparison: { version: string; device: 'desktop' | 'mobile'; date_from: string; date_to?: string };
+  }) {
+    return this.req<VisualExperienceCompareResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'visual_experience_compare',
+      ...body,
+    });
+  }
+
+  createExperienceSurface(slug: string, body: { key: string; name: string; purpose: string; route_pattern?: string }) {
     return this.req<ExperienceSurface>('POST', `/api/v1/projects/${slug}/experience/surfaces`, body);
   }
 
@@ -325,6 +474,59 @@ export class PoolstatisClient {
 
   experienceSession(slug: string, body: { surface: string; session_id: string; date_from?: string; date_to?: string; env: string; limit?: number }) {
     return this.req<ExperienceSessionResponse>('POST', `/api/v1/projects/${slug}/query`, { kind: 'experience_session', ...body });
+  }
+
+  trend(slug: string, body: {
+    metric: string; date_from: string; date_to?: string | null;
+    interval?: 'hour' | 'day' | 'week' | 'month';
+    filters?: SampleFilter[]; breakdown?: { property: string }; env: string;
+  }) {
+    return this.req<TrendResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'trend', interval: 'day', filters: [], ...body,
+    });
+  }
+
+  webAnalytics(slug: string, body: {
+    metric: string;
+    date_from: string;
+    date_to?: string | null;
+    dimensions: WebAnalyticsDimension[];
+    filters?: SampleFilter[];
+    env: string;
+  }) {
+    return this.req<WebAnalyticsResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'web_analytics', filters: [], ...body,
+    });
+  }
+
+  webSessions(slug: string, body: {
+    metric: string;
+    key_metric?: string;
+    date_from: string;
+    date_to?: string | null;
+    filters?: SampleFilter[];
+    limit?: number;
+    env: string;
+  }) {
+    return this.req<WebSessionsResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'web_sessions', filters: [], limit: 20, ...body,
+    });
+  }
+
+  webSession(slug: string, body: {
+    metric: string;
+    key_metric?: string;
+    session_id: string;
+    actor_id?: string;
+    page_limit?: number;
+    date_from: string;
+    date_to?: string | null;
+    filters?: SampleFilter[];
+    env: string;
+  }) {
+    return this.req<WebSessionResponse>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'web_session', filters: [], ...body,
+    });
   }
 
   // ---- data inspection ----
@@ -373,6 +575,14 @@ export class PoolstatisClient {
 
   issuePersonalToken(body: { label?: string } = {}) {
     return this.req<{ id: string; token: string }>('POST', '/api/v1/me/tokens', body);
+  }
+
+  personalTokens() {
+    return this.req<{ tokens: PersonalToken[] }>('GET', '/api/v1/me/tokens').then((response) => response.tokens);
+  }
+
+  revokePersonalToken(id: string) {
+    return this.req<{ revoked: boolean }>('DELETE', `/api/v1/me/tokens/${id}`);
   }
 
   revokeKey(slug: string, id: string) {

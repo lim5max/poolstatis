@@ -1,22 +1,64 @@
 import { randomUUID } from 'node:crypto';
 import { createPool, migrate } from '../db.js';
-import { loadConfig } from '../config.js';
+import { assertHostedApiCredentialBoundary, loadConfig } from '../config.js';
 import { buildServer } from '../http/server.js';
 import { startRetentionWorker } from '../services/retention.js';
-import { ensureRetentionIndexes } from '../services/retentionIndexes.js';
+import {
+  ensureRetentionIndexes,
+  retentionIndexesReady,
+} from '../services/retentionIndexes.js';
+import {
+  rollingEventPartitionsReady,
+} from '../stores/postgresEventStore.js';
 import { createContext } from '../http/context.js';
 import { ReleaseMonitor, startReleaseMonitor } from '../services/releaseMonitor.js';
 import { WebhookOutbox, startWebhookOutbox } from '../services/webhooks.js';
+import {
+  assertHostedRuntimeDatabaseRole,
+  prepareHostedOrganizationPolicies,
+} from '../services/accounts.js';
+import { LocalArtifactStore } from '../stores/artifactStore.js';
+import { startExperienceArtifactRetention } from '../services/experienceArtifactRetention.js';
+import {
+  createLocalMmdbCountryResolver,
+  createTrustedProxyCountryResolver,
+} from '../services/country.js';
 
 const config = loadConfig();
+const hostedPolicyRequired = config.auth?.requireOrganizationPolicy === true;
+assertHostedApiCredentialBoundary(config);
 const pool = createPool(config.databaseUrl, { max: config.databasePoolMax });
-await migrate(pool);
+if (hostedPolicyRequired) {
+  await assertHostedRuntimeDatabaseRole(pool, true);
+  if (!await rollingEventPartitionsReady(pool, new Date(), 12)) {
+    throw new Error(
+      'hosted rolling event partitions are not ready; run the privileged prepare-hosted job',
+    );
+  }
+  if (!await retentionIndexesReady(pool)) {
+    throw new Error(
+      'hosted runtime is not prepared; run the privileged prepare-hosted job before serve',
+    );
+  }
+} else {
+  await migrate(pool);
+}
+await prepareHostedOrganizationPolicies(
+  pool,
+  hostedPolicyRequired,
+);
 // Index builds and retention never borrow a request-serving connection.
 const maintenanceApplicationName = `poolstatis-maintenance-${randomUUID()}`;
 const maintenancePool = createPool(config.databaseUrl, {
   max: 1,
   applicationName: maintenanceApplicationName,
 });
+
+const countryResolver = config.browserCountry?.mode === 'local_mmdb'
+  ? await createLocalMmdbCountryResolver(config.browserCountry)
+  : config.browserCountry?.mode === 'trusted_header'
+    ? createTrustedProxyCountryResolver(config.browserCountry)
+    : undefined;
 
 const app = buildServer(pool, {
   auth: config.auth,
@@ -25,6 +67,11 @@ const app = buildServer(pool, {
   ingestBuffer: config.ingestBuffer,
   queryCache: config.queryCache,
   rateLimit: config.rateLimit,
+  corsOrigins: config.corsOrigins,
+  outboundPolicy: config.outboundPolicy,
+  manageEventPartitions: !hostedPolicyRequired,
+  artifactDir: config.experienceArtifactDir,
+  ...(countryResolver ? { countryResolver } : {}),
   ...(config.connectorEncryptionKey
     ? { connectorEncryptionKey: config.connectorEncryptionKey }
     : {}),
@@ -36,13 +83,21 @@ let stopping = false;
 let retentionWorker: ReturnType<typeof startRetentionWorker> | null = null;
 let releaseMonitorWorker: ReturnType<typeof startReleaseMonitor> | null = null;
 let webhookOutboxWorker: ReturnType<typeof startWebhookOutbox> | null = null;
+let experienceArtifactRetention: ReturnType<typeof startExperienceArtifactRetention> | null = null;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let maintenanceTask: Promise<void> | null = null;
 
 const prepareMaintenance = async (): Promise<void> => {
   if (stopping) return;
   try {
-    const indexes = await ensureRetentionIndexes(maintenancePool);
+    const indexes = hostedPolicyRequired
+      ? {
+          lockAcquired: false,
+          ready: await retentionIndexesReady(maintenancePool),
+          partitionsIndexed: 0,
+          metadataIndexed: false,
+        }
+      : await ensureRetentionIndexes(maintenancePool);
     if (indexes.partitionsIndexed > 0 || indexes.metadataIndexed) {
       console.log(JSON.stringify({ maintenance: 'operational_indexes', ...indexes }));
     }
@@ -68,6 +123,20 @@ const prepareMaintenance = async (): Promise<void> => {
       },
       onError: (error) => console.error('retention worker failed', error),
       });
+      experienceArtifactRetention = startExperienceArtifactRetention(
+        maintenancePool,
+        new LocalArtifactStore(config.experienceArtifactDir),
+        {
+          intervalMs: config.retentionWorker.intervalMs,
+          batchSize: Math.min(config.retentionWorker.batchSize, 500),
+          onResult: (result) => {
+            if (result.snapshotsDeleted > 0 || result.artifactErrors > 0) {
+              console.log(JSON.stringify({ maintenance: 'experience-artifacts', ...result }));
+            }
+          },
+          onError: (error) => console.error('experience artifact retention failed', error),
+        },
+      );
     }
     if (config.releaseMonitor.enabled && !releaseMonitorWorker && !stopping) {
       const monitorContext = createContext(maintenancePool, {
@@ -99,7 +168,7 @@ const prepareMaintenance = async (): Promise<void> => {
         maxRetryMs: config.webhookOutbox.maxRetryMs,
         leaseMs: config.webhookOutbox.leaseMs,
         requestTimeoutMs: config.webhookOutbox.requestTimeoutMs,
-      });
+      }, config.outboundPolicy);
       webhookOutboxWorker = startWebhookOutbox(outbox, {
         intervalMs: config.webhookOutbox.intervalMs,
         onResult: (result) => {
@@ -137,6 +206,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     await retentionWorker?.stop();
     await releaseMonitorWorker?.stop();
     await webhookOutboxWorker?.stop();
+    await experienceArtifactRetention?.stop();
     await maintenancePool.end();
     await pool.end();
     process.exit(0);

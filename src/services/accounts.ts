@@ -1,21 +1,30 @@
 import type pg from 'pg';
-import { ApiError, badRequest } from '../errors.js';
+import { ApiError, badRequest, organizationWriteDisabled } from '../errors.js';
 import { createApiKey, createProject, type Project } from './projects.js';
 
 export interface AuthUserInput {
+  issuer: string;
   subject: string;
   email?: string | null;
-  name?: string | null;
+  emailVerified: boolean;
+  displayName?: string | null;
   pictureUrl?: string | null;
+  connectionStrategy: string;
+  legacyIssuer?: string | null;
+  requireOrganizationPolicy?: boolean;
 }
 
 export interface AuthenticatedAccount {
   user: {
     id: string;
+    identity_issuer: string;
     subject: string;
     email: string | null;
+    email_verified: boolean;
+    display_name: string | null;
     name: string | null;
     picture_url: string | null;
+    connection_strategy: string;
   };
   organization: {
     id: string;
@@ -48,11 +57,8 @@ export interface BillingSummary {
     name: string;
     unit: string;
     aggregation: string;
-    free_quantity: number;
-    overage_unit_quantity: number;
-    overage_price_cents: string;
-    pricing_stage: string;
-    source_note: string;
+    hard_limit: number | null;
+    warning_thresholds: number[];
   }>;
 }
 
@@ -94,7 +100,7 @@ function cleanText(value: string | null | undefined, fallback: string): string {
 }
 
 function defaultOrgName(user: AuthUserInput): string {
-  const display = cleanText(user.name, cleanText(user.email, 'Poolstatis'));
+  const display = cleanText(user.displayName, cleanText(user.email, 'Poolstatis'));
   return `${display}'s workspace`;
 }
 
@@ -105,19 +111,63 @@ export async function getOrCreateAuthenticatedAccount(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows: userRows } = await client.query(
-      `INSERT INTO auth_users (subject, email, name, picture_url, updated_at, last_seen_at)
-       VALUES ($1, $2, $3, $4, now(), now())
-       ON CONFLICT (subject) DO UPDATE SET
-         email = COALESCE(EXCLUDED.email, auth_users.email),
-         name = COALESCE(EXCLUDED.name, auth_users.name),
-         picture_url = COALESCE(EXCLUDED.picture_url, auth_users.picture_url),
-         updated_at = now(),
-         last_seen_at = now()
-       RETURNING id, subject, email, name, picture_url`,
-      [input.subject, input.email ?? null, input.name ?? null, input.pictureUrl ?? null],
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.subject]);
+    const selectUser = () => client.query(
+      `SELECT id, identity_issuer, subject, email, email_verified, display_name, name, picture_url, connection_strategy
+       FROM auth_users WHERE subject = $1 FOR UPDATE`,
+      [input.subject],
     );
-    const user = userRows[0];
+    let existing = (await selectUser()).rows[0];
+    let user;
+    if (!existing) {
+      const { rows } = await client.query(
+        `INSERT INTO auth_users (
+           identity_issuer, subject, email, email_verified, display_name, name,
+           picture_url, connection_strategy, updated_at, last_seen_at
+         ) VALUES ($1, $2, $3, $4, $5, $5, $6, $7, now(), now())
+         ON CONFLICT (subject) DO NOTHING
+         RETURNING id, identity_issuer, subject, email, email_verified, display_name, name, picture_url, connection_strategy`,
+        [
+          input.issuer,
+          input.subject,
+          input.email ?? null,
+          input.emailVerified,
+          input.displayName ?? null,
+          input.pictureUrl ?? null,
+          input.connectionStrategy,
+        ],
+      );
+      user = rows[0];
+      if (!user) existing = (await selectUser()).rows[0];
+    }
+    if (existing) {
+      const adoptLegacy = existing.identity_issuer === null && input.legacyIssuer === input.issuer;
+      if ((!adoptLegacy && existing.identity_issuer === null)
+        || (existing.identity_issuer !== null && existing.identity_issuer !== input.issuer)) {
+        throw new ApiError(401, 'unauthorized', 'authentication failed');
+      }
+      const { rows } = await client.query(
+        `UPDATE auth_users SET
+           identity_issuer = COALESCE(identity_issuer, $2),
+           email = COALESCE($3, email),
+           email_verified = $4,
+           picture_url = COALESCE($5, picture_url),
+           connection_strategy = $6,
+           updated_at = now(),
+           last_seen_at = now()
+         WHERE id = $1
+         RETURNING id, identity_issuer, subject, email, email_verified, display_name, name, picture_url, connection_strategy`,
+        [
+          existing.id,
+          input.issuer,
+          input.email ?? null,
+          input.emailVerified,
+          input.pictureUrl ?? null,
+          input.connectionStrategy,
+        ],
+      );
+      user = rows[0];
+    }
 
     const { rows: memberships } = await client.query(
       `SELECT o.id, o.name, om.role
@@ -155,6 +205,15 @@ export async function getOrCreateAuthenticatedAccount(
       );
     }
 
+    if (input.requireOrganizationPolicy === true) {
+      // The marker is part of the same transaction as first hosted account
+      // provisioning. Cloud activates it only after its policy rows are durable.
+      await client.query(
+        'SELECT poolstatis_require_organization_policy($1::uuid)',
+        [organization.id],
+      );
+    }
+
     await client.query('COMMIT');
     return {
       user,
@@ -170,6 +229,299 @@ export async function getOrCreateAuthenticatedAccount(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Upgrade gate for a hosted process. This must complete before the server
+ * starts listening so pre-existing JWT organizations and their old keys fail
+ * closed until the external control plane activates each policy.
+ */
+export async function prepareHostedOrganizationPolicies(
+  pool: pg.Pool,
+  required: boolean,
+): Promise<number> {
+  if (!required) return 0;
+  const { rows: privilegeRows } = await pool.query<{
+    runtime_member: boolean;
+    can_require: boolean;
+    can_backfill: boolean;
+    can_check_writes: boolean;
+  }>(
+    `SELECT
+       pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS runtime_member,
+       has_function_privilege(
+         current_user,
+         'poolstatis_require_organization_policy(uuid)',
+         'EXECUTE'
+       ) AS can_require,
+       has_function_privilege(
+         current_user,
+         'poolstatis_backfill_organization_policy_state()',
+         'EXECUTE'
+       ) AS can_backfill,
+       has_function_privilege(
+         current_user,
+         'poolstatis_organization_policy_allows_writes(uuid)',
+         'EXECUTE'
+       ) AS can_check_writes`,
+  );
+  const privileges = privilegeRows[0];
+  if (!privileges?.runtime_member
+      || !privileges.can_require
+      || !privileges.can_backfill
+      || !privileges.can_check_writes) {
+    throw new Error(
+      'hosted policy startup requires membership in poolstatis_core_runtime with require/backfill/write-check execute privileges',
+    );
+  }
+  const { rows } = await pool.query<{ inserted: string }>(
+    'SELECT poolstatis_backfill_organization_policy_state()::text AS inserted',
+  );
+  return Number(rows[0]?.inserted ?? 0);
+}
+
+/**
+ * Shared HTTP/MCP write boundary. The MCP server is a thin HTTP client, so
+ * both customer surfaces resolve the same authenticated organization marker.
+ * No marker means ordinary self-host behavior remains unlimited.
+ */
+export async function requireOrganizationWriteReadiness(
+  pool: pg.Pool,
+  organizationId: string,
+): Promise<void> {
+  const { rows } = await pool.query<{ allowed: boolean }>(
+    `SELECT poolstatis_organization_policy_allows_writes($1) AS allowed`,
+    [organizationId],
+  );
+  if (rows[0]?.allowed !== true) throw organizationWriteDisabled();
+}
+
+/**
+ * Hosted deployments use a short-lived deploy credential and a distinct
+ * least-privilege runtime credential. Check the effective database roles after
+ * migrations and before the deploy pool is closed.
+ */
+export async function assertHostedDatabaseRoleSeparation(
+  migrationPool: pg.Pool,
+  runtimePool: pg.Pool,
+  required: boolean,
+): Promise<void> {
+  if (!required) return;
+  const { rows: migrationRows } = await migrationPool.query<{
+    user_name: string;
+    core_admin: boolean;
+    activator_admin: boolean;
+  }>(
+    `SELECT
+       current_user AS user_name,
+       EXISTS (
+         SELECT 1 FROM pg_auth_members am
+         JOIN pg_roles granted_role ON granted_role.oid = am.roleid
+         JOIN pg_roles member_role ON member_role.oid = am.member
+         WHERE granted_role.rolname = 'poolstatis_core_runtime'
+           AND member_role.rolname = current_user
+           AND am.admin_option
+       ) AS core_admin,
+       EXISTS (
+         SELECT 1 FROM pg_auth_members am
+         JOIN pg_roles granted_role ON granted_role.oid = am.roleid
+         JOIN pg_roles member_role ON member_role.oid = am.member
+         WHERE granted_role.rolname = 'poolstatis_policy_activator'
+           AND member_role.rolname = current_user
+           AND am.admin_option
+       ) AS activator_admin`,
+  );
+  const { rows: runtimeRows } = await runtimePool.query<{
+    user_name: string;
+    core_member: boolean;
+    can_check_writes: boolean;
+    can_activate: boolean;
+    can_read_policy: boolean;
+    can_write_policy: boolean;
+    can_read_migrations: boolean;
+    can_write_migrations: boolean;
+    can_use_experience_routes: boolean;
+    can_use_experience_snapshots: boolean;
+  }>(
+    `SELECT
+       current_user AS user_name,
+       pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS core_member,
+       has_function_privilege(
+         current_user,
+         'poolstatis_organization_policy_allows_writes(uuid)',
+         'EXECUTE'
+       ) AS can_check_writes,
+       has_function_privilege(
+         current_user,
+         'poolstatis_activate_organization_policy(uuid)',
+         'EXECUTE'
+       ) AS can_activate,
+       has_table_privilege(
+         current_user,
+         'organization_policy_state',
+         'SELECT'
+       ) AS can_read_policy,
+       has_table_privilege(
+         current_user,
+         'organization_policy_state',
+         'INSERT,UPDATE,DELETE'
+       ) AS can_write_policy,
+       has_table_privilege(current_user, 'schema_migrations', 'SELECT')
+         AS can_read_migrations,
+       has_table_privilege(
+         current_user,
+         'schema_migrations',
+         'INSERT,UPDATE,DELETE'
+       ) AS can_write_migrations,
+       has_table_privilege(current_user, 'experience_routes', 'SELECT')
+         AND has_table_privilege(current_user, 'experience_routes', 'INSERT')
+         AND has_table_privilege(current_user, 'experience_routes', 'UPDATE')
+         AND has_table_privilege(current_user, 'experience_routes', 'DELETE')
+         AS can_use_experience_routes,
+       has_table_privilege(current_user, 'experience_snapshots', 'SELECT')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'INSERT')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'UPDATE')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'DELETE')
+         AS can_use_experience_snapshots`,
+  );
+  const migration = migrationRows[0];
+  const runtime = runtimeRows[0];
+  if (!migration || !runtime
+      || migration.user_name === runtime.user_name
+      || !migration.core_admin
+      || !migration.activator_admin
+      || !runtime.core_member
+      || !runtime.can_check_writes
+      || runtime.can_activate
+      || runtime.can_read_policy
+      || runtime.can_write_policy
+      || runtime.can_read_migrations
+      || runtime.can_write_migrations
+      || !runtime.can_use_experience_routes
+      || !runtime.can_use_experience_snapshots) {
+    throw new Error(
+      'hosted database roles are not separated: use a deploy migrator with Core/activator ADMIN OPTION and a distinct poolstatis_core_runtime login without policy or migration-table access',
+    );
+  }
+}
+
+export async function assertHostedRuntimeDatabaseRole(
+  runtimePool: pg.Pool,
+  required: boolean,
+): Promise<void> {
+  if (!required) return;
+  const { rows } = await runtimePool.query<{
+    core_member: boolean;
+    can_check_writes: boolean;
+    can_activate: boolean;
+    can_read_policy: boolean;
+    can_write_policy: boolean;
+    can_read_migrations: boolean;
+    can_write_migrations: boolean;
+    can_use_experience_routes: boolean;
+    can_use_experience_snapshots: boolean;
+  }>(
+    `SELECT
+       pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS core_member,
+       has_function_privilege(
+         current_user,
+         'poolstatis_organization_policy_allows_writes(uuid)',
+         'EXECUTE'
+       ) AS can_check_writes,
+       has_function_privilege(
+         current_user,
+         'poolstatis_activate_organization_policy(uuid)',
+         'EXECUTE'
+       ) AS can_activate,
+       has_table_privilege(current_user, 'organization_policy_state', 'SELECT')
+         AS can_read_policy,
+       has_table_privilege(
+         current_user,
+         'organization_policy_state',
+         'INSERT,UPDATE,DELETE'
+       ) AS can_write_policy,
+       has_table_privilege(current_user, 'schema_migrations', 'SELECT')
+         AS can_read_migrations,
+       has_table_privilege(
+         current_user,
+         'schema_migrations',
+         'INSERT,UPDATE,DELETE'
+       ) AS can_write_migrations,
+       has_table_privilege(current_user, 'experience_routes', 'SELECT')
+         AND has_table_privilege(current_user, 'experience_routes', 'INSERT')
+         AND has_table_privilege(current_user, 'experience_routes', 'UPDATE')
+         AND has_table_privilege(current_user, 'experience_routes', 'DELETE')
+         AS can_use_experience_routes,
+       has_table_privilege(current_user, 'experience_snapshots', 'SELECT')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'INSERT')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'UPDATE')
+         AND has_table_privilege(current_user, 'experience_snapshots', 'DELETE')
+         AS can_use_experience_snapshots`,
+  );
+  const runtime = rows[0];
+  if (!runtime
+      || !runtime.core_member
+      || !runtime.can_check_writes
+      || runtime.can_activate
+      || runtime.can_read_policy
+      || runtime.can_write_policy
+      || runtime.can_read_migrations
+      || runtime.can_write_migrations
+      || !runtime.can_use_experience_routes
+      || !runtime.can_use_experience_snapshots) {
+    throw new Error(
+      'hosted runtime must use poolstatis_core_runtime without activation, policy-table, or schema-migration access',
+    );
+  }
+}
+
+export interface AuthenticatedProfile extends AuthenticatedAccount {}
+
+export async function getAuthenticatedProfile(
+  pool: pg.Pool,
+  userId: string,
+  orgId: string,
+): Promise<AuthenticatedProfile | null> {
+  const { rows } = await pool.query(
+    `SELECT au.id, au.identity_issuer, au.subject, au.email, au.email_verified,
+            au.display_name, au.name, au.picture_url, au.connection_strategy,
+            o.id AS org_id, o.name AS org_name, om.role
+     FROM auth_users au
+     JOIN organization_members om ON om.user_id = au.id
+     JOIN organizations o ON o.id = om.org_id
+     WHERE au.id = $1 AND o.id = $2
+     LIMIT 1`,
+    [userId, orgId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    user: {
+      id: row.id,
+      identity_issuer: row.identity_issuer,
+      subject: row.subject,
+      email: row.email,
+      email_verified: row.email_verified,
+      display_name: row.display_name,
+      name: row.name,
+      picture_url: row.picture_url,
+      connection_strategy: row.connection_strategy,
+    },
+    organization: { id: row.org_id, name: row.org_name, role: row.role },
+  };
+}
+
+export async function updateAuthenticatedProfile(
+  pool: pg.Pool,
+  userId: string,
+  displayName: string,
+): Promise<void> {
+  await pool.query(
+    `UPDATE auth_users
+     SET display_name = $2, name = $2, updated_at = now()
+     WHERE id = $1`,
+    [userId, displayName],
+  );
 }
 
 export async function getBillingSummary(pool: pg.Pool, orgId: string): Promise<BillingSummary> {
@@ -192,12 +544,10 @@ export async function getBillingSummary(pool: pg.Pool, orgId: string): Promise<B
   const plan = rows[0];
   if (!plan) throw new ApiError(500, 'billing_not_initialized', 'free billing plan was not initialized');
 
-  const { rows: meters } = await pool.query(
-    `SELECT key, name, unit, aggregation, free_quantity, overage_unit_quantity,
-       overage_price_cents::text, pricing_stage, source_note
-     FROM billing_meters
-     WHERE active = true
-     ORDER BY sort_order, key`,
+  const { rows: entitlements } = await pool.query<{ hard_limit: string | null; warning_thresholds: string[] }>(
+    `SELECT hard_limit, warning_thresholds FROM organization_entitlements
+     WHERE org_id = $1 AND meter_key = 'events_stored'`,
+    [orgId],
   );
 
   return {
@@ -219,11 +569,15 @@ export async function getBillingSummary(pool: pg.Pool, orgId: string): Promise<B
     billing_limit_cents: plan.billing_limit_cents,
     current_period_start: plan.current_period_start,
     current_period_end: plan.current_period_end,
-    meters: meters.map((m) => ({
-      ...m,
-      free_quantity: Number(m.free_quantity),
-      overage_unit_quantity: Number(m.overage_unit_quantity),
-    })),
+    meters: [{
+      key: 'events_stored',
+      name: 'Accepted events stored',
+      unit: 'event',
+      aggregation: 'sum',
+      hard_limit: entitlements[0]?.hard_limit === null || entitlements[0]?.hard_limit === undefined
+        ? null : Number(entitlements[0].hard_limit),
+      warning_thresholds: (entitlements[0]?.warning_thresholds ?? []).map(Number),
+    }],
   };
 }
 
@@ -235,11 +589,11 @@ export async function organizationHasProjects(pool: pg.Pool, orgId: string): Pro
 export async function completeHostedOnboarding(
   pool: pg.Pool,
   orgId: string,
+  userId: string,
   input: OnboardingInput,
   publicUrl: string,
   mcpRunner: McpRunnerConfig,
 ): Promise<OnboardingResult> {
-  const workspaceName = cleanText(input.workspace_name, 'Poolstatis workspace');
   const projectSlug = cleanText(input.project_slug, '');
   const projectName = cleanText(input.project_name, projectSlug);
   if (!/^[a-z][a-z0-9-]*$/.test(projectSlug)) {
@@ -249,6 +603,7 @@ export async function completeHostedOnboarding(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`onboarding:${orgId}`]);
     const { rowCount } = await client.query('SELECT 1 FROM projects WHERE org_id = $1 LIMIT 1', [orgId]);
     if (rowCount) {
       throw new ApiError(
@@ -259,8 +614,8 @@ export async function completeHostedOnboarding(
       );
     }
     const { rows: orgRows } = await client.query(
-      'UPDATE organizations SET name = $2 WHERE id = $1 RETURNING id, name',
-      [orgId, workspaceName],
+      'SELECT id, name FROM organizations WHERE id = $1',
+      [orgId],
     );
     if (!orgRows[0]) throw new ApiError(404, 'organization_not_found', 'organization not found');
 
@@ -278,6 +633,7 @@ export async function completeHostedOnboarding(
       projectId: null,
       kind: 'personal',
       label: 'hosted onboarding MCP',
+      issuedByUserId: userId,
     });
     const ingest = await createApiKey(client as unknown as pg.Pool, {
       orgId,

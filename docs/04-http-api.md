@@ -76,7 +76,10 @@ Merge-семантика: присланные ключи перезаписыв
 
 ### POST /i/v1/experience/events
 
-Optional Browser Experience SDK использует этот endpoint после явного consent.
+Optional Browser Experience SDK использует этот endpoint только когда
+host-controlled policy разрешает сбор. Browser Analytics поддерживает
+явные `opt-in` (default), `opt-out` и `external`/CMP-managed режимы; это не
+расширяет фиксированный privacy-safe allowlist.
 Сначала platform token создаёт active surface с `key`, `name` и `purpose`;
 ingest key затем отправляет только типизированные interaction events для этой
 surface:
@@ -90,19 +93,30 @@ surface:
     "distinct_id": "user_8a21",
     "session_id": "opaque-session-id",
     "route": "checkout",
+    "version": "2026.07.27-abc123",
+    "device": "desktop",
+    "viewport_width": 1440,
+    "viewport_height": 900,
+    "document_width": 1440,
+    "document_height": 3200,
     "sequence": 7,
     "label": "pay_now",
     "x": 0.62,
-    "y": 0.48
+    "y": 0.48,
+    "viewport_x": 0.62,
+    "viewport_y": 0.72
   }]
 }
 // → { "accepted": 1 }
 ```
 
-Допустимы только `page_viewed`, labelled `element_clicked`, `scroll_depth` и
-`client_error`. `route` — developer-provided stable key, а не URL/path. API
-откажет unknown/archived surface, invalid route key, duplicate fields и
-неразрешённые поля. `batch_id` обязателен и сохраняется на retry, поэтому
+Допустимы только `page_viewed`, labelled `element_clicked`, `scroll_depth`,
+`section_exposed` и `client_error`. `route` — registered developer-provided
+stable key, а не URL/path. Every signal carries a release `version`,
+desktop/mobile device and viewport/document dimensions. Click `x/y` are
+normalized document coordinates; `viewport_x/viewport_y` retain layout-relative
+position. API откажет unknown/archived surface, unregistered/invalid route key,
+duplicate fields и неразрешённые поля. `batch_id` обязателен и сохраняется на retry, поэтому
 потерянный HTTP response не удваивает карту. DOM, URL/path, текст, CSS
 selectors, input values, error stack/message и network data не являются частью
 этого контракта.
@@ -121,6 +135,8 @@ POST   /api/v1/projects/{slug}/identity-links
 GET    /api/v1/projects/{slug}/identity-links?env=prod
 POST   /api/v1/projects/{slug}/identity-links/{id}/revoke
 POST   /api/v1/projects/{slug}/properties
+POST   /api/v1/projects/{slug}/properties/acquisition-attribution
+POST   /api/v1/projects/{slug}/properties/browser-analytics
 GET    /api/v1/projects/{slug}/properties
 PATCH  /api/v1/projects/{slug}/properties/{scope}/{key}
 POST   /api/v1/projects/{slug}/measurement/trust
@@ -160,6 +176,10 @@ POST   /api/v1/projects/{slug}/webhooks
 GET    /api/v1/projects/{slug}/webhooks
 POST   /api/v1/projects/{slug}/webhooks/{id}/test
 GET    /api/v1/projects/{slug}/webhook-deliveries
+GET    /api/v1/projects/{slug}/metric-categories
+POST   /api/v1/projects/{slug}/metric-categories
+PATCH  /api/v1/projects/{slug}/metric-categories/{key}
+DELETE /api/v1/projects/{slug}/metric-categories/{key}
 POST   /api/v1/projects/{slug}/metrics
 PATCH  /api/v1/projects/{slug}/metrics/{key}
 POST   /api/v1/projects/{slug}/metrics/{key}/deprecate
@@ -182,12 +202,34 @@ GET    /api/v1/projects/{slug}/experiments/{key}/results?env=prod
 POST   /api/v1/projects/{slug}/experience/surfaces
 GET    /api/v1/projects/{slug}/experience/surfaces
 POST   /api/v1/projects/{slug}/experience/surfaces/{key}/archive
+POST   /api/v1/projects/{slug}/experience/surfaces/{key}/routes
+GET    /api/v1/projects/{slug}/experience/routes
+POST   /api/v1/projects/{slug}/experience/snapshots
+GET    /api/v1/projects/{slug}/experience/snapshots
+GET    /api/v1/projects/{slug}/experience/snapshots/{id}/image
+DELETE /api/v1/projects/{slug}/experience/snapshots/{id}
 POST   /api/v1/projects/{slug}/query          ← единая точка Query DSL
 GET    /api/v1/projects/{slug}/events/sample
 GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+Category CRUD работает только в scope проекта. Создавать можно только
+`domain: "custom"`; system definitions неизменяемы (`409
+system_metric_category`). Удаление используемой custom-категории возвращает
+`409 metric_category_in_use` и `details.metric_count`. Metric create/update
+проверяет category в том же проекте и возвращает `400 unknown_metric_category`.
+`GET .../schema` также возвращает `metric_categories`, включая definitions,
+цвет, domain, `is_system` и usage count.
+
+Категория — purpose axis (**зачем**), namespaced tags — feature/surface axis
+(**где/что**), funnel — journey axis. `NULL`/uncategorized и старые plain tags
+остаются обратно совместимыми.
+
+Snapshot upload metadata includes viewport and CSS-pixel document dimensions
+separately from the validated physical PNG/WebP width and height. Visual queries
+match all four layout dimensions before overlaying aggregate coordinates.
 
 Proof gates, actor-link semantics, property trust и точная capability matrix PostHog
 описаны в [09-product-decision-loop.md](09-product-decision-loop.md). `observe-agent`
@@ -240,6 +282,47 @@ endpoint; generic `/i/v1/events` с похожим именем не попад�
 Как и любой `pk_` write key, typed endpoint не является anti-fraud границей:
 доверяй данным как product telemetry, а не как доказательству действий пользователя.
 
+`kind: "visual_experience"` requires the exact
+`{surface,route,version,device,date_from,date_to?,grid?,env}` tuple and returns
+snapshot metadata, click cells/labels, scroll coverage, named-section
+reach/drop-off, counts, percentages and a causality caveat.
+`kind: "visual_experience_compare"` compares two device/version/period cohorts
+and returns count and percentage-point deltas. Snapshot upload is raw PNG/WebP;
+the API never fetches a caller-supplied URL.
+
+## Web engagement queries
+
+`POST /query` accepts four native, project/environment-isolated web kinds:
+
+- `web_analytics`: headline traffic, engagement coverage and bounded
+  breakdowns; optional `key_metric` adds the declared product outcome to the
+  engaged-session rule;
+- `web_sessions`: bounded recent session summaries with explicit total and
+  truncation;
+- `web_session`: one browser-tab session plus ordered page evidence bounded by
+  `page_limit` (default 100, maximum 200), with `total_pages` and `truncated`;
+- `page_engagement`: the latest cumulative snapshot for one
+  `$page_view_id`.
+
+All require an active count metric sourcing canonical `page.viewed` with
+`$browser_context = "1"`. Session classification uses the highest valid
+`page.engagement.sequence` per actor and page: engaged means
+`foreground_ms >= 10000`, at least two page views, or the optional active native
+key metric. Positive evidence makes `engaged` true even before a terminal
+snapshot. A complete negative session returns `engaged: false` and
+`bounce: true`; otherwise both remain `null`. `measured_sessions` counts only
+non-null classifications, `unknown_sessions` counts unresolved sessions, and
+the engagement/bounce rates use measured sessions as their denominator.
+`session_span_ms` is wall span and never substitutes for foreground time.
+`actor_id` stays optional for backward compatibility only when the requested
+session/page id resolves to one actor. If more than one actor shares that id,
+`web_session` and `page_engagement` fail closed with a 400 response; call
+`web_sessions` first and repeat the detail query with its returned `actor_id`.
+
+Reads do not create billable events. Each accepted `page.viewed`,
+`page.engagement` and key-metric event is still counted once in accepted
+stored-event usage.
+
 ## Query DSL
 
 Один POST `/query`, дискриминатор — `kind`. DSL невелик по построению: он обязан транслироваться в узкий интерфейс `EventStore` (см. [02-storage.md](02-storage.md)).
@@ -252,7 +335,8 @@ endpoint; generic `/i/v1/events` с похожим именем не попад�
   "date_from": "-30d",                   // относительные и ISO-даты
   "date_to": null,
   "interval": "day",                     // hour | day | week | month
-  "breakdown": { "property": "plan" },   // опционально, топ-10 значений + other
+  "filters": [{ "property": "$utm_source", "op": "eq", "value": "newsletter" }],
+  "breakdown": { "property": "$utm_source" }, // опционально, топ-10 значений + other
   "env": "prod"
 }
 
@@ -277,6 +361,13 @@ endpoint; generic `/i/v1/events` с похожим именем не попад�
 Операторы фильтров: `eq, ne, gt, gte, lt, lte, in, contains, is_set, is_not_set`.
 
 Ответ любого запроса включает `meta`: `{computed_at, date_range, sampling: null}` — задел под кеширование и сэмплирование без смены контракта.
+
+`$utm_source`, `$utm_medium`, `$utm_campaign`, `$utm_term`, `$utm_content` —
+зарезервированные event properties browser-attribution entrypoint. Перед
+filter/breakdown вызови `POST .../properties/acquisition-attribution`: он
+идемпотентно создаёт пять native string definitions со статусом `proposed`.
+`meta.note` такого trend явно говорит **Session landing attribution**: это связь
+с tagged landing в этой browser session, не causal credit кампании.
 
 Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки.
 
@@ -368,3 +459,8 @@ GET /api/v1/projects/{slug}/data-quality?env=prod&limit=50&since_days=30
   лимитера для глобальной квоты. Локальный слой остаётся обязательной защитой
   каждого процесса при сбое shared limiter.
 - Формат ошибок единый: `{ "error": { "code": "metric_key_taken", "message": "…", "hint": "…" } }` — `hint` пишется для агента-читателя.
+Для privacy-bounded web traffic используйте Query DSL
+`kind: "web_analytics"` с registry metric key, периодом и bounded dimensions
+`country|device|browser|os|language|timezone|source`. Ответ отдельно возвращает
+`visitors`, `sessions`, `page_views`, counts и page-view percentages; определения
+и privacy caveats входят в `meta`.

@@ -1,7 +1,17 @@
 // Mirrors the Platform API response shapes (src/http/server.ts + services).
 
-export type MetricCategory =
-  | 'acquisition' | 'activation' | 'retention' | 'revenue' | 'referral' | 'quality';
+export type MetricCategory = string;
+
+export interface MetricCategoryDefinition {
+  id: string;
+  key: string;
+  name: string;
+  description: string;
+  domain: 'product' | 'business' | 'technical' | 'custom';
+  color: string;
+  is_system: boolean;
+  metric_count: number;
+}
 
 export type MetricType = 'count' | 'unique_actors' | 'value' | 'conversion' | 'state';
 export type MetricStatus = 'proposed' | 'active' | 'deprecated';
@@ -112,6 +122,176 @@ export interface ExperienceSurface {
   status: ExperienceSurfaceStatus;
   created_at: string;
   updated_at: string;
+  last_capture_at?: string | null;
+}
+
+export interface ExperienceRoute {
+  id: string;
+  surface_key: string;
+  key: string;
+  name: string;
+  path_pattern: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExperienceSnapshot {
+  id: string;
+  surface_key: string;
+  route_key: string;
+  env: string;
+  version: string;
+  device: 'desktop' | 'mobile';
+  release_hash: string;
+  mime_type: 'image/png' | 'image/webp';
+  byte_size: number;
+  width: number;
+  height: number;
+  viewport_width: number;
+  viewport_height: number;
+  document_width: number;
+  document_height: number;
+  captured_at: string;
+  expires_at: string;
+  created_at: string;
+  evidence_ref: string;
+  stale: boolean;
+}
+
+export interface VisualExperienceResponse {
+  kind: 'visual_experience';
+  surface: Pick<ExperienceSurface, 'key' | 'name' | 'purpose' | 'status'>;
+  route: string;
+  version: string;
+  device: 'desktop' | 'mobile';
+  grid: number;
+  snapshot: ExperienceSnapshot | null;
+  summary: {
+    events: number;
+    page_views: number;
+    sessions: number;
+    actors: number;
+    clicks: number;
+    max_document_width: number;
+    max_document_height: number;
+  };
+  click_cells: Array<{ x: number; y: number; count: number; actors: number }>;
+  click_labels: Array<{ label: string; count: number; actors: number }>;
+  click_labels_truncated: boolean;
+  scroll_coverage: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+  sections: Array<{
+    section: string;
+    top: number;
+    sessions: number;
+    actors: number;
+    percentage: number;
+    dropoff_percentage: number;
+  }>;
+  sections_truncated: boolean;
+  agent_context: {
+    scope: {
+      surface: string;
+      route: string;
+      version: string;
+      device: 'desktop' | 'mobile';
+      purpose: string;
+    };
+    sample_size: {
+      events: number;
+      page_views: number;
+      sessions: number;
+      actors: number;
+      clicks: number;
+    };
+    section_order: string[];
+    largest_section_reach_decreases: Array<{
+      from_section: string;
+      to_section: string;
+      from_sessions: number;
+      to_sessions: number;
+      session_count_decrease: number;
+      percentage_point_decrease: number;
+    }>;
+    click_concentration: Array<{
+      label: string;
+      count: number;
+      actors: number;
+      percentage_of_all_clicks: number;
+    }>;
+    scroll_reach: Array<{ depth: number; sessions: number; actors: number; percentage: number }>;
+    output_coverage: {
+      click_labels_returned: number;
+      click_labels_truncated: boolean;
+      sections_returned: number;
+      sections_truncated: boolean;
+    };
+    snapshot_coverage: {
+      status: 'fresh' | 'stale' | 'future' | 'missing';
+      exact_viewport_match: boolean;
+      snapshot_id: string | null;
+      evidence_ref: string | null;
+      captured_at: string | null;
+      expires_at: string | null;
+      age_seconds: number | null;
+    };
+    evidence_refs: Array<{ type: 'experience_snapshot'; id: string; evidence_ref: string }>;
+    data_quality: { status: 'ok' | 'limited' | 'empty'; caveats: string[] };
+    suggested_next_actions: Array<{
+      action: 'list_versions' | 'compare_explicit_cohorts';
+      tool: 'list_visual_experience_versions' | 'compare_visual_experience';
+      reason: string;
+      known_parameters: Record<string, unknown>;
+      requires: string[];
+    }>;
+  };
+  causality: string;
+  meta: { computed_at: string; date_range: { from: string; to: string }; note?: string };
+}
+
+export interface VisualExperienceCompareResponse {
+  kind: 'visual_experience_compare';
+  baseline: VisualExperienceResponse;
+  comparison: VisualExperienceResponse;
+  delta: {
+    events: number;
+    page_views: number;
+    sessions: number;
+    clicks: number;
+    actors: number;
+    sections: Array<{
+      section: string;
+      baseline_present: boolean;
+      comparison_present: boolean;
+      percentage_points: number | null;
+    }>;
+  };
+  agent_context: {
+    scope: { surface: string; route: string; purpose: string };
+    sample_sizes: {
+      baseline: VisualExperienceResponse['agent_context']['sample_size'];
+      comparison: VisualExperienceResponse['agent_context']['sample_size'];
+    };
+    largest_section_changes: Array<{
+      section: string;
+      baseline_percentage: number;
+      comparison_percentage: number;
+      percentage_points: number;
+    }>;
+    section_taxonomy_mismatches: Array<{
+      section: string;
+      baseline_present: boolean;
+      comparison_present: boolean;
+    }>;
+    evidence_refs: Array<{ type: 'experience_snapshot'; id: string; evidence_ref: string }>;
+    data_quality: { status: 'ok' | 'limited' | 'empty'; caveats: string[] };
+    suggested_next_actions: Array<{
+      action: 'inspect_baseline_map' | 'inspect_comparison_map';
+      tool: 'get_visual_experience_map';
+      reason: string;
+      query: Record<string, unknown>;
+    }>;
+  };
+  causality: string;
 }
 
 export interface InteractionMapResponse {
@@ -122,13 +302,132 @@ export interface InteractionMapResponse {
   labels: Array<{ label: string; count: number; actors: number }>;
 }
 
+export interface TrendResponse {
+  kind: 'trend';
+  series: Array<{ bucket: string; value: number; breakdown_value?: string }>;
+  meta: {
+    computed_at: string;
+    date_range?: { from: string; to: string };
+    sampling: null;
+    note?: string;
+    source?: 'native' | 'posthog';
+  };
+}
+
+export type WebAnalyticsDimension = 'country' | 'device' | 'browser' | 'os' | 'language' | 'timezone' | 'source';
+
+export interface WebAnalyticsResponse {
+  kind: 'web_analytics';
+  summary: { visitors: number; sessions: number; page_views: number };
+  engagement: {
+    measured_sessions: number;
+    incomplete_sessions: number;
+    unknown_sessions: number;
+    engaged_sessions: number;
+    bounce_sessions: number;
+    measured_session_coverage: number | null;
+    engaged_rate: number | null;
+    bounce_rate: number | null;
+    single_page_sessions: number;
+    timed_page_views: number;
+    total_page_views: number;
+    timed_page_coverage: number | null;
+    foreground_ms: number;
+    session_span_ms: number;
+  };
+  breakdowns: Partial<Record<WebAnalyticsDimension, Array<{
+    value: string;
+    visitors: number;
+    sessions: number;
+    page_views: number;
+    percentage: number;
+  }>>>;
+  meta: {
+    computed_at: string;
+    truncated_dimensions: WebAnalyticsDimension[];
+    definitions: {
+      visitors: string;
+      sessions: string;
+      page_views: string;
+      measured_sessions: string;
+      unknown_sessions: string;
+      engaged_sessions: string;
+      bounce_sessions: string;
+      engaged_rate: string;
+      bounce_rate: string;
+      single_page_sessions: string;
+      foreground_ms: string;
+      session_span_ms: string;
+    };
+    accepted_event_accounting: string;
+    privacy: string;
+    country_attribution?: { label: string; url: string };
+  };
+}
+
+export interface WebPageEngagement {
+  page_view_id: string;
+  session_id: string;
+  actor_id: string;
+  path: string;
+  viewed_at: string;
+  last_snapshot_at: string | null;
+  sequence: number | null;
+  foreground_ms: number | null;
+  elapsed_ms: number | null;
+  max_scroll_pct: number | null;
+  interaction_count: number | null;
+  reason: string | null;
+  timed: boolean;
+  complete: boolean;
+}
+
+export interface WebSessionSummary {
+  session_id: string;
+  actor_id: string;
+  started_at: string;
+  ended_at: string;
+  page_views: number;
+  timed_page_views: number;
+  foreground_ms: number;
+  session_span_ms: number;
+  engaged: boolean | null;
+  bounce: boolean | null;
+  single_page: boolean;
+  complete: boolean;
+}
+
+export interface WebSessionsResponse {
+  kind: 'web_sessions';
+  sessions: WebSessionSummary[];
+  meta: {
+    computed_at: string;
+    total: number;
+    truncated: boolean;
+    definitions: { foreground_ms: string; session_span_ms: string; bounce: string };
+  };
+}
+
+export interface WebSessionResponse {
+  kind: 'web_session';
+  summary: WebSessionSummary | null;
+  pages: WebPageEngagement[];
+  meta: {
+    computed_at: string;
+    no_data_reason?: string;
+    privacy: string;
+    total_pages: number;
+    truncated: boolean;
+  };
+}
+
 export interface ExperienceSessionResponse {
   kind: 'experience_session';
   surface: Pick<ExperienceSurface, 'key' | 'name' | 'purpose' | 'status'>;
   session_id: string;
   events: Array<{
     timestamp: string;
-    kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'client_error';
+    kind: 'page_viewed' | 'element_clicked' | 'scroll_depth' | 'section_exposed' | 'client_error';
     route: string;
     sequence: number;
     label?: string;
@@ -136,6 +435,8 @@ export interface ExperienceSessionResponse {
     y?: number;
     depth?: number;
     error_type?: 'error' | 'unhandled_rejection';
+    section?: string;
+    top?: number;
   }>;
   summary: { page_views: number; clicks: number; max_scroll_depth: number; client_errors: number };
 }
@@ -166,6 +467,7 @@ export interface ProjectSchema {
   project: { slug: string; name: string };
   env: string;
   metrics: Metric[];
+  metric_categories: MetricCategoryDefinition[];
   funnels: Funnel[];
   entity_types: EntityType[];
   observed_events_30d: ObservedEvent[];
@@ -578,6 +880,8 @@ export interface ApiKeyRow {
   kind: KeyKind;
   env: string;
   label: string | null;
+  /** Permanently masked server value, e.g. sk_...cafe. */
+  masked_token: string;
   created_at: string;
   revoked_at: string | null;
 }
@@ -590,12 +894,9 @@ export interface BillingMeter {
   key: string;
   name: string;
   unit: string;
-  aggregation: 'sum' | 'max' | 'latest';
-  free_quantity: number;
-  overage_unit_quantity: number;
-  overage_price_cents: string;
-  pricing_stage: 'free_now' | 'future_reference' | 'active';
-  source_note: string;
+  aggregation: string;
+  hard_limit: number | null;
+  warning_thresholds: number[];
 }
 
 export interface BillingSummary {
@@ -625,18 +926,55 @@ export interface AccountMe {
     id: string;
     subject: string;
     email: string | null;
+    email_verified: boolean;
+    display_name: string | null;
     name: string | null;
     picture_url: string | null;
+    connection_strategy: string;
+  };
+  identity: {
+    issuer: string | null;
+    subject: string;
   };
   organization: {
     id: string;
     name: string;
     role: 'owner' | 'admin' | 'member';
   };
+  membership: {
+    organization_id: string;
+    role: 'owner' | 'admin' | 'member';
+  };
   billing: BillingSummary;
   onboarding: {
     completed: boolean;
   };
+}
+
+export interface PersonalToken {
+  id: string;
+  label: string | null;
+  /** Permanently masked server value, e.g. pt_...cafe. */
+  token: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface OrganizationUsage {
+  meter: 'events_stored';
+  period: string;
+  quantity: number;
+  hard_limit: number | null;
+  warning_thresholds: number[];
+  warnings: Array<{ threshold: number; quantity: number }>;
+  projects: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    quantity: number;
+    environments: Array<{ env: string; quantity: number }>;
+  }>;
 }
 
 export interface HostedOnboardingResult {
