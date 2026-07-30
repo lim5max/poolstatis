@@ -163,7 +163,7 @@ create_experience_surface(project, {key, name, purpose})
 list_experience_surfaces(project)
 archive_experience_surface(project, key)
 query_interaction_map(project, {surface, date_from, date_to?, grid?, env?})
-get_experience_session(project, {surface, session_id, date_from?, date_to?, limit?, env?})
+get_experience_session(project, {surface, session_id, actor_id?, date_from?, date_to?, limit?, env?})
 register_experience_route(project, {surface, route:{key,name,path_pattern}})
 list_visual_experience_versions(project, {surface?, route?, env?})
 get_visual_experience_map(project, {surface, route, version, device, date_from, date_to?, grid?, env?})
@@ -175,6 +175,9 @@ capture. Карта показывает нормализованные **кли
 Timeline содержит только developer-provided stable route key, stable label,
 координаты, scroll depth и тип клиентской ошибки — DOM, URL/path, текст, input
 values, stacks и network data в Poolstatis не отправляются.
+Если один `session_id` использован несколькими акторами в том же tenant/env/
+surface/window, чтение без `actor_id` завершается typed ambiguity error.
+Ответ всегда содержит canonical actor identity и active-link provenance.
 
 Visual map tools additionally return an agent-ready `agent_context`: the
 purpose-tagged scope, sample sizes, ordered section labels, counts and
@@ -205,8 +208,12 @@ query_retention(project, {start_metric, return_metric?, interval, periods, date_
 query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning/resurrecting/dormant
 query_stickiness(project, {metric, interval, date_from, env?})
 query_entities(project, {entity_type, filters?, limit, order_by?})
+list_actors(project, {env?, from?, to?, limit?, cursor?, order?, search?,
+  propertyFilters?, activityMetric?})
 
-get_person(project, {distinct_id, env?})       // engagement summary + identity entity
+propose_browser_analytics(project, route_keys[]) // finite reviewed vocabulary; atomic
+get_person(project, {distinct_id, env?, from?, to?, limit?, cursor?})
+  // distinct_id≤200; canonical ID + bounded raw IDs/links + registered-only masked activity
 sample_events(project, {event?, registered?, distinct_id?, limit≤100})  // отладка ингеста
 list_ingest_warnings(project, {env?, kind?})   // rejected/unregistered/clock_skew (лог ошибок)
 list_data_quality_issues(project, {env?, limit?, since_days?})
@@ -214,6 +221,11 @@ list_data_quality_issues(project, {env?, limit?, since_days?})
 ```
 
 MCP tools expose structured JSON output (`structuredContent`) with a text JSON fallback for older clients.
+Web tools используют только typed Query DSL и registry metric keys: raw SQL и
+raw event-name escape hatch отсутствуют. Полный контракт:
+[13-browser-analytics.md](13-browser-analytics.md).
+Контракт Actors/Person доступен агенту как
+`poolstatis://standard/actors`.
 
 ### Инсайты
 

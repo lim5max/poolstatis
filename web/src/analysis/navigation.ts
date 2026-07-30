@@ -21,16 +21,8 @@ export const NAVIGATION_ZONES: NavigationZone[] = [
     label: 'Analyze',
     items: [
       { label: 'Product analytics', to: '/analyze/product', availability: 'available' },
-      {
-        label: 'Web analytics',
-        availability: 'unavailable',
-        reason: 'Ships with the typed web analytics aggregates milestone.',
-      },
-      {
-        label: 'Users',
-        availability: 'unavailable',
-        reason: 'Ships with the bounded actors query milestone.',
-      },
+      { label: 'Web analytics', to: '/analyze/web', availability: 'available' },
+      { label: 'Users', to: '/analyze/users', availability: 'available' },
     ],
   },
   {

@@ -24,6 +24,7 @@ export interface AppContext {
   posthog: PostHogAdapter;
   webhooks: WebhookService;
   artifacts: ArtifactStore;
+  cursorSigningSecret?: string;
 }
 
 export interface CreateContextOptions {
@@ -35,6 +36,7 @@ export interface CreateContextOptions {
   artifactStore?: ArtifactStore;
   artifactDir?: string;
   countryAttribution?: CountryResolver['attribution'];
+  cursorSigningSecret?: string;
 }
 
 export function createContext(pool: pg.Pool, options: CreateContextOptions = {}): AppContext {
@@ -52,9 +54,19 @@ export function createContext(pool: pg.Pool, options: CreateContextOptions = {})
     pool,
     eventStore,
     ingest: new IngestService(pool, eventStore),
-    query: new QueryService(pool, eventStore, queryCache, posthog, options.countryAttribution),
+    query: new QueryService(
+      pool,
+      eventStore,
+      queryCache,
+      posthog,
+      options.countryAttribution,
+      options.cursorSigningSecret,
+    ),
     posthog,
     webhooks: new WebhookService(pool, options.connectorEncryptionKey, options.outboundPolicy),
     artifacts: options.artifactStore ?? new LocalArtifactStore(options.artifactDir ?? './data/experience-artifacts'),
+    ...(options.cursorSigningSecret
+      ? { cursorSigningSecret: options.cursorSigningSecret }
+      : {}),
   };
 }

@@ -197,8 +197,10 @@ exposure per section, batches at most 25 signals per request, and defaults to a
 120-signals/minute browser guard.
 
 The agent can use `query_interaction_map` for normalised click cells and
-`get_experience_session` for a known session id. These are interaction maps,
-not gaze or full session replay.
+`get_experience_session` for a known session id plus actor id. A reused
+session id across actors fails with typed ambiguity instead of combining
+people; the read response includes canonical actor/link provenance. These are
+interaction maps, not gaze or full session replay.
 
 ## Browser acquisition attribution (optional module)
 

@@ -213,6 +213,90 @@ export interface ActorSummary {
   top_events: Array<{ event: string; count: number }>;
 }
 
+export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
+export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+
+export interface ActorListItem {
+  distinct_id: string;
+  raw_actor_count: number;
+  first_seen: string;
+  last_seen: string;
+  total_events: number;
+  active_days: number;
+  session_count: number | null;
+  top_events: Array<{ event: string; count: number }>;
+  pinned_properties: Record<string, unknown>;
+  identity_status: ActorIdentityStatus;
+}
+
+/** Internal detail fields retained for Person compatibility, not Actors DSL output. */
+export interface ActorListRecord extends ActorListItem {
+  distinct_events: number;
+  registered_share: number;
+}
+
+export interface ActorsKeyset {
+  value: string | number;
+  distinctId: string;
+}
+
+export interface ActorsQuery {
+  projectId: string;
+  env: string;
+  from: Date;
+  to: Date;
+  snapshotIngestedAt: Date;
+  limit: number;
+  order: ActorOrder;
+  cursor?: ActorsKeyset;
+  searchExactId?: string;
+  activity?: FunnelStepQuery;
+  trustedBrowserSessions: boolean;
+}
+
+export interface ActorsResult {
+  actors: ActorListRecord[];
+  hasMore: boolean;
+}
+
+export interface ActorActivityKeyset {
+  timestamp: string;
+  ingestedAt: string;
+  event: string;
+  rawDistinctId: string;
+  sessionId: string;
+  propertiesHash: string;
+  duplicateOrdinal: number;
+}
+
+export interface ActorActivityQuery {
+  projectId: string;
+  env: string;
+  distinctId: string;
+  from: Date;
+  to: Date;
+  snapshotIngestedAt: Date;
+  limit: number;
+  cursor?: ActorActivityKeyset;
+}
+
+export interface ActorActivityEvent {
+  event: string;
+  timestamp: string;
+  distinct_id: string;
+  raw_distinct_id: string;
+  session_id: string | null;
+  properties: Record<string, unknown>;
+  registered: true;
+  env: string;
+}
+
+export interface ActorActivityResult {
+  events: ActorActivityEvent[];
+  hasMore: boolean;
+  lastKey?: ActorActivityKeyset;
+}
+
 export interface RawEvent {
   event: string;
   timestamp: string;
@@ -392,6 +476,7 @@ export interface ExperienceSessionQuery {
   env: string;
   surface: string;
   sessionId: string;
+  actorId?: string;
   from: Date;
   to: Date;
   limit: number;
@@ -452,6 +537,11 @@ export interface VisualExperienceResult {
   sections_truncated: boolean;
 }
 
+export interface ExperienceSessionResult {
+  events: ExperienceSessionEvent[];
+  actorIds: string[];
+}
+
 /**
  * The narrow storage interface the whole platform depends on.
  * Every method must be implementable efficiently on both Postgres and
@@ -472,7 +562,7 @@ export interface EventStore {
   stickiness(q: IntervalActivityQuery): Promise<StickinessBin[]>;
   experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]>;
   interactionMap(q: InteractionMapQuery): Promise<InteractionMapResult>;
-  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]>;
+  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionResult>;
   experienceLastCaptures(projectId: string, env: string, surfaces: string[]): Promise<Record<string, string>>;
   visualExperience(q: VisualExperienceQuery): Promise<VisualExperienceResult>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
@@ -489,4 +579,6 @@ export interface EventStore {
   purge(projectId: string, env?: string, distinctId?: string): Promise<number>;
   /** Engagement summary for one actor — powers the person page. */
   actorSummary(projectId: string, env: string, distinctId: string): Promise<ActorSummary>;
+  actors(q: ActorsQuery): Promise<ActorsResult>;
+  actorActivity(q: ActorActivityQuery): Promise<ActorActivityResult>;
 }

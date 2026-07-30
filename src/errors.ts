@@ -15,7 +15,7 @@ export class ApiError extends Error {
   ) {
     super(message);
     this.name = 'ApiError';
-    this.retryable = details?.retryable === true ? true : undefined;
+    this.retryable = typeof details?.retryable === 'boolean' ? details.retryable : undefined;
   }
 
   toBody(): { error: { code: string; message: string; hint?: string; retryable?: boolean; details?: Record<string, unknown> } } {

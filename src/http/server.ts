@@ -40,6 +40,7 @@ import {
   purgeExperienceSnapshots, readExperienceSnapshot, registerExperienceRoute,
 } from '../services/experience.js';
 import { createActorLink, listActorLinks, revokeActorLink } from '../services/identity.js';
+import { getPerson } from '../services/person.js';
 import {
   createPropertyDefinition, listPropertyDefinitions, updatePropertyDefinition,
   type PropertyDefinition,
@@ -72,7 +73,7 @@ import {
 } from '../services/rateLimiter.js';
 import {
   deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
-  actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
+  actorDistinctIdSchema, actorLinkSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
   browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
@@ -99,6 +100,7 @@ export interface ServerOptions {
   artifactStore?: CreateContextOptions['artifactStore'];
   artifactDir?: string;
   countryResolver?: CountryResolver;
+  cursorSigningSecret?: string;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -295,8 +297,17 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   if (options.countryResolver?.attribution !== undefined) {
     contextOptions.countryAttribution = options.countryResolver.attribution;
   }
+  if (options.cursorSigningSecret !== undefined) {
+    contextOptions.cursorSigningSecret = options.cursorSigningSecret;
+  }
   const ctx = createContext(pool, contextOptions);
-  const app = Fastify({ logger: false });
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 1024 * 1024,
+    // distinct_id is contractually bounded to 200 decoded characters. Leave
+    // room for percent-encoded Unicode while the schema enforces that bound.
+    routerOptions: { maxParamLength: 2_000 },
+  });
   (app as FastifyInstance & { countryResolver?: CountryResolver }).countryResolver =
     options.countryResolver ?? UNKNOWN_COUNTRY_RESOLVER;
   app.addContentTypeParser(['image/png', 'image/webp'], { parseAs: 'buffer' }, (_req, body, done) => {
@@ -1165,7 +1176,17 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     }
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
-    return { events_deleted, entities_deleted, snapshots_deleted, env: body.env };
+    return {
+      events_deleted,
+      entities_deleted,
+      snapshots_deleted,
+      env: body.env,
+      ...(body.distinct_id ? {
+        distinct_id: body.distinct_id,
+        identity_scope: 'exact_raw_distinct_id',
+        canonical_expansion: false,
+      } : {}),
+    };
   });
 
   app.post('/api/v1/projects/:slug/query', async (req) => {
@@ -1702,13 +1723,16 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/api/v1/projects/:slug/persons/:distinctId', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const { distinctId } = req.params as { distinctId: string };
-    const env = (req.query as { env?: string }).env ?? 'prod';
-    const [summary, entity] = await Promise.all([
-      ctx.eventStore.actorSummary(project.id, env, distinctId),
-      getIdentityEntity(ctx.pool, project.id, env, distinctId),
-    ]);
-    return { distinct_id: distinctId, env, summary, entity };
+    const { distinctId: rawDistinctId } = req.params as { distinctId: string };
+    const distinctId = actorDistinctIdSchema.parse(rawDistinctId);
+    return getPerson(
+      ctx.pool,
+      ctx.eventStore,
+      project.id,
+      distinctId,
+      personQuerySchema.parse(req.query),
+      ctx.cursorSigningSecret,
+    );
   });
 
   app.get('/api/v1/projects/:slug/ingest-warnings', async (req) => {

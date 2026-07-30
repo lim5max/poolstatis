@@ -10,14 +10,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
-  actorLinkSchema, browserRouteKeysSchema,
+  actorDistinctIdSchema, actorLinkSchema, actorsQuerySchema, browserRouteKeysSchema,
   applyMeasurementDeclarationSchema,
   concludeExperimentSchema, createExperimentSchema,
   createMetricCategorySchema,
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
   experienceRouteRegistrationSchema, experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
-  editDecisionSchema, measurementDeclarationSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema,
+  editDecisionSchema, measurementDeclarationSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, propertyDefinitionSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
   registerReleaseSchema, reviewDecisionSchema,
   retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, webAnalyticsQuerySchema,
@@ -27,6 +27,7 @@ import {
 } from '../schemas.js';
 import { INSTRUMENTATION_STANDARD } from './standard.js';
 import { BROWSER_ANALYTICS_STANDARD } from './browserStandard.js';
+import { ACTORS_STANDARD } from './actorsStandard.js';
 
 export interface McpConfig { baseUrl: string; token: string; }
 
@@ -879,6 +880,16 @@ jsonTool(
 );
 
 jsonTool(
+  'list_actors',
+  'List bounded query-time canonical actors with exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. activityMetric must be a registry metric key; unsupported actor property filters fail closed.',
+  { project, query: actorsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, {
+    kind: 'actors',
+    ...query,
+  })),
+);
+
+jsonTool(
   'query_retention',
   'Retention grid: of the actors who did `start_metric` in each cohort bucket, how many returned (did `return_metric`, defaults to start) in each later period. Returns cohorts with size + retained counts/percentages.',
   { project, query: retentionQuerySchema.omit({ kind: true }) },
@@ -908,7 +919,7 @@ jsonTool(
 
 jsonTool(
   'get_experience_session',
-  'Read the privacy-safe ordered interaction timeline for one known Browser Experience session. It contains only paths, stable labels, coordinates, scroll depth and coarse error type — never DOM/text.',
+  'Read one actor-scoped privacy-safe Browser Experience session timeline. Reused session IDs require actor_id or fail with typed ambiguity. The response includes canonical actor/link provenance and never DOM/text.',
   { project, query: experienceSessionQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'experience_session', ...query })),
 );
@@ -929,9 +940,22 @@ jsonTool(
 
 jsonTool(
   'get_person',
-  'Engagement summary for one actor (distinct_id): first/last seen, total/distinct events, active days, sessions, registered share, top events, plus their identity entity. Use to profile or segment a user.',
-  { project, distinct_id: z.string(), env: z.string().default('prod') },
-  wrap(({ project: slug, distinct_id, env }) => api('GET', `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinct_id)}?env=${encodeURIComponent(env)}`)),
+  'Canonical actor detail with bounded raw IDs/link provenance, registered-only masked activity and opaque keyset pagination. Entity/pinned properties fail closed until a deterministic approved source exists.',
+  {
+    project,
+    distinct_id: actorDistinctIdSchema,
+    ...personQuerySchema.shape,
+  },
+  wrap(({ project: slug, distinct_id, env, from, to, limit, cursor }) => {
+    const query = new URLSearchParams({ env, limit: String(limit) });
+    if (from) query.set('from', from);
+    if (to) query.set('to', to);
+    if (cursor) query.set('cursor', cursor);
+    return api(
+      'GET',
+      `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinct_id)}?${query}`,
+    );
+  }),
 );
 
 jsonTool(
@@ -1034,6 +1058,14 @@ server.resource(
   'poolstatis://standard/browser-analytics',
   async (uri) => ({
     contents: [{ uri: uri.href, mimeType: 'text/markdown', text: BROWSER_ANALYTICS_STANDARD }],
+  }),
+);
+
+server.resource(
+  'actors-standard',
+  'poolstatis://standard/actors',
+  async (uri) => ({
+    contents: [{ uri: uri.href, mimeType: 'text/markdown', text: ACTORS_STANDARD }],
   }),
 );
 

@@ -238,6 +238,7 @@ describe('production protection config', () => {
 
   it('enables bounded tenant limits and automatic retention by default', () => {
     const config = loadConfig({});
+    expect(config.cursorSigningSecret).toBeNull();
 
     expect(config.rateLimit).toEqual(expect.objectContaining({
       ingest: expect.objectContaining({
@@ -306,6 +307,7 @@ describe('production protection config', () => {
       WEBHOOK_OUTBOX_LEASE_MS: '4444',
       WEBHOOK_REQUEST_TIMEOUT_MS: '555',
       OUTBOUND_ALLOW_LOCAL_HTTP: 'true',
+      POOLSTATIS_CURSOR_SIGNING_SECRET: 'synthetic-server-only-secret-123456',
     });
     expect(config.rateLimit).toBe(false);
     expect(config.outboundPolicy).toEqual({ allowLocalHttp: true });
@@ -338,6 +340,7 @@ describe('production protection config', () => {
       leaseMs: 4444,
       requestTimeoutMs: 555,
     });
+    expect(config.cursorSigningSecret).toBe('synthetic-server-only-secret-123456');
 
     expect(() => loadConfig({ RATE_LIMIT_ENABLED: 'yes' })).toThrow(
       'RATE_LIMIT_ENABLED must be true or false',
@@ -347,6 +350,9 @@ describe('production protection config', () => {
     );
     expect(() => loadConfig({ RETENTION_MAX_BATCHES: '1001' })).toThrow(
       'RETENTION_MAX_BATCHES must be less than or equal to 1000',
+    );
+    expect(() => loadConfig({ POOLSTATIS_CURSOR_SIGNING_SECRET: 'too-short' })).toThrow(
+      'POOLSTATIS_CURSOR_SIGNING_SECRET must be at least 32 characters',
     );
   });
 });

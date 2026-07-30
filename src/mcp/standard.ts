@@ -54,8 +54,9 @@ Avoid: \`Signup\`, \`user_signed_up_event\`, \`click\`, \`track\`, \`event1\`.
    The one supported anonymous exception is the consent-gated
    \`@poolstatis/sdk/browser\` first-party visitor id: after authentication,
    switch to the stable product user id and create the explicit audited actor
-   link returned by the browser module. Sessions remain separate in
-   \`session_id\`; query-time identity resolution preserves immutable events.
+   link returned by the browser module. That environment-scoped audited link is
+   resolved at query time without rewriting immutable events. Sessions remain
+   separate in \`session_id\`; never use a per-session or random id as the actor.
 2. **Money** goes in a numeric \`amount\` property, currency in \`currency\`:
    \`{ "amount": 49.0, "currency": "USD" }\`. Never bake the number into the event name.
 3. **Mutable state** (plan, role, lifecycle stage, seat count) belongs on the
@@ -203,7 +204,8 @@ needs a falsifiable \`hypothesis\` and an active registered outcome metric.
    or \`inconclusive\` plus a rationale. Conclusion freezes the observation window.
 
 Flags and experiments currently require stable authenticated \`distinct_id\`.
-Do not use temporary anonymous/session ids until actor identity merge ships.
+Do not use a session id as actor identity. Anonymous-to-authenticated identity
+must use an audited actor link, and the flag still needs the durable target ID.
 
 ---
 

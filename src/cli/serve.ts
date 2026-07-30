@@ -75,6 +75,9 @@ const app = buildServer(pool, {
   ...(config.connectorEncryptionKey
     ? { connectorEncryptionKey: config.connectorEncryptionKey }
     : {}),
+  ...(config.cursorSigningSecret
+    ? { cursorSigningSecret: config.cursorSigningSecret }
+    : {}),
 });
 await app.listen({ port: config.port, host: config.host });
 console.log(`poolstatis listening on http://${config.host}:${config.port}`);
