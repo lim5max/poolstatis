@@ -8,8 +8,6 @@ on:
   push:
     branches:
       - codex/event-backfill-revisions
-    paths:
-      - .github/workflows/publish-mcp.yml
 
 permissions:
   contents: read
