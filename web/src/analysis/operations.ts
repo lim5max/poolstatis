@@ -2,7 +2,17 @@ import type { ActorLink, Metric } from '../api/types';
 import type { PropertyFilter, TrendQueryResult } from './visualization';
 
 export type AnalyticsRange = '7d' | '30d' | '90d';
-export type WebDimension = 'route' | 'source' | 'device' | 'browser' | 'os' | 'language' | 'timezone';
+export type WebDimension =
+  | 'route'
+  | 'source'
+  | 'medium'
+  | 'campaign'
+  | 'device'
+  | 'browser'
+  | 'os'
+  | 'language'
+  | 'timezone'
+  | 'country';
 export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
 export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
 
@@ -123,6 +133,11 @@ export interface WebAnalyticsResult {
   }>>;
   meta: OperationalMeta & {
     truncated_dimensions: string[];
+    unavailable_dimensions: Record<string, {
+      code: string;
+      reason: string;
+      next_action: string;
+    }>;
     definitions: Record<string, string>;
     accepted_event_accounting: string;
     privacy: string;

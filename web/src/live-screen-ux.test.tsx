@@ -292,7 +292,7 @@ describe('live customer screen UX', () => {
     expect(screen.getByText(/Showing 1 of 1 returned groups/)).toBeInTheDocument();
     expect(webAnalytics).toHaveBeenCalledWith('alpha', expect.objectContaining({
       metric: 'web_page_views',
-      dimensions: ['route', 'device', 'browser', 'os', 'language', 'timezone', 'source'],
+      dimensions: ['source', 'campaign', 'medium', 'route', 'device', 'browser', 'os', 'language', 'timezone'],
       env: 'prod',
     }));
     fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));

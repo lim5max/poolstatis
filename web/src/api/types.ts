@@ -314,7 +314,17 @@ export interface TrendResponse {
   };
 }
 
-export type WebAnalyticsDimension = 'route' | 'device' | 'browser' | 'os' | 'language' | 'timezone' | 'source';
+export type WebAnalyticsDimension =
+  | 'route'
+  | 'source'
+  | 'medium'
+  | 'campaign'
+  | 'device'
+  | 'browser'
+  | 'os'
+  | 'language'
+  | 'timezone'
+  | 'country';
 
 export interface WebAnalyticsResponse {
   kind: 'web_analytics';
@@ -350,6 +360,11 @@ export interface WebAnalyticsResponse {
   meta: {
     computed_at: string;
     truncated_dimensions: WebAnalyticsDimension[];
+    unavailable_dimensions: Partial<Record<WebAnalyticsDimension, {
+      code: string;
+      reason: string;
+      next_action: string;
+    }>>;
     definitions: Record<string, string>;
     accepted_event_accounting: string;
     privacy: string;

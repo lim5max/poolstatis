@@ -30,7 +30,7 @@ import {
   assertRegisteredAcquisitionProperties,
   assertTrustedAcquisitionProperties,
 } from './acquisitionAttribution.js';
-import { assertTrustedSafeRoute } from './browserAnalytics.js';
+import { assertTrustedSafeRoute, browserRouteVocabulary } from './browserAnalytics.js';
 import type { CountryResolver } from './country.js';
 import {
   actorCursorFingerprint,
@@ -44,6 +44,8 @@ const SESSION_ATTRIBUTION_NOTE = 'Session landing attribution: this associates e
 const WEB_DIMENSIONS = {
   route: { property: '$route_key', missingValue: 'unavailable' },
   source: { property: '$utm_source', missingValue: 'direct / unknown' },
+  medium: { property: '$utm_medium', missingValue: 'none / unknown' },
+  campaign: { property: '$utm_campaign', missingValue: 'none / unknown' },
   country: { property: '$country', missingValue: 'unknown' },
   device: { property: '$device_class', missingValue: 'unknown' },
   browser: { property: '$browser_family', missingValue: 'unknown' },
@@ -207,6 +209,11 @@ export type QueryResult =
       }>>;
       meta: QueryMeta & {
         truncated_dimensions: string[];
+        unavailable_dimensions: Record<string, {
+          code: string;
+          reason: string;
+          next_action: string;
+        }>;
         definitions: Record<string, string>;
         accepted_event_accounting: string;
         privacy: string;
@@ -526,21 +533,72 @@ export class QueryService {
       ? await this.webKeyMetricSource(projectId, q.key_metric)
       : undefined;
     this.assertWebFilterAllowlist(q.filters);
-    if (q.dimensions.includes('country')) {
-      throw badRequest(
-        'web_analytics_dimension_unavailable',
-        'country is unavailable until a separately reviewed trusted proxy or MMDB contract is active',
-      );
-    }
-    const routeVocabulary = q.dimensions.includes('route')
-      || q.filters.some((filter) => filter.property === '$route_key')
+    const routeFilterVocabulary = q.filters.some((filter) => filter.property === '$route_key')
       ? await assertTrustedSafeRoute(this.pool, projectId)
       : null;
-    const requestedProperties = [
-      ...q.filters.map((filter) => filter.property),
-      ...q.dimensions.map((key) => WEB_DIMENSIONS[key].property),
-    ];
-    await assertTrustedAcquisitionProperties(this.pool, projectId, requestedProperties);
+    await assertTrustedAcquisitionProperties(
+      this.pool,
+      projectId,
+      q.filters.map((filter) => filter.property),
+    );
+    const unavailableDimensions: Record<string, {
+      code: string;
+      reason: string;
+      next_action: string;
+    }> = {};
+    const dimensions: Array<{
+      key: keyof typeof WEB_DIMENSIONS;
+      property: string;
+      missingValue: string;
+      allowedValues?: string[];
+    }> = [];
+    for (const key of q.dimensions) {
+      if (key === 'country') {
+        unavailableDimensions.country = {
+          code: 'web_analytics_dimension_unavailable',
+          reason: 'Country is unavailable until a separately reviewed trusted proxy or MMDB contract is active.',
+          next_action: 'Keep country disabled until the server-side geography contract is reviewed and active.',
+        };
+        continue;
+      }
+      if (key === 'route') {
+        const vocabulary = await browserRouteVocabulary(this.pool, projectId);
+        if (!vocabulary) {
+          unavailableDimensions.route = {
+            code: 'safe_route_unavailable',
+            reason: 'Route analysis requires a trusted canonical finite $route_key vocabulary.',
+            next_action: 'Run setup with the complete finite route vocabulary, then review and trust its definition.',
+          };
+          continue;
+        }
+        dimensions.push({
+          key,
+          ...WEB_DIMENSIONS[key],
+          allowedValues: [...vocabulary],
+        });
+        continue;
+      }
+      if (['source', 'medium', 'campaign'].includes(key)) {
+        try {
+          await assertTrustedAcquisitionProperties(
+            this.pool,
+            projectId,
+            [WEB_DIMENSIONS[key].property],
+          );
+        } catch (error) {
+          if (error instanceof ApiError && error.code === 'acquisition_property_untrusted') {
+            unavailableDimensions[key] = {
+              code: error.code,
+              reason: error.message,
+              next_action: error.hint ?? 'Review and trust the canonical acquisition property.',
+            };
+            continue;
+          }
+          throw error;
+        }
+      }
+      dimensions.push({ key, ...WEB_DIMENSIONS[key] });
+    }
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
     this.assertWebDateRange(from, to);
@@ -550,16 +608,16 @@ export class QueryService {
       event: source.event,
       filters: [
         ...source.filters,
-        ...(routeVocabulary ? [{
+        ...(routeFilterVocabulary ? [{
           property: '$route_key',
           op: 'in' as const,
-          value: [...routeVocabulary],
+          value: [...routeFilterVocabulary],
         }] : []),
         ...q.filters,
       ],
       from,
       to,
-      dimensions: q.dimensions.map((key) => ({ key, ...WEB_DIMENSIONS[key] })),
+      dimensions,
       ...(keyMetric ? { keyMetric } : {}),
     });
     return {
@@ -583,6 +641,7 @@ export class QueryService {
         sampling: null,
         source: 'native',
         truncated_dimensions: result.truncatedDimensions,
+        unavailable_dimensions: unavailableDimensions,
         definitions: {
           visitors: 'Unique query-time resolved actors with canonical browser page views.',
           sessions: 'Distinct (resolved actor, non-empty session_id) pairs with canonical page views.',
@@ -598,9 +657,11 @@ export class QueryService {
           session_span_ms: 'Wall-clock span from the first page view to the latest trusted lifecycle evidence.',
           average_session_duration_ms: 'Average wall-clock session span across lifecycle-complete sessions only; unavailable without complete-session evidence.',
           source: 'Consent-gated session landing attribution; this is not causal campaign credit.',
+          medium: 'Consent-gated session landing medium; this is not causal campaign credit.',
+          campaign: 'Consent-gated session landing campaign; this is not causal campaign credit.',
         },
         accepted_event_accounting: 'Each accepted page.viewed, page.engagement and key-metric event remains one stored event; reads create no synthetic events.',
-        privacy: 'Returns only trusted safe route keys and bounded coarse dimensions. Country is unavailable; raw IP, URL, query, hash, user agent, DOM and text are forbidden.',
+        privacy: 'Returns bounded coarse dimensions and only trusted safe route keys. Unavailable dimensions stay explicit; raw IP, URL, query, hash, user agent, DOM and text are forbidden.',
       },
     };
   }
@@ -615,7 +676,9 @@ export class QueryService {
       ? await this.webKeyMetricSource(projectId, q.key_metric)
       : undefined;
     this.assertWebFilterAllowlist(q.filters);
-    const routeVocabulary = await assertTrustedSafeRoute(this.pool, projectId);
+    const routeVocabulary = q.filters.some((filter) => filter.property === '$route_key')
+      ? await assertTrustedSafeRoute(this.pool, projectId)
+      : null;
     await assertTrustedAcquisitionProperties(
       this.pool,
       projectId,
@@ -630,7 +693,9 @@ export class QueryService {
       event: source.event,
       filters: [
         ...source.filters,
-        { property: '$route_key', op: 'in', value: [...routeVocabulary] },
+        ...(routeVocabulary
+          ? [{ property: '$route_key', op: 'in' as const, value: [...routeVocabulary] }]
+          : []),
         ...q.filters,
       ],
       from,

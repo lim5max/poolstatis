@@ -559,7 +559,11 @@ GET /api/v1/projects/{slug}/data-quality?env=prod&limit=50&since_days=30
 - Формат ошибок единый: `{ "error": { "code": "metric_key_taken", "message": "…", "hint": "…" } }` — `hint` пишется для агента-читателя.
 Для privacy-bounded web traffic используйте Query DSL
 `kind: "web_analytics"` с registry metric key, периодом и bounded dimensions
-`route|device|browser|os|language|timezone|source`. `country` остаётся явно
-unavailable до отдельного review trusted proxy/MMDB lifecycle. Ответ возвращает
-`visitors`, `sessions`, `page_views`, counts и page-view percentages; определения
-и privacy caveats входят в `meta`.
+`route|device|browser|os|language|timezone|source|medium|campaign|country`.
+Недоступный trusted-контракт конкретного разреза не блокирует весь ответ:
+доступные headline-метрики и breakdowns возвращаются как обычно, а пропущенные
+разрезы перечисляются в `meta.unavailable_dimensions` с причиной и следующим
+действием. `country` остаётся недоступным до отдельного review trusted
+proxy/MMDB lifecycle. Фильтры fail-closed, потому что меняют саму считаемую
+популяцию. Ответ возвращает `visitors`, `sessions`, `page_views`, counts и
+page-view percentages; определения и privacy caveats входят в `meta`.

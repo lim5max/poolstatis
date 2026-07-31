@@ -794,13 +794,15 @@ export const webAnalyticsQuerySchema = z.object({
   dimensions: z.array(z.enum([
     'route',
     'source',
+    'medium',
+    'campaign',
     'device',
     'browser',
     'os',
     'language',
     'timezone',
     'country',
-  ])).min(1).max(8).default(['route', 'device', 'browser']),
+  ])).min(1).max(10).default(['route', 'device', 'browser']),
   env: z.string().trim().min(1).max(100).default('prod'),
 }).strict();
 

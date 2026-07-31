@@ -222,6 +222,8 @@ non-causal.
 ```
 query_trend(project, {metric, date_from, date_to?, interval, breakdown?, env?})
 query_web_analytics(project, {metric, date_from, date_to?, dimensions?, filters?, env?})
+  // доступные dimensions возвращаются вместе; недоступные перечислены в
+  // meta.unavailable_dimensions и не скрывают headline traffic
 get_web_overview(project, {metric, key_metric?, date_from, date_to?, dimensions?, filters?, env?})
 list_web_sessions(project, {metric, key_metric?, date_from, date_to?, filters?, limit?, env?})
 get_web_session(project, {metric, key_metric?, actor_id?, session_id, date_from, date_to?, filters?, page_limit?, env?})

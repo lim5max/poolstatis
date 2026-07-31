@@ -173,11 +173,18 @@ and bounded retry, so a conflict cannot leave a partial bundle.
 `get_web_overview` / `query_web_analytics` (Query DSL
 `kind: "web_analytics"`) references the page-view count metric and returns the
 three headline counts, measured engagement coverage and count/page-view
-percentage breakdowns for route, device, browser, OS, language, timezone and
-source. Country requests return an explicit unavailable error.
-`list_web_sessions`, `get_web_session`,
-`get_session_engagement` and `get_page_engagement` expose bounded session/page
-evidence. `get_click_map` and `get_scroll_map` require the exact
+percentage breakdowns for route, device, browser, OS, language, timezone,
+source, medium and campaign. Availability is evaluated per requested
+dimension: missing trusted route, acquisition or country contracts are omitted
+from `breakdowns` and reported in `meta.unavailable_dimensions` without hiding
+headline traffic, engagement or other available dimensions. Filters remain
+fail-closed because they change the population being counted.
+
+`list_web_sessions` does not require route setup and keeps actor-safe session
+summaries available. `get_web_session` remains route-dependent because it
+returns an ordered route sequence. `get_session_engagement` and
+`get_page_engagement` expose bounded session/page evidence. `get_click_map` and
+`get_scroll_map` require the exact
 surface/version/route/device tuple and default to unique-session aggregation.
 No-data reasons, sample size and truncation are explicit.
 If a session/page id is shared by multiple actors, detail tools fail closed

@@ -332,7 +332,8 @@ describe('privacy-safe browser ingest and Web analytics', () => {
       dimensions: ['route'],
     });
     expect(result.status).toBe(200);
-    expect(result.body.summary.page_views).toBe(0);
+    expect(result.body.summary.page_views).toBe(1);
+    expect(result.body.breakdowns.route).toEqual([]);
     expect(JSON.stringify(result.body)).not.toContain('secret-token');
   });
 
@@ -456,10 +457,20 @@ describe('privacy-safe browser ingest and Web analytics', () => {
       date_to: '2026-07-30T10:00:00.000Z',
       dimensions: ['country'],
     });
-    expect(country.status).toBe(400);
+    expect(country.status).toBe(200);
     expect(country.body).toMatchObject({
-      error: {
-        code: 'web_analytics_dimension_unavailable',
+      summary: {
+        visitors: 3,
+        sessions: 3,
+        page_views: 3,
+      },
+      breakdowns: {},
+      meta: {
+        unavailable_dimensions: {
+          country: {
+            code: 'web_analytics_dimension_unavailable',
+          },
+        },
       },
     });
 
@@ -489,7 +500,7 @@ describe('privacy-safe browser ingest and Web analytics', () => {
     expect(ambiguous.body.error.code).toBe('web_session_actor_ambiguous');
   });
 
-  it('fails route analysis closed until the route key is trusted', async () => {
+  it('keeps traffic and session summaries available while route analysis is unavailable', async () => {
     await api(env, env.secretToken, 'PATCH', `${project()}/properties/event/$route_key`, {
       status: 'proposed',
     });
@@ -509,10 +520,43 @@ describe('privacy-safe browser ingest and Web analytics', () => {
       kind: 'web_analytics',
       metric: 'web_page_views',
       date_from: '-7d',
-      dimensions: ['route'],
+      dimensions: ['route', 'device'],
     });
-    expect(result.status).toBe(400);
-    expect(result.body.error.code).toBe('safe_route_unavailable');
+    expect(result.status).toBe(200);
+    expect(result.body.summary.page_views).toBeGreaterThan(0);
+    expect(result.body.breakdowns).not.toHaveProperty('route');
+    expect(result.body.breakdowns).toHaveProperty('device');
+    expect(result.body.meta.unavailable_dimensions.route).toMatchObject({
+      code: 'safe_route_unavailable',
+    });
+    const sessions = await api(env, env.secretToken, 'POST', `${project()}/query`, {
+      kind: 'web_sessions',
+      metric: 'web_page_views',
+      date_from: '-7d',
+      limit: 10,
+    });
+    expect(sessions.status).toBe(200);
+    expect(sessions.body.sessions.length).toBeGreaterThan(0);
+    const session = sessions.body.sessions[0];
+    const detail = await api(env, env.secretToken, 'POST', `${project()}/query`, {
+      kind: 'web_session',
+      metric: 'web_page_views',
+      date_from: '-7d',
+      actor_id: session.actor_id,
+      session_id: session.session_id,
+      page_limit: 10,
+    });
+    expect(detail.status).toBe(400);
+    expect(detail.body.error.code).toBe('safe_route_unavailable');
+    const filtered = await api(env, env.secretToken, 'POST', `${project()}/query`, {
+      kind: 'web_analytics',
+      metric: 'web_page_views',
+      date_from: '-7d',
+      dimensions: ['device'],
+      filters: [{ property: '$route_key', op: 'eq', value: 'home' }],
+    });
+    expect(filtered.status).toBe(400);
+    expect(filtered.body.error.code).toBe('safe_route_unavailable');
     await api(env, env.secretToken, 'PATCH', `${project()}/properties/event/$route_key`, {
       status: 'trusted',
     });
@@ -529,6 +573,18 @@ describe('privacy-safe browser ingest and Web analytics', () => {
     });
     expect(result.status).toBe(200);
     expect(result.body.breakdowns).not.toHaveProperty('source');
+    const explicit = await api(env, env.secretToken, 'POST', `${project()}/query`, {
+      kind: 'web_analytics',
+      metric: 'web_page_views',
+      date_from: '-1d',
+      dimensions: ['source', 'device'],
+    });
+    expect(explicit.status).toBe(200);
+    expect(explicit.body.breakdowns).not.toHaveProperty('source');
+    expect(explicit.body.breakdowns).toHaveProperty('device');
+    expect(explicit.body.meta.unavailable_dimensions.source).toMatchObject({
+      code: 'acquisition_property_untrusted',
+    });
     await api(env, env.secretToken, 'PATCH', `${project()}/properties/event/$utm_source`, {
       status: 'trusted',
     });

@@ -71,7 +71,12 @@ export interface WebAnalyticsQuery {
   filters: PropertyFilter[];
   from: Date;
   to: Date;
-  dimensions: Array<{ key: string; property: string; missingValue: string }>;
+  dimensions: Array<{
+    key: string;
+    property: string;
+    missingValue: string;
+    allowedValues?: string[];
+  }>;
   keyMetric?: FunnelStepQuery;
 }
 

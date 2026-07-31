@@ -141,15 +141,28 @@ export function Measurement() {
   </div>;
 }
 
-const webDimensions: WebAnalyticsDimension[] = ['route', 'device', 'browser', 'os', 'language', 'timezone', 'source'];
+const webDimensions: WebAnalyticsDimension[] = [
+  'source',
+  'campaign',
+  'medium',
+  'route',
+  'device',
+  'browser',
+  'os',
+  'language',
+  'timezone',
+];
 const webDimensionLabels: Record<WebAnalyticsDimension, string> = {
   route: 'Route',
+  source: 'Source',
+  medium: 'Medium',
+  campaign: 'Campaign',
   device: 'Device',
   browser: 'Browser',
   os: 'OS',
   language: 'Language',
   timezone: 'Timezone',
-  source: 'Source',
+  country: 'Country',
 };
 const collapsedBreakdownRows = 8;
 const maxBreakdownRows = 50;
@@ -238,7 +251,12 @@ function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: 
     {result && result.summary.page_views === 0 && <div className="mt-4"><EmptyState headline="No page views in this window" lead="no zero was estimated; verify consent, SDK capture and the active page-view metric" /></div>}
     {result && result.summary.page_views > 0 && <>
       <WebAnalyticsResults result={result} />
-      <WebSessionsExplorer metric={metric!.key} period={period} env={env} />
+      <WebSessionsExplorer
+        metric={metric!.key}
+        period={period}
+        env={env}
+        routeAvailable={!result.meta.unavailable_dimensions?.route}
+      />
     </>}
   </Panel>;
 }
@@ -311,7 +329,12 @@ function WebEngagementSummary({ result }: { result: WebAnalyticsResponse }) {
   </section>;
 }
 
-function WebSessionsExplorer({ metric, period, env }: { metric: string; period: string; env: string }) {
+function WebSessionsExplorer({ metric, period, env, routeAvailable }: {
+  metric: string;
+  period: string;
+  env: string;
+  routeAvailable: boolean;
+}) {
   const { client, project } = useStore();
   const [sessions, setSessions] = useState<WebSessionsResponse | null>(null);
   const [detail, setDetail] = useState<WebSessionResponse | null>(null);
@@ -363,7 +386,7 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
     <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
       <div>
         <h3 id="web-sessions-title" className="text-sm font-medium">Session engagement</h3>
-        <p className="mt-0.5 text-xs text-muted-foreground">Browser-tab sessions with trusted finite route keys and timing evidence — not video replay.</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">Browser-tab sessions with bounded timing evidence — not video replay.</p>
       </div>
       <Button variant="outline" size="sm" onClick={load} disabled={busy}>
         {busy && <Loader2 className="size-4 animate-spin" />}Load recent sessions
@@ -392,16 +415,20 @@ function WebSessionsExplorer({ metric, period, env }: { metric: string; period: 
                 <Badge variant="outline">{session.complete ? 'Complete' : 'Incomplete'}</Badge>
               </div></TableCell>
               <TableCell className="text-right">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-expanded={selected}
-                  aria-controls={detailId}
-                  onClick={() => selected ? closeDetail() : inspect(session.session_id, session.actor_id)}
-                >
-                  {detailBusy && selected && <Loader2 className="size-4 animate-spin" />}
-                  {selected ? 'Close' : 'Inspect'}
-                </Button>
+                {routeAvailable ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-expanded={selected}
+                    aria-controls={detailId}
+                    onClick={() => selected ? closeDetail() : inspect(session.session_id, session.actor_id)}
+                  >
+                    {detailBusy && selected && <Loader2 className="size-4 animate-spin" />}
+                    {selected ? 'Close' : 'Inspect'}
+                  </Button>
+                ) : (
+                  <span className="whitespace-nowrap text-xs text-muted-foreground">Route setup required</span>
+                )}
               </TableCell>
             </TableRow>
             {selected && <TableRow>
@@ -494,6 +521,7 @@ function RankedDimensionExplorer({
   const resultLabel = expanded
     ? `${visibleRows.length} of ${rows.length} returned groups`
     : `${Math.min(collapsedBreakdownRows, rows.length)} of ${rows.length} returned groups`;
+  const unavailable = result.meta.unavailable_dimensions?.[dimension];
 
   return <section className="min-w-0 overflow-hidden rounded-md border" aria-labelledby="web-breakdown-title">
     <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
@@ -514,12 +542,19 @@ function RankedDimensionExplorer({
           <SelectContent>{webDimensions.map((item) => <SelectItem key={item} value={item}>{webDimensionLabels[item]}</SelectItem>)}</SelectContent>
         </Select>
       </div>
-      <div className="hidden min-w-0 border-b px-3 pt-2 sm:block">
-        <TabsList variant="line" aria-label="Breakdown dimension" className="grid h-10 w-full grid-cols-7">
+      <div className="hidden min-w-0 overflow-x-auto border-b px-3 pt-2 sm:block">
+        <TabsList variant="line" aria-label="Breakdown dimension" className="h-10 w-max">
           {webDimensions.map((item) => <TabsTrigger key={item} value={item}>{webDimensionLabels[item]}</TabsTrigger>)}
         </TabsList>
       </div>
       <TabsContent value={dimension} className="mt-0">
+      {unavailable ? (
+        <div className="px-4 py-8 text-center" role="status">
+          <div className="text-sm font-medium">{webDimensionLabels[dimension]} unavailable</div>
+          <p className="mx-auto mt-1 max-w-lg text-xs text-muted-foreground">{unavailable.reason}</p>
+          <p className="mx-auto mt-2 max-w-lg text-xs text-muted-foreground">{unavailable.next_action}</p>
+        </div>
+      ) : <>
       {expanded && rows.length > 12 && <div className="border-b p-3">
       <div className="relative">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -570,6 +605,7 @@ function RankedDimensionExplorer({
         if (expanded) onSearchChange('');
       }}>{expanded ? 'Show top 8' : 'View all'}</Button>}
     </div>
+      </>}
       </TabsContent>
     </Tabs>
   </section>;
