@@ -302,7 +302,7 @@ Proposed API:
 import { createWebClient } from "@poolstatis/sdk/web";
 
 const ps = createWebClient({
-  url: "https://api.poolstatis.com",
+  url: "https://api.poolstatis.xyz",
   ingestKey: "pk_...",
   distinctId: () => user?.id ?? anonymousId(),
   web: {

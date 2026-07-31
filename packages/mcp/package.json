@@ -1,6 +1,6 @@
 {
   "name": "@poolstatis/mcp",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Official stdio MCP server for Poolstatis agent-native product analytics",
   "license": "PolyForm-Shield-1.0.0",
   "type": "module",

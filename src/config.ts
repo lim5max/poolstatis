@@ -89,7 +89,7 @@ export function assertHostedApiCredentialBoundary(config: Config): void {
   }
 }
 
-export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.4.0';
+export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.5.0';
 const LOCAL_MCP_ARGS = ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'];
 
 function parseArgs(raw: string | undefined, packageStatus: 'published' | 'publish_pending'): string[] {
@@ -353,7 +353,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databasePoolMax,
     port: env.PORT ? Number(env.PORT) : 3300,
     host: env.HOST ?? '127.0.0.1',
-    publicUrl: (env.POOLSTATIS_PUBLIC_URL ?? 'https://api.poolstatis.com').replace(/\/$/, ''),
+    publicUrl: (env.POOLSTATIS_PUBLIC_URL ?? 'https://api.poolstatis.xyz').replace(/\/$/, ''),
     connectorEncryptionKey: env.POOLSTATIS_CONNECTOR_ENCRYPTION_KEY?.trim() || null,
     outboundPolicy: { allowLocalHttp: booleanValue(env.OUTBOUND_ALLOW_LOCAL_HTTP, false, 'OUTBOUND_ALLOW_LOCAL_HTTP') },
     experienceArtifactDir: env.POOLSTATIS_EXPERIENCE_ARTIFACT_DIR?.trim() || './data/experience-artifacts',

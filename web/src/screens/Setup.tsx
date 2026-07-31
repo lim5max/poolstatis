@@ -47,7 +47,7 @@ export function Setup() {
   const publicUrl =
     (import.meta.env.VITE_POOLSTATIS_PUBLIC_URL as string | undefined) ||
     (import.meta.env.VITE_POOLSTATIS_API_URL as string | undefined) ||
-    'https://api.poolstatis.com';
+    'https://api.poolstatis.xyz';
   const serverUrl = baseUrl || publicUrl;
   const slug = project ?? 'your-project';
   const std = useAsync(
