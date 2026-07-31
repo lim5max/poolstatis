@@ -11,6 +11,20 @@ jobs:
   publish:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: poolsatis
+          POSTGRES_PASSWORD: poolsatis
+          POSTGRES_DB: poolsatis
+        ports:
+          - 5444:5432
+        options: >-
+          --health-cmd "pg_isready -U poolsatis"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -25,6 +39,10 @@ jobs:
         run: |
           mkdir -p .release
           MCP_VERSION=$(node -p "require('./packages/mcp/package.json').version")
+          if npm view "@poolstatis/mcp@$MCP_VERSION" version >/dev/null 2>&1; then
+            echo "@poolstatis/mcp@$MCP_VERSION already exists; refusing to overwrite"
+            exit 1
+          fi
           MCP_TARBALL="$PWD/.release/poolstatis-mcp-$MCP_VERSION.tgz"
           npm pack --json --pack-destination .release ./packages/mcp > .release/pack-output.txt
           POOLSTATIS_MCP_TARBALL="$MCP_TARBALL" \

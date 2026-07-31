@@ -1,6 +1,6 @@
 import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage,
-  ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
+  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
 import type { OperationalQueryInput, OperationalQueryResult, PersonResult } from '../analysis/operations';
@@ -569,6 +569,60 @@ export class PoolstatisClient {
     return this.req<PersonResult>(
       'GET',
       `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinctId)}?${query}`,
+    );
+  }
+
+  previewBackfill(slug: string, body: { env: string; events: unknown[] }) {
+    return this.req<BackfillPreview>('POST', `/api/v1/projects/${slug}/events/backfill/preview`, body);
+  }
+
+  commitBackfill(slug: string, body: {
+    env: string;
+    batch_id: string;
+    reason: string;
+    expected_payload_sha256: string;
+    events: unknown[];
+  }) {
+    return this.req<{ batch: BackfillRecord; inserted: number; duplicate?: boolean }>(
+      'POST',
+      `/api/v1/projects/${slug}/events/backfill`,
+      body,
+    );
+  }
+
+  backfills(slug: string, env: string, limit = 50) {
+    return this.req<{ backfills: BackfillRecord[] }>(
+      'GET',
+      `/api/v1/projects/${slug}/events/backfills?env=${encodeURIComponent(env)}&limit=${limit}`,
+    ).then((response) => response.backfills);
+  }
+
+  eventHistory(slug: string, eventId: string, env: string) {
+    return this.req<{ event: SampleEvent; revisions: EventRevision[] }>(
+      'GET',
+      `/api/v1/projects/${slug}/events/${encodeURIComponent(eventId)}?env=${encodeURIComponent(env)}`,
+    );
+  }
+
+  previewEventRevision(slug: string, eventId: string, body: { env: string; patch: EventRevisionPatch }) {
+    return this.req<EventRevisionPreview>(
+      'POST',
+      `/api/v1/projects/${slug}/events/${encodeURIComponent(eventId)}/revisions/preview`,
+      body,
+    );
+  }
+
+  commitEventRevision(slug: string, eventId: string, body: {
+    env: string;
+    patch: EventRevisionPatch;
+    expected_revision: number;
+    expected_preview_sha256: string;
+    reason: string;
+  }) {
+    return this.req<{ revision: EventRevision }>(
+      'POST',
+      `/api/v1/projects/${slug}/events/${encodeURIComponent(eventId)}/revisions`,
+      body,
     );
   }
 

@@ -15,6 +15,8 @@ export const PENDING_ORGANIZATION_MUTATION_EXEMPTIONS = Object.freeze([
   'POST /api/v1/projects/:slug/contracts/diff',
   'POST /api/v1/projects/:slug/contracts/similar',
   'POST /api/v1/projects/:slug/onboarding/observe-agent',
+  'POST /api/v1/projects/:slug/events/backfill/preview',
+  'POST /api/v1/projects/:slug/events/:eventId/revisions/preview',
 ] as const);
 
 const EXEMPTIONS = new Set<string>(PENDING_ORGANIZATION_MUTATION_EXEMPTIONS);

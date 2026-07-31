@@ -5,7 +5,7 @@ Thin stdio MCP runner for a Poolstatis API instance.
 ```sh
 POOLSTATIS_URL=https://api.example.com \
 POOLSTATIS_TOKEN=pt_your_token \
-pnpm dlx @poolstatis/mcp@0.2.0
+pnpm dlx @poolstatis/mcp@0.4.0
 ```
 
 `POOLSTATIS_TOKEN` must be a `pt_` personal token or project-scoped `sk_` key.

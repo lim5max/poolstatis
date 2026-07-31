@@ -782,6 +782,7 @@ export interface DecisionHistoryItem {
 }
 
 export interface SampleEvent {
+  id: string;
   event: string;
   timestamp: string;
   distinct_id: string;
@@ -789,6 +790,66 @@ export interface SampleEvent {
   properties: Record<string, unknown>;
   registered: boolean;
   env: string;
+  revision: number;
+  origin: 'live' | 'backfill';
+  backfill_batch_id: string | null;
+  ingested_at: string;
+  editable: boolean;
+}
+
+export interface EventRevisionPatch {
+  event?: string;
+  timestamp?: string;
+  distinct_id?: string;
+  session_id?: string | null;
+  set_properties?: Record<string, unknown>;
+  unset_properties?: string[];
+}
+
+export interface EventRevisionPreview {
+  event_id: string;
+  expected_revision: number;
+  preview_sha256: string;
+  changed_fields: string[];
+  before: SampleEvent;
+  after: SampleEvent;
+}
+
+export interface EventRevision {
+  id: string;
+  event_id: string;
+  revision: number;
+  actor: string;
+  reason: string;
+  previous_snapshot: SampleEvent;
+  snapshot: SampleEvent;
+  created_at: string;
+}
+
+export interface BackfillPreview {
+  valid: boolean;
+  payload_sha256: string | null;
+  event_count: number;
+  registered_count: number;
+  unregistered_count: number;
+  min_timestamp: string | null;
+  max_timestamp: string | null;
+  errors: Array<{ index: number; message: string }>;
+}
+
+export interface BackfillRecord {
+  id: string;
+  env: string;
+  batch_id: string;
+  payload_sha256: string;
+  reason: string;
+  actor: string;
+  event_count: number;
+  registered_count: number;
+  unregistered_count: number;
+  min_timestamp: string;
+  max_timestamp: string;
+  created_at: string;
 }
 
 export interface EntityRow {

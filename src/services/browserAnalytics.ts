@@ -529,3 +529,45 @@ function boundedInteger(value: unknown, min: number, max: number): boolean {
     && value >= min
     && value <= max;
 }
+
+function validateLegacyPagePath(value: unknown): string | null {
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > 512
+    || !value.startsWith('/')
+    || value.includes('?')
+    || value.includes('#')
+  ) {
+    return 'path must be a pathname of at most 512 characters, without query string or fragment';
+  }
+  return null;
+}
+
+/**
+ * Compatibility entrypoint used by audited event management. The current
+ * route-key contract intentionally has no inferred geographic dimension.
+ */
+export function validateAndEnrichBrowserProperties(
+  event: string,
+  properties: Record<string, unknown>,
+  sessionId: string | undefined,
+  country: string,
+  options: {
+    historical?: boolean;
+    safeRouteKeys?: ReadonlySet<string> | null;
+  } = {},
+): string | null {
+  void country;
+  void options.historical;
+  if (event === 'page.viewed' && properties.path !== undefined) {
+    const pathError = validateLegacyPagePath(properties.path);
+    if (pathError) return pathError;
+  }
+  return validateBrowserAnalyticsProperties(
+    event,
+    properties,
+    sessionId,
+    options.safeRouteKeys,
+  );
+}

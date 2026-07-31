@@ -4,6 +4,8 @@ import { assertHostedDatabaseRoleSeparation } from '../services/accounts.js';
 import { ensureRetentionIndexes } from '../services/retentionIndexes.js';
 import {
   ensureRollingEventPartitions,
+  ensureHistoricalEventPartitions,
+  historicalEventPartitionsReady,
   rollingEventPartitionsReady,
 } from '../stores/postgresEventStore.js';
 
@@ -32,8 +34,18 @@ if (process.argv.includes('--help')) {
     await migrationPool.query(
       'SELECT poolstatis_prepare_metric_taxonomy_role_grants()',
     );
-    await ensureRollingEventPartitions(migrationPool, new Date(), 12);
-    if (!await rollingEventPartitionsReady(migrationPool, new Date(), 12)) {
+    await migrationPool.query(
+      'SELECT poolstatis_prepare_event_management_role_grants()',
+    );
+    const now = new Date();
+    const retention = await migrationPool.query<{ months: number }>(
+      'SELECT COALESCE(max(retention_months), 12)::int AS months FROM projects',
+    );
+    const retentionMonths = Number(retention.rows[0]?.months ?? 12);
+    await ensureRollingEventPartitions(migrationPool, now, 12);
+    await ensureHistoricalEventPartitions(migrationPool, now, retentionMonths);
+    if (!await rollingEventPartitionsReady(migrationPool, now, 12)
+        || !await historicalEventPartitionsReady(migrationPool, now, retentionMonths)) {
       throw new Error('rolling event partitions are not ready');
     }
     const indexes = await ensureRetentionIndexes(migrationPool);
@@ -43,6 +55,7 @@ if (process.argv.includes('--help')) {
       prepared: true,
       migrations_applied: applied,
       partition_months_ahead: 12,
+      partition_months_behind: retentionMonths,
       indexes_ready: true,
     }));
   } finally {

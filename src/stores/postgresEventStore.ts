@@ -1,6 +1,11 @@
 import type pg from 'pg';
 import type {
   AppendResult,
+  BackfillRecord,
+  BackfillResult,
+  EventRevisionInput,
+  EventRevisionRecord,
+  HistoricalBackfill,
   UsageWarning,
   ActorSummary,
   ActorActivityQuery,
@@ -58,6 +63,7 @@ import { recordUsageWarnings, type PendingUsageWarning } from '../services/usage
 
 const IDEMPOTENCY_RECLAIM_INTERVAL = '35 days';
 const MAX_METER_QUANTITY = BigInt(Number.MAX_SAFE_INTEGER);
+const PURGE_BATCH_SIZE = 1_000;
 
 interface MeteredInsertResult {
   inserted: number;
@@ -221,6 +227,272 @@ export class PostgresEventStore implements EventStore {
     }
   }
 
+  async backfill(batch: HistoricalBackfill): Promise<BackfillResult> {
+    if (this.managePartitions) {
+      await this.ensurePartitions(batch.events.map((event) => event.timestamp));
+    }
+    const client = await this.pool.connect();
+    let warnings: PendingUsageWarning[] = [];
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`backfill:${batch.projectId}:${batch.env}:${batch.batchId}`],
+      );
+      const existing = await client.query(
+        `SELECT id, env, batch_id, payload_sha256, reason, actor, event_count,
+                registered_count, unregistered_count,
+                min_timestamp, max_timestamp, created_at
+         FROM event_backfill_batches
+         WHERE project_id = $1 AND env = $2 AND batch_id = $3`,
+        [batch.projectId, batch.env, batch.batchId],
+      );
+      if (existing.rows[0]) {
+        if (existing.rows[0].payload_sha256 !== batch.payloadSha256) {
+          throw new ApiError(
+            409,
+            'backfill_batch_conflict',
+            'this batch_id is already bound to a different historical payload',
+            'use the original payload for an exact retry or choose a new batch_id',
+          );
+        }
+        await client.query('COMMIT');
+        return { batch: toBackfillRecord(existing.rows[0]), inserted: 0, duplicate: true };
+      }
+
+      const backfillId = randomUUID();
+      const materialized = batch.events.map((event) => ({
+        ...event,
+        id: event.id ?? randomUUID(),
+        origin: 'backfill' as const,
+        backfillBatchId: backfillId,
+        revision: 1,
+      }));
+      const [group] = await this.resolveMeteredGroups(client, [{
+        projectId: batch.projectId,
+        env: batch.env,
+        events: materialized,
+      }]);
+      if (group?.orgId && hasBillableEvents(materialized)) {
+        await this.acquireUsageConfigLocks(client, [group.orgId]);
+      }
+      const periodStart = await this.currentPeriodStart(client);
+      const metered = await this.insertMetered(
+        client,
+        materialized,
+        `backfill:${batch.projectId}:${batch.env}:${batch.batchId}`,
+        group?.orgId ? { orgId: group.orgId, periodStart } : undefined,
+      );
+      warnings = metered.warnings;
+      const timestamps = materialized.map((event) => event.timestamp.getTime());
+      const registeredCount = materialized.filter((event) => event.registered).length;
+      const recorded = await client.query(
+        `INSERT INTO event_backfill_batches (
+           id, project_id, env, batch_id, payload_sha256, reason, actor,
+           event_count, registered_count, unregistered_count, min_timestamp, max_timestamp
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id, env, batch_id, payload_sha256, reason, actor, event_count,
+                   registered_count, unregistered_count,
+                   min_timestamp, max_timestamp, created_at`,
+        [
+          backfillId,
+          batch.projectId,
+          batch.env,
+          batch.batchId,
+          batch.payloadSha256,
+          batch.reason,
+          batch.actor,
+          metered.inserted,
+          registeredCount,
+          materialized.length - registeredCount,
+          new Date(Math.min(...timestamps)),
+          new Date(Math.max(...timestamps)),
+        ],
+      );
+      await client.query('COMMIT');
+      await recordUsageWarnings(this.pool, warnings).catch(() => {});
+      return {
+        batch: toBackfillRecord(recorded.rows[0]),
+        inserted: metered.inserted,
+        ...(warnings.length > 0 ? { warnings: warnings.map(toUsageWarning) } : {}),
+      };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getEvent(projectId: string, env: string, eventId: string): Promise<RawEvent | null> {
+    const { rows } = await this.pool.query(
+      `SELECT id, event, "timestamp", distinct_id, session_id, properties, registered,
+              env, revision, origin, backfill_batch_id, ingested_at, is_system, event_source
+       FROM events
+       WHERE project_id = $1 AND env = $2 AND id = $3
+       LIMIT 2`,
+      [projectId, env, eventId],
+    );
+    if (rows.length > 1) {
+      throw new ApiError(409, 'event_id_collision', 'multiple event rows share this identifier');
+    }
+    return rows[0] ? toRawEvent(rows[0]) : null;
+  }
+
+  async reviseEvent(input: EventRevisionInput): Promise<EventRevisionRecord> {
+    if (this.managePartitions) await this.ensurePartitions([input.event.timestamp]);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query(
+        `SELECT id, event, "timestamp", distinct_id, session_id, properties, registered,
+                env, revision, origin, backfill_batch_id, ingested_at, is_system, event_source
+         FROM events
+         WHERE project_id = $1 AND env = $2 AND id = $3
+         FOR UPDATE`,
+        [input.projectId, input.env, input.eventId],
+      );
+      if (current.rows.length === 0) {
+        throw new ApiError(404, 'event_not_found', 'event not found');
+      }
+      if (current.rows.length > 1) {
+        throw new ApiError(409, 'event_id_collision', 'multiple event rows share this identifier');
+      }
+      const row = current.rows[0];
+      if (row.is_system || row.event_source !== 'ingest') {
+        throw new ApiError(
+          409,
+          'event_not_editable',
+          'system and Browser Experience events cannot be revised',
+          'correct the producing integration and keep typed platform evidence immutable',
+        );
+      }
+      if (Number(row.revision) !== input.expectedRevision) {
+        throw new ApiError(
+          409,
+          'event_revision_conflict',
+          `event is now at revision ${row.revision}`,
+          'read the event again, review the current values, and preview a new correction',
+          { current_revision: Number(row.revision) },
+        );
+      }
+      const previous = toRawEvent(row);
+      const updated = await client.query(
+        `UPDATE events
+         SET event = $4,
+             "timestamp" = $5,
+             distinct_id = $6,
+             session_id = $7,
+             properties = $8,
+             registered = $9,
+             revision = revision + 1
+         WHERE project_id = $1 AND env = $2 AND id = $3 AND revision = $10
+         RETURNING id, event, "timestamp", distinct_id, session_id, properties,
+                   registered, env, revision, origin, backfill_batch_id, ingested_at,
+                   is_system, event_source`,
+        [
+          input.projectId,
+          input.env,
+          input.eventId,
+          input.event.event,
+          input.event.timestamp,
+          input.event.distinctId,
+          input.event.sessionId,
+          JSON.stringify(input.event.properties),
+          input.event.registered,
+          input.expectedRevision,
+        ],
+      );
+      if (!updated.rows[0]) {
+        throw new ApiError(409, 'event_revision_conflict', 'event changed during correction');
+      }
+      const snapshot = toRawEvent(updated.rows[0]);
+      const audit = await client.query(
+        `INSERT INTO event_revisions (
+           event_id, project_id, env, revision, actor, reason,
+           previous_snapshot, snapshot
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, event_id, revision, actor, reason,
+                   previous_snapshot, snapshot, created_at`,
+        [
+          input.eventId,
+          input.projectId,
+          input.env,
+          snapshot.revision,
+          input.actor,
+          input.reason,
+          JSON.stringify(previous),
+          JSON.stringify(snapshot),
+        ],
+      );
+      await client.query('COMMIT');
+      return toEventRevisionRecord(audit.rows[0]);
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async eventHistory(
+    projectId: string,
+    env: string,
+    eventId: string,
+  ): Promise<{ event: RawEvent; revisions: EventRevisionRecord[] } | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const current = await client.query(
+        `SELECT id, event, "timestamp", distinct_id, session_id, properties, registered,
+                env, revision, origin, backfill_batch_id, ingested_at, is_system, event_source
+         FROM events
+         WHERE project_id = $1 AND env = $2 AND id = $3
+         LIMIT 2`,
+        [projectId, env, eventId],
+      );
+      if (current.rows.length > 1) {
+        throw new ApiError(409, 'event_id_collision', 'multiple event rows share this identifier');
+      }
+      if (!current.rows[0]) {
+        await client.query('COMMIT');
+        return null;
+      }
+      const history = await client.query(
+        `SELECT id, event_id, revision, actor, reason,
+                previous_snapshot, snapshot, created_at
+         FROM event_revisions
+         WHERE project_id = $1 AND env = $2 AND event_id = $3
+         ORDER BY revision`,
+        [projectId, env, eventId],
+      );
+      await client.query('COMMIT');
+      return {
+        event: toRawEvent(current.rows[0]),
+        revisions: history.rows.map(toEventRevisionRecord),
+      };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listBackfills(projectId: string, env: string, limit: number): Promise<BackfillRecord[]> {
+    const { rows } = await this.pool.query(
+      `SELECT id, env, batch_id, payload_sha256, reason, actor, event_count,
+              registered_count, unregistered_count,
+              min_timestamp, max_timestamp, created_at
+       FROM event_backfill_batches
+       WHERE project_id = $1 AND env = $2
+       ORDER BY created_at DESC
+       LIMIT $3`,
+      [projectId, env, limit],
+    );
+    return rows.map(toBackfillRecord);
+  }
+
   private async insertMetered(
     client: pg.PoolClient,
     events: StorableEvent[],
@@ -321,15 +593,16 @@ export class PostgresEventStore implements EventStore {
     const params: unknown[] = [];
     const rows = events.map((e) => {
       params.push(
-        e.projectId, e.env, e.event, e.timestamp, e.distinctId,
+        e.id ?? randomUUID(), e.projectId, e.env, e.event, e.timestamp, e.distinctId,
         e.sessionId, JSON.stringify(e.properties), e.registered, e.isSystem ?? false,
         e.eventSource ?? (e.isSystem ? 'system' : 'ingest'),
+        e.origin ?? 'live', e.backfillBatchId ?? null, e.revision ?? 1,
       );
-      const base = params.length - 10;
-      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
+      const base = params.length - 14;
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13}, $${base + 14})`;
     });
     const result = await client.query(
-      `INSERT INTO events (project_id, env, event, "timestamp", distinct_id, session_id, properties, registered, is_system, event_source)
+      `INSERT INTO events (id, project_id, env, event, "timestamp", distinct_id, session_id, properties, registered, is_system, event_source, origin, backfill_batch_id, revision)
        VALUES ${rows.join(', ')}`,
       params,
     );
@@ -1355,18 +1628,126 @@ export class PostgresEventStore implements EventStore {
   }
 
   async purge(projectId: string, env?: string, distinctId?: string): Promise<number> {
-    const params: unknown[] = [projectId];
-    let sql = 'DELETE FROM events WHERE project_id = $1';
+    const candidateParams: unknown[] = [projectId];
+    const currentWhere = ['e.project_id = $1'];
+    const auditWhere = ['r.project_id = $1'];
     if (env !== undefined) {
-      params.push(env);
-      sql += ` AND env = $${params.length}`;
+      candidateParams.push(env);
+      currentWhere.push(`e.env = $${candidateParams.length}`);
+      auditWhere.push(`r.env = $${candidateParams.length}`);
     }
     if (distinctId !== undefined) {
-      params.push(distinctId);
-      sql += ` AND distinct_id = $${params.length}`;
+      candidateParams.push(distinctId);
+      currentWhere.push(`e.distinct_id = $${candidateParams.length}`);
+      auditWhere.push(
+        `(r.previous_snapshot->>'distinct_id' = $${candidateParams.length}
+          OR r.snapshot->>'distinct_id' = $${candidateParams.length})`,
+      );
     }
-    const { rowCount } = await this.pool.query(sql, params);
-    return rowCount ?? 0;
+    const client = await this.pool.connect();
+    let totalDeleted = 0;
+    try {
+      await client.query(
+        `SELECT set_config(
+           'poolstatis.purge_started_at',
+           clock_timestamp()::text,
+           false
+         )`,
+      );
+      const fenceSql = "current_setting('poolstatis.purge_started_at')::timestamptz";
+      currentWhere.push(`e.ingested_at <= ${fenceSql}`);
+      auditWhere.push(
+        `(e.ingested_at <= ${fenceSql}
+          OR (e.id IS NULL AND r.created_at <= ${fenceSql}))`,
+      );
+      while (true) {
+        await client.query('BEGIN');
+        try {
+          const batchParams = [...candidateParams, PURGE_BATCH_SIZE];
+          const limitParam = `$${batchParams.length}`;
+          const candidates = await client.query<{ event_id: string }>(
+            `SELECT event_id
+             FROM (
+               (SELECT e.id AS event_id
+                FROM events AS e
+                WHERE ${currentWhere.join(' AND ')}
+                LIMIT ${limitParam})
+               UNION
+               (SELECT r.event_id
+                FROM event_revisions AS r
+                LEFT JOIN events AS e
+                  ON e.project_id = r.project_id
+                 AND e.env = r.env
+                 AND e.id = r.event_id
+                WHERE ${auditWhere.join(' AND ')}
+                LIMIT ${limitParam})
+             ) AS candidate_batch
+             LIMIT ${limitParam}`,
+            batchParams,
+          );
+          const candidateIds = candidates.rows.map((row) => row.event_id);
+          if (candidateIds.length === 0) {
+            await client.query('COMMIT');
+            return totalDeleted;
+          }
+
+          const scopedParams: unknown[] = [projectId];
+          const scopedWhere = ['project_id = $1'];
+          if (env !== undefined) {
+            scopedParams.push(env);
+            scopedWhere.push(`env = $${scopedParams.length}`);
+          }
+          scopedParams.push(candidateIds);
+          const idParam = `$${scopedParams.length}`;
+          const locked = await client.query<{ id: string }>(
+            `SELECT id
+             FROM events
+             WHERE ${scopedWhere.join(' AND ')}
+               AND id = ANY(${idParam}::uuid[])
+             FOR UPDATE`,
+            scopedParams,
+          );
+
+          await client.query("SELECT set_config('poolstatis.event_purge', 'on', true)");
+          // These statements run after the event locks are acquired. Under READ
+          // COMMITTED they see revisions committed by a writer that held the
+          // lock first, so purge cannot strand a newer audit snapshot.
+          await client.query(
+            `DELETE FROM event_revisions
+             WHERE ${scopedWhere.join(' AND ')}
+               AND event_id = ANY(${idParam}::uuid[])`,
+            scopedParams,
+          );
+          const lockedIds = locked.rows.map((row) => row.id);
+          if (lockedIds.length > 0) {
+            const deleteParams: unknown[] = [projectId];
+            const deleteWhere = ['project_id = $1'];
+            if (env !== undefined) {
+              deleteParams.push(env);
+              deleteWhere.push(`env = $${deleteParams.length}`);
+            }
+            deleteParams.push(lockedIds);
+            const result = await client.query(
+              `DELETE FROM events
+               WHERE ${deleteWhere.join(' AND ')}
+                 AND id = ANY($${deleteParams.length}::uuid[])`,
+              deleteParams,
+            );
+            totalDeleted += result.rowCount ?? 0;
+          }
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw error;
+        }
+      }
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      await client.query('RESET poolstatis.purge_started_at').catch(() => {});
+      client.release();
+    }
   }
 
   async sample(q: SampleQuery): Promise<RawEvent[]> {
@@ -1401,19 +1782,12 @@ export class PostgresEventStore implements EventStore {
     }
     params.push(q.limit);
     const sql = `
-      SELECT event, "timestamp", distinct_id, session_id, properties, registered, env
+      SELECT id, event, "timestamp", distinct_id, session_id, properties, registered,
+             env, revision, origin, backfill_batch_id, ingested_at, is_system, event_source
       FROM events WHERE ${where.join(' AND ')}
       ORDER BY ingested_at DESC LIMIT $${params.length}`;
     const { rows } = await this.pool.query(sql, params);
-    return rows.map((r) => ({
-      event: r.event,
-      timestamp: toIso(r.timestamp),
-      distinct_id: r.distinct_id,
-      session_id: r.session_id,
-      properties: r.properties,
-      registered: r.registered,
-      env: r.env,
-    }));
+    return rows.map(toRawEvent);
   }
 
   async actorSummary(projectId: string, env: string, distinctId: string): Promise<ActorSummary> {
@@ -2051,23 +2425,87 @@ export async function ensureRollingEventPartitions(
   await ensureEventPartitions(pool, timestamps);
 }
 
+/** Pre-create every monthly partition a valid historical backfill may target. */
+export async function ensureHistoricalEventPartitions(
+  pool: pg.Pool,
+  now: Date,
+  monthsBehind: number,
+): Promise<void> {
+  await ensureEventPartitions(pool, historicalPartitionDates(now, monthsBehind));
+}
+
+export async function historicalEventPartitionsReady(
+  pool: pg.Pool,
+  now: Date,
+  monthsBehind: number,
+): Promise<boolean> {
+  return eventPartitionCoverageReady(pool, historicalPartitionDates(now, monthsBehind));
+}
+
 export async function rollingEventPartitionsReady(
   pool: pg.Pool,
   now: Date = new Date(),
   monthsAhead = 12,
 ): Promise<boolean> {
-  const names = rollingPartitionDates(now, monthsAhead).map((date) =>
-    `events_y${date.getUTCFullYear()}m${String(date.getUTCMonth() + 1).padStart(2, '0')}`);
-  const { rows } = await pool.query<{ count: number }>(
-    `SELECT count(DISTINCT child.relname)::int AS count
+  return eventPartitionCoverageReady(pool, rollingPartitionDates(now, monthsAhead));
+}
+
+async function eventPartitionCoverageReady(
+  pool: pg.Pool,
+  dates: Date[],
+): Promise<boolean> {
+  const names = dates.map(partitionName);
+  const { rows } = await pool.query<{ relname: string }>(
+    `SELECT child.relname
      FROM pg_inherits
      JOIN pg_class parent ON parent.oid = inhparent
      JOIN pg_class child ON child.oid = inhrelid
      WHERE parent.oid = 'events'::regclass
        AND child.relname = ANY($1::text[])`,
-    [names],
+    [[...names, 'events_default']],
   );
-  return rows[0]?.count === names.length;
+  const attached = new Set(rows.map((row) => row.relname));
+  const missing = dates.filter((date) => !attached.has(partitionName(date)));
+  if (missing.length === 0) return true;
+  if (!attached.has('events_default')) return false;
+
+  // PostgreSQL refuses to attach a dedicated partition when matching rows
+  // already live in events_default. Those rows are still safely covered, but
+  // an absent empty/future partition is not ready and must fail the deploy.
+  const first = missing.reduce((min, date) => date < min ? date : min);
+  const last = missing.reduce((max, date) => date > max ? date : max);
+  const afterLast = new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth() + 1, 1));
+  const fallback = await pool.query<{ month: string }>(
+    `SELECT DISTINCT to_char(
+       date_trunc('month', "timestamp" AT TIME ZONE 'UTC'),
+       'YYYY-MM'
+     ) AS month
+     FROM events_default
+     WHERE "timestamp" >= $1 AND "timestamp" < $2`,
+    [first, afterLast],
+  );
+  const covered = new Set(fallback.rows.map((row) => row.month));
+  return missing.every((date) => covered.has(partitionMonth(date)));
+}
+
+function partitionName(date: Date): string {
+  return `events_y${date.getUTCFullYear()}m${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function partitionMonth(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function historicalPartitionDates(now: Date, monthsBehind: number): Date[] {
+  const timestamps: Date[] = [];
+  for (let offset = -monthsBehind; offset <= 0; offset += 1) {
+    timestamps.push(new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth() + offset,
+      1,
+    )));
+  }
+  return timestamps;
 }
 
 function rollingPartitionDates(now: Date, monthsAhead: number): Date[] {
@@ -2119,6 +2557,54 @@ export async function ensureEventPartitions(
 
 function toUsageWarning(warning: PendingUsageWarning): UsageWarning {
   return { meter: warning.meter, threshold: warning.threshold, quantity: warning.quantity };
+}
+
+function toRawEvent(row: Record<string, unknown>): RawEvent {
+  return {
+    id: String(row.id),
+    event: String(row.event),
+    timestamp: toIso(row.timestamp as Date | string),
+    distinct_id: String(row.distinct_id),
+    session_id: row.session_id === null ? null : String(row.session_id),
+    properties: row.properties as Record<string, unknown>,
+    registered: Boolean(row.registered),
+    env: String(row.env),
+    revision: Number(row.revision),
+    origin: row.origin as RawEvent['origin'],
+    backfill_batch_id: row.backfill_batch_id === null ? null : String(row.backfill_batch_id),
+    ingested_at: toIso(row.ingested_at as Date | string),
+    editable: row.is_system === false && row.event_source === 'ingest',
+  };
+}
+
+function toBackfillRecord(row: Record<string, unknown>): BackfillRecord {
+  return {
+    id: String(row.id),
+    env: String(row.env),
+    batch_id: String(row.batch_id),
+    payload_sha256: String(row.payload_sha256),
+    reason: String(row.reason),
+    actor: String(row.actor),
+    event_count: Number(row.event_count),
+    registered_count: Number(row.registered_count),
+    unregistered_count: Number(row.unregistered_count),
+    min_timestamp: toIso(row.min_timestamp as Date | string),
+    max_timestamp: toIso(row.max_timestamp as Date | string),
+    created_at: toIso(row.created_at as Date | string),
+  };
+}
+
+function toEventRevisionRecord(row: Record<string, unknown>): EventRevisionRecord {
+  return {
+    id: String(row.id),
+    event_id: String(row.event_id),
+    revision: Number(row.revision),
+    actor: String(row.actor),
+    reason: String(row.reason),
+    previous_snapshot: row.previous_snapshot as RawEvent,
+    snapshot: row.snapshot as RawEvent,
+    created_at: toIso(row.created_at as Date | string),
+  };
 }
 
 function hasBillableEvents(events: StorableEvent[]): boolean {

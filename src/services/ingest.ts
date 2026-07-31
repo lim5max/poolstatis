@@ -7,8 +7,9 @@ import { randomUUID } from 'node:crypto';
 import { validateAcquisitionProperties } from './acquisitionAttribution.js';
 import {
   browserRouteVocabulary,
-  validateBrowserAnalyticsProperties,
+  validateAndEnrichBrowserProperties,
 } from './browserAnalytics.js';
+import { subtractUtcCalendarMonths } from './retentionPolicy.js';
 
 const CLOCK_SKEW_FUTURE_MS = 5 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 30_000;
@@ -52,9 +53,6 @@ export class IngestService {
     now: Date = new Date(),
     enrichment: { country: string } = { country: 'unknown' },
   ): Promise<IngestResult> {
-    // The resolver remains an owned server capability, but E1 intentionally
-    // keeps geography unavailable until the proxy/MMDB lifecycle is reviewed.
-    void enrichment;
     const rawEvents = batch.events;
     {
       const needsSafeRouteVocabulary = rawEvents.some((raw) => {
@@ -71,8 +69,7 @@ export class IngestService {
           ? this.browserRouteKeys(project.id)
           : Promise.resolve(undefined),
       ]);
-      const retentionFloor = new Date(now);
-      retentionFloor.setUTCMonth(retentionFloor.getUTCMonth() - project.retention_months);
+      const retentionFloor = subtractUtcCalendarMonths(now, project.retention_months);
 
       const storable: StorableEvent[] = [];
       const errors: Array<{ index: number; message: string }> = [];
@@ -108,11 +105,14 @@ export class IngestService {
           bump('rejected', e.event, acquisitionError);
           return;
         }
-        const browserError = validateBrowserAnalyticsProperties(
+        const browserError = validateAndEnrichBrowserProperties(
           e.event,
           properties,
           e.session_id,
-          safeRouteKeys,
+          enrichment.country,
+          {
+            ...(safeRouteKeys !== undefined ? { safeRouteKeys } : {}),
+          },
         );
         if (browserError) {
           errors.push({ index, message: browserError });

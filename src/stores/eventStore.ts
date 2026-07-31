@@ -2,6 +2,7 @@ import type { PropertyFilter } from '../schemas.js';
 
 /** A validated event ready for storage. */
 export interface StorableEvent {
+  id?: string;
   projectId: string;
   env: string;
   event: string;
@@ -14,6 +15,10 @@ export interface StorableEvent {
   isSystem?: boolean;
   /** Physical ingest route that accepted the event; never a user-defined property. */
   eventSource?: 'ingest' | 'experience' | 'system';
+  /** How this fact entered the current store materialization. */
+  origin?: 'live' | 'backfill';
+  backfillBatchId?: string | null;
+  revision?: number;
 }
 
 /** A transport batch whose idempotency must cover the event write itself. */
@@ -298,6 +303,7 @@ export interface ActorActivityResult {
 }
 
 export interface RawEvent {
+  id: string;
   event: string;
   timestamp: string;
   distinct_id: string;
@@ -305,6 +311,64 @@ export interface RawEvent {
   properties: Record<string, unknown>;
   registered: boolean;
   env: string;
+  revision: number;
+  origin: 'live' | 'backfill';
+  backfill_batch_id: string | null;
+  ingested_at: string;
+  editable: boolean;
+}
+
+export interface HistoricalBackfill {
+  projectId: string;
+  env: string;
+  batchId: string;
+  payloadSha256: string;
+  reason: string;
+  actor: string;
+  events: StorableEvent[];
+}
+
+export interface BackfillRecord {
+  id: string;
+  env: string;
+  batch_id: string;
+  payload_sha256: string;
+  reason: string;
+  actor: string;
+  event_count: number;
+  registered_count: number;
+  unregistered_count: number;
+  min_timestamp: string;
+  max_timestamp: string;
+  created_at: string;
+}
+
+export interface BackfillResult {
+  batch: BackfillRecord;
+  inserted: number;
+  duplicate?: boolean;
+  warnings?: UsageWarning[];
+}
+
+export interface EventRevisionInput {
+  projectId: string;
+  env: string;
+  eventId: string;
+  expectedRevision: number;
+  actor: string;
+  reason: string;
+  event: StorableEvent;
+}
+
+export interface EventRevisionRecord {
+  id: string;
+  event_id: string;
+  revision: number;
+  actor: string;
+  reason: string;
+  previous_snapshot: RawEvent;
+  snapshot: RawEvent;
+  created_at: string;
 }
 
 export interface EventNameStat {
@@ -566,6 +630,14 @@ export interface EventStore {
   experienceLastCaptures(projectId: string, env: string, surfaces: string[]): Promise<Record<string, string>>;
   visualExperience(q: VisualExperienceQuery): Promise<VisualExperienceResult>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
+  getEvent(projectId: string, env: string, eventId: string): Promise<RawEvent | null>;
+  backfill(batch: HistoricalBackfill): Promise<BackfillResult>;
+  reviseEvent(input: EventRevisionInput): Promise<EventRevisionRecord>;
+  eventHistory(projectId: string, env: string, eventId: string): Promise<{
+    event: RawEvent;
+    revisions: EventRevisionRecord[];
+  } | null>;
+  listBackfills(projectId: string, env: string, limit: number): Promise<BackfillRecord[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;
   measurementCoverage(q: MeasurementCoverageQuery): Promise<MeasurementCoverage>;

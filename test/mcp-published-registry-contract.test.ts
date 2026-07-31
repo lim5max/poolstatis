@@ -53,8 +53,8 @@ suite('published MCP registry contract', () => {
       for (const tool of contract?.[1]?.split(',') ?? []) requiredBySkills.add(tool);
     }
 
-    expect(client.getServerVersion()).toMatchObject({ version: '0.2.0' });
-    expect(result.tools).toHaveLength(78);
+    expect(client.getServerVersion()).toMatchObject({ version: '0.4.0' });
+    expect(result.tools).toHaveLength(99);
     expect(setupTools.every((tool) => registryTools.has(tool))).toBe(true);
     expect([...requiredBySkills].every((tool) => registryTools.has(tool))).toBe(true);
     expect(stderr).toBe('');

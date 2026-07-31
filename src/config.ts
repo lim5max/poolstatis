@@ -89,7 +89,7 @@ export function assertHostedApiCredentialBoundary(config: Config): void {
   }
 }
 
-export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.2.0';
+export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.4.0';
 const LOCAL_MCP_ARGS = ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'];
 
 function parseArgs(raw: string | undefined, packageStatus: 'published' | 'publish_pending'): string[] {
