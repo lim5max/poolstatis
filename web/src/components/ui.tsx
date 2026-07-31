@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import {
-  Search, ChevronDown, MoreHorizontal, Copy, Eye, EyeOff, Download, Check, Loader2, X,
+  AlertTriangle, Search, ChevronDown, MoreHorizontal, Copy, Eye, EyeOff, Download, Check, Loader2, X,
 } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -119,7 +119,12 @@ export function Loading({ what }: { what?: string }) {
 }
 
 export function ErrorNote({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground" role="alert">⚠ {children}</div>;
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
 }
 
 export function RecoverableError({ children, onRetry }: { children: ReactNode; onRetry: () => void }) {
@@ -132,7 +137,12 @@ export function RecoverableError({ children, onRetry }: { children: ReactNode; o
 }
 
 export function WarningNote({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100" role="status">⚠ {children}</div>;
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning" role="status">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
 }
 
 /** Keeps wide administrative tables usable inside Panels, including on mobile. */
