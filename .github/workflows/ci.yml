@@ -1,0 +1,87 @@
+name: Continuous integration
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: poolsatis
+          POSTGRES_PASSWORD: poolsatis
+          POSTGRES_DB: poolsatis
+        ports:
+          - 5444:5432
+        options: >-
+          --health-cmd "pg_isready -U poolsatis -d poolsatis"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_ADMIN_DATABASE_URL: postgres://poolsatis:poolsatis@127.0.0.1:5444/poolsatis
+      TEST_DATABASE_URL: postgres://poolsatis:poolsatis@127.0.0.1:5444/poolsatis_test
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+
+      - run: corepack enable
+      - run: corepack prepare pnpm@10.13.1 --activate
+      - run: pnpm install --frozen-lockfile
+
+      - name: Bootstrap hosted-policy test roles
+        run: |
+          docker exec -i "${{ job.services.postgres.id }}" psql -v ON_ERROR_STOP=1 -U poolsatis -d poolsatis <<'SQL'
+          CREATE ROLE poolstatis_policy_owner NOLOGIN NOINHERIT;
+          CREATE ROLE poolstatis_core_runtime NOLOGIN NOINHERIT;
+          CREATE ROLE poolstatis_policy_activator NOLOGIN NOINHERIT;
+          GRANT poolstatis_policy_owner TO poolsatis WITH ADMIN OPTION;
+          GRANT poolstatis_core_runtime TO poolsatis WITH ADMIN OPTION;
+          GRANT poolstatis_policy_activator TO poolsatis WITH ADMIN OPTION;
+          SQL
+
+      - name: Typecheck Core
+        run: pnpm typecheck
+
+      - name: Test Core
+        run: pnpm test
+
+      - name: Test and build Web
+        run: |
+          pnpm --dir web test --run
+          pnpm --dir web build
+
+      - name: Test and build SDK
+        run: |
+          pnpm --dir sdk test
+          pnpm --dir sdk typecheck
+          pnpm --dir sdk build
+
+      - name: Test and pack MCP
+        run: |
+          mkdir -p .release
+          MCP_VERSION=$(node -p "require('./packages/mcp/package.json').version")
+          MCP_TARBALL="$PWD/.release/poolstatis-mcp-$MCP_VERSION.tgz"
+          npm pack --json --pack-destination .release ./packages/mcp > .release/pack-output.txt
+          POOLSTATIS_MCP_TARBALL="$MCP_TARBALL" \
+          POOLSTATIS_MCP_PACK_OUTPUT="$PWD/.release/pack-output.txt" \
+            pnpm mcp:package:test
