@@ -224,6 +224,12 @@ if (variant?.key === "test") {
 }
 ```
 
+Здесь единица эксперимента - authenticated user. Для анонимного теста только
+на browser surface можно передать persistent first-party `visitorId` из
+browser-модуля, если outcome остаётся на том же visitor. Не называйте такую
+единицу пользователем и не используйте session/page-view/random id. Для
+атрибуции signup или payment сначала создайте audited actor link к durable user.
+
 ### 2.1a 1C-Bitrix browser integration
 
 Poolstatis does not need a Bitrix plugin. Build one browser asset in the

@@ -68,9 +68,14 @@ cannot be reached. `null` is the safe control path; failures also call
 `onError`. `getFeatureFlags(keys, distinctId, options?)` evaluates several
 flags through the same cache.
 
-The `distinctId` must be a stable authenticated product id, never a generated
-session id. The evaluation request is an exposure event, so do not call it in a
-tight loop; a single shared `Poolstatis` client handles this automatically.
+The `distinctId` must match the declared exposure unit. Use a stable
+authenticated product id for user/account experiments. A persistent
+first-party browser visitor id is valid only for an anonymous browser-surface
+experiment whose outcome is measured on that same visitor identity; report the
+unit as `browser_visitor`, not as a user. Never use a session id, page-view id,
+or freshly generated random id. The evaluation request is an exposure event,
+so do not call it in a tight loop; a single shared `Poolstatis` client handles
+this automatically.
 
 ## Browser Analytics Context (optional module)
 

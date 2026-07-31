@@ -203,9 +203,19 @@ needs a falsifiable \`hypothesis\` and an active registered outcome metric.
 4. Read \`get_experiment_results\`, then conclude with \`ship\`, \`iterate\`, \`stop\`
    or \`inconclusive\` plus a rationale. Conclusion freezes the observation window.
 
-Flags and experiments currently require stable authenticated \`distinct_id\`.
-Do not use a session id as actor identity. Anonymous-to-authenticated identity
-must use an audited actor link, and the flag still needs the durable target ID.
+Choose and declare one durable exposure unit before starting the experiment:
+
+- Use a stable authenticated \`distinct_id\` for user, account, or other
+  cross-session product experiments.
+- A persistent first-party browser visitor id is allowed for an anonymous
+  browser-surface experiment only when the outcome is measured on that same
+  visitor identity. Report its unit as \`browser_visitor\`, not as a user or
+  account. It does not deduplicate browsers or devices.
+
+Never use a session id, page-view id, or freshly generated random id as actor
+identity. Signup, payment, or another authenticated outcome belongs to the
+durable product actor and requires an audited anonymous-to-authenticated actor
+link before it can be attributed to the earlier visitor exposure.
 
 ---
 

@@ -178,7 +178,7 @@ export class Poolstatis {
     this.bindUnload();
   }
 
-  /** Queue an event. The distinct_id must be a stable user id. */
+  /** Queue an event. The distinct_id must be a stable actor id for its declared unit. */
   track(event: string, distinctId: string, properties: Record<string, unknown> = {}): void {
     this.capture({ event, distinct_id: distinctId, properties });
   }

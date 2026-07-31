@@ -311,7 +311,7 @@ variants `{key, rollout_percentage, payload?}`. Проценты не могут
 
 Эксперимент ссылается на один flag и на `active` registry metric типа `count`
 или `unique_actors`. Старт возможен только для active flag с распределением
-ровно 100%. Результат сопоставляет первый `$feature_flag_called` пользователя в
+ровно 100%. Результат сопоставляет первый `$feature_flag_called` выбранной единицы в
 окне эксперимента с outcome-event **после** exposure. Учитываются только
 события exposure, созданные серверным evaluator (публичный ingest не может
 подделать assignment). Затем возвращаются `exposed`, `converted`,
@@ -320,6 +320,13 @@ variants `{key, rollout_percentage, payload?}`. Проценты не могут
 
 `POST /flags/{key}/evaluate` в Platform API создан для MCP/debugging и не
 создаёт exposure. Рантайм всегда использует ingest endpoint выше.
+
+Для user/account эксперимента передавайте стабильный authenticated
+`distinct_id`. Для анонимного эксперимента на browser surface допустим
+постоянный first-party `visitor:*`, если outcome измеряется на том же id;
+единица такого результата называется `browser_visitor`, а не пользователь.
+Session/page-view/random id запрещены. Signup, payment и другие authenticated
+outcome требуют audited actor link от visitor к durable product actor.
 
 ## Browser Experience queries
 
