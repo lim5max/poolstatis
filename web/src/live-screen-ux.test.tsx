@@ -773,6 +773,11 @@ describe('live customer screen UX', () => {
         flag_key: 'dev_flag', primary_metric_key: 'landing_visits', secondary_metric_keys: [], env: 'dev', control_variant_key: 'control',
         snapshot_integrity: 'legacy_unfrozen', status: 'draft', started_at: null, concluded_at: null, decision: null,
         created_at: '2026-08-01', updated_at: '2026-08-01',
+      }, {
+        id: 'legacy-experiment', key: 'legacy_experiment', name: 'Legacy experiment', hypothesis: 'A global legacy experiment needs an explicit cross-environment review.',
+        flag_key: 'legacy_flag', primary_metric_key: 'landing_visits', secondary_metric_keys: [], env: null, control_variant_key: 'control',
+        snapshot_integrity: 'backfilled_current', status: 'running', started_at: '2026-08-01', concluded_at: null, decision: null,
+        created_at: '2026-08-01', updated_at: '2026-08-01',
       }]),
       metrics: vi.fn().mockResolvedValue([metric]),
     }));
@@ -780,6 +785,9 @@ describe('live customer screen UX', () => {
 
     expect(await screen.findByText('Prod experiment')).toBeInTheDocument();
     expect(screen.queryByText('Dev experiment')).not.toBeInTheDocument();
+    const legacyExperiment = screen.getByRole('article', { name: 'Legacy experiment' });
+    expect(within(legacyExperiment).getByText(/read only here/)).toBeInTheDocument();
+    expect(within(legacyExperiment).queryByRole('button', { name: 'Record decision' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: /Feature flags/ }));
     expect(screen.getByRole('article', { name: 'prod_flag' })).toBeInTheDocument();
     expect(screen.getByRole('article', { name: 'legacy_flag' })).toBeInTheDocument();

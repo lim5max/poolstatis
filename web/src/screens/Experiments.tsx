@@ -428,6 +428,7 @@ function ExperimentCard({
   const [readiness, setReadiness] = useState<ExperimentReadiness | null>(null);
   const [result, setResult] = useState<ExperimentResult | null>(null);
   const [showDecision, setShowDecision] = useState(false);
+  const legacyAllEnvironments = experiment.env === null;
 
   const checkReadiness = async () => {
     setBusy(true); setError(null);
@@ -461,11 +462,14 @@ function ExperimentCard({
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
           {busy && <Loader2 className="size-4 animate-spin" />}
-          {!busy && experiment.status === 'draft' && <Button size="sm" onClick={checkReadiness}>Check readiness</Button>}
+          {!busy && !legacyAllEnvironments && experiment.status === 'draft' && <Button size="sm" onClick={checkReadiness}>Check readiness</Button>}
           {!busy && experiment.status !== 'draft' && <Button variant="outline" size="sm" onClick={showResults}>View evidence</Button>}
-          {!busy && experiment.status === 'running' && <Button size="sm" onClick={() => setShowDecision(true)}>Record decision</Button>}
+          {!busy && !legacyAllEnvironments && experiment.status === 'running' && <Button size="sm" onClick={() => setShowDecision(true)}>Record decision</Button>}
         </div>
       </div>
+      {legacyAllEnvironments && (
+        <p className="mt-3 text-xs text-muted-foreground">Legacy all-environment experiments are read only here. Review every environment before using the legacy conclude operation.</p>
+      )}
       {flag && experiment.status === 'draft' && (
         <p className="mt-3 text-xs text-muted-foreground">Flag is {flag.status} · {flag.variants.length} variants · {flag.variants.reduce((sum, variant) => sum + variant.rollout_percentage, 0)}% allocated.</p>
       )}

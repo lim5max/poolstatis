@@ -383,6 +383,14 @@ export async function applyExperimentDecision(
     if (current.status !== 'running') {
       throw new ApiError(409, 'experiment_not_running', `experiment "${key}" is ${current.status}`, 'only a running experiment can be concluded');
     }
+    if (current.env === null) {
+      throw new ApiError(
+        409,
+        'legacy_experiment_all_env_read_only',
+        `experiment "${key}" has legacy all-environment scope`,
+        'review every environment, then use the legacy conclude operation; automatic winner rollout is disabled',
+      );
+    }
     const flag = await getFeatureFlag(db, projectId, current.flag_key, true);
     if (input.ship_variant_key && !flag.variants.some((variant) => variant.key === input.ship_variant_key)) {
       throw new ApiError(400, 'experiment_ship_variant_unknown', `flag "${flag.key}" has no variant "${input.ship_variant_key}"`);

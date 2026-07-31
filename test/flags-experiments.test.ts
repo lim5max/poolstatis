@@ -611,6 +611,15 @@ describe('experiments', () => {
       control_variant_key: 'control',
       snapshot_integrity: 'frozen_at_start',
     });
+
+    const guardedDecision = await api(env, env.secretToken, 'POST', `${P()}/experiments/legacy_start_experiment/apply-decision`, {
+      decision: { outcome: 'ship', rationale: 'This must not change a global flag from one environment view.' },
+      ship_variant_key: 'test',
+    });
+    expect(guardedDecision.status).toBe(409);
+    expect(guardedDecision.body.error.code).toBe('legacy_experiment_all_env_read_only');
+    const afterGuard = await api(env, env.secretToken, 'GET', `${P()}/experiments`);
+    expect(afterGuard.body.experiments.find((experiment: { key: string }) => experiment.key === 'legacy_start_experiment')).toMatchObject({ status: 'running' });
   });
 });
 
