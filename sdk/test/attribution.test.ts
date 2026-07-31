@@ -26,6 +26,21 @@ function consentController(initial: boolean) {
 }
 
 describe('browser acquisition attribution', () => {
+  it('starts immediately without host callbacks', async () => {
+    const client = fakeClient();
+    const analytics = createAttributionClient({
+      client,
+      distinctId: 'anonymous',
+      route: 'home',
+      browser: { location: { href: 'https://app.example/?utm_source=direct' }, document: { referrer: '' } },
+      createSessionId: () => 'session-immediate',
+    });
+
+    await analytics.start();
+
+    expect(client.queued.map((event) => event.event)).toEqual(['session.started', 'page.viewed']);
+  });
+
   it('captures one immutable tagged landing snapshot without raw URL data', async () => {
     const client = fakeClient();
     const browser = {

@@ -41,6 +41,7 @@ export const BROWSER_OPTIONAL_CONTEXT_PROPERTIES = [
 ] as const;
 
 export type BrowserOptionalContextProperty = typeof BROWSER_OPTIONAL_CONTEXT_PROPERTIES[number];
+/** @deprecated Collection starts immediately by default. Use host callbacks only for an optional host-owned pause control. */
 export type BrowserConsentPolicy = 'opt-in' | 'opt-out' | 'external';
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -99,11 +100,10 @@ type HostConsent = {
   subscribeConsent: (listener: () => void) => () => void;
 };
 
-export type BrowserAnalyticsOptions = BrowserAnalyticsBaseOptions & (
-  | ({ consentPolicy?: 'opt-in' } & HostConsent)
-  | ({ consentPolicy: 'opt-out' } & Partial<HostConsent>)
-  | ({ consentPolicy: 'external' } & HostConsent)
-);
+export type BrowserAnalyticsOptions = BrowserAnalyticsBaseOptions & Partial<HostConsent> & {
+  /** @deprecated Collection is immediate when `hasConsent` is omitted. */
+  consentPolicy?: BrowserConsentPolicy;
+};
 
 export interface ActorLinkHandoff {
   source_distinct_id: string;
@@ -193,16 +193,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
   const resolveBrowser = () => options.browser
     ?? ((globalThis as { window?: BrowserLike }).window ?? null);
 
-  const hostAllowsCollection = () => {
-    if (options.consentPolicy === 'opt-out') return options.hasConsent?.() ?? true;
-    return options.hasConsent();
-  };
-
-  const collectionAllowed = () => {
-    if (!hostAllowsCollection()) return false;
-    const candidate = browser ?? resolveBrowser();
-    return candidate?.navigator.globalPrivacyControl !== true;
-  };
+  const collectionAllowed = () => options.hasConsent?.() ?? true;
 
   const storageGet = (storage: StorageLike, key: string): string | null => {
     try { return storage.getItem(key); } catch { return null; }
@@ -578,7 +569,7 @@ export function createBrowserAnalytics(options: BrowserAnalyticsOptions) {
     },
     pageViewed,
     identify(userId: string): ActorLinkHandoff {
-      if (!visitorId) throw new Error('browser analytics must be started with consent before identify');
+      if (!visitorId) throw new Error('browser analytics must be started before identify');
       const target = userId.trim();
       if (!target || target.length > 200) throw new Error('user id must be 1..200 characters');
       actorId = target;

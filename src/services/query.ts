@@ -554,11 +554,15 @@ export class QueryService {
     }> = [];
     for (const key of q.dimensions) {
       if (key === 'country') {
-        unavailableDimensions.country = {
-          code: 'web_analytics_dimension_unavailable',
-          reason: 'Country is unavailable until a separately reviewed trusted proxy or MMDB contract is active.',
-          next_action: 'Keep country disabled until the server-side geography contract is reviewed and active.',
-        };
+        if (!this.countryAttribution) {
+          unavailableDimensions.country = {
+            code: 'web_analytics_dimension_unavailable',
+            reason: 'Country is unavailable until the local MMDB resolver is active.',
+            next_action: 'Configure the reviewed server-side MMDB country resolver.',
+          };
+          continue;
+        }
+        dimensions.push({ key, ...WEB_DIMENSIONS[key] });
         continue;
       }
       if (key === 'route') {
@@ -656,9 +660,9 @@ export class QueryService {
           foreground_ms: 'Monotonic visible-and-focused time from the highest cumulative page snapshot.',
           session_span_ms: 'Wall-clock span from the first page view to the latest trusted lifecycle evidence.',
           average_session_duration_ms: 'Average wall-clock session span across lifecycle-complete sessions only; unavailable without complete-session evidence.',
-          source: 'Consent-gated session landing attribution; this is not causal campaign credit.',
-          medium: 'Consent-gated session landing medium; this is not causal campaign credit.',
-          campaign: 'Consent-gated session landing campaign; this is not causal campaign credit.',
+          source: 'Session landing attribution; this is not causal campaign credit.',
+          medium: 'Session landing medium; this is not causal campaign credit.',
+          campaign: 'Session landing campaign; this is not causal campaign credit.',
         },
         accepted_event_accounting: 'Each accepted page.viewed, page.engagement and key-metric event remains one stored event; reads create no synthetic events.',
         privacy: 'Returns bounded coarse dimensions and only trusted safe route keys. Unavailable dimensions stay explicit; raw IP, URL, query, hash, user agent, DOM and text are forbidden.',
@@ -1602,7 +1606,7 @@ export class QueryService {
         sampling: null,
         source: 'native',
         note: snapshot
-          ? 'Events match the snapshot viewport exactly. Accepted events may still exclude signals discarded by client consent and rate guards.'
+          ? 'Events match the snapshot viewport exactly. Accepted events may still exclude signals discarded by host pause controls and rate guards.'
           : 'No immutable snapshot matches these route, version, device and env filters; events are not restricted to one viewport.',
       },
     };
@@ -1699,7 +1703,7 @@ function buildVisualAgentContext(
   ).slice(0, 5);
   const labelledClicks = result.click_labels.reduce((sum, item) => sum + item.count, 0);
   const caveats = [
-    'Accepted event totals can exclude signals withheld by client consent or discarded by rate guards.',
+    'Accepted event totals can exclude signals withheld by host pause controls or discarded by rate guards.',
     'This evidence is descriptive and non-causal; verify instrumentation and cohort differences before acting.',
   ];
   let quality: VisualAgentContext['data_quality']['status'] = 'ok';

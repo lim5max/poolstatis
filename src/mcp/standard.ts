@@ -51,7 +51,7 @@ Avoid: \`Signup\`, \`user_signed_up_event\`, \`click\`, \`track\`, \`event1\`.
 
 1. **\`distinct_id\` MUST be a stable user id** from the product's auth system —
    the same value every time that user acts. Never use a session id as the actor.
-   The one supported anonymous exception is the consent-gated
+   The one supported anonymous exception is the immediate
    \`@poolstatis/sdk/browser\` first-party visitor id: after authentication,
    switch to the stable product user id and create the explicit audited actor
    link returned by the browser module. That environment-scoped audited link is

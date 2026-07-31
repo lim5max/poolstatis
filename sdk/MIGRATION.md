@@ -13,7 +13,9 @@ customer-controlled values. The SDK and Core now share one bounded contract:
 - the key must match `^[a-z][a-z0-9_.:-]{0,99}$`;
 - the same key must be present in the trusted browser `route_keys` vocabulary;
 - capture sends `landing_route`, never `landing_path`;
-- Core rejects `landing_path` instead of translating or storing it.
+- Core's versioned `/i/v1/events` compatibility path removes `landing_path`
+  without storing it and maps only reviewed finite route keys; new SDKs never
+  send the legacy field.
 
 ## Browser analytics 0.1 to 0.2
 
@@ -26,7 +28,6 @@ Before:
 const analytics = createBrowserAnalytics({
   client,
   distinctId,
-  consentPolicy: 'opt-out',
 });
 // page.viewed properties included $page_path
 ```
@@ -44,7 +45,6 @@ const mapRoute = (pathname: string) => {
 const analytics = createBrowserAnalytics({
   client,
   distinctId,
-  consentPolicy: 'opt-out',
   mapPagePath: mapRoute,
 });
 // page.viewed properties include $route_key and never $page_path
@@ -80,8 +80,6 @@ The attribution client also requires a route provider:
 const attribution = createAttributionClient({
   client,
   distinctId,
-  hasConsent,
-  subscribeConsent,
   route: () => mapRoute(router.currentPathname()),
 });
 ```
@@ -116,5 +114,7 @@ workflow.
    no `$page_path`, `landing_path`, full URL, query string or user-controlled
    identifier.
 
-There is no legacy `landing_path` compatibility mode. Keeping one would
-preserve the privacy defect that this version removes.
+The server retains a bounded SDK 0.1 compatibility path that strips
+`landing_path`, `$page_path`, and legacy `path` before storage. It never exposes
+those fields to queries or warnings. SDK 0.2 and later must continue using only
+the finite `$route_key` and `landing_route` contract.

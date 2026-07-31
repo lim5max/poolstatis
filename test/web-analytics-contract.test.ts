@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { querySchema } from '../src/schemas.js';
 import { runSerializedBrowserSetup } from '../src/services/browserAnalytics.js';
+import { DB_IP_ATTRIBUTION } from '../src/services/country.js';
 import { PostgresEventStore } from '../src/stores/postgresEventStore.js';
 import {
   createBrowserAnalytics,
@@ -61,6 +62,88 @@ describe('web analytics Query DSL', () => {
   });
 });
 
+describe('country breakdown with active server-side GeoIP', () => {
+  it('returns stored ISO country values when the MMDB attribution contract is active', async () => {
+    const geo = await createTestEnv({
+      ingestBuffer: false,
+      queryCache: false,
+      countryResolver: {
+        attribution: DB_IP_ATTRIBUTION,
+        resolve: () => 'DE',
+      },
+    });
+    const geoProject = `/api/v1/projects/${geo.projectSlug}`;
+    try {
+      const setup = await api(geo, geo.secretToken, 'POST', `${geoProject}/properties/browser-analytics`, {
+        route_keys: ['home'],
+      });
+      expect(setup.status).toBe(200);
+      const trustedRoute = await api(
+        geo,
+        geo.secretToken,
+        'PATCH',
+        `${geoProject}/properties/event/$route_key`,
+        { status: 'trusted' },
+      );
+      expect(trustedRoute.status).toBe(200);
+      const activated = await api(
+        geo,
+        geo.secretToken,
+        'PATCH',
+        `${geoProject}/metrics/web_page_views`,
+        { status: 'active' },
+      );
+      expect(activated.status).toBe(200);
+      const ingested = await api(geo, geo.ingestToken, 'POST', '/i/v1/events', {
+        events: [{
+          event: 'page.viewed',
+          distinct_id: 'visitor:geo-test',
+          session_id: 'session:geo-test',
+          properties: {
+            $browser_context: '1',
+            $route_key: 'home',
+            $page_view_id: 'page:geo-test',
+          },
+        }],
+      });
+      expect(ingested.status, JSON.stringify(ingested.body)).toBe(200);
+      const spoofed = await api(geo, geo.ingestToken, 'POST', '/i/v1/events', {
+        events: [{
+          event: 'page.viewed',
+          distinct_id: 'visitor:spoof-test',
+          session_id: 'session:spoof-test',
+          properties: {
+            $browser_context: '1',
+            $route_key: 'home',
+            $page_view_id: 'page:spoof-test',
+            $country: 'US',
+          },
+        }],
+      });
+      expect(spoofed.status).toBe(207);
+      expect(spoofed.body).toMatchObject({ accepted: 0 });
+      expect(spoofed.body.errors[0].message).toContain('server-derived');
+
+      const result = await api(geo, geo.secretToken, 'POST', `${geoProject}/query`, {
+        kind: 'web_analytics',
+        metric: 'web_page_views',
+        date_from: '-1d',
+        dimensions: ['country'],
+      });
+      expect(result.status).toBe(200);
+      expect(result.body.breakdowns.country).toMatchObject([{
+        value: 'DE',
+        visitors: 1,
+        sessions: 1,
+        page_views: 1,
+      }]);
+      expect(result.body.meta.unavailable_dimensions ?? {}).not.toHaveProperty('country');
+    } finally {
+      await geo.close();
+    }
+  });
+});
+
 describe('atomic browser registry setup', () => {
   it('retries 40001/40P01 at most three times and returns a controlled retryable 503', async () => {
     const statements: string[] = [];
@@ -117,9 +200,9 @@ describe('atomic browser registry setup', () => {
     ]);
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
-    expect(first.body.properties).toHaveLength(15);
+    expect(first.body.properties).toHaveLength(16);
     expect(first.body.metrics).toHaveLength(2);
-    expect(second.body.properties).toHaveLength(15);
+    expect(second.body.properties).toHaveLength(16);
     expect(second.body.metrics).toHaveLength(2);
     expect(first.body.properties.find((property: { key: string }) => property.key === '$route_key'))
       .toMatchObject({ value_type: 'enum', enum_values: [...ROUTE_KEYS].sort() });
@@ -130,7 +213,7 @@ describe('atomic browser registry setup', () => {
          (SELECT count(*)::int FROM metrics WHERE project_id = $1) AS metrics`,
       [env.projectId],
     );
-    expect(counts.rows[0]).toEqual({ properties: 15, metrics: 2 });
+    expect(counts.rows[0]).toEqual({ properties: 16, metrics: 2 });
   });
 
   it('preflights the whole bundle before any write', async () => {

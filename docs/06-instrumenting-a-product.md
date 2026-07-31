@@ -178,7 +178,7 @@ follow that installed version's guide instead.
 
 ### 2.0 Browser landing attribution (optional)
 
-Для consented browser-продукта сначала вызови MCP
+Для browser-продукта сначала вызови MCP
 `propose_acquisition_properties` (или `POST /properties/acquisition-attribution`)
 с platform credential. Это создаст пять `$utm_*` definitions как `proposed`;
 ингест-ключ в браузере не может и не должен менять реестр. Затем подключи
@@ -189,9 +189,8 @@ follow that installed version's guide instead.
 Модуль пишет только обязательный finite `landing_route`, origin referrer и
 стандартные UTM; raw path/URL, full referrer, click ids и unknown query params
 не отправляются. Для SPA вызывай
-`pageViewed()` после навигации. Передай обязательный `subscribeConsent` callback,
-который синхронно вызывает listener при отзыве product-analytics consent: модуль сам
-вызовет `stop()` и удалит unsent/retrying attribution events.
+`pageViewed()` после навигации. Сбор начинается сразу после `start()`; legacy
+host callbacks можно оставить только как необязательный внешний pause-control.
 До attribution-only capture запусти browser analytics setup с конечным
 `route_keys` vocabulary и переведи `$route_key` в `trusted`: `landing_route`
 валидируется по тому же словарю даже без полного browser-модуля.
@@ -235,10 +234,6 @@ template. The source asset imports the same package as any other site:
 import { createClient } from '@poolstatis/sdk';
 import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
 
-const hostWindow = window as Window & {
-  productConsent?: { analytics: boolean };
-};
-
 const client = createClient({
   url: 'https://api.example.com',
   ingestKey: 'pk_…', // write-only project key; never place sk_ or pt_ here
@@ -246,14 +241,8 @@ const client = createClient({
 
 const analytics = createBrowserAnalytics({
   client,
-  consentPolicy: 'external',
-  hasConsent: () => hostWindow.productConsent?.analytics === true,
-  subscribeConsent: (listener) => {
-    const handler = () => listener();
-    window.addEventListener('product-consent', handler);
-    return () => window.removeEventListener('product-consent', handler);
-  },
   captureAcquisition: true,
+  mapPagePath: () => 'home',
 });
 analytics.start();
 ```
@@ -358,6 +347,6 @@ Query kinds: `trend`, `funnel`, `entities`, `retention`, `lifecycle`, `stickines
 Для web analytics сначала прочитайте также
 `poolstatis://standard/browser-analytics`, затем вызовите
 `propose_browser_analytics`. Browser capture подключается только через отдельный
-локальный/одобренный `@poolstatis/sdk/browser` entrypoint и только после consent;
+локальный/одобренный `@poolstatis/sdk/browser` entrypoint, который стартует сразу;
 base SDK не меняет поведение. Публичную npm-доступность перед инструкцией по
 установке нужно проверять отдельно.

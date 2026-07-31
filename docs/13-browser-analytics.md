@@ -1,6 +1,6 @@
 # Browser Analytics Context
 
-`@poolstatis/sdk/browser` is an optional policy-gated layer over the neutral
+`@poolstatis/sdk/browser` is an optional immediate-capture layer over the neutral
 `@poolstatis/sdk` transport.
 
 - Visitors are unique query-time resolved actors with `page.viewed` events.
@@ -22,9 +22,6 @@ import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
 const transport = createClient({ url, ingestKey });
 const browser = createBrowserAnalytics({
   client: transport,
-  consentPolicy: 'external',
-  hasConsent: () => consent.analytics,
-  subscribeConsent(listener) { return consent.subscribe(listener); },
   captureAcquisition: true,
   mapPagePath: (pathname) => publicRouteVocabulary(pathname),
   contextProperties: ['$device_class', '$browser_family', '$os_family'],
@@ -35,25 +32,10 @@ browser.track('signup.started');
 const link = browser.identify(user.id); // send link to your trusted backend
 ```
 
-Consent policy belongs to the integrating product:
-
-- `opt-in` is the backward-compatible default. Both consent callbacks are
-  required, and no browser state is read before the host grants consent.
-- `opt-out` is an explicit host choice. It starts immediately when callbacks
-  are omitted; a host with a reversible preference supplies the same callbacks
-  and returns `false` after Disable.
-- `external` requires both callbacks and delegates the decision to a CMP or
-  another host-owned source.
-
-Global Privacy Control disables collection in every mode. A withdrawal
-synchronously removes queued browser events, stored ids and navigation
-listeners. Policy selection changes only when collection may begin; it cannot
-add properties or expand the fixed capture allowlist.
-
-When a host loads an already-disabled preference or GPC state before creating
-the client, call `clearBrowserAnalyticsIdentity()` once. It removes an older
-first-party visitor/session without starting capture or resolving analytics
-transport.
+Collection starts immediately when the host calls `start()`. Legacy
+`hasConsent` / `subscribeConsent` callbacks remain supported only as an
+optional host-owned pause control for existing integrations; they are not a
+Poolstatis requirement and the SDK does not inspect Global Privacy Control.
 
 When collection is enabled, the module stores an opaque visitor id
 in first-party local storage and a 30-minute inactivity session in session
@@ -152,11 +134,11 @@ precise pointer replay.
 
 ## Country
 
-Country is unavailable in the E1 Web Analytics contract. It is never inferred
-from locale or timezone, and canonical browser events do not persist an IP or
-country property. The source tree retains fail-closed proxy/MMDB resolver
-primitives for a separately reviewed future lifecycle, but configuring them
-does not activate geography in E1 ingest or queries.
+Country is never inferred from locale or timezone. When the reviewed local
+MMDB resolver is configured, Core derives an ISO alpha-2 country server-side,
+stores only `$country`, and exposes the country breakdown. Raw client IP is
+used transiently for lookup and is not stored or returned. Without the active
+resolver the dimension remains explicitly unavailable.
 
 ## Registry, query and billing
 
@@ -208,8 +190,7 @@ No database migration is required.
 2. Define the complete finite non-sensitive route vocabulary.
 3. Propose it atomically, then review and activate the canonical registry bundle.
 4. Upgrade the SDK and import only `@poolstatis/sdk/browser`.
-5. Choose and document the host's policy. Keep the default `opt-in`, explicitly
-   select `opt-out`, or integrate an `external` CMP; wire Disable/withdrawal.
+5. Start browser analytics during application bootstrap; collection is immediate.
 6. Verify prod/dev separately through `query_web_analytics`.
 
 The Core source contains `query_web_analytics`, but a public MCP package must

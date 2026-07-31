@@ -74,12 +74,11 @@ tight loop; a single shared `Poolstatis` client handles this automatically.
 
 ## Browser Analytics Context (optional module)
 
-`@poolstatis/sdk/browser` adds policy-gated first-party visitors, 30-minute
+`@poolstatis/sdk/browser` adds immediate first-party visitors, 30-minute
 browser-tab sessions, SPA-safe `page.viewed` events, cumulative
-`page.engagement` snapshots and coarse browser context. The
-backward-compatible default is `opt-in`; `opt-out` must be selected explicitly,
-and `external` delegates the decision to a host CMP. Global Privacy Control
-always disables collection. It never
+`page.engagement` snapshots and coarse browser context. Collection starts when
+the host calls `start()`; no consent state is required and the SDK does not
+inspect Global Privacy Control. It never
 sends query strings, full URLs/referrers, DOM/text, full User-Agent or precise
 screen dimensions. The base SDK remains browser/Node neutral.
 
@@ -88,9 +87,6 @@ import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
 
 const browser = createBrowserAnalytics({
   client: ph,
-  consentPolicy: 'external',
-  hasConsent: () => consent.has('product_analytics'),
-  subscribeConsent: (listener) => consent.onChange(listener),
   captureAcquisition: true, // reuses the bounded attribution snapshot
   mapPagePath: (pathname) => publicRouteVocabulary(pathname),
   contextProperties: ['$device_class', '$browser_family', '$os_family'],
@@ -128,14 +124,8 @@ terminal timing remains incomplete instead of becoming a false zero/bounce.
 Every accepted `page.viewed` and `page.engagement` remains one stored,
 billable event.
 
-If the host loads a persisted decline or GPC state before creating the client,
-call `clearBrowserAnalyticsIdentity()` to remove an older first-party
-visitor/session without starting capture.
-
-For a host-owned, reversible opt-out policy, set `consentPolicy: 'opt-out'`.
-Without callbacks it starts immediately; provide `hasConsent` and
-`subscribeConsent` when the host persists a Disable/Enable choice. Omitting
-`consentPolicy` keeps the existing opt-in contract and requires both callbacks.
+Legacy `hasConsent` and `subscribeConsent` callbacks remain compatible as an
+optional host-owned pause control. New integrations omit them.
 `mapPagePath` is required. Its finite lowercase result is used for both
 `$route_key` and `landing_route`, so raw public paths are never sent.
 Mapper exceptions fall back to the trusted `other` key; an unsafe returned key
@@ -159,7 +149,7 @@ properties, finite route-vocabulary setup, definitions and rollout. Existing
 ## Browser Experience (optional module)
 
 The `@poolstatis/sdk/experience` entrypoint is deliberately separate from the
-core client. It records a consent-gated session timeline of developer-provided
+core client. It records an immediate session timeline of developer-provided
 route keys,
 **labelled** clicks, scroll milestones and a coarse client-error type. It does
 not collect DOM snapshots, text/input values, CSS selectors, URL query/hash,
@@ -179,12 +169,11 @@ const experience = new BrowserExperience({
   distinctId: () => currentUser.id,
   route: () => 'checkout', // stable key; never pass window.location.pathname
   version: import.meta.env.VITE_RELEASE_SHA,
-  hasConsent: () => consent.has('product_analytics'),
 });
 
 await experience.start();
 // <button data-poolstatis-label="pay_now">Pay now</button>
-// Call `experience.stop()` if consent is withdrawn or the app unmounts.
+// Call `experience.stop()` when the app unmounts.
 ```
 
 For visual maps the module also sends desktop/mobile, viewport/document
@@ -204,7 +193,7 @@ interaction maps, not gaze or full session replay.
 
 ## Browser acquisition attribution (optional module)
 
-`@poolstatis/sdk/attribution` is a separate, consent-gated browser entrypoint.
+`@poolstatis/sdk/attribution` is a separate immediate browser entrypoint.
 The base client never reads `location`, referrer or URL parameters. First use a
 Platform API credential or MCP `propose_acquisition_properties` to add the five
 canonical `$utm_*` event definitions as `proposed`; an owner must trust one
@@ -218,15 +207,12 @@ const client = createClient({ url: 'https://analytics.example.com', ingestKey: '
 const analytics = createAttributionClient({
   client,
   distinctId: () => currentActorId(), // can change from anonymous to authenticated
-  hasConsent: () => consent.has('product_analytics'),
-  subscribeConsent: (listener) => consent.onChange(listener), // must synchronously call on withdrawal
   route: () => mapRoute(router.currentPathname()), // finite key from the trusted route vocabulary
 });
 
 await analytics.start(); // exactly one session.started + initial page.viewed
 analytics.track('signup.completed', { plan: 'pro' });
 // On SPA navigation: analytics.pageViewed();  It preserves the original landing snapshot.
-// `subscribeConsent` calls stop automatically on withdrawal and drops unsent/retrying attribution events.
 ```
 
 The helper owns and exposes `analytics.sessionId`; it snapshots only the

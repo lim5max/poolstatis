@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { validateAcquisitionProperties } from './acquisitionAttribution.js';
 import {
   browserRouteVocabulary,
+  normalizeLegacyBrowserProperties,
   validateAndEnrichBrowserProperties,
 } from './browserAnalytics.js';
 import { subtractUtcCalendarMonths } from './retentionPolicy.js';
@@ -61,7 +62,9 @@ export class IngestService {
           && typeof properties === 'object'
           && !Array.isArray(properties)
           && ((properties as Record<string, unknown>).$browser_context !== undefined
-            || (properties as Record<string, unknown>).landing_route !== undefined);
+            || (properties as Record<string, unknown>).landing_route !== undefined
+            || (properties as Record<string, unknown>).landing_path !== undefined
+            || (properties as Record<string, unknown>).$page_path !== undefined);
       });
       const [registered, safeRouteKeys] = await Promise.all([
         this.registeredNames(project.id),
@@ -97,6 +100,7 @@ export class IngestService {
         }
         const e = parsed.data;
         const properties: Record<string, unknown> = { ...e.properties };
+        normalizeLegacyBrowserProperties(e.event, properties, e.session_id, safeRouteKeys);
         const acquisitionError = validateAcquisitionProperties(properties, e.session_id, safeRouteKeys);
         if (acquisitionError) {
           errors.push({ index, message: acquisitionError });

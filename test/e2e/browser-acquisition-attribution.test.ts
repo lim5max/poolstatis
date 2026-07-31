@@ -127,13 +127,18 @@ describe('browser acquisition attribution end to end', () => {
     expect(events.body.events.map((event: { event: string }) => event.event)).not.toContain('never.sent');
   });
 
-  it('rejects malformed reserved attribution fields without retaining a raw URL in warnings', async () => {
-    const rejected = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+  it('strips legacy landing_path without retaining a raw URL in events or warnings', async () => {
+    const compatible = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
       batch_id: 'bad-attribution-url',
       events: [{ event: 'signup.completed', distinct_id: 'bad-url', session_id: 'session-bad', properties: { landing_path: 'https://private.example/path?token=never-store' } }],
     });
-    expect(rejected.status).toBe(207);
-    expect(JSON.stringify(rejected.body)).not.toContain('private.example');
+    expect(compatible.status).toBe(200);
+    expect(compatible.body).toMatchObject({ accepted: 1 });
+    expect(JSON.stringify(compatible.body)).not.toContain('private.example');
+    const events = await api(env, env.secretToken, 'GET', `${P()}/events/sample?event=signup.completed&limit=20`);
+    const compatibleEvent = events.body.events.find((event: { distinct_id: string }) => event.distinct_id === 'bad-url');
+    expect(compatibleEvent.properties).not.toHaveProperty('landing_route');
+    expect(JSON.stringify(compatibleEvent)).not.toContain('private.example');
     const warnings = await api(env, env.secretToken, 'GET', `${P()}/ingest-warnings?env=prod&kind=rejected`);
     expect(warnings.status).toBe(200);
     expect(JSON.stringify(warnings.body)).not.toContain('private.example');

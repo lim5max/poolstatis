@@ -36,8 +36,8 @@ export interface BrowserExperienceOptions {
   version?: string | (() => string);
   /** Override responsive classification; defaults to mobile below 768 CSS px. */
   device?: 'desktop' | 'mobile' | (() => 'desktop' | 'mobile');
-  /** Explicit consent boundary. No listener is attached until this returns true. */
-  hasConsent: () => boolean;
+  /** Optional host-owned pause control. Collection starts immediately when omitted. */
+  hasConsent?: () => boolean;
   /** Inject only for tests or non-window browser environments. */
   browser?: BrowserExperienceEnvironment;
   /** An opaque session id; generated automatically when omitted. */
@@ -79,6 +79,10 @@ export class BrowserExperience {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private flushing = false;
   private inFlightBatch: ExperienceCaptureBatch | null = null;
+
+  private collectionAllowed(): boolean {
+    return this.options.hasConsent?.() ?? true;
+  }
 
   private readonly onClick = (event: { target?: unknown; clientX?: number; clientY?: number; pageX?: number; pageY?: number }) => {
     const label = labelFor(event.target);
@@ -145,9 +149,9 @@ export class BrowserExperience {
     this.maxEventsPerMinute = Math.max(1, options.maxEventsPerMinute ?? DEFAULT_MAX_EVENTS_PER_MINUTE);
   }
 
-  /** Attach listeners once consent exists and record the initial route key. */
+  /** Attach listeners and record the initial route key. */
   async start(): Promise<void> {
-    if (this.started || !this.options.hasConsent()) return;
+    if (this.started || !this.collectionAllowed()) return;
     this.started = true;
     this.browser.addEventListener('click', this.onClick);
     this.browser.addEventListener('scroll', this.onScroll);
@@ -170,12 +174,12 @@ export class BrowserExperience {
     this.browser.removeEventListener('unhandledrejection', this.onUnhandledRejection);
     this.browser.removeEventListener('pagehide', this.onPageHide);
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
-    if (!this.options.hasConsent()) this.clearQueue();
+    if (!this.collectionAllowed()) this.clearQueue();
   }
 
-  /** Send bounded chunks. Consent revocation drops every unsent interaction immediately. */
+  /** Send bounded chunks. A host-owned pause drops every unsent interaction immediately. */
   async flush(options: ExperienceCaptureOptions = {}): Promise<void> {
-    if (!this.options.hasConsent()) { this.clearQueue(); return; }
+    if (!this.collectionAllowed()) { this.clearQueue(); return; }
     if (options.keepalive) {
       // Browsers share a small keepalive body budget across the page. One
       // bounded batch gives the navigation-time interaction the best chance
@@ -220,7 +224,7 @@ export class BrowserExperience {
       }
     } finally {
       this.flushing = false;
-      if (this.pending.length > 0 && this.retryBatches.length === 0 && this.options.hasConsent()) this.scheduleFlush();
+      if (this.pending.length > 0 && this.retryBatches.length === 0 && this.collectionAllowed()) this.scheduleFlush();
     }
   }
 
@@ -263,7 +267,7 @@ export class BrowserExperience {
   }
 
   private enqueue(event: ExperienceCaptureEvent): void {
-    if (!this.started || !this.options.hasConsent()) return;
+    if (!this.started || !this.collectionAllowed()) return;
     const now = Date.now();
     this.acceptedAt = this.acceptedAt.filter((timestamp) => timestamp > now - 60_000);
     if (this.acceptedAt.length >= this.maxEventsPerMinute) return;

@@ -35,8 +35,9 @@ export interface AttributionCaptureClient {
 export interface AttributionClientOptions {
   client: AttributionCaptureClient;
   distinctId: string | (() => string);
-  hasConsent: () => boolean;
-  subscribeConsent: (listener: () => void) => () => void;
+  /** Optional host-owned pause control. Collection starts immediately when omitted. */
+  hasConsent?: () => boolean;
+  subscribeConsent?: (listener: () => void) => () => void;
   /** Product-owned finite safe route key, never a raw URL pathname. */
   route: string | (() => string);
   browser?: BrowserAttributionEnvironment;
@@ -49,7 +50,7 @@ export const acquisitionPropertyDefinitions = ACQUISITION_UTM_KEYS.map((key) => 
   value_type: 'string' as const,
   status: 'proposed' as const,
   source: 'native' as const,
-  purpose: `Records the consented session landing ${key.slice(5)} for bounded acquisition analysis, never causal campaign credit.`,
+  purpose: `Records the session landing ${key.slice(5)} for bounded acquisition analysis, never causal campaign credit.`,
 }));
 
 export function snapshotFromBrowser(
@@ -80,8 +81,8 @@ export function snapshotFromBrowser(
 }
 
 /**
- * Consent-gated acquisition helper retained for existing SDK integrations.
- * New browser analytics capture uses the same safe-route snapshot directly.
+ * Acquisition helper retained for existing SDK integrations.
+ * New browser analytics capture uses the same safe-route snapshot directly and starts immediately.
  */
 export class AttributionClient {
   private snapshot: AttributionSnapshot | null = null;
@@ -98,23 +99,23 @@ export class AttributionClient {
   }
 
   async start(): Promise<void> {
-    if (this.started || !this.options.hasConsent()) return;
+    if (this.started || !this.collectionAllowed()) return;
     const browser = this.options.browser ?? browserFromGlobal();
     if (!browser) throw new Error('createAttributionClient requires a browser environment — do not start it during SSR');
     const sessionId = this.options.createSessionId?.() ?? opaqueId();
     this.snapshot = snapshotFromBrowser(browser, sessionId, this.route());
     this.started = true;
-    this.unsubscribeConsent = this.options.subscribeConsent(() => {
-      if (!this.options.hasConsent()) this.stop();
-    });
+    this.unsubscribeConsent = this.options.subscribeConsent?.(() => {
+      if (!this.collectionAllowed()) this.stop();
+    }) ?? null;
     this.enqueue('session.started');
     this.enqueue('page.viewed');
     await this.flush();
   }
 
   track(event: string, properties: Record<string, unknown> = {}): void {
-    if (!this.started || !this.options.hasConsent()) {
-      if (!this.options.hasConsent()) this.stop();
+    if (!this.started || !this.collectionAllowed()) {
+      if (!this.collectionAllowed()) this.stop();
       return;
     }
     this.enqueue(event, properties);
@@ -125,7 +126,7 @@ export class AttributionClient {
   }
 
   async flush(options: { keepalive?: boolean } = {}): Promise<void> {
-    if (!this.options.hasConsent()) { this.stop(); return; }
+    if (!this.collectionAllowed()) { this.stop(); return; }
     while (this.pending.length > 0) this.options.client.capture(this.pending.shift()!);
     await this.options.client.flush(options);
   }
@@ -153,6 +154,10 @@ export class AttributionClient {
 
   private distinctId(): string {
     return typeof this.options.distinctId === 'function' ? this.options.distinctId() : this.options.distinctId;
+  }
+
+  private collectionAllowed(): boolean {
+    return this.options.hasConsent?.() ?? true;
   }
 
   private route(): string {

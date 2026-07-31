@@ -36,6 +36,23 @@ afterEach(() => {
 });
 
 describe('BrowserExperience', () => {
+  it('starts immediately when no host pause callback is provided', async () => {
+    const browser = new FakeWindow();
+    const batches: Array<{ events: Array<Record<string, unknown>> }> = [];
+    const experience = new BrowserExperience({
+      client: { captureExperience: async (batch) => { batches.push(batch); } },
+      surface: 'checkout', distinctId: 'actor-1', route: 'checkout', browser,
+      sessionId: 'session-immediate',
+    });
+
+    await experience.start();
+
+    expect(batches.flatMap((batch) => batch.events)).toEqual([
+      expect.objectContaining({ kind: 'page_viewed', session_id: 'session-immediate' }),
+    ]);
+    expect(browser.listenerCount('click')).toBe(1);
+  });
+
   it('does nothing until consent is granted', async () => {
     const browser = new FakeWindow();
     const batches: unknown[] = [];
