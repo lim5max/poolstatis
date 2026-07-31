@@ -1,9 +1,23 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App } from './App';
+import { App, NAV_ICONS } from './App';
 import { Setup } from './screens/Setup';
 import { useStore } from './store';
+import {
+  Browser,
+  Catalogue,
+  ChartAnalysis,
+  DashboardSpeed,
+  GitCommit,
+  Globe,
+  Plug,
+  Ruler,
+  TaskDone,
+  TestTube,
+  UserCircle,
+  UserGroup,
+} from './components/icons';
 
 vi.mock('./store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./store')>()),
@@ -77,6 +91,30 @@ describe('customer admin shell', () => {
     expect(screen.getByText('Ship & decide')).toBeInTheDocument();
     expect(screen.getByText('Manage data')).toBeInTheDocument();
     expect(screen.getByText('Workspace')).toBeInTheDocument();
+  });
+
+  it('uses semantic Hugeicons and a restrained lime hover state', () => {
+    render(<MemoryRouter initialEntries={['/analyze/web']}><App /></MemoryRouter>);
+
+    expect(NAV_ICONS['Product analytics']).toBe(ChartAnalysis);
+    expect(NAV_ICONS['Web analytics']).toBe(Globe);
+    expect(NAV_ICONS.Users).toBe(UserGroup);
+    expect(NAV_ICONS.Changes).toBe(GitCommit);
+    expect(NAV_ICONS.Experiments).toBe(TestTube);
+    expect(NAV_ICONS.Decisions).toBe(TaskDone);
+    expect(NAV_ICONS.Registry).toBe(Catalogue);
+    expect(NAV_ICONS.Measurement).toBe(Ruler);
+    expect(NAV_ICONS['Browser experience']).toBe(Browser);
+    expect(NAV_ICONS['Setup & MCP']).toBe(Plug);
+    expect(NAV_ICONS.Usage).toBe(DashboardSpeed);
+    expect(NAV_ICONS.Profile).toBe(UserCircle);
+
+    const product = screen.getAllByRole('link', { name: 'Product analytics' })[0];
+    expect(product).toHaveClass('hover:bg-sidebar-accent/10', 'hover:text-sidebar-accent');
+    expect(product).not.toHaveClass('hover:text-foreground');
+
+    const web = screen.getAllByRole('link', { name: 'Web analytics' })[0];
+    expect(web).toHaveClass('bg-sidebar-accent', 'text-sidebar-accent-foreground');
   });
 
   it('keeps the project and environment visible on Setup', async () => {

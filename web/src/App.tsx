@@ -1,7 +1,29 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { LayoutGrid, List, Database, GridView, KeyRound, Settings, SystemSettings, Target, PackageBox, Check, ChevronsUpDown, Menu, X, ArrowLeft, ArrowRight, type PoolstatisIcon } from '@/components/icons';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Browser,
+  Catalogue,
+  ChartAnalysis,
+  ChevronsUpDown,
+  DashboardSpeed,
+  Database,
+  GitCommit,
+  Globe,
+  KeyRound,
+  LayoutGrid,
+  Menu,
+  Plug,
+  Ruler,
+  TaskDone,
+  TestTube,
+  UserCircle,
+  UserGroup,
+  X,
+  type PoolstatisIcon,
+} from '@/components/icons';
 import { hostedAuthEnabled, useHostedAuth } from './oidc';
 import { useStore } from './store';
 import { Button } from '@/components/ui/button';
@@ -30,22 +52,22 @@ import { Profile } from './screens/Profile';
 import { Usage } from './screens/Usage';
 import { AuthPortal } from './screens/AuthPortal';
 
-const NAV_ICONS: Record<string, PoolstatisIcon> = {
+export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Overview: LayoutGrid,
-  'Product analytics': GridView,
-  'Web analytics': GridView,
-  Users: List,
-  Changes: PackageBox,
-  Experiments: Target,
-  Decisions: Check,
+  'Product analytics': ChartAnalysis,
+  'Web analytics': Globe,
+  Users: UserGroup,
+  Changes: GitCommit,
+  Experiments: TestTube,
+  Decisions: TaskDone,
   Data: Database,
-  Registry: List,
-  Measurement: SystemSettings,
-  'Browser experience': GridView,
+  Registry: Catalogue,
+  Measurement: Ruler,
+  'Browser experience': Browser,
   Keys: KeyRound,
-  'Setup & MCP': Settings,
-  Usage: Database,
-  Profile: Settings,
+  'Setup & MCP': Plug,
+  Usage: DashboardSpeed,
+  Profile: UserCircle,
 };
 const WORKSPACE_ITEMS: NavigationItem[] = [
   { label: 'Usage', to: '/usage', availability: 'available' },
@@ -257,7 +279,7 @@ function NavigationRow({ item, collapsed, onNavigate }: {
         collapsed ? 'justify-center px-2' : 'gap-2.5 px-3',
         isActive
           ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-          : 'text-muted-foreground hover:bg-sidebar-accent/65 hover:text-foreground',
+          : 'text-muted-foreground hover:bg-sidebar-accent/10 hover:text-sidebar-accent',
       )}
     >
       <Icon className="size-4 shrink-0" />
