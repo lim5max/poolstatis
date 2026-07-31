@@ -55,9 +55,9 @@ for the client you use; the paste location depends on the host.
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.4.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.5.0"],
       "env": {
-        "POOLSTATIS_URL": "https://api.poolstatis.com",
+        "POOLSTATIS_URL": "https://api.poolstatis.xyz",
         "POOLSTATIS_TOKEN": "pt_…"
       }
     }
@@ -68,9 +68,10 @@ for the client you use; the paste location depends on the host.
 `--silent` is required — otherwise pnpm prints a banner to stdout and corrupts the
 stdio MCP protocol.
 
-`@poolstatis/mcp@0.4.0` is the historical data and audited correction release
-candidate. Hosted deployments keep this pin fail-closed until its exact registry
-artifact passes fresh install, initialize, 99-tool list, and project-scoped read.
+`@poolstatis/mcp@0.5.0` includes the current Browser Analytics resource plus
+historical data and audited correction tools. Hosted deployments keep this pin
+fail-closed until its exact registry artifact passes fresh install, initialize,
+full tool-list, and project-scoped read.
 
 Verify the connection from the MCP client itself: ask it to call
 `get_onboarding_status` with the target `project` and explicit `env`, then
@@ -209,7 +210,7 @@ matching MCP tools). The experiment needs a 100%-allocated flag and an active
 import { createClient } from "@poolstatis/sdk";
 
 const ph = createClient({
-  url: "https://api.poolstatis.com",
+  url: "https://api.poolstatis.xyz",
   ingestKey: "pk_…",
 });
 

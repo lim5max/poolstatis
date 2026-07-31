@@ -92,7 +92,7 @@ function wrap<A>(fn: (args: A) => Promise<unknown>): (args: A) => Promise<ToolRe
   };
 }
 
-const server = new McpServer({ name: 'poolstatis', version: '0.4.0' });
+const server = new McpServer({ name: 'poolstatis', version: '0.5.0' });
 const project = z.string().describe('project slug, see list_projects');
 
 function asStructuredContent(data: unknown): Record<string, unknown> {

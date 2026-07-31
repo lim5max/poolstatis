@@ -319,7 +319,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   const credentialAttemptLimiter = options.rateLimit === false || options.rateLimit === undefined
     ? null
     : new TenantRateLimiter(credentialAttemptLimits(options.rateLimit));
-  const publicUrl = (options.publicUrl ?? 'https://api.poolstatis.com').replace(/\/$/, '');
+  const publicUrl = (options.publicUrl ?? 'https://api.poolstatis.xyz').replace(/\/$/, '');
   const mcpRunner = options.mcpRunner ?? {
     command: 'pnpm',
     args: ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'],

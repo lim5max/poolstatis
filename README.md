@@ -104,9 +104,9 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.4.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.5.0"],
       "env": {
-        "POOLSTATIS_URL": "https://api.poolstatis.com",
+        "POOLSTATIS_URL": "https://api.poolstatis.xyz",
         "POOLSTATIS_TOKEN": "pt_..."
       }
     }
@@ -118,9 +118,12 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
 the stdio MCP protocol.
 
 The public runner is version-pinned so a hosted deploy cannot silently change
-its MCP runtime. `@poolstatis/mcp@0.4.0` is the historical data and audited
-correction candidate; deployments keep it fail-closed until its exact registry
-artifact passes fresh install, initialize, 99-tool list, and scoped read smoke.
+its MCP runtime. `@poolstatis/mcp@0.5.0` includes the production browser
+analytics standard: immediate collection, finite route keys, server-derived
+country, bounded legacy SDK compatibility, and the existing historical-data
+and audited-correction tools. Each release remains fail-closed until its exact
+registry artifact passes fresh install, initialize, tool-list, and scoped-read
+smoke checks.
 
 Verify MCP from the configured client by calling `get_onboarding_status` with
 the target project and environment, then refresh **Setup & MCP**. A copied
@@ -147,7 +150,7 @@ See the public [quickstart](https://poolstatis.xyz/docs/quickstart),
 Send product events through the ingest API:
 
 ```bash
-curl -X POST https://api.poolstatis.com/i/v1/events \
+curl -X POST https://api.poolstatis.xyz/i/v1/events \
   -H 'Authorization: Bearer pk_...' \
   -H 'content-type: application/json' \
   -d '{"events":[{"event":"signup.completed","distinct_id":"u1"}]}'

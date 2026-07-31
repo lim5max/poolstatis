@@ -373,7 +373,7 @@ describe('live customer screen UX', () => {
     });
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[1]!);
     const noData = await screen.findByRole('region', { name: 'Session detail' });
-    expect(within(noData).getByText('Session details unavailable')).toBeInTheDocument();
+    expect(await within(noData).findByText('Session details unavailable')).toBeInTheDocument();
     expect(within(noData).getByText(/No matching accepted page-view session/)).toBeInTheDocument();
   });
 

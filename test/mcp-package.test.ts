@@ -317,7 +317,7 @@ describe('@poolstatis/mcp release artifact', () => {
   it('initializes, lists tools, and performs a project-scoped read against a safe fixture', async () => {
     const { client, stderr } = await connect(process.execPath, [cliModule]);
     try {
-      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.4.0' });
+      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.5.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
       expect(tools.tools).toHaveLength(100);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
@@ -338,6 +338,17 @@ describe('@poolstatis/mcp release artifact', () => {
         'revise_event',
         'get_event_history',
       ]));
+      const browserStandard = await client.readResource({
+        uri: 'poolstatis://standard/browser-analytics',
+      });
+      const browserStandardText = browserStandard.contents
+        .map((content) => ('text' in content ? content.text : ''))
+        .join('\n');
+      expect(browserStandardText).toContain('starts collection immediately');
+      expect(browserStandardText).toContain('does not require a consent state');
+      expect(browserStandardText).toContain('reviewed local MMDB resolver');
+      expect(browserStandardText).toContain('`landing_route`');
+      expect(browserStandardText).not.toContain('does nothing before explicit consent');
       const result = await client.callTool({
         name: 'get_project_schema',
         arguments: { project: 'safe-fixture', env: 'prod' },
