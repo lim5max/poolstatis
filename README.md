@@ -95,16 +95,22 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
 
 1. Open the hosted admin and create the first project in onboarding.
 2. Save the one-time `pt_` token for the MCP client and `pk_` token for ingest.
-3. Add Poolstatis as an MCP server in Claude Code, Claude Desktop, Codex,
+3. Choose an analytics job and optional product outcome; onboarding generates
+   one project/environment-scoped agent request without embedding either token.
+4. Add Poolstatis as an MCP server in Claude Code, Claude Desktop, Codex,
    Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit,
    OpenCode, Hermes-style launchers, or any compatible custom MCP host.
+
+The JSON below is the verified Claude MCP shape. **Setup & MCP** renders Codex
+as `config.toml`; for other hosts it shows generic stdio command, args, and env
+fields instead of pretending every client accepts Claude JSON.
 
 ```json
 {
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.5.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.6.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.xyz",
         "POOLSTATIS_TOKEN": "pt_..."
@@ -118,7 +124,7 @@ See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
 the stdio MCP protocol.
 
 The public runner is version-pinned so a hosted deploy cannot silently change
-its MCP runtime. `@poolstatis/mcp@0.5.0` includes the production browser
+its MCP runtime. `@poolstatis/mcp@0.6.0` includes the production browser
 analytics standard: immediate collection, finite route keys, server-derived
 country, bounded legacy SDK compatibility, and the existing historical-data
 and audited-correction tools. Each release remains fail-closed until its exact
@@ -143,6 +149,8 @@ pnpm dlx skills list --json
 
 Use `--agent codex` or `--agent claude-code` instead of `'*'` to target one
 runtime. An absolute local Core checkout path can replace the GitHub URL.
+The GitHub-source install resolves the repository state supported by the skills
+CLI; it is not a pinned-commit promise, so verify the installed names and source.
 See the public [quickstart](https://poolstatis.xyz/docs/quickstart),
 [instrumentation standard](https://poolstatis.xyz/docs/standard), and
 [MCP reference](https://poolstatis.xyz/docs/mcp-tools).

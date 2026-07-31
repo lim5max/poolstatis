@@ -630,27 +630,24 @@ describe('live customer screen UX', () => {
     expect(within(rankedList).getByTitle(longSource)).toHaveClass('truncate');
   });
 
-  it('keeps feature and experiment forms behind task-oriented actions', async () => {
+  it('starts feature delivery from a job instead of exposing infrastructure forms', async () => {
     mockedStore.mockReturnValue(store({
       flags: vi.fn().mockResolvedValue([]), experiments: vi.fn().mockResolvedValue([]),
       metrics: vi.fn().mockResolvedValue([metric]),
     }));
     render(<TooltipProvider><Experiments /></TooltipProvider>);
-    expect(await screen.findByText('Plan a measured rollout')).toBeInTheDocument();
-    expect(screen.getByText('Draft')).toBeInTheDocument();
-    expect(screen.getByText('Active')).toBeInTheDocument();
-    expect(screen.getByText('Running')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Explain draft status' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Explain active status' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Explain running experiment status' })).toBeInTheDocument();
-    expect(screen.queryByText((_, element) => element?.tagName === 'P' && Boolean(element.textContent?.includes('record first exposure')) && Boolean(element.textContent?.includes('outcome events only after that exposure')))).not.toBeInTheDocument();
+    expect(await screen.findByText('Ship a change safely')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Safe rollout/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /A\/B experiment/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Remote config/ })).toBeInTheDocument();
     expect(screen.queryByLabelText('Flag key')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Create feature flag' }));
-    expect(screen.getByLabelText('Flag key')).toBeInTheDocument();
-    expect(screen.getByText('Landing CTA example')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Experiment hypothesis')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /A\/B experiment/ }));
+    expect(screen.getByLabelText('Experiment hypothesis')).toBeInTheDocument();
+    expect(screen.getByText(/No traffic changes until readiness passes/)).toBeInTheDocument();
   });
 
-  it('wraps long experiment hypotheses inside a fixed responsive table', async () => {
+  it('wraps long experiment hypotheses inside a task card', async () => {
     const hypothesis = 'Directional, non-causal test: among consented landing visitors, proof-first CTA copy should improve measured signup completion while retaining the same exposure grain.';
     mockedStore.mockReturnValue(store({
       flags: vi.fn().mockResolvedValue([]),
@@ -661,14 +658,135 @@ describe('live customer screen UX', () => {
         hypothesis,
         flag_key: 'landing_cta_copy',
         primary_metric_key: 'signup_completed',
+        secondary_metric_keys: [],
+        env: 'prod',
+        control_variant_key: 'control',
+        snapshot_integrity: 'frozen_at_start',
         status: 'draft',
       }]),
       metrics: vi.fn().mockResolvedValue([metric]),
     }));
     render(<TooltipProvider><Experiments /></TooltipProvider>);
-    const cell = (await screen.findByText(hypothesis)).closest('td');
-    expect(cell).toHaveClass('whitespace-normal', 'break-words');
-    expect(cell?.closest('table')).toHaveClass('table-fixed');
+    const card = (await screen.findByText(hypothesis)).closest('article');
+    expect(card).toHaveAttribute('aria-label', 'Proof-first CTA');
+    expect(screen.getByText(hypothesis)).toHaveClass('break-words');
+    expect(within(card!).getByRole('button', { name: 'Check readiness' })).toBeInTheDocument();
+  });
+
+  it('prepares a scoped flag and experiment in one atomic request', async () => {
+    const prepareExperiment = vi.fn().mockResolvedValue({});
+    mockedStore.mockReturnValue(store({
+      flags: vi.fn().mockResolvedValue([]),
+      experiments: vi.fn().mockResolvedValue([]),
+      metrics: vi.fn().mockResolvedValue([metric]),
+      prepareExperiment,
+    }));
+    render(<TooltipProvider><Experiments /></TooltipProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: /A\/B experiment/ }));
+    fireEvent.change(screen.getByLabelText('Experiment name'), { target: { value: 'Shorter signup' } });
+    fireEvent.change(screen.getByLabelText('Experiment hypothesis'), { target: { value: 'A shorter signup will increase completed activation.' } });
+    const metricSelect = screen.getByRole('combobox', { name: 'Experiment primary metric' });
+    fireEvent.keyDown(metricSelect, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Landing visits/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare drafts' }));
+
+    await waitFor(() => expect(prepareExperiment).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      env: 'prod',
+      control_variant_key: 'control',
+      flag: expect.objectContaining({ key: 'shorter_signup_flag' }),
+      experiment: expect.objectContaining({ key: 'shorter_signup', primary_metric_key: 'landing_visits' }),
+    })));
+  });
+
+  it('requires server readiness plus code and identity confirmation before launch', async () => {
+    const launchExperiment = vi.fn().mockResolvedValue({});
+    const checks = [
+      'experiment_draft', 'flag_draft', 'environment_match', 'variant_count', 'allocation_complete',
+      'control_variant', 'primary_metric_distinct', 'metrics_active', 'no_running_experiment',
+    ].map((key) => ({ key, ready: true, message: `${key} is ready` }));
+    mockedStore.mockReturnValue(store({
+      flags: vi.fn().mockResolvedValue([{
+        id: 'f1', key: 'signup_flag', name: 'Signup delivery', purpose: 'Control signup traffic safely.', env: 'prod',
+        status: 'draft', salt: 'salt', variants: [{ key: 'control', rollout_percentage: 50 }, { key: 'treatment', rollout_percentage: 50 }],
+        created_at: '2026-08-01', updated_at: '2026-08-01',
+      }]),
+      experiments: vi.fn().mockResolvedValue([{
+        id: 'e1', key: 'signup_test', name: 'Signup test', hypothesis: 'A shorter signup will increase completed activation.',
+        flag_key: 'signup_flag', primary_metric_key: 'landing_visits', secondary_metric_keys: [], env: 'prod', control_variant_key: 'control',
+        snapshot_integrity: 'legacy_unfrozen', status: 'draft', started_at: null, concluded_at: null, decision: null,
+        created_at: '2026-08-01', updated_at: '2026-08-01',
+      }]),
+      metrics: vi.fn().mockResolvedValue([metric]),
+      experimentReadiness: vi.fn().mockResolvedValue({ key: 'signup_test', env: 'prod', ready: true, checks }),
+      launchExperiment,
+    }));
+    render(<TooltipProvider><Experiments /></TooltipProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Check readiness' }));
+    expect(await screen.findByText('Ready to start measuring?')).toBeInTheDocument();
+    const launch = screen.getByRole('button', { name: 'Launch experiment' });
+    expect(launch).toBeDisabled();
+    screen.getAllByRole('checkbox').forEach((checkbox) => fireEvent.click(checkbox));
+    expect(launch).toBeEnabled();
+    fireEvent.click(launch);
+    await waitFor(() => expect(launchExperiment).toHaveBeenCalledWith('alpha', 'signup_test'));
+  });
+
+  it('states that recording a ship decision does not silently change rollout', async () => {
+    mockedStore.mockReturnValue(store({
+      flags: vi.fn().mockResolvedValue([{
+        id: 'f1', key: 'signup_flag', name: 'Signup delivery', purpose: 'Control signup traffic safely.', env: 'prod',
+        status: 'active', salt: 'salt', variants: [{ key: 'control', rollout_percentage: 50 }, { key: 'treatment', rollout_percentage: 50 }],
+        created_at: '2026-08-01', updated_at: '2026-08-01',
+      }]),
+      experiments: vi.fn().mockResolvedValue([{
+        id: 'e1', key: 'signup_test', name: 'Signup test', hypothesis: 'A shorter signup will increase completed activation.',
+        flag_key: 'signup_flag', primary_metric_key: 'landing_visits', secondary_metric_keys: [], env: 'prod', control_variant_key: 'control',
+        snapshot_integrity: 'frozen_at_start', status: 'running', started_at: '2026-08-01', concluded_at: null, decision: null,
+        created_at: '2026-08-01', updated_at: '2026-08-01',
+      }]),
+      metrics: vi.fn().mockResolvedValue([metric]),
+    }));
+    render(<TooltipProvider><Experiments /></TooltipProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Record decision' }));
+    expect(await screen.findByText(/does not change rollout unless you explicitly select a variant/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply decision' })).toBeDisabled();
+  });
+
+  it('shows only the selected environment and keeps legacy all-env flags read only', async () => {
+    const flag = (key: string, env: string | null) => ({
+      id: key, key, name: key, purpose: `Safely control ${key} for its declared environment.`, env,
+      status: 'draft' as const, salt: `salt-${key}`, variants: [{ key: 'control', rollout_percentage: 100 }],
+      created_at: '2026-08-01', updated_at: '2026-08-01',
+    });
+    mockedStore.mockReturnValue(store({
+      flags: vi.fn().mockResolvedValue([flag('prod_flag', 'prod'), flag('dev_flag', 'dev'), flag('legacy_flag', null)]),
+      experiments: vi.fn().mockResolvedValue([{
+        id: 'prod-experiment', key: 'prod_experiment', name: 'Prod experiment', hypothesis: 'Measure the production outcome safely.',
+        flag_key: 'prod_flag', primary_metric_key: 'landing_visits', secondary_metric_keys: [], env: 'prod', control_variant_key: 'control',
+        snapshot_integrity: 'legacy_unfrozen', status: 'draft', started_at: null, concluded_at: null, decision: null,
+        created_at: '2026-08-01', updated_at: '2026-08-01',
+      }, {
+        id: 'dev-experiment', key: 'dev_experiment', name: 'Dev experiment', hypothesis: 'This must stay outside the production view.',
+        flag_key: 'dev_flag', primary_metric_key: 'landing_visits', secondary_metric_keys: [], env: 'dev', control_variant_key: 'control',
+        snapshot_integrity: 'legacy_unfrozen', status: 'draft', started_at: null, concluded_at: null, decision: null,
+        created_at: '2026-08-01', updated_at: '2026-08-01',
+      }]),
+      metrics: vi.fn().mockResolvedValue([metric]),
+    }));
+    render(<TooltipProvider><Experiments /></TooltipProvider>);
+
+    expect(await screen.findByText('Prod experiment')).toBeInTheDocument();
+    expect(screen.queryByText('Dev experiment')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /Feature flags/ }));
+    expect(screen.getByRole('article', { name: 'prod_flag' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'legacy_flag' })).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'dev_flag' })).not.toBeInTheDocument();
+    const legacyCard = screen.getByRole('article', { name: 'legacy_flag' });
+    expect(within(legacyCard).getByText('Read only · all envs')).toBeInTheDocument();
+    expect(within(legacyCard).queryByRole('button', { name: 'Activate' })).not.toBeInTheDocument();
   });
 
   it('keeps customer capture recency while exposing the full Visual Experience setup', async () => {

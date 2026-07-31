@@ -120,6 +120,30 @@ describe('proof-gated onboarding', () => {
     const reloaded = await api(env, env.secretToken, 'GET', statusUrl());
     expect(reloaded.body).toEqual(completed.body);
 
+    const unrelated = await api(
+      env,
+      env.secretToken,
+      'POST',
+      '/api/v1/projects/' + env.projectSlug + '/insights',
+      {
+        title: 'Unexecuted retention idea',
+        body: 'This must not be joined to the latest successful signup query.',
+        query: {
+          kind: 'trend',
+          metric: 'signup_completed',
+          date_from: '-30d',
+          interval: 'week',
+          env: 'prod',
+        },
+        severity: 'info',
+      },
+    );
+    expect(unrelated.status).toBe(201);
+
+    const afterUnrelatedInsight = await api(env, env.secretToken, 'GET', statusUrl());
+    expect(afterUnrelatedInsight.body.final_result).toEqual(completed.body.final_result);
+    expect(gate(afterUnrelatedInsight.body, 'first_decision_saved').evidence.title).toBe('Signup completion observed');
+
     await env.pool.query(
       `UPDATE api_keys SET revoked_at = now()
        WHERE project_id = $1 AND kind = 'ingest' AND env = 'prod'`,
@@ -128,6 +152,55 @@ describe('proof-gated onboarding', () => {
     const afterRevoke = await api(env, env.secretToken, 'GET', statusUrl());
     expect(gate(afterRevoke.body, 'data_source_connected').evidence.native).toBe(false);
     expect(gate(afterRevoke.body, 'data_source_connected').evidence.native_key_created_at).toBeNull();
+  });
+
+  test('links a saved funnel insight only to its executed funnel and uses the terminal metric', async () => {
+    const funnelEnv = await createTestEnv();
+    try {
+      await activeMetric(funnelEnv, {
+        key: 'funnel_started',
+        purpose: 'Shows whether a user enters the activation journey.',
+        source: { event: 'funnel.started', filters: [] },
+      });
+      await activeMetric(funnelEnv, {
+        key: 'funnel_completed',
+        purpose: 'Shows whether a user reaches the activation outcome.',
+        source: { event: 'funnel.completed', filters: [] },
+      });
+      await api(funnelEnv, funnelEnv.ingestToken, 'POST', '/i/v1/events', {
+        batch_id: 'onboarding-funnel',
+        events: [
+          { event: 'funnel.started', distinct_id: 'funnel-user' },
+          { event: 'funnel.completed', distinct_id: 'funnel-user' },
+        ],
+      });
+      const queryBody = {
+        kind: 'funnel',
+        steps: [{ metric: 'funnel_started' }, { metric: 'funnel_completed' }],
+        date_from: '-1d',
+        env: 'prod',
+      };
+      expect((await api(funnelEnv, funnelEnv.secretToken, 'POST',
+        `/api/v1/projects/${funnelEnv.projectSlug}/query`, queryBody)).status).toBe(200);
+      expect((await api(funnelEnv, funnelEnv.secretToken, 'POST',
+        `/api/v1/projects/${funnelEnv.projectSlug}/insights`, {
+          title: 'Activation funnel observed',
+          body: 'Investigate the handoff before expanding instrumentation.',
+          query: queryBody,
+          severity: 'info',
+        })).status).toBe(201);
+
+      const status = await api(funnelEnv, funnelEnv.secretToken, 'GET',
+        `/api/v1/projects/${funnelEnv.projectSlug}/onboarding/status?env=prod`);
+      expect(gate(status.body, 'first_decision_saved').complete).toBe(true);
+      expect(status.body.final_result).toMatchObject({
+        metric_key: 'funnel_completed',
+        metric_purpose: 'Shows whether a user reaches the activation outcome.',
+        next_action: 'Investigate the handoff before expanding instrumentation.',
+      });
+    } finally {
+      await funnelEnv.close();
+    }
   });
 });
 

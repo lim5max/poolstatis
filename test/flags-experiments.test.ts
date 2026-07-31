@@ -158,6 +158,33 @@ describe('experiments', () => {
     expect(started.status).toBe(200);
   }
 
+  function preparedSetup(
+    key: string,
+    metricKey: string,
+    overrides: Record<string, unknown> = {},
+  ) {
+    return {
+      env: 'prod',
+      control_variant_key: 'control',
+      flag: {
+        key: `${key}_flag`,
+        name: `${key} flag`,
+        purpose: `Safely deliver the ${key.replaceAll('_', ' ')} experiment variants.`,
+        variants: [
+          { key: 'control', rollout_percentage: 50 },
+          { key: 'test', rollout_percentage: 50, payload: { label: 'New' } },
+        ],
+      },
+      experiment: {
+        key,
+        name: key.replaceAll('_', ' '),
+        hypothesis: `The ${key.replaceAll('_', ' ')} treatment should improve its declared outcome.`,
+        primary_metric_key: metricKey,
+      },
+      ...overrides,
+    };
+  }
+
   it('counts only registered outcomes after an actor first sees the running experiment', async () => {
     await activeMetric(env, { key: 'checkout_completed', source: { event: 'checkout.completed' } });
     await createActiveFlag('checkout_experiment_flag');
@@ -329,6 +356,261 @@ describe('experiments', () => {
       expect.objectContaining({ metric: expect.objectContaining({ key: 'secondary_guardrail_failed' }) }),
     ]);
     expect(result.body.secondary_metrics[0].variants.reduce((total: number, variant: { converted: number }) => total + variant.converted, 0)).toBe(1);
+  });
+
+  it('prepares a draft flag and experiment atomically and rolls both back on a later conflict', async () => {
+    await activeMetric(env, { key: 'prepared_atomic_outcome', source: { event: 'prepared.atomic.outcome' } });
+    const prepared = await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`,
+      preparedSetup('prepared_atomic', 'prepared_atomic_outcome'));
+    expect(prepared.status).toBe(201);
+    expect(prepared.body).toMatchObject({
+      flag: { key: 'prepared_atomic_flag', status: 'draft', env: 'prod' },
+      experiment: { key: 'prepared_atomic', status: 'draft', env: 'prod', control_variant_key: 'control' },
+      readiness: { ready: true, env: 'prod' },
+    });
+
+    const conflict = await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`, {
+      ...preparedSetup('prepared_atomic_conflict', 'prepared_atomic_outcome'),
+      flag: {
+        ...(preparedSetup('prepared_atomic_conflict', 'prepared_atomic_outcome').flag),
+        key: 'must_rollback_flag',
+      },
+      experiment: {
+        ...(preparedSetup('prepared_atomic_conflict', 'prepared_atomic_outcome').experiment),
+        key: 'prepared_atomic',
+      },
+    });
+    expect(conflict.status).toBe(409);
+    const flags = await api(env, env.secretToken, 'GET', `${P()}/flags`);
+    expect(flags.body.flags.some((flag: { key: string }) => flag.key === 'must_rollback_flag')).toBe(false);
+  });
+
+  it('reports launch guard failures without activating a partial setup', async () => {
+    await activeMetric(env, { key: 'guarded_launch_outcome', source: { event: 'guarded.launch.outcome' } });
+    const singleVariant = preparedSetup('guarded_launch', 'guarded_launch_outcome', {
+      flag: {
+        key: 'guarded_launch_flag',
+        name: 'Guarded launch flag',
+        purpose: 'Keep an invalid one-variant experiment safely inactive.',
+        variants: [{ key: 'control', rollout_percentage: 100 }],
+      },
+    });
+    const prepared = await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`, singleVariant);
+    expect(prepared.status).toBe(201);
+    expect(prepared.body.readiness).toMatchObject({ ready: false });
+    expect(prepared.body.readiness.checks).toContainEqual(expect.objectContaining({ key: 'variant_count', ready: false }));
+
+    const launched = await api(env, env.secretToken, 'POST', `${P()}/experiments/guarded_launch/launch`, {});
+    expect(launched.status).toBe(409);
+    expect(launched.body.error.code).toBe('experiment_not_ready');
+    const listed = await api(env, env.secretToken, 'GET', `${P()}/flags`);
+    expect(listed.body.flags.find((flag: { key: string }) => flag.key === 'guarded_launch_flag').status).toBe('draft');
+  });
+
+  it('rejects PostHog outcome metrics instead of reporting native zeroes', async () => {
+    await env.pool.query(
+      `INSERT INTO metrics (project_id, key, name, purpose, type, source, status)
+       VALUES ($1, 'posthog_experiment_outcome', 'PostHog experiment outcome',
+         'Measures an external outcome that the native experiment evaluator cannot read.',
+         'count', $2::jsonb, 'active')`,
+      [env.projectId, JSON.stringify({
+        event: 'external.completed',
+        data_source: 'posthog',
+        source_connection_id: '00000000-0000-4000-8000-000000000001',
+      })],
+    );
+
+    const prepared = await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`,
+      preparedSetup('posthog_outcome_guard', 'posthog_experiment_outcome'));
+    expect(prepared.status).toBe(201);
+    expect(prepared.body.readiness.ready).toBe(false);
+    expect(prepared.body.readiness.checks).toContainEqual(expect.objectContaining({
+      key: 'metrics_active',
+      ready: false,
+      message: expect.stringContaining('native'),
+    }));
+
+    const launch = await api(env, env.secretToken, 'POST', `${P()}/experiments/posthog_outcome_guard/launch`);
+    expect(launch.status).toBe(409);
+    expect(launch.body.error.code).toBe('experiment_not_ready');
+  });
+
+  it('blocks inactive metrics and a second running experiment on the same flag', async () => {
+    const proposed = await api(env, env.secretToken, 'POST', `${P()}/metrics`, {
+      key: 'proposed_launch_outcome',
+      name: 'Proposed launch outcome',
+      purpose: 'Measure whether the proposed launch produces its intended outcome.',
+      type: 'count',
+      source: { event: 'proposed.launch.outcome' },
+    });
+    expect(proposed.status).toBe(201);
+    const notReady = await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`,
+      preparedSetup('proposed_metric_launch', 'proposed_launch_outcome'));
+    expect(notReady.body.readiness.checks).toContainEqual(expect.objectContaining({ key: 'metrics_active', ready: false }));
+    expect((await api(env, env.secretToken, 'POST', `${P()}/experiments/proposed_metric_launch/launch`, {})).status).toBe(409);
+
+    await activeMetric(env, { key: 'shared_flag_outcome', source: { event: 'shared.flag.outcome' } });
+    await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`,
+      preparedSetup('shared_flag_first', 'shared_flag_outcome'));
+    const second = await api(env, env.secretToken, 'POST', `${P()}/experiments`, {
+      key: 'shared_flag_second',
+      name: 'Shared flag second',
+      hypothesis: 'A second experiment must not launch while the first owns this flag.',
+      flag_key: 'shared_flag_first_flag',
+      primary_metric_key: 'shared_flag_outcome',
+      env: 'prod',
+      control_variant_key: 'control',
+    });
+    expect(second.status).toBe(201);
+    expect((await api(env, env.secretToken, 'POST', `${P()}/experiments/shared_flag_first/launch`, {})).status).toBe(200);
+    const readiness = await api(env, env.secretToken, 'GET', `${P()}/experiments/shared_flag_second/readiness?env=prod`);
+    expect(readiness.body.checks).toContainEqual(expect.objectContaining({ key: 'no_running_experiment', ready: false }));
+    expect((await api(env, env.secretToken, 'POST', `${P()}/experiments/shared_flag_second/launch`, {})).status).toBe(409);
+  });
+
+  it('rejects invalid controls and repeated primary metrics before creating either draft', async () => {
+    await activeMetric(env, { key: 'invalid_prepare_outcome', source: { event: 'invalid.prepare.outcome' } });
+    const unknownControl = await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`, {
+      ...preparedSetup('unknown_control_prepare', 'invalid_prepare_outcome'),
+      control_variant_key: 'missing',
+    });
+    expect(unknownControl.status).toBe(400);
+    expect(unknownControl.body.error.code).toBe('experiment_control_variant_unknown');
+
+    const repeatedMetric = await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`, {
+      ...preparedSetup('repeated_metric_prepare', 'invalid_prepare_outcome'),
+      experiment: {
+        ...preparedSetup('repeated_metric_prepare', 'invalid_prepare_outcome').experiment,
+        secondary_metric_keys: ['invalid_prepare_outcome'],
+      },
+    });
+    expect(repeatedMetric.status).toBe(400);
+    expect(repeatedMetric.body.error.code).toBe('experiment_primary_metric_repeated');
+
+    const flags = await api(env, env.secretToken, 'GET', `${P()}/flags`);
+    expect(flags.body.flags.some((flag: { key: string }) => flag.key === 'unknown_control_prepare_flag')).toBe(false);
+    expect(flags.body.flags.some((flag: { key: string }) => flag.key === 'repeated_metric_prepare_flag')).toBe(false);
+  });
+
+  it('launches atomically once under concurrency and freezes definitions', async () => {
+    await activeMetric(env, { key: 'atomic_launch_outcome', source: { event: 'atomic.launch.outcome' } });
+    expect((await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`,
+      preparedSetup('atomic_launch', 'atomic_launch_outcome'))).status).toBe(201);
+
+    const attempts = await Promise.all([
+      api(env, env.secretToken, 'POST', `${P()}/experiments/atomic_launch/launch`, {}),
+      api(env, env.secretToken, 'POST', `${P()}/experiments/atomic_launch/launch`, {}),
+    ]);
+    expect(attempts.map((attempt) => attempt.status).sort()).toEqual([200, 409]);
+    const success = attempts.find((attempt) => attempt.status === 200)!;
+    expect(success.body).toMatchObject({
+      flag: { status: 'active' },
+      experiment: { status: 'running', snapshot_integrity: 'frozen_at_start' },
+    });
+  });
+
+  it('keeps frozen results stable after the concluded flag and metric mutate', async () => {
+    await activeMetric(env, { key: 'frozen_result_outcome', source: { event: 'frozen.result.outcome' } });
+    await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`,
+      preparedSetup('frozen_result', 'frozen_result_outcome'));
+    await api(env, env.secretToken, 'POST', `${P()}/experiments/frozen_result/launch`, {});
+    await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'frozen_result_flag', distinct_id: 'frozen-actor',
+    });
+    await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{ event: 'frozen.result.outcome', distinct_id: 'frozen-actor' }],
+    });
+    const before = await api(env, env.secretToken, 'GET', `${P()}/experiments/frozen_result/results?env=prod`);
+    expect(before.status).toBe(200);
+    expect(before.body.snapshot_integrity).toBe('frozen_at_start');
+
+    const concluded = await api(env, env.secretToken, 'POST', `${P()}/experiments/frozen_result/apply-decision`, {
+      decision: { outcome: 'inconclusive', rationale: 'Freeze this measured window before definitions change.' },
+    });
+    expect(concluded.status).toBe(200);
+    expect((await api(env, env.secretToken, 'PATCH', `${P()}/flags/frozen_result_flag`, {
+      variants: [{ key: 'replacement', rollout_percentage: 100 }],
+    })).status).toBe(200);
+    expect((await api(env, env.secretToken, 'PATCH', `${P()}/metrics/frozen_result_outcome`, {
+      source: { event: 'different.outcome' },
+    })).status).toBe(200);
+    expect((await api(env, env.secretToken, 'POST', `${P()}/metrics/frozen_result_outcome/deprecate`, {
+      reason: 'Changed after the experiment to prove snapshots remain readable.',
+    })).status).toBe(200);
+
+    const after = await api(env, env.secretToken, 'GET', `${P()}/experiments/frozen_result/results?env=prod`);
+    expect(after.status).toBe(200);
+    expect(after.body.primary_metric).toEqual(before.body.primary_metric);
+    expect(after.body.variants).toEqual(before.body.variants);
+    expect(after.body.snapshot_integrity).toBe('frozen_at_start');
+  });
+
+  it('keeps a failed ship decision atomic and can explicitly roll a winner to one hundred percent', async () => {
+    await activeMetric(env, { key: 'ship_atomic_outcome', source: { event: 'ship.atomic.outcome' } });
+    await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`,
+      preparedSetup('ship_atomic', 'ship_atomic_outcome'));
+    await api(env, env.secretToken, 'POST', `${P()}/experiments/ship_atomic/launch`, {});
+
+    const invalid = await api(env, env.secretToken, 'POST', `${P()}/experiments/ship_atomic/apply-decision`, {
+      decision: { outcome: 'ship', rationale: 'This invalid choice must roll the whole transaction back.' },
+      ship_variant_key: 'missing',
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe('experiment_ship_variant_unknown');
+    const stillRunning = await api(env, env.secretToken, 'GET', `${P()}/experiments`);
+    expect(stillRunning.body.experiments.find((experiment: { key: string }) => experiment.key === 'ship_atomic').status).toBe('running');
+
+    const applied = await api(env, env.secretToken, 'POST', `${P()}/experiments/ship_atomic/apply-decision`, {
+      decision: { outcome: 'ship', rationale: 'Ship the explicit treatment and stop splitting new traffic.' },
+      ship_variant_key: 'test',
+    });
+    expect(applied.status).toBe(200);
+    expect(applied.body.experiment).toMatchObject({ status: 'concluded', decision: { outcome: 'ship', ship_variant_key: 'test' } });
+    expect(applied.body.flag.variants).toEqual([
+      { key: 'control', rollout_percentage: 0 },
+      { key: 'test', rollout_percentage: 100, payload: { label: 'New' } },
+    ]);
+  });
+
+  it('isolates new flags and experiment results by env while legacy flags remain project-wide', async () => {
+    await activeMetric(env, { key: 'env_scoped_outcome', source: { event: 'env.scoped.outcome' } });
+    await api(env, env.secretToken, 'POST', `${P()}/experiments/prepare`,
+      preparedSetup('env_scoped', 'env_scoped_outcome'));
+    await api(env, env.secretToken, 'POST', `${P()}/experiments/env_scoped/launch`, {});
+
+    const dev = await api(env, env.ingestDevToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'env_scoped_flag', distinct_id: 'env-actor',
+    });
+    expect(dev.status).toBe(200);
+    expect(dev.body).toEqual({ key: 'env_scoped_flag', variant: null });
+    const prod = await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'env_scoped_flag', distinct_id: 'env-actor',
+    });
+    expect(prod.status).toBe(200);
+    expect(prod.body.variant).not.toBeNull();
+    const wrongResults = await api(env, env.secretToken, 'GET', `${P()}/experiments/env_scoped/results?env=dev`);
+    expect(wrongResults.status).toBe(409);
+    expect(wrongResults.body.error.code).toBe('experiment_environment_mismatch');
+
+    await createActiveFlag('legacy_all_env_flag');
+    expect((await api(env, env.ingestToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'legacy_all_env_flag', distinct_id: 'legacy-prod',
+    })).body.variant).not.toBeNull();
+    expect((await api(env, env.ingestDevToken, 'POST', '/i/v1/flags/evaluate', {
+      key: 'legacy_all_env_flag', distinct_id: 'legacy-dev',
+    })).body.variant).not.toBeNull();
+  });
+
+  it('freezes snapshots for the legacy start endpoint without changing its request shape', async () => {
+    await activeMetric(env, { key: 'legacy_start_outcome', source: { event: 'legacy.start.outcome' } });
+    await createActiveFlag('legacy_start_flag');
+    await createAndStartExperiment('legacy_start_experiment', 'legacy_start_flag', 'legacy_start_outcome');
+    const listed = await api(env, env.secretToken, 'GET', `${P()}/experiments`);
+    expect(listed.body.experiments.find((experiment: { key: string }) => experiment.key === 'legacy_start_experiment')).toMatchObject({
+      env: null,
+      control_variant_key: 'control',
+      snapshot_integrity: 'frozen_at_start',
+    });
   });
 });
 

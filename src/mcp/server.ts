@@ -12,7 +12,7 @@ import { z } from 'zod';
 import {
   actorDistinctIdSchema, actorLinkSchema, actorsQuerySchema, browserRouteKeysSchema,
   applyMeasurementDeclarationSchema,
-  concludeExperimentSchema, createExperimentSchema,
+  concludeExperimentSchema, createExperimentSchema, prepareExperimentSchema,
   createMetricCategorySchema,
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
@@ -92,7 +92,7 @@ function wrap<A>(fn: (args: A) => Promise<unknown>): (args: A) => Promise<ToolRe
   };
 }
 
-const server = new McpServer({ name: 'poolstatis', version: '0.5.0' });
+const server = new McpServer({ name: 'poolstatis', version: '0.6.0' });
 const project = z.string().describe('project slug, see list_projects');
 
 function asStructuredContent(data: unknown): Record<string, unknown> {
@@ -692,6 +692,13 @@ jsonTool(
 );
 
 jsonTool(
+  'prepare_experiment',
+  'Atomically create an environment-scoped draft flag and experiment from one reviewed setup. Nothing is activated until launch_experiment succeeds.',
+  { project, setup: prepareExperimentSchema },
+  wrap(({ project: slug, setup }) => api('POST', `/api/v1/projects/${slug}/experiments/prepare`, setup)),
+);
+
+jsonTool(
   'list_experiments',
   'List feature experiments and their lifecycle status.',
   { project },
@@ -713,10 +720,43 @@ jsonTool(
 );
 
 jsonTool(
+  'check_experiment_readiness',
+  'Check the explicit environment, control, allocation, outcome metrics and flag ownership required for an atomic experiment launch.',
+  { project, key: z.string(), env: z.string().optional() },
+  wrap(({ project: slug, key, env }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/readiness${env ? `?env=${encodeURIComponent(env)}` : ''}`,
+  )),
+);
+
+jsonTool(
+  'launch_experiment',
+  'Atomically activate a prepared draft flag, freeze its metric/variant definitions and start the experiment only when every readiness check passes.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api('POST', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/launch`, {})),
+);
+
+jsonTool(
   'conclude_experiment',
   'Conclude a running experiment and optionally record the agent decision with rationale.',
   { project, key: z.string(), conclusion: concludeExperimentSchema },
   wrap(({ project: slug, key, conclusion }) => api('POST', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/conclude`, conclusion)),
+);
+
+jsonTool(
+  'apply_experiment_decision',
+  'Atomically conclude a running experiment and optionally roll one explicit shipped variant to 100%. Omitting ship_variant_key records the decision without changing delivery.',
+  {
+    project,
+    key: z.string(),
+    decision: concludeExperimentSchema.shape.decision.unwrap(),
+    ship_variant_key: z.string().optional(),
+  },
+  wrap(({ project: slug, key, decision, ship_variant_key }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/apply-decision`,
+    { decision, ...(ship_variant_key ? { ship_variant_key } : {}) },
+  )),
 );
 
 jsonTool(

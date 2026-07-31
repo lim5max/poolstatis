@@ -249,6 +249,7 @@ describe('owner UI feedback regressions', () => {
           key: 'landing_waitlist_cta_copy',
           name: 'Landing waitlist CTA copy',
           purpose: 'Test whether proof-oriented CTA copy increases qualified Cloud waitlist submissions without changing app routing.',
+          env: 'prod',
           status: 'active',
           salt: 'salt',
           variants: [
@@ -264,6 +265,7 @@ describe('owner UI feedback regressions', () => {
     } as never);
     render(<TooltipProvider><Experiments /></TooltipProvider>);
 
+    fireEvent.click(await screen.findByRole('tab', { name: /Feature flags/ }));
     const card = await screen.findByRole('article', { name: 'Landing waitlist CTA copy' });
     expect(card).toHaveClass('grid');
     expect(within(card).getByText(/proof-oriented CTA copy/)).toHaveClass('break-words');

@@ -58,6 +58,7 @@ export interface FeatureFlag {
   key: string;
   name: string;
   purpose: string;
+  env: string | null;
   status: FeatureFlagStatus;
   salt: string;
   variants: FeatureFlagVariant[];
@@ -66,6 +67,7 @@ export interface FeatureFlag {
 }
 
 export type ExperimentStatus = 'draft' | 'running' | 'concluded';
+export type ExperimentSnapshotIntegrity = 'legacy_unfrozen' | 'backfilled_current' | 'frozen_at_start';
 
 export interface Experiment {
   id: string;
@@ -75,6 +77,9 @@ export interface Experiment {
   flag_key: string;
   primary_metric_key: string;
   secondary_metric_keys: string[];
+  env: string | null;
+  control_variant_key: string | null;
+  snapshot_integrity: ExperimentSnapshotIntegrity;
   status: ExperimentStatus;
   started_at: string | null;
   concluded_at: string | null;
@@ -86,6 +91,9 @@ export interface Experiment {
 export interface ExperimentResult {
   key: string;
   status: ExperimentStatus;
+  env: string;
+  control_variant_key: string | null;
+  snapshot_integrity: ExperimentSnapshotIntegrity;
   primary_metric: Pick<Metric, 'key' | 'name' | 'purpose'>;
   started_at: string;
   concluded_at: string | null;
@@ -110,6 +118,34 @@ export interface ExperimentResult {
       probability_best: number;
     }>;
   }>;
+}
+
+export type ExperimentReadinessCheckKey =
+  | 'experiment_draft'
+  | 'flag_draft'
+  | 'environment_match'
+  | 'variant_count'
+  | 'allocation_complete'
+  | 'control_variant'
+  | 'primary_metric_distinct'
+  | 'metrics_active'
+  | 'no_running_experiment';
+
+export interface ExperimentReadiness {
+  key: string;
+  env: string | null;
+  ready: boolean;
+  checks: Array<{
+    key: ExperimentReadinessCheckKey;
+    ready: boolean;
+    message: string;
+  }>;
+}
+
+export interface PreparedExperiment {
+  flag: FeatureFlag;
+  experiment: Experiment;
+  readiness: ExperimentReadiness;
 }
 
 export type ExperienceSurfaceStatus = 'active' | 'archived';

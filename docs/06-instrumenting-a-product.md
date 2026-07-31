@@ -43,19 +43,34 @@ Key kinds (see [ARCHITECTURE.md](../ARCHITECTURE.md)):
 
 ## A. Agent-driven (MCP)
 
-### 1. Connect the MCP
+### 1. Choose the first product question
+
+In **Setup & MCP**, choose one job: understand activation, find funnel drop-off,
+add web analytics, or measure a release. Add an optional product outcome, then
+copy the generated request into the coding agent that edits the product repo.
+
+The request is scoped to the selected Poolstatis project and environment. It
+contains no `pt_`, `sk_`, `pk_`, admin-session token, or saved prompt. It asks the
+agent to inspect the repo, propose the smallest purpose-backed plan, keep new
+definitions proposed for owner review, exercise a real path, and finish with
+server evidence plus the single next onboarding blocker.
+
+### 2. Connect the MCP
 
 Choose Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot,
 Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers, or custom MCP in
-the **Setup & MCP** tab. The admin renders the same stdio command, args, and env
-for the client you use; the paste location depends on the host.
+the **Setup & MCP** tab. The admin renders a verified `mcpServers` JSON adapter
+for Claude clients, a verified `config.toml` adapter for Codex, and explicit
+generic stdio `command`, `args`, and `env` fields for other hosts whose exact
+file shape is not verified. Do not paste a Claude JSON object into an unrelated
+host just because both support MCP.
 
 ```json
 {
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.5.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.6.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.xyz",
         "POOLSTATIS_TOKEN": "pt_…"
@@ -68,7 +83,7 @@ for the client you use; the paste location depends on the host.
 `--silent` is required — otherwise pnpm prints a banner to stdout and corrupts the
 stdio MCP protocol.
 
-`@poolstatis/mcp@0.5.0` includes the current Browser Analytics resource plus
+`@poolstatis/mcp@0.6.0` includes the current Browser Analytics resource plus
 historical data and audited correction tools. Hosted deployments keep this pin
 fail-closed until its exact registry artifact passes fresh install, initialize,
 full tool-list, and project-scoped read.
@@ -80,7 +95,7 @@ The server records that MCP-marked request and its time. Copying config is not
 connection proof, and the recorded request is last-use evidence rather than a
 heartbeat or transport attestation.
 
-### 2. Install the agent skills
+### 3. Install the agent skills
 
 MCP supplies live tools and project data. Skills supply the standards and
 documentation workflow for using them. Install all three in the **product repo**:
@@ -110,8 +125,11 @@ pnpm dlx skills list --json
 The list must include `poolstatis-instrument`, `poolstatis-analyze`, and
 `poolstatis-maintain`. The canonical copies are under `.agents/skills`; the
 `.claude/skills` copies are kept byte-identical for direct Claude discovery.
+The GitHub-source command above installs the repository state resolved by the
+skills CLI; it does not promise a pinned commit. Verify the installed names and
+inspect the resolved source before relying on it in a controlled release.
 
-### 3. Run the instrumentation skill
+### 4. Run the instrumentation skill
 
 With MCP connected, invoke `poolstatis-instrument` or ask:
 *"instrument this app with Poolstatis."* The skill routes the agent to:
@@ -128,7 +146,7 @@ The public references are the [quickstart](https://poolstatis.xyz/docs/quickstar
 [instrumentation standard](https://poolstatis.xyz/docs/standard), and
 [MCP tool reference](https://poolstatis.xyz/docs/mcp-tools).
 
-### 4. Activate
+### 5. Activate
 
 Open the admin **Registry** tab → metrics arrive as `proposed` → click **activate**
 on the ones you want counted. (Or `update_metric` with `{status:"active"}` via MCP.)

@@ -190,11 +190,36 @@ export async function getOnboardingStatus(
       [projectId, env],
     ),
     pool.query(
-      `SELECT id, title, body, query, created_at
-       FROM insights
-       WHERE project_id = $1 AND query IS NOT NULL
-       ORDER BY created_at DESC, id DESC LIMIT 1`,
-      [projectId],
+      `SELECT i.id, i.title, i.body, i.query, i.created_at,
+              q.id AS query_run_id, q.source AS query_source,
+              q.result_summary AS query_result_summary,
+              q.created_at AS query_created_at
+       FROM insights i
+       JOIN LATERAL (
+         SELECT id, source, result_summary, created_at
+         FROM query_runs
+         WHERE project_id = $1 AND env = $2
+           AND query->>'kind' = i.query->>'kind'
+           AND (
+             (query->>'kind' = 'funnel'
+               AND COALESCE(query->>'funnel', '') = COALESCE(i.query->>'funnel', '')
+               AND COALESCE(query->'steps', '[]'::jsonb) = COALESCE(i.query->'steps', '[]'::jsonb))
+             OR
+             (query->>'kind' <> 'funnel' AND query->>'metric' = i.query->>'metric')
+           )
+           AND query->>'date_from' = i.query->>'date_from'
+           AND COALESCE(query->>'date_to', '') = COALESCE(i.query->>'date_to', '')
+           AND COALESCE(query->>'interval', 'day') = COALESCE(i.query->>'interval', 'day')
+           AND COALESCE(query->>'env', 'prod') = COALESCE(i.query->>'env', 'prod')
+           AND COALESCE(query->'filters', '[]'::jsonb) = COALESCE(i.query->'filters', '[]'::jsonb)
+           AND COALESCE(query->'breakdown', 'null'::jsonb) = COALESCE(i.query->'breakdown', 'null'::jsonb)
+           AND created_at <= i.created_at
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1
+       ) q ON true
+       WHERE i.project_id = $1 AND i.query IS NOT NULL
+       ORDER BY i.created_at DESC, i.id DESC LIMIT 1`,
+      [projectId, env],
     ),
     pool.query(
       `SELECT reason, acknowledged_by, acknowledged_at
@@ -306,7 +331,7 @@ export async function getOnboardingStatus(
     ),
   ];
 
-  const finalResult = await finalResultFor(pool, projectId, queryRow, insightRow, decisionRow);
+  const finalResult = await finalResultFor(pool, projectId, insightRow, decisionRow);
   return {
     complete: gates.every((item) => item.complete),
     gates,
@@ -357,7 +382,6 @@ function summarizeResult(result: QueryResult): Record<string, unknown> {
 async function finalResultFor(
   pool: pg.Pool,
   projectId: string,
-  queryRow: Record<string, any> | undefined,
   insightRow: Record<string, any> | undefined,
   decisionRow: Record<string, any> | undefined,
 ): Promise<OnboardingStatus['final_result']> {
@@ -374,11 +398,18 @@ async function finalResultFor(
       };
     }
   }
-  if (!queryRow || !insightRow) return null;
-  const metricKey = typeof queryRow.query?.metric === 'string'
-    ? queryRow.query.metric
+  if (!insightRow) return null;
+  const funnelSteps = Array.isArray(insightRow.query_result_summary?.steps)
+    ? insightRow.query_result_summary.steps
+    : [];
+  const terminalFunnelMetric = funnelSteps.length > 0
+    && typeof funnelSteps[funnelSteps.length - 1]?.metric_key === 'string'
+    ? funnelSteps[funnelSteps.length - 1].metric_key
     : null;
-  const window = queryRow.result_summary?.query_window;
+  const metricKey = typeof insightRow.query?.metric === 'string'
+    ? insightRow.query.metric
+    : terminalFunnelMetric;
+  const window = insightRow.query_result_summary?.query_window;
   if (!metricKey || !window?.from || !window?.to) return null;
   const metric = await pool.query<{ purpose: string }>(
     'SELECT purpose FROM metrics WHERE project_id = $1 AND key = $2',
@@ -389,7 +420,7 @@ async function finalResultFor(
     metric_key: metricKey,
     metric_purpose: metric.rows[0].purpose,
     query_window: { from: window.from, to: window.to },
-    source: queryRow.source,
+    source: insightRow.query_source,
     next_action: insightRow.body,
   };
 }

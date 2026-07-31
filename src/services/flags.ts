@@ -22,6 +22,7 @@ export interface FeatureFlag {
   name: string;
   purpose: string;
   status: 'draft' | 'active' | 'archived';
+  env: string | null;
   salt: string;
   variants: FeatureFlagVariant[];
   created_at: string;
@@ -33,7 +34,7 @@ export interface FlagEvaluation {
   variant: { key: string; payload?: Record<string, unknown> } | null;
 }
 
-const FLAG_COLS = 'id, key, name, purpose, status, salt, variants, created_at, updated_at';
+const FLAG_COLS = 'id, key, name, purpose, status, env, salt, variants, created_at, updated_at';
 
 function mapFlag(row: FeatureFlag): FeatureFlag {
   return {
@@ -47,16 +48,16 @@ function mapFlag(row: FeatureFlag): FeatureFlag {
 }
 
 export async function createFeatureFlag(
-  pool: pg.Pool,
+  pool: Db,
   projectId: string,
   input: CreateFeatureFlagInput,
 ): Promise<FeatureFlag> {
   try {
     const { rows } = await pool.query<FeatureFlag>(
-      `INSERT INTO feature_flags (project_id, key, name, purpose, status, variants)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO feature_flags (project_id, key, name, purpose, status, variants, env)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING ${FLAG_COLS}`,
-      [projectId, input.key, input.name, input.purpose, input.status, JSON.stringify(input.variants)],
+      [projectId, input.key, input.name, input.purpose, input.status, JSON.stringify(input.variants), input.env ?? null],
     );
     return mapFlag(rows[0]!);
   } catch (err) {
@@ -189,6 +190,9 @@ export async function evaluateFeatureFlag(
   options: { emitExposure?: boolean; now?: Date } = {},
 ): Promise<FlagEvaluation> {
   const flag = await getFeatureFlag(pool, projectId, input.key);
+  if (flag.env !== null && flag.env !== env) {
+    return { key: flag.key, variant: null };
+  }
   if (flag.status !== 'active') {
     throw new ApiError(
       409,

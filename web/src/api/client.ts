@@ -1,5 +1,5 @@
 import type {
-  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage,
+  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, PreparedExperiment,
   BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
@@ -363,6 +363,7 @@ export class PoolstatisClient {
 
   createFlag(slug: string, body: {
     key: string; name: string; purpose: string; status: Exclude<FeatureFlagStatus, 'archived'>;
+    env?: string;
     variants: Array<{ key: string; rollout_percentage: number; payload?: Record<string, unknown> }>;
   }) {
     return this.req<FeatureFlag>('POST', `/api/v1/projects/${slug}/flags`, body);
@@ -384,7 +385,7 @@ export class PoolstatisClient {
   }
 
   createExperiment(slug: string, body: {
-    key: string; name: string; hypothesis: string; flag_key: string; primary_metric_key: string; secondary_metric_keys?: string[];
+    key: string; name: string; hypothesis: string; flag_key: string; primary_metric_key: string; secondary_metric_keys?: string[]; env?: string; control_variant_key?: string;
   }) {
     return this.req<Experiment>('POST', `/api/v1/projects/${slug}/experiments`, body);
   }
@@ -399,6 +400,50 @@ export class PoolstatisClient {
 
   experimentResults(slug: string, key: string, env = 'prod') {
     return this.req<ExperimentResult>('GET', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/results?env=${encodeURIComponent(env)}`);
+  }
+
+  prepareExperiment(slug: string, body: {
+    env: string;
+    control_variant_key: string;
+    flag: {
+      key: string;
+      name: string;
+      purpose: string;
+      variants: Array<{ key: string; rollout_percentage: number; payload?: Record<string, unknown> }>;
+    };
+    experiment: {
+      key: string;
+      name: string;
+      hypothesis: string;
+      primary_metric_key: string;
+      secondary_metric_keys?: string[];
+    };
+  }) {
+    return this.req<PreparedExperiment>('POST', `/api/v1/projects/${slug}/experiments/prepare`, body);
+  }
+
+  experimentReadiness(slug: string, key: string, env?: string) {
+    const query = env ? `?env=${encodeURIComponent(env)}` : '';
+    return this.req<ExperimentReadiness>('GET', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/readiness${query}`);
+  }
+
+  launchExperiment(slug: string, key: string) {
+    return this.req<PreparedExperiment>('POST', `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/launch`, {});
+  }
+
+  applyExperimentDecision(
+    slug: string,
+    key: string,
+    body: {
+      decision: { outcome: 'ship' | 'iterate' | 'stop' | 'inconclusive'; rationale: string };
+      ship_variant_key?: string;
+    },
+  ) {
+    return this.req<{ experiment: Experiment; flag: FeatureFlag }>(
+      'POST',
+      `/api/v1/projects/${slug}/experiments/${encodeURIComponent(key)}/apply-decision`,
+      body,
+    );
   }
 
   // ---- browser experience ----
