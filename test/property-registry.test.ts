@@ -1,4 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import {
+  acquisitionPropertyPlans,
+  assertRegisteredAcquisitionProperties,
+  assertTrustedAcquisitionProperties,
+  LEGACY_ACQUISITION_PURPOSE,
+} from '../src/services/acquisitionAttribution.js';
 import { BROWSER_ANALYTICS_PROPERTIES } from '../src/services/browserAnalytics.js';
 import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
 
@@ -170,6 +176,50 @@ describe('property registry and measurement trust', () => {
     );
     expect(setup.status).toBe(409);
     expect(setup.body.error.code).toBe('acquisition_property_conflict');
+  });
+
+  test('accepts the exact legacy acquisition purposes created by the previous setup contract', async () => {
+    const legacyEnv = await createTestEnv();
+    try {
+      const legacy = await api(
+        legacyEnv,
+        legacyEnv.secretToken,
+        'POST',
+        '/api/v1/projects/' + legacyEnv.projectSlug + '/properties',
+        {
+          key: '$utm_source',
+          scope: 'event',
+          value_type: 'string',
+          purpose: LEGACY_ACQUISITION_PURPOSE.$utm_source,
+          status: 'trusted',
+          source: 'native',
+        },
+      );
+      expect(legacy.status).toBe(201);
+
+      await expect(acquisitionPropertyPlans(legacyEnv.pool, legacyEnv.projectId))
+        .resolves.toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            key: '$utm_source',
+            property: expect.objectContaining({
+              purpose: LEGACY_ACQUISITION_PURPOSE.$utm_source,
+              status: 'trusted',
+            }),
+          }),
+        ]));
+      await expect(assertRegisteredAcquisitionProperties(
+        legacyEnv.pool,
+        legacyEnv.projectId,
+        ['$utm_source'],
+      )).resolves.toBeUndefined();
+      await expect(assertTrustedAcquisitionProperties(
+        legacyEnv.pool,
+        legacyEnv.projectId,
+        ['$utm_source'],
+      )).resolves.toBeUndefined();
+    } finally {
+      await legacyEnv.close();
+    }
   });
 
   test('rejects a noncanonical existing definition for reserved browser keys', async () => {
