@@ -76,10 +76,9 @@ Merge-семантика: присланные ключи перезаписыв
 
 ### POST /i/v1/experience/events
 
-Optional Browser Experience SDK использует этот endpoint только когда
-host-controlled policy разрешает сбор. Browser Analytics поддерживает
-явные `opt-in` (default), `opt-out` и `external`/CMP-managed режимы; это не
-расширяет фиксированный privacy-safe allowlist.
+Optional Browser Experience SDK начинает отправку сразу после `start()`.
+Совместимые host callbacks могут приостановить сбор, но Poolstatis не требует
+состояния разрешения; это не расширяет фиксированный privacy-safe allowlist.
 Сначала platform token создаёт active surface с `key`, `name` и `purpose`;
 ingest key затем отправляет только типизированные interaction events для этой
 surface:
@@ -131,7 +130,7 @@ Browser Analytics добавляет atomic setup endpoint
 `web_analytics`, `web_sessions`, `web_session`, `page_engagement` в общем
 `POST /api/v1/projects/{slug}/query`. Session grain —
 `(resolved actor, non-empty session_id)`; ambiguous detail fail-closed, а
-отсутствующие denominators возвращаются как `null`. Полный privacy/consent
+отсутствующие denominators возвращаются как `null`. Полный payload/privacy
 контракт: [13-browser-analytics.md](13-browser-analytics.md).
 
 ```

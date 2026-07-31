@@ -392,7 +392,7 @@ export async function purgeExperienceSnapshots(
   }
 }
 
-/** Convert the narrow consent-gated wire protocol into immutable analytics events. */
+/** Convert the narrow browser wire protocol into immutable analytics events. */
 export async function captureExperienceEvents(
   pool: pg.Pool,
   eventStore: EventStore,

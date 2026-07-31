@@ -159,48 +159,47 @@ describe('@poolstatis/sdk/browser', () => {
     })).toThrow('engagementHeartbeatMs must be less than the seven-day page duration ceiling');
   });
 
-  it('keeps opt-in as the default and starts opt-out without a host consent callback', () => {
-    const defaultConsent = consent(false);
-    const optIn = fixture();
+  it('starts immediately by default and keeps legacy host callbacks as an optional pause', () => {
+    const immediate = fixture();
     createBrowserAnalytics({
-      client: optIn.client,
-      browser: optIn.browser,
-      hasConsent: defaultConsent.hasConsent,
-      subscribeConsent: defaultConsent.subscribeConsent,
-      createId: () => 'opt-in',
+      client: immediate.client,
+      browser: immediate.browser,
+      createId: (() => { let id = 0; return () => `immediate-${++id}`; })(),
     }).start();
-    expect(optIn.queued).toEqual([]);
-
-    const optOut = fixture();
-    createBrowserAnalytics({
-      client: optOut.client,
-      browser: optOut.browser,
-      consentPolicy: 'opt-out',
-      createId: (() => { let id = 0; return () => `opt-out-${++id}`; })(),
-    }).start();
-    expect(optOut.queued).toHaveLength(1);
-    expect(optOut.queued[0]).toMatchObject({
+    expect(immediate.queued).toHaveLength(1);
+    expect(immediate.queued[0]).toMatchObject({
       event: 'page.viewed',
-      distinct_id: 'visitor:opt-out-1',
-      session_id: 'session:opt-out-2',
+      distinct_id: 'visitor:immediate-1',
+      session_id: 'session:immediate-2',
     });
+
+    const paused = consent(false);
+    const legacy = fixture();
+    createBrowserAnalytics({
+      client: legacy.client,
+      browser: legacy.browser,
+      hasConsent: paused.hasConsent,
+      subscribeConsent: paused.subscribeConsent,
+      createId: () => 'legacy',
+    }).start();
+    expect(legacy.queued).toEqual([]);
   });
 
-  it('fails closed for Global Privacy Control in every policy mode', () => {
+  it('does not make Global Privacy Control a Poolstatis collection gate', () => {
     const f = fixture();
     f.browser.navigator.globalPrivacyControl = true;
     const analytics = createBrowserAnalytics({
       client: f.client,
       browser: f.browser,
       consentPolicy: 'opt-out',
-      createId: () => 'never-created',
+      createId: (() => { let id = 0; return () => `gpc-${++id}`; })(),
     });
 
     analytics.start();
 
-    expect(f.queued).toEqual([]);
-    expect(f.localStorage.getItem('poolstatis.browser.visitor')).toBeNull();
-    expect(f.sessionStorage.getItem('poolstatis.browser.session')).toBeNull();
+    expect(f.queued).toHaveLength(1);
+    expect(f.localStorage.getItem('poolstatis.browser.visitor')).toBe('visitor:gpc-1');
+    expect(f.sessionStorage.getItem('poolstatis.browser.session')).not.toBeNull();
   });
 
   it('explicitly clears persisted browser identity when a host starts disabled', () => {

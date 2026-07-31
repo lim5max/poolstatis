@@ -12,7 +12,7 @@
 | URI | Содержание |
 |-----|------------|
 | `poolstatis://standard/instrumentation` | Стандарт инструментации: именование событий, обязательные свойства, какие метрики ставить по типу продукта. Версионируется. (Контент — этап 2.) |
-| `poolstatis://standard/browser-analytics` | Нормативные определения Visitors / Sessions / Page views, consent и privacy/GeoIP границы browser-модуля. |
+| `poolstatis://standard/browser-analytics` | Нормативные определения Visitors / Sessions / Page views и payload/GeoIP границы browser-модуля. |
 | `poolstatis://{project}/schema` | Живая схема проекта: метрики реестра, воронки, типы сущностей, фактические имена событий за 30 дней с пометкой registered/unregistered. |
 
 Схема как ресурс — ключевой UX-ход: агент получает полный контекст проекта одним чтением, без цепочки list-вызовов.
@@ -180,7 +180,7 @@ event counts remain secondary. All responses are project/environment isolated
 and bounded, with sample size, truncation and no-data reasons. These tools never
 return DOM/video replay.
 
-### Browser Experience (consent → interaction evidence)
+### Browser Experience (session → interaction evidence)
 
 ```
 create_experience_surface(project, {key, name, purpose})

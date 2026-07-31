@@ -243,7 +243,7 @@ describe('visual experience maps', () => {
         data_quality: {
           status: 'ok',
           caveats: expect.arrayContaining([
-            expect.stringContaining('consent'),
+            expect.stringContaining('host pause'),
             expect.stringContaining('descriptive'),
           ]),
         },

@@ -1,6 +1,6 @@
 export const BROWSER_ANALYTICS_STANDARD = `# Poolstatis Browser Analytics Standard (v1)
 
-Browser Analytics is optional, consent-gated and privacy-bounded.
+Browser Analytics starts collection immediately and remains privacy-bounded.
 
 ## Identity and grain
 
@@ -31,21 +31,20 @@ finite non-sensitive vocabulary; the host mapper must return one of those
 values, never a URL or dynamic path.
 
 Never send or return raw IP, full URL, query, hash, full user agent, DOM, text,
-or secret-bearing dynamic route data. Country is unavailable until a separate
-trusted proxy and geography contract is approved. Custom product events use
+or secret-bearing dynamic route data. Country is available only when the
+reviewed local MMDB resolver is active. Custom product events use
 the neutral base SDK path and must not carry \`$browser_context\`. UTM values
 are bounded labels; URL-, path- and query-shaped values are not accepted.
 \`landing_route\` must belong to the same trusted finite vocabulary as
 \`$route_key\`.
 
-## Consent and lifecycle
+## Collection and lifecycle
 
-The browser module supports explicit opt-in, opt-out and external consent
-policies. Global Privacy Control disables all modes. No browser storage is read
-before collection is allowed. Withdrawal clears listeners, queued browser-owned
-events and stored identifiers. Logout or account switch rotates visitor and
-session identity. Hidden/pagehide/freeze terminal snapshots use keepalive
-transport.
+The browser module starts immediately when the host calls \`start()\`. Legacy
+host callbacks remain compatible as an optional pause control, but Poolstatis
+does not require a consent state or inspect Global Privacy Control. Logout or
+account switch rotates visitor and session identity. Hidden/pagehide/freeze
+terminal snapshots use keepalive transport.
 
 ## Setup and analysis
 

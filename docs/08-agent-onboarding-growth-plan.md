@@ -256,7 +256,7 @@ Keep them semantic, small, and useful:
 |---|---|---|
 | `page.viewed` | `$route_key`, `$page_view_id`, `session_id` | privacy-safe route and session analysis |
 | `page.engagement` | `$route_key`, `$page_view_id`, `foreground_ms`, `elapsed_ms`, `max_scroll_pct`, `session_id` | measured foreground engagement and completion evidence |
-| `session.started` | `landing_route`, `referrer_origin`, `$utm_*` | consent-gated session landing attribution |
+| `session.started` | `landing_route`, `referrer_origin`, `$utm_*` | immediate session landing attribution |
 | `cta.clicked` | `cta_id`, `$route_key` | conversion intent without captured text or URL |
 | `form.started` | `form_id`, `$route_key` | friction before submit |
 | `form.submitted` | `form_id`, `$route_key`, `success` | lead/signup intent |
@@ -270,8 +270,8 @@ Keep them semantic, small, and useful:
 
 `$route_key` and `landing_route` must come from the same finite trusted
 vocabulary, for example `home`, `pricing`, `docs.article`, and `other`.
-`referrer_origin` is origin-only, while `$utm_*` values are bounded and
-consent-gated. Do not capture raw paths, full URLs, titles, referrers, form
+`referrer_origin` is origin-only, while `$utm_*` values are bounded. Do not
+capture raw paths, full URLs, titles, referrers, form
 values, copied text, or DOM text. Only the normalized referrer origin is
 allowed.
 

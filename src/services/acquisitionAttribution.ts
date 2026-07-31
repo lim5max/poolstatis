@@ -19,11 +19,11 @@ export const ACQUISITION_UTM_PROPERTIES = [
 type AcquisitionPropertyKey = (typeof ACQUISITION_UTM_PROPERTIES)[number];
 
 export const ACQUISITION_PURPOSE: Record<AcquisitionPropertyKey, string> = {
-  $utm_source: 'Records the consented session landing source for bounded acquisition analysis, never causal campaign credit.',
-  $utm_medium: 'Records the consented session landing medium for bounded acquisition analysis, never causal campaign credit.',
-  $utm_campaign: 'Records the consented session landing campaign for bounded acquisition analysis, never causal campaign credit.',
-  $utm_term: 'Records the consented session landing term for bounded acquisition analysis, never causal campaign credit.',
-  $utm_content: 'Records the consented session landing content for bounded acquisition analysis, never causal campaign credit.',
+  $utm_source: 'Records the session landing source for bounded acquisition analysis, never causal campaign credit.',
+  $utm_medium: 'Records the session landing medium for bounded acquisition analysis, never causal campaign credit.',
+  $utm_campaign: 'Records the session landing campaign for bounded acquisition analysis, never causal campaign credit.',
+  $utm_term: 'Records the session landing term for bounded acquisition analysis, never causal campaign credit.',
+  $utm_content: 'Records the session landing content for bounded acquisition analysis, never causal campaign credit.',
 };
 
 // Definitions created by the first acquisition setup remain semantically valid.

@@ -137,7 +137,7 @@ describe('@poolstatis/sdk/browser contract', () => {
     expect(analytics.visitorId).toBeNull();
   });
 
-  it('honors GPC for opt-in, opt-out and external modes', () => {
+  it('leaves GPC policy to the integrating host', () => {
     for (const consentPolicy of ['opt-in', 'opt-out', 'external'] as const) {
       const f = fixture();
       f.setConsent(true);
@@ -151,7 +151,7 @@ describe('@poolstatis/sdk/browser contract', () => {
         mapPagePath: () => 'home',
       });
       analytics.start();
-      expect(f.queued).toEqual([]);
+      expect(f.queued).toHaveLength(1);
     }
   });
 

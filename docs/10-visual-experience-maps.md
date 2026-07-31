@@ -35,11 +35,10 @@ const experience = new BrowserExperience({
   route: () => location.pathname.startsWith('/docs/') ? 'docs' : 'home',
   version: import.meta.env.VITE_RELEASE_SHA,
   distinctId: () => authenticatedUserId,
-  hasConsent: () => consent.analytics === true,
 });
 
 await experience.start();
-// On consent withdrawal:
+// On application teardown:
 experience.stop();
 ```
 
@@ -54,7 +53,7 @@ Only stable developer labels are read:
 The SDK sends normalized document and viewport click coordinates, viewport and
 document dimensions, max-depth milestones, and one exposure per named section.
 It never reads or sends DOM snapshots, text, raw paths/URLs, query strings, form
-values, pointer paths, error messages or stacks. Capture is consent-gated,
+values, pointer paths, error messages or stacks. Capture starts immediately,
 batched in chunks of 25, memory-bounded and limited to 120 accepted signals per
 minute by default.
 
@@ -135,7 +134,7 @@ delta, never a fabricated behavioral change.
 
 The semantic summary is derived only from the returned aggregates. It never
 generates a cause or returns DOM, page text, form values, image bytes or PII.
-Every map and comparison repeats an explicit non-causal caveat; consent,
+Every map and comparison repeats an explicit non-causal caveat; collection scope,
 rate-guard, missing-label, missing-section and missing/stale-snapshot limits are
 reported instead of silently treated as complete data. Top-100 click-label and
 200-section bounds carry explicit truncation metadata and caveats. Future-dated
@@ -160,12 +159,12 @@ This repository does not own or deploy landing files. The landing task should:
    - docs: `docs.copy_install`, `docs.open_sdk`, `docs.open_mcp`,
      `docs.next_step`
 5. Pass the deployed git SHA as `version`; never derive it from a URL.
-6. After production deploy and consent, capture and upload four artifacts:
+6. After production deploy, capture and upload four artifacts:
    `home/desktop`, `home/mobile`, `docs/desktop`, `docs/mobile`.
    Use 1440×900 and 390×844 viewports, wait for fonts/images, and capture the
    full page. Upload only after the live asset checksum matches the release.
-7. Verify one consented page view, labelled click, scroll depth and section
-   exposure through REST and MCP. Revoke consent and verify no later capture.
+7. Verify one page view, labelled click, scroll depth and section exposure through REST and
+   MCP. If the host implements a pause control, verify it separately.
 
 Landing acceptance evidence must include release SHA, snapshot ids, actual
 viewport sizes, event read-back and MCP tool output. A successful page response

@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import { createHash } from 'node:crypto';
 import { ApiError, badRequest } from '../errors.js';
 import {
   ACQUISITION_UTM_PROPERTIES,
@@ -17,6 +18,7 @@ import {
   updateMetric,
   type Metric,
 } from './registry.js';
+import { isIsoAlpha2Country } from './country.js';
 
 type Queryable = pg.Pool | pg.PoolClient;
 
@@ -30,7 +32,7 @@ export const BROWSER_ANALYTICS_PROPERTIES: Record<string, BrowserPropertySpec> =
   $browser_context: {
     value_type: 'enum',
     enum_values: ['1'],
-    purpose: 'Marks canonical events produced by the consent-gated privacy-safe browser analytics module.',
+    purpose: 'Marks canonical events produced by the immediate privacy-bounded browser analytics module.',
   },
   $route_key: {
     value_type: 'enum',
@@ -72,6 +74,10 @@ export const BROWSER_ANALYTICS_PROPERTIES: Record<string, BrowserPropertySpec> =
     value_type: 'enum',
     enum_values: ['xs', 'sm', 'md', 'lg', 'xl'],
     purpose: 'Groups screen width into coarse buckets without precise display dimensions.',
+  },
+  $country: {
+    value_type: 'string',
+    purpose: 'Records a coarse ISO country derived server-side from the reviewed local MMDB resolver without storing IP.',
   },
 };
 
@@ -138,7 +144,7 @@ const BROWSER_METRICS = [
   {
     key: 'web_page_views',
     name: 'Web page views',
-    purpose: 'Counts consented canonical page views to assess traffic and demand across trusted safe routes.',
+    purpose: 'Counts canonical page views to assess traffic and demand across trusted safe routes.',
     type: 'count' as const,
   },
   {
@@ -409,6 +415,80 @@ const BROWSER_ONLY_PROPERTIES = new Set([
   'reason',
 ]);
 
+function legacyRouteKey(
+  value: unknown,
+  safeRouteKeys?: ReadonlySet<string> | null,
+): string | undefined {
+  if (!safeRouteKeys || safeRouteKeys.size === 0) return undefined;
+  if (typeof value === 'string') {
+    const normalized = value.startsWith('/') ? value.slice(1) : value;
+    if (isSafeRouteKey(normalized) && safeRouteKeys.has(normalized)) return normalized;
+  }
+  return safeRouteKeys.has('other') ? 'other' : undefined;
+}
+
+function legacyPageViewId(sessionId: string, routeKey: string): string {
+  const digest = createHash('sha256')
+    .update(sessionId)
+    .update('\0')
+    .update(routeKey)
+    .digest('hex')
+    .slice(0, 32);
+  return `legacy:${digest}`;
+}
+
+/**
+ * Keep the versioned /i/v1 contract compatible with SDK 0.1 browser payloads.
+ * Raw paths are never retained. A value is promoted only when it exactly maps
+ * to the project's trusted finite route vocabulary; every other path becomes
+ * `other` when that reviewed fallback exists.
+ */
+export function normalizeLegacyBrowserProperties(
+  event: string,
+  properties: Record<string, unknown>,
+  sessionId: string | undefined,
+  safeRouteKeys?: ReadonlySet<string> | null,
+): boolean {
+  const hasLegacyPagePath = Object.hasOwn(properties, '$page_path');
+  const hasLegacyLandingPath = Object.hasOwn(properties, 'landing_path');
+  if (!hasLegacyPagePath && !hasLegacyLandingPath) return false;
+
+  const rawPagePath = properties.$page_path
+    ?? (event === 'page.viewed' ? properties.path : undefined)
+    ?? properties.landing_path;
+  const rawLandingPath = properties.landing_path ?? rawPagePath;
+  delete properties.$page_path;
+  delete properties.landing_path;
+  delete properties.path;
+
+  const landingRoute = legacyRouteKey(
+    properties.landing_route ?? rawLandingPath,
+    safeRouteKeys,
+  );
+  if (landingRoute && properties.landing_route === undefined) {
+    properties.landing_route = landingRoute;
+  }
+
+  if (event === 'page.viewed' || event === 'page.engagement') {
+    const routeKey = legacyRouteKey(properties.$route_key ?? rawPagePath, safeRouteKeys);
+    if (routeKey && sessionId) {
+      properties.$browser_context = '1';
+      properties.$route_key = routeKey;
+      properties.$page_view_id ??= legacyPageViewId(sessionId, routeKey);
+      // Older clients could reserve this key, but country attribution is now
+      // exclusively server-derived.
+      delete properties.$country;
+      return true;
+    }
+  }
+
+  // SDK 0.1 stamped browser context on custom product events. Preserve the
+  // product event and bounded acquisition fields, but keep it out of the
+  // canonical page-event contract.
+  for (const key of BROWSER_ONLY_PROPERTIES) delete properties[key];
+  return true;
+}
+
 export function validateBrowserAnalyticsProperties(
   event: string,
   properties: Record<string, unknown>,
@@ -544,10 +624,7 @@ function validateLegacyPagePath(value: unknown): string | null {
   return null;
 }
 
-/**
- * Compatibility entrypoint used by audited event management. The current
- * route-key contract intentionally has no inferred geographic dimension.
- */
+/** Validate the canonical browser contract and add server-derived country. */
 export function validateAndEnrichBrowserProperties(
   event: string,
   properties: Record<string, unknown>,
@@ -558,16 +635,29 @@ export function validateAndEnrichBrowserProperties(
     safeRouteKeys?: ReadonlySet<string> | null;
   } = {},
 ): string | null {
-  void country;
-  void options.historical;
+  if (!options.historical && '$country' in properties) {
+    return '$country is server-derived and must not be sent by a client';
+  }
   if (event === 'page.viewed' && properties.path !== undefined) {
     const pathError = validateLegacyPagePath(properties.path);
     if (pathError) return pathError;
   }
-  return validateBrowserAnalyticsProperties(
+  const error = validateBrowserAnalyticsProperties(
     event,
     properties,
     sessionId,
     options.safeRouteKeys,
   );
+  if (error) return error;
+  if (properties.$browser_context !== '1') return null;
+
+  const resolvedCountry = options.historical
+    ? (properties.$country ?? 'unknown')
+    : country;
+  if (typeof resolvedCountry !== 'string'
+    || (resolvedCountry !== 'unknown' && !isIsoAlpha2Country(resolvedCountry))) {
+    return 'resolved country must be unknown or ISO alpha-2';
+  }
+  properties.$country = resolvedCountry;
+  return null;
 }
