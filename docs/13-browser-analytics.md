@@ -13,6 +13,13 @@ its returned actor-link handoff to your trusted backend. That backend creates
 the existing audited actor link; never expose an `sk_` or `pt_` token in a
 browser.
 
+That persistent visitor id may be the exposure unit for an anonymous
+browser-surface feature flag or experiment when its outcome is measured on the
+same visitor identity. Name the unit `browser_visitor`; it is not a deduplicated
+user and cannot join browsers or devices. Never substitute a session or page
+view id. Authenticated outcomes such as signup or payment require the audited
+actor link described above.
+
 ## SDK and privacy
 
 ```ts
