@@ -58,6 +58,13 @@ docker compose -f docker-compose.selfhost.yml up -d --build  # self-host stack
   (one project, read+manage), `pt_` personal (org-wide, for MCP). Auth in `src/http/auth.ts`.
 - **Ingest:** unregistered events are accepted but flagged (`registered=false`), not dropped;
   per-element 207 errors and unregistered/clock-skew warnings are logged to `ingest_warnings`.
+- **Public ingest compatibility:** `/i/v1/*` and the published SDK are one customer contract.
+  Never deploy stricter validation that makes the currently published SDK or any known live
+  consumer start returning `207`. Maintain a versioned consumer inventory; a breaking privacy or
+  schema change is blocked until the replacement SDK is published and registry-verified, every
+  known production consumer (including `poolstatis.xyz`) is migrated and live-verified, and the
+  previous published SDK contract fixture still passes CI. If that sequence is impossible, use a
+  new API version or a bounded server compatibility path instead of dropping customer events.
 
 ## Conventions & gotchas (learned the hard way)
 
@@ -83,6 +90,11 @@ docker compose -f docker-compose.selfhost.yml up -d --build  # self-host stack
   the whole product, not boilerplate. Agent-registered metrics are `proposed` until activated.
 - **Ship a feature whole:** REST route + MCP tool + admin UI + vitest in the same change.
   Run `pnpm typecheck`, `pnpm test`, `pnpm --dir web build` before declaring done.
+- **Release order for contract migrations:** compatible Core first, verified SDK publication
+  second, consumer migrations third, strict legacy rejection only in a new API version or after
+  an explicitly measured deprecation window. A version written in `package.json` is not published
+  until `npm view` confirms that exact version; a site change is not deployed until fresh live
+  events are accepted with HTTP 200 and `ingest_warnings` shows no new rejection watermark.
 
 ## Continuous integration and completion
 
