@@ -16,7 +16,9 @@ export const ACQUISITION_UTM_PROPERTIES = [
   '$utm_content',
 ] as const;
 
-export const ACQUISITION_PURPOSE: Record<(typeof ACQUISITION_UTM_PROPERTIES)[number], string> = {
+type AcquisitionPropertyKey = (typeof ACQUISITION_UTM_PROPERTIES)[number];
+
+export const ACQUISITION_PURPOSE: Record<AcquisitionPropertyKey, string> = {
   $utm_source: 'Records the consented session landing source for bounded acquisition analysis, never causal campaign credit.',
   $utm_medium: 'Records the consented session landing medium for bounded acquisition analysis, never causal campaign credit.',
   $utm_campaign: 'Records the consented session landing campaign for bounded acquisition analysis, never causal campaign credit.',
@@ -24,9 +26,30 @@ export const ACQUISITION_PURPOSE: Record<(typeof ACQUISITION_UTM_PROPERTIES)[num
   $utm_content: 'Records the consented session landing content for bounded acquisition analysis, never causal campaign credit.',
 };
 
+// Definitions created by the first acquisition setup remain semantically valid.
+export const LEGACY_ACQUISITION_PURPOSE: Record<AcquisitionPropertyKey, string> = {
+  $utm_source: 'Records the browser landing publisher or referring source for bounded session acquisition analysis.',
+  $utm_medium: 'Records the browser landing channel or medium for bounded session acquisition analysis.',
+  $utm_campaign: 'Records the browser landing campaign identifier for bounded session acquisition analysis.',
+  $utm_term: 'Records the intentionally supplied browser landing paid-search term for bounded session acquisition analysis.',
+  $utm_content: 'Records the browser landing creative or placement variant for bounded session acquisition analysis.',
+};
+
 interface Plan {
-  key: (typeof ACQUISITION_UTM_PROPERTIES)[number];
+  key: AcquisitionPropertyKey;
   property?: PropertyDefinition;
+}
+
+function hasCanonicalAcquisitionDefinition(
+  property: PropertyDefinition,
+  key: AcquisitionPropertyKey,
+): boolean {
+  return property.value_type === 'string'
+    && property.source === 'native'
+    && (
+      property.purpose === ACQUISITION_PURPOSE[key]
+      || property.purpose === LEGACY_ACQUISITION_PURPOSE[key]
+    );
 }
 
 export async function acquisitionPropertyPlans(
@@ -39,11 +62,7 @@ export async function acquisitionPropertyPlans(
   );
   return ACQUISITION_UTM_PROPERTIES.map((key) => {
     const property = existing.get(key);
-    if (property && (
-      property.value_type !== 'string'
-      || property.source !== 'native'
-      || property.purpose !== ACQUISITION_PURPOSE[key]
-    )) {
+    if (property && !hasCanonicalAcquisitionDefinition(property, key)) {
       throw new ApiError(
         409,
         'acquisition_property_conflict',
@@ -81,8 +100,8 @@ export async function assertTrustedAcquisitionProperties(
   projectId: string,
   keys: string[],
 ): Promise<void> {
-  const requested = [...new Set(keys.filter((key) =>
-    ACQUISITION_UTM_PROPERTIES.includes(key as (typeof ACQUISITION_UTM_PROPERTIES)[number])))];
+  const requested = [...new Set(keys.filter((key): key is AcquisitionPropertyKey =>
+    ACQUISITION_UTM_PROPERTIES.includes(key as AcquisitionPropertyKey)))];
   if (requested.length === 0) return;
   const definitions = new Map(
     (await listPropertyDefinitions(pool, projectId, { scope: 'event' }))
@@ -91,9 +110,7 @@ export async function assertTrustedAcquisitionProperties(
   for (const key of requested) {
     const property = definitions.get(key);
     if (!property || property.status !== 'trusted'
-      || property.value_type !== 'string'
-      || property.source !== 'native'
-      || property.purpose !== ACQUISITION_PURPOSE[key as keyof typeof ACQUISITION_PURPOSE]) {
+      || !hasCanonicalAcquisitionDefinition(property, key)) {
       throw badRequest(
         'acquisition_property_untrusted',
         `reserved acquisition property "${key}" must be a trusted canonical event property`,
@@ -114,8 +131,8 @@ export async function assertRegisteredAcquisitionProperties(
   projectId: string,
   keys: string[],
 ): Promise<void> {
-  const requested = [...new Set(keys.filter((key) =>
-    ACQUISITION_UTM_PROPERTIES.includes(key as (typeof ACQUISITION_UTM_PROPERTIES)[number])))];
+  const requested = [...new Set(keys.filter((key): key is AcquisitionPropertyKey =>
+    ACQUISITION_UTM_PROPERTIES.includes(key as AcquisitionPropertyKey)))];
   if (requested.length === 0) return;
   const definitions = new Map(
     (await listPropertyDefinitions(pool, projectId, { scope: 'event' }))
@@ -123,10 +140,10 @@ export async function assertRegisteredAcquisitionProperties(
   );
   for (const key of requested) {
     const property = definitions.get(key);
-    if (!property
-      || property.value_type !== 'string'
-      || property.source !== 'native'
-      || property.purpose !== ACQUISITION_PURPOSE[key as keyof typeof ACQUISITION_PURPOSE]) {
+    if (!property || !hasCanonicalAcquisitionDefinition(
+      property,
+      key,
+    )) {
       throw badRequest(
         'acquisition_property_unregistered',
         `reserved acquisition property "${key}" must have its canonical event definition`,
