@@ -70,11 +70,12 @@ describe('customer admin shell', () => {
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeInTheDocument();
   });
 
-  it('groups navigation around setup, measurement, delivery, and account tasks', () => {
+  it('groups navigation around overview, analysis, decisions, data management, and account tasks', () => {
     render(<MemoryRouter><App /></MemoryRouter>);
-    expect(screen.getByText('Get started')).toBeInTheDocument();
-    expect(screen.getByText('Measure')).toBeInTheDocument();
-    expect(screen.getByText('Ship & learn')).toBeInTheDocument();
+    expect(screen.getAllByText('Overview').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Analyze')).toBeInTheDocument();
+    expect(screen.getByText('Ship & decide')).toBeInTheDocument();
+    expect(screen.getByText('Manage data')).toBeInTheDocument();
     expect(screen.getByText('Workspace')).toBeInTheDocument();
   });
 
@@ -84,6 +85,15 @@ describe('customer admin shell', () => {
     expect(screen.getByRole('button', { name: /alpha/i })).toBeInTheDocument();
     expect(screen.getAllByText('prod').length).toBeGreaterThan(0);
     expect(screen.queryByText('Connect an agent, send data, and verify the first query.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the project context and project management reachable from Analyze', async () => {
+    render(<MemoryRouter initialEntries={['/analyze/product']}><App /></MemoryRouter>);
+    const projectSwitcher = screen.getByRole('button', { name: /alpha/i });
+    expect(projectSwitcher).toBeInTheDocument();
+    expect(screen.getAllByText('prod').length).toBeGreaterThan(0);
+    fireEvent.keyDown(projectSwitcher, { key: 'ArrowDown' });
+    expect(await screen.findByRole('menuitem', { name: 'Manage projects' })).toBeInTheDocument();
   });
 
   it('still works when browser storage is blocked', () => {
@@ -232,20 +242,30 @@ describe('server-verified setup flow', () => {
     await waitFor(() => expect(screen.queryByText('reading webhook status…')).not.toBeInTheDocument());
   });
 
-  it('does not advertise source-only tools that are absent from the pinned public runner', async () => {
+  it('advertises only tools present in the pinned public runner contract', async () => {
     renderSetup();
     await screen.findByText('Connect Poolstatis in four steps');
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced setup' }));
     for (const tool of [
-      'list_metric_categories',
-      'create_metric_category',
-      'update_metric_category',
-      'delete_metric_category',
       'get_web_overview',
       'list_web_sessions',
       'get_web_session',
       'get_session_engagement',
       'get_page_engagement',
+      'preview_event_backfill',
+      'import_historical_events',
+      'list_event_backfills',
+      'preview_event_revision',
+      'revise_event',
+      'get_event_history',
+    ]) {
+      expect(screen.getByText(tool, { exact: true })).toBeInTheDocument();
+    }
+    for (const tool of [
+      'list_metric_categories',
+      'create_metric_category',
+      'update_metric_category',
+      'delete_metric_category',
       'get_click_map',
       'get_scroll_map',
     ]) {

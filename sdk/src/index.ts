@@ -36,6 +36,35 @@ export interface PoolstatisEvent {
   properties?: Record<string, unknown>;
 }
 
+export {
+  clearBrowserAnalyticsIdentity,
+  createBrowserAnalytics,
+  BROWSER_CONTEXT_VERSION,
+  BROWSER_PAGE_ENGAGEMENT_EVENT,
+  BROWSER_PAGE_VIEW_EVENT,
+  BROWSER_RESERVED_PROPERTIES,
+} from './browser.js';
+export type {
+  ActorLinkHandoff,
+  BrowserAnalyticsOptions,
+  BrowserCaptureClient,
+  BrowserConsentPolicy,
+  BrowserLike,
+} from './browser.js';
+export {
+  ACQUISITION_UTM_KEYS,
+  acquisitionPropertyDefinitions,
+  AttributionClient,
+  createAttributionClient,
+  snapshotFromBrowser,
+} from './attribution.js';
+export type {
+  AcquisitionUtmKey,
+  AttributionClientOptions,
+  AttributionSnapshot,
+  BrowserAttributionEnvironment,
+} from './attribution.js';
+
 export interface ExperienceEventContext {
   distinct_id: string;
   session_id: string;

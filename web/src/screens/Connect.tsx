@@ -25,7 +25,9 @@ export function HostedConnect() {
   const { isAuthenticated, isLoading, login, logout, error } = useHostedAuth();
   const getToken = useHostedToken();
   const attempted = useRef(false);
+  const signInAttempted = useRef(false);
   const [err, setErr] = useState<string | null>(null);
+  const [signInError, setSignInError] = useState<string | null>(null);
   const [needsReauthentication, setNeedsReauthentication] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -54,7 +56,26 @@ export function HostedConnect() {
     setNeedsReauthentication(false);
   }, [connectWorkspace, isAuthenticated]);
 
-  const signIn = () => login();
+  const signIn = useCallback(() => {
+    if (signInAttempted.current) return;
+    signInAttempted.current = true;
+    setSignInError(null);
+    setBusy(true);
+    void login()
+      .catch((cause) => {
+        setSignInError(
+          cause instanceof Error
+            ? cause.message
+            : 'Sign-in could not be started.',
+        );
+      })
+      .finally(() => setBusy(false));
+  }, [login]);
+
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated && !error) signIn();
+  }, [error, isAuthenticated, isLoading, signIn]);
+
   const signOutAndRetry = () => {
     attempted.current = false;
     setErr(null);
@@ -64,8 +85,16 @@ export function HostedConnect() {
     attempted.current = false;
     connectWorkspace();
   };
+  const retrySignIn = () => {
+    signInAttempted.current = false;
+    signIn();
+  };
 
-  if (isLoading || (isAuthenticated && !err)) {
+  if (
+    isLoading
+    || (isAuthenticated && !err)
+    || (!isAuthenticated && !error && !signInError)
+  ) {
     return <AuthBootShell />;
   }
 
@@ -96,20 +125,22 @@ export function HostedConnect() {
   return (
     <ConnectShell>
       <Brand />
-      <h1 className="serif text-3xl">Sign in to your workspace.</h1>
+      <h1 className="serif text-3xl">Sign-in could not be started.</h1>
       <p className="mt-2 mb-6 text-sm text-muted-foreground">
-        Use hosted auth, then create an MCP token during onboarding. No database keys are needed in the browser.
+        Try again to continue to the Poolstatis identity service.
       </p>
       <Button
         className="h-10 w-full"
-        onClick={signIn}
+        onClick={retrySignIn}
         disabled={busy}
       >
         {busy
           ? <Loader2 className="size-4 animate-spin" />
-          : 'Continue to sign in'}
+          : 'Try sign in again'}
       </Button>
-      {error && <div className="mt-4 text-xs text-destructive" role="alert">{error.message}</div>}
+      <div className="mt-4 text-xs text-destructive" role="alert">
+        {signInError || error?.message}
+      </div>
     </ConnectShell>
   );
 }

@@ -25,9 +25,12 @@ interface Store {
   projects: ProjectWithStats[];
   project: string | null;
   env: string;
+  envReady: boolean;
+  envError: string | null;
   availableEnvs: string[];
   setEnv: (e: string) => void;
   setProject: (slug: string) => void;
+  retryEnvValidation: () => void;
   refreshProjects: () => Promise<void>;
   refreshAccount: () => Promise<void>;
   connect: (c: Conn) => Promise<void>;
@@ -36,6 +39,27 @@ interface Store {
 }
 
 const ENV_KEY = 'poolstatis.env';
+const PROJECT_KEY = 'poolstatis.project';
+const projectEnvKey = (slug: string) => `${ENV_KEY}.${slug}`;
+
+export function normalizeProjectEnv(current: string, available: string[]): string {
+  if (available.includes(current)) return current;
+  if (available.includes('prod')) return 'prod';
+  return available[0] ?? 'prod';
+}
+
+export async function loadProjectEnvironments(
+  fetchKeys: () => Promise<Array<{ env: string; revoked_at?: string | null }>>,
+): Promise<string[]> {
+  const keys = await fetchKeys();
+  const environments = [...new Set(keys.filter((key) => !key.revoked_at).map((key) => key.env))];
+  return environments.length ? environments.sort() : ['prod'];
+}
+
+function savedProjectEnv(slug: string | null): string {
+  if (!slug) return 'prod';
+  return localStorage.getItem(projectEnvKey(slug)) ?? localStorage.getItem(ENV_KEY) ?? 'prod';
+}
 
 function kindOf(token: string): KeyKind | null {
   if (token.startsWith('pk_')) return 'ingest';
@@ -64,13 +88,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [projectScope, setProjectScope] = useState<'org' | 'project' | null>(null);
   const [account, setAccount] = useState<AccountMe | null>(null);
   const [projects, setProjects] = useState<ProjectWithStats[]>([]);
-  const [project, setProjectState] = useState<string | null>(null);
-  const [env, setEnvState] = useState(() => localStorage.getItem(ENV_KEY) ?? 'prod');
-  const [availableEnvs, setAvailableEnvs] = useState<string[]>(['prod']);
+  const [project, setProjectState] = useState<string | null>(() => localStorage.getItem(PROJECT_KEY));
+  const [env, setEnvState] = useState(() => savedProjectEnv(localStorage.getItem(PROJECT_KEY)));
+  const [envReady, setEnvReady] = useState(false);
+  const [envError, setEnvError] = useState<string | null>(null);
+  const [availableEnvs, setAvailableEnvs] = useState<string[]>([]);
+  const [envValidationNonce, setEnvValidationNonce] = useState(0);
 
   const setEnv = useCallback((e: string) => {
-    localStorage.setItem(ENV_KEY, e);
+    if (project) localStorage.setItem(projectEnvKey(project), e);
     setEnvState(e);
+  }, [project]);
+
+  const setProject = useCallback((slug: string) => {
+    localStorage.setItem(PROJECT_KEY, slug);
+    setEnvState(savedProjectEnv(slug));
+    setAvailableEnvs([]);
+    setEnvReady(false);
+    setEnvError(null);
+    setProjectState(slug);
+  }, []);
+
+  const retryEnvValidation = useCallback(() => {
+    setEnvError(null);
+    setEnvReady(false);
+    setEnvValidationNonce((current) => current + 1);
   }, []);
 
   const client = useMemo(
@@ -89,7 +131,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setProjectScope(scope);
     setAccount(null);
     setProjects(list);
-    setProjectState(list[0]?.slug ?? null);
+    const savedProject = localStorage.getItem(PROJECT_KEY);
+    const nextProject = list.some((item) => item.slug === savedProject) ? savedProject : list[0]?.slug ?? null;
+    if (nextProject) localStorage.setItem(PROJECT_KEY, nextProject);
+    setEnvState(savedProjectEnv(nextProject));
+    setAvailableEnvs([]);
+    setEnvReady(false);
+    setEnvError(null);
+    setProjectState(nextProject);
   }, []);
 
   const connectHosted = useCallback(async (c: HostedConn) => {
@@ -105,7 +154,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setProjectScope(projectResponse.scope);
     setAccount(profile);
     setProjects(projectResponse.projects);
-    setProjectState(projectResponse.projects[0]?.slug ?? null);
+    const savedProject = localStorage.getItem(PROJECT_KEY);
+    const nextProject = projectResponse.projects.some((item) => item.slug === savedProject)
+      ? savedProject
+      : projectResponse.projects[0]?.slug ?? null;
+    if (nextProject) localStorage.setItem(PROJECT_KEY, nextProject);
+    setEnvState(savedProjectEnv(nextProject));
+    setAvailableEnvs([]);
+    setEnvReady(false);
+    setEnvError(null);
+    setProjectState(nextProject);
     markHostedSessionConnected();
   }, []);
 
@@ -118,6 +176,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setAccount(null);
     setProjects([]);
     setProjectState(null);
+    setAvailableEnvs([]);
+    setEnvReady(false);
+    setEnvError(null);
   }, []);
 
   const refreshProjects = useCallback(async () => {
@@ -125,7 +186,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const { projects: list, scope } = await client.listProjects();
     setProjects(list);
     setProjectScope(scope);
-    setProjectState((p) => p ?? list[0]?.slug ?? null);
+    setProjectState((current) => {
+      const next = list.some((item) => item.slug === current) ? current : list[0]?.slug ?? null;
+      if (next) localStorage.setItem(PROJECT_KEY, next);
+      if (next !== current) {
+        setEnvState(savedProjectEnv(next));
+        setAvailableEnvs([]);
+        setEnvReady(false);
+        setEnvError(null);
+      }
+      return next;
+    });
   }, [client]);
 
   const refreshAccount = useCallback(async () => {
@@ -133,20 +204,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setAccount(await client.me());
   }, [client, explicitKind]);
 
-  // Derive which environments actually exist from the selected project's keys
-  // (the env switcher hides when there's only one). Falls back to ['prod'].
+  // A successful key-list response proves the environment scope. Request
+  // failures remain blocked instead of silently inventing prod.
   useEffect(() => {
-    if (!client || !project) return;
+    if (!client || !project) {
+      setEnvReady(false);
+      return;
+    }
     let alive = true;
-    client.keys(project)
-      .then((keys) => {
+    setEnvReady(false);
+    setEnvError(null);
+    loadProjectEnvironments(() => client.keys(project))
+      .then((available) => {
         if (!alive) return;
-        const envs = [...new Set(keys.filter((k) => !k.revoked_at).map((k) => k.env))];
-        setAvailableEnvs(envs.length ? envs.sort() : ['prod']);
+        setAvailableEnvs(available);
+        setEnvState((current) => {
+          const next = normalizeProjectEnv(current, available);
+          localStorage.setItem(projectEnvKey(project), next);
+          return next;
+        });
+        setEnvReady(true);
       })
-      .catch(() => alive && setAvailableEnvs(['prod']));
+      .catch(() => {
+        if (!alive) return;
+        setAvailableEnvs([]);
+        setEnvError('Could not verify this project’s environments.');
+        setEnvReady(false);
+      });
     return () => { alive = false; };
-  }, [client, project]);
+  }, [client, project, envValidationNonce]);
 
   // Re-hydrate a persisted key session. Hosted sessions are never persisted and
   // connectHosted already establishes the allowed project scope for that role.
@@ -156,16 +242,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .then(({ projects: list, scope }) => {
           setProjects(list);
           setProjectScope(scope);
-          setProjectState((p) => p ?? list[0]?.slug ?? null);
+          setProjectState((current) => {
+            const next = list.some((item) => item.slug === current) ? current : list[0]?.slug ?? null;
+            if (next) localStorage.setItem(PROJECT_KEY, next);
+            if (next !== current) {
+              setEnvState(savedProjectEnv(next));
+              setAvailableEnvs([]);
+              setEnvReady(false);
+              setEnvError(null);
+            }
+            return next;
+          });
         })
         .catch(() => disconnect());
     }
   }, [client, disconnect, explicitKind, projects.length]);
 
   const value: Store = {
-    client, baseUrl, token, tokenKind: explicitKind, projectScope, account, projects, project, env, availableEnvs,
+    client, baseUrl, token, tokenKind: explicitKind, projectScope, account, projects, project, env,
+    envReady, envError, availableEnvs,
     setEnv,
-    setProject: setProjectState,
+    setProject,
+    retryEnvValidation,
     refreshProjects, refreshAccount,
     connect, connectHosted, disconnect,
   };

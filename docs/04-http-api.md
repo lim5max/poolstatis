@@ -125,6 +125,15 @@ selectors, input values, error stack/message и network data не являютс
 
 CRUD-слой 1:1 с тулами MCP (см. [03-mcp-server.md](03-mcp-server.md)):
 
+Browser Analytics добавляет atomic setup endpoint
+`POST /api/v1/projects/{slug}/properties/browser-analytics` с body
+`{"route_keys":["home","docs","pricing","other"]}` и строгие ветки
+`web_analytics`, `web_sessions`, `web_session`, `page_engagement` в общем
+`POST /api/v1/projects/{slug}/query`. Session grain —
+`(resolved actor, non-empty session_id)`; ambiguous detail fail-closed, а
+отсутствующие denominators возвращаются как `null`. Полный privacy/consent
+контракт: [13-browser-analytics.md](13-browser-analytics.md).
+
 ```
 GET    /api/v1/projects
 GET    /api/v1/projects/{slug}/schema
@@ -210,10 +219,52 @@ GET    /api/v1/projects/{slug}/experience/snapshots/{id}/image
 DELETE /api/v1/projects/{slug}/experience/snapshots/{id}
 POST   /api/v1/projects/{slug}/query          ← единая точка Query DSL
 GET    /api/v1/projects/{slug}/events/sample
+POST   /api/v1/projects/{slug}/events/backfill/preview
+POST   /api/v1/projects/{slug}/events/backfill
+GET    /api/v1/projects/{slug}/events/backfills
+GET    /api/v1/projects/{slug}/events/{eventId}
+POST   /api/v1/projects/{slug}/events/{eventId}/revisions/preview
+POST   /api/v1/projects/{slug}/events/{eventId}/revisions
 GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+### Historical backfill
+
+`POST .../events/backfill/preview` принимает `env` и до 500 событий с
+обязательным ISO timestamp. В отличие от runtime-ingest, timestamp за пределами
+retention или более чем на пять минут в будущем не заменяется текущей датой:
+preview возвращает indexed errors, а commit не записывает ни одной строки.
+Успешный preview возвращает canonical `payload_sha256`.
+
+Commit повторяет тот же payload и добавляет:
+
+```json
+{
+  "batch_id": "atlas-skills-2026-part-001",
+  "reason": "Restore skill activation history from the product database.",
+  "expected_payload_sha256": "…",
+  "env": "prod",
+  "events": []
+}
+```
+
+Точный retry постоянного `batch_id` возвращает `duplicate: true`; другой payload
+с тем же id получает `409`. Backfill проходит обычную registry-классификацию,
+accepted-event metering и quota check. Audit хранит actor, reason, hash, counts
+и диапазон дат, но не копирует персональный event payload.
+
+### Event corrections
+
+Sample возвращает stable `id`, `revision` и `origin`. Сначала
+`POST .../{eventId}/revisions/preview` с patch (`timestamp`, `event`,
+`distinct_id`, `session_id`, `set_properties`, `unset_properties`), затем тот же
+patch отправляется на `POST .../{eventId}/revisions` вместе с
+`expected_revision`, `expected_preview_sha256` из preview и причиной длиной не
+менее 10 символов. Изменившийся patch/registry state или устаревшая revision
+получают `409`; системные и Browser Experience события не редактируются.
+`GET .../{eventId}` возвращает текущий факт и append-only историю before/after.
 
 Category CRUD работает только в scope проекта. Создавать можно только
 `domain: "custom"`; system definitions неизменяемы (`409
@@ -276,8 +327,12 @@ variants `{key, rollout_percentage, payload?}`. Проценты не могут
 `POST /query` поддерживает `kind: "interaction_map"` с `{surface, date_from,
 date_to?, grid?, env?}` и возвращает нормализованные click cells + labelled
 totals. `kind: "experience_session"` принимает `{surface, session_id,
-date_from?, date_to?, limit?, env?}` и возвращает privacy-safe timeline с
-summary. Оба запроса учитывают только события, принятые typed Experience
+actor_id?, date_from?, date_to?, limit?, env?}` и возвращает privacy-safe
+timeline с summary и canonical actor/link provenance. Повторно использованный
+`session_id` не смешивает людей: без `actor_id` несколько найденных акторов
+дают `experience_session_actor_ambiguous`, а указанный `actor_id` без
+совпадающих session events — `experience_session_actor_not_found`; provenance
+не строится из одного только request input. Оба запроса учитывают только события, принятые typed Experience
 endpoint; generic `/i/v1/events` с похожим именем не попадает в эти результаты.
 Как и любой `pk_` write key, typed endpoint не является anti-fraud границей:
 доверяй данным как product telemetry, а не как доказательству действий пользователя.
@@ -356,6 +411,20 @@ stored-event usage.
   "order_by": { "property": "seats", "dir": "desc" },
   "limit": 50
 }
+
+// Actors: canonical event-derived population, not a users table
+{
+  "kind": "actors",
+  "env": "prod",
+  "from": "-30d",                       // default: trailing 30 days
+  "to": null,
+  "limit": 50,                          // max 100
+  "cursor": null,                       // opaque keyset cursor
+  "order": "last_seen_desc",            // first_seen_desc | events_desc
+  "search": { "kind": "exact_id", "value": "user-123" },
+  "activityMetric": "activation_started", // registry key, never raw event
+  "propertyFilters": []
+}
 ```
 
 Операторы фильтров: `eq, ne, gt, gte, lt, lte, in, contains, is_set, is_not_set`.
@@ -370,6 +439,35 @@ filter/breakdown вызови `POST .../properties/acquisition-attribution`: о�
 с tagged landing в этой browser session, не causal credit кампании.
 
 Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки.
+
+`actors` также принимает только registry key в `activityMetric`. Search —
+только exact ID; substring scan отсутствует. Пока нет детерминированного
+trusted canonical actor-property source, `propertyFilters` возвращает typed
+`actors_property_filters_unavailable`, а `pinned_properties` остаётся `{}` с
+capability/provenance metadata. `linked` требует active server-owned link или
+несколько observed raw IDs; без explicit stable/anonymous provenance статус
+равен `unknown`. `top_events` bounded и включает только event names,
+помеченные `registered` при ingest. `session_count` равен `null`, если strict
+canonical Browser session evidence для actor/window не доказан.
+Cursor v2 подписан HMAC по всему envelope, привязан к
+project/env/window/order/search/resolved activity source/session capability и
+frozen `ingested_at` cutoff. Новые и late-ingested events не меняют следующие
+страницы; изменение actor-link graph инвалидирует cursor typed-ошибкой.
+Ключ выводится per project из server-only
+`POOLSTATIS_CURSOR_SIGNING_SECRET`; API/ingest token material не используется.
+
+`GET /api/v1/projects/{slug}/persons/{distinctId}` принимает `env`, `from`,
+`to`, `limit≤100`, opaque `cursor`; `distinctId` bounded до 200 символов
+одинаково в REST и MCP. Он возвращает canonical `distinct_id`,
+requested ID, bounded raw IDs, active link provenance и keyset activity всей
+resolved population. Activity показывает только registered event names, а
+properties fail closed в `{}`. Identity entity отсутствует, пока не появится
+явное deterministic entity-to-actor правило.
+
+Destructive purge остаётся отдельным exact-raw-ID действием:
+`POST /data/purge` с `scope:"events"` и `distinct_id` не расширяется до
+canonical actor или связанных raw IDs. Response явно содержит
+`identity_scope:"exact_raw_distinct_id"` и `canonical_expansion:false`.
 
 `query_funnel` возвращает семантику каждого шага вместе с числами:
 
@@ -461,6 +559,7 @@ GET /api/v1/projects/{slug}/data-quality?env=prod&limit=50&since_days=30
 - Формат ошибок единый: `{ "error": { "code": "metric_key_taken", "message": "…", "hint": "…" } }` — `hint` пишется для агента-читателя.
 Для privacy-bounded web traffic используйте Query DSL
 `kind: "web_analytics"` с registry metric key, периодом и bounded dimensions
-`country|device|browser|os|language|timezone|source`. Ответ отдельно возвращает
+`route|device|browser|os|language|timezone|source`. `country` остаётся явно
+unavailable до отдельного review trusted proxy/MMDB lifecycle. Ответ возвращает
 `visitors`, `sessions`, `page_views`, counts и page-view percentages; определения
 и privacy caveats входят в `meta`.

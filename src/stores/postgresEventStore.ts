@@ -1,14 +1,26 @@
 import type pg from 'pg';
 import type {
   AppendResult,
+  BackfillRecord,
+  BackfillResult,
+  EventRevisionInput,
+  EventRevisionRecord,
+  HistoricalBackfill,
   UsageWarning,
   ActorSummary,
+  ActorActivityQuery,
+  ActorActivityResult,
+  ActorListItem,
+  ActorListRecord,
+  ActorsQuery,
+  ActorsResult,
   EntityStatusEvidence,
   EntityStatusEvidenceQuery,
   ExperimentResultsQuery,
   ExperimentVariantOutcome,
   ExperienceSessionEvent,
   ExperienceSessionQuery,
+  ExperienceSessionResult,
   EventStore,
   IdempotentAppend,
   EventNameStat,
@@ -51,6 +63,7 @@ import { recordUsageWarnings, type PendingUsageWarning } from '../services/usage
 
 const IDEMPOTENCY_RECLAIM_INTERVAL = '35 days';
 const MAX_METER_QUANTITY = BigInt(Number.MAX_SAFE_INTEGER);
+const PURGE_BATCH_SIZE = 1_000;
 
 interface MeteredInsertResult {
   inserted: number;
@@ -214,6 +227,272 @@ export class PostgresEventStore implements EventStore {
     }
   }
 
+  async backfill(batch: HistoricalBackfill): Promise<BackfillResult> {
+    if (this.managePartitions) {
+      await this.ensurePartitions(batch.events.map((event) => event.timestamp));
+    }
+    const client = await this.pool.connect();
+    let warnings: PendingUsageWarning[] = [];
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`backfill:${batch.projectId}:${batch.env}:${batch.batchId}`],
+      );
+      const existing = await client.query(
+        `SELECT id, env, batch_id, payload_sha256, reason, actor, event_count,
+                registered_count, unregistered_count,
+                min_timestamp, max_timestamp, created_at
+         FROM event_backfill_batches
+         WHERE project_id = $1 AND env = $2 AND batch_id = $3`,
+        [batch.projectId, batch.env, batch.batchId],
+      );
+      if (existing.rows[0]) {
+        if (existing.rows[0].payload_sha256 !== batch.payloadSha256) {
+          throw new ApiError(
+            409,
+            'backfill_batch_conflict',
+            'this batch_id is already bound to a different historical payload',
+            'use the original payload for an exact retry or choose a new batch_id',
+          );
+        }
+        await client.query('COMMIT');
+        return { batch: toBackfillRecord(existing.rows[0]), inserted: 0, duplicate: true };
+      }
+
+      const backfillId = randomUUID();
+      const materialized = batch.events.map((event) => ({
+        ...event,
+        id: event.id ?? randomUUID(),
+        origin: 'backfill' as const,
+        backfillBatchId: backfillId,
+        revision: 1,
+      }));
+      const [group] = await this.resolveMeteredGroups(client, [{
+        projectId: batch.projectId,
+        env: batch.env,
+        events: materialized,
+      }]);
+      if (group?.orgId && hasBillableEvents(materialized)) {
+        await this.acquireUsageConfigLocks(client, [group.orgId]);
+      }
+      const periodStart = await this.currentPeriodStart(client);
+      const metered = await this.insertMetered(
+        client,
+        materialized,
+        `backfill:${batch.projectId}:${batch.env}:${batch.batchId}`,
+        group?.orgId ? { orgId: group.orgId, periodStart } : undefined,
+      );
+      warnings = metered.warnings;
+      const timestamps = materialized.map((event) => event.timestamp.getTime());
+      const registeredCount = materialized.filter((event) => event.registered).length;
+      const recorded = await client.query(
+        `INSERT INTO event_backfill_batches (
+           id, project_id, env, batch_id, payload_sha256, reason, actor,
+           event_count, registered_count, unregistered_count, min_timestamp, max_timestamp
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id, env, batch_id, payload_sha256, reason, actor, event_count,
+                   registered_count, unregistered_count,
+                   min_timestamp, max_timestamp, created_at`,
+        [
+          backfillId,
+          batch.projectId,
+          batch.env,
+          batch.batchId,
+          batch.payloadSha256,
+          batch.reason,
+          batch.actor,
+          metered.inserted,
+          registeredCount,
+          materialized.length - registeredCount,
+          new Date(Math.min(...timestamps)),
+          new Date(Math.max(...timestamps)),
+        ],
+      );
+      await client.query('COMMIT');
+      await recordUsageWarnings(this.pool, warnings).catch(() => {});
+      return {
+        batch: toBackfillRecord(recorded.rows[0]),
+        inserted: metered.inserted,
+        ...(warnings.length > 0 ? { warnings: warnings.map(toUsageWarning) } : {}),
+      };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getEvent(projectId: string, env: string, eventId: string): Promise<RawEvent | null> {
+    const { rows } = await this.pool.query(
+      `SELECT id, event, "timestamp", distinct_id, session_id, properties, registered,
+              env, revision, origin, backfill_batch_id, ingested_at, is_system, event_source
+       FROM events
+       WHERE project_id = $1 AND env = $2 AND id = $3
+       LIMIT 2`,
+      [projectId, env, eventId],
+    );
+    if (rows.length > 1) {
+      throw new ApiError(409, 'event_id_collision', 'multiple event rows share this identifier');
+    }
+    return rows[0] ? toRawEvent(rows[0]) : null;
+  }
+
+  async reviseEvent(input: EventRevisionInput): Promise<EventRevisionRecord> {
+    if (this.managePartitions) await this.ensurePartitions([input.event.timestamp]);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query(
+        `SELECT id, event, "timestamp", distinct_id, session_id, properties, registered,
+                env, revision, origin, backfill_batch_id, ingested_at, is_system, event_source
+         FROM events
+         WHERE project_id = $1 AND env = $2 AND id = $3
+         FOR UPDATE`,
+        [input.projectId, input.env, input.eventId],
+      );
+      if (current.rows.length === 0) {
+        throw new ApiError(404, 'event_not_found', 'event not found');
+      }
+      if (current.rows.length > 1) {
+        throw new ApiError(409, 'event_id_collision', 'multiple event rows share this identifier');
+      }
+      const row = current.rows[0];
+      if (row.is_system || row.event_source !== 'ingest') {
+        throw new ApiError(
+          409,
+          'event_not_editable',
+          'system and Browser Experience events cannot be revised',
+          'correct the producing integration and keep typed platform evidence immutable',
+        );
+      }
+      if (Number(row.revision) !== input.expectedRevision) {
+        throw new ApiError(
+          409,
+          'event_revision_conflict',
+          `event is now at revision ${row.revision}`,
+          'read the event again, review the current values, and preview a new correction',
+          { current_revision: Number(row.revision) },
+        );
+      }
+      const previous = toRawEvent(row);
+      const updated = await client.query(
+        `UPDATE events
+         SET event = $4,
+             "timestamp" = $5,
+             distinct_id = $6,
+             session_id = $7,
+             properties = $8,
+             registered = $9,
+             revision = revision + 1
+         WHERE project_id = $1 AND env = $2 AND id = $3 AND revision = $10
+         RETURNING id, event, "timestamp", distinct_id, session_id, properties,
+                   registered, env, revision, origin, backfill_batch_id, ingested_at,
+                   is_system, event_source`,
+        [
+          input.projectId,
+          input.env,
+          input.eventId,
+          input.event.event,
+          input.event.timestamp,
+          input.event.distinctId,
+          input.event.sessionId,
+          JSON.stringify(input.event.properties),
+          input.event.registered,
+          input.expectedRevision,
+        ],
+      );
+      if (!updated.rows[0]) {
+        throw new ApiError(409, 'event_revision_conflict', 'event changed during correction');
+      }
+      const snapshot = toRawEvent(updated.rows[0]);
+      const audit = await client.query(
+        `INSERT INTO event_revisions (
+           event_id, project_id, env, revision, actor, reason,
+           previous_snapshot, snapshot
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, event_id, revision, actor, reason,
+                   previous_snapshot, snapshot, created_at`,
+        [
+          input.eventId,
+          input.projectId,
+          input.env,
+          snapshot.revision,
+          input.actor,
+          input.reason,
+          JSON.stringify(previous),
+          JSON.stringify(snapshot),
+        ],
+      );
+      await client.query('COMMIT');
+      return toEventRevisionRecord(audit.rows[0]);
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async eventHistory(
+    projectId: string,
+    env: string,
+    eventId: string,
+  ): Promise<{ event: RawEvent; revisions: EventRevisionRecord[] } | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const current = await client.query(
+        `SELECT id, event, "timestamp", distinct_id, session_id, properties, registered,
+                env, revision, origin, backfill_batch_id, ingested_at, is_system, event_source
+         FROM events
+         WHERE project_id = $1 AND env = $2 AND id = $3
+         LIMIT 2`,
+        [projectId, env, eventId],
+      );
+      if (current.rows.length > 1) {
+        throw new ApiError(409, 'event_id_collision', 'multiple event rows share this identifier');
+      }
+      if (!current.rows[0]) {
+        await client.query('COMMIT');
+        return null;
+      }
+      const history = await client.query(
+        `SELECT id, event_id, revision, actor, reason,
+                previous_snapshot, snapshot, created_at
+         FROM event_revisions
+         WHERE project_id = $1 AND env = $2 AND event_id = $3
+         ORDER BY revision`,
+        [projectId, env, eventId],
+      );
+      await client.query('COMMIT');
+      return {
+        event: toRawEvent(current.rows[0]),
+        revisions: history.rows.map(toEventRevisionRecord),
+      };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listBackfills(projectId: string, env: string, limit: number): Promise<BackfillRecord[]> {
+    const { rows } = await this.pool.query(
+      `SELECT id, env, batch_id, payload_sha256, reason, actor, event_count,
+              registered_count, unregistered_count,
+              min_timestamp, max_timestamp, created_at
+       FROM event_backfill_batches
+       WHERE project_id = $1 AND env = $2
+       ORDER BY created_at DESC
+       LIMIT $3`,
+      [projectId, env, limit],
+    );
+    return rows.map(toBackfillRecord);
+  }
+
   private async insertMetered(
     client: pg.PoolClient,
     events: StorableEvent[],
@@ -314,15 +593,16 @@ export class PostgresEventStore implements EventStore {
     const params: unknown[] = [];
     const rows = events.map((e) => {
       params.push(
-        e.projectId, e.env, e.event, e.timestamp, e.distinctId,
+        e.id ?? randomUUID(), e.projectId, e.env, e.event, e.timestamp, e.distinctId,
         e.sessionId, JSON.stringify(e.properties), e.registered, e.isSystem ?? false,
         e.eventSource ?? (e.isSystem ? 'system' : 'ingest'),
+        e.origin ?? 'live', e.backfillBatchId ?? null, e.revision ?? 1,
       );
-      const base = params.length - 10;
-      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
+      const base = params.length - 14;
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13}, $${base + 14})`;
     });
     const result = await client.query(
-      `INSERT INTO events (project_id, env, event, "timestamp", distinct_id, session_id, properties, registered, is_system, event_source)
+      `INSERT INTO events (id, project_id, env, event, "timestamp", distinct_id, session_id, properties, registered, is_system, event_source, origin, backfill_batch_id, revision)
        VALUES ${rows.join(', ')}`,
       params,
     );
@@ -410,19 +690,14 @@ export class PostgresEventStore implements EventStore {
     const counts = `count(DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id))::int AS visitors,
       count(DISTINCT (
         poolstatis_resolve_actor(project_id, env, distinct_id), session_id
-      )) FILTER (WHERE session_id IS NOT NULL)::int AS sessions,
+      )) FILTER (WHERE session_id IS NOT NULL AND session_id <> '')::int AS sessions,
       count(*)::int AS page_views`;
-    const summaryRows = await this.pool.query(
+    const summaryRow = (await this.pool.query(
       `SELECT ${counts} FROM events WHERE ${where}`,
       params,
-    );
-    const summary = {
-      visitors: Number(summaryRows.rows[0]?.visitors ?? 0),
-      sessions: Number(summaryRows.rows[0]?.sessions ?? 0),
-      page_views: Number(summaryRows.rows[0]?.page_views ?? 0),
-    };
+    )).rows[0] ?? {};
     const engagementParams: unknown[] = [q.projectId, q.env, q.event, q.from, q.to];
-    const engagementRows = await this.pool.query(
+    const engagementRow = (await this.pool.query(
       `${this.webEngagementCtes(q, engagementParams)}
        SELECT
          count(*) FILTER (WHERE engaged IS NOT NULL)::int AS measured_sessions,
@@ -434,16 +709,25 @@ export class PostgresEventStore implements EventStore {
          COALESCE(sum(timed_page_views), 0)::int AS timed_page_views,
          COALESCE(sum(page_views), 0)::int AS total_page_views,
          COALESCE(sum(foreground_ms), 0)::bigint AS foreground_ms,
-         COALESCE(sum(session_span_ms), 0)::bigint AS session_span_ms
+         COALESCE(sum(session_span_ms), 0)::bigint AS session_span_ms,
+         floor(avg(session_span_ms) FILTER (WHERE complete))::bigint
+           AS average_session_duration_ms
        FROM session_rows`,
       engagementParams,
-    );
-    const engagementRow = engagementRows.rows[0] ?? {};
-    const totalPageViews = summary.page_views;
-    const timedPageViews = Number(engagementRow.timed_page_views ?? 0);
+    )).rows[0] ?? {};
+    const summary = {
+      visitors: Number(summaryRow.visitors ?? 0),
+      sessions: Number(summaryRow.sessions ?? 0),
+      page_views: Number(summaryRow.page_views ?? 0),
+      average_session_duration_ms: engagementRow.average_session_duration_ms === null
+        || engagementRow.average_session_duration_ms === undefined
+        ? null
+        : Number(engagementRow.average_session_duration_ms),
+    };
     const measuredSessions = Number(engagementRow.measured_sessions ?? 0);
     const engagedSessions = Number(engagementRow.engaged_sessions ?? 0);
     const bounceSessions = Number(engagementRow.bounce_sessions ?? 0);
+    const timedPageViews = Number(engagementRow.timed_page_views ?? 0);
     const engagement = {
       measured_sessions: measuredSessions,
       incomplete_sessions: Number(engagementRow.incomplete_sessions ?? 0),
@@ -455,8 +739,8 @@ export class PostgresEventStore implements EventStore {
       bounce_rate: measuredSessions === 0 ? null : bounceSessions / measuredSessions,
       single_page_sessions: Number(engagementRow.single_page_sessions ?? 0),
       timed_page_views: timedPageViews,
-      total_page_views: totalPageViews,
-      timed_page_coverage: totalPageViews === 0 ? null : timedPageViews / totalPageViews,
+      total_page_views: summary.page_views,
+      timed_page_coverage: summary.page_views === 0 ? null : timedPageViews / summary.page_views,
       foreground_ms: Number(engagementRow.foreground_ms ?? 0),
       session_span_ms: Number(engagementRow.session_span_ms ?? 0),
     };
@@ -492,7 +776,7 @@ export class PostgresEventStore implements EventStore {
       `${ctes}
        SELECT *, count(*) OVER ()::int AS total
        FROM session_rows
-       ORDER BY started_at DESC, session_id
+       ORDER BY started_at DESC, session_id, actor_id
        LIMIT $${limitParam}`,
       params,
     );
@@ -525,13 +809,12 @@ export class PostgresEventStore implements EventStore {
          SELECT *, count(*) OVER ()::int AS total_pages
          FROM pages WHERE session_id = $${sessionParam}
            AND ($${actorParam}::text IS NULL OR actor_id = $${actorParam})
-         ORDER BY viewed_at, page_view_id NULLS LAST
+         ORDER BY viewed_at, page_view_id, actor_id, route
          LIMIT $${pageLimitParam}`,
         params,
       ),
     ]);
-    const ambiguousActor = !q.actorId && summaryRows.rows.length > 1;
-    if (ambiguousActor) {
+    if (!q.actorId && summaryRows.rows.length > 1) {
       return { summary: null, pages: [], total: 0, ambiguous_actor: true };
     }
     return {
@@ -549,21 +832,24 @@ export class PostgresEventStore implements EventStore {
     const pageParam = params.length;
     params.push(q.actorId ?? null);
     const actorParam = params.length;
+    params.push(q.sessionId ?? null);
+    const sessionParam = params.length;
     const { rows } = await this.pool.query(
-      `${ctes}
-       , matched_pages AS (
+      `${ctes},
+       matched_pages AS (
          SELECT * FROM pages
          WHERE page_view_id = $${pageParam}
            AND ($${actorParam}::text IS NULL OR actor_id = $${actorParam})
+           AND ($${sessionParam}::text IS NULL OR session_id = $${sessionParam})
        )
        SELECT *,
-         (SELECT count(DISTINCT actor_id)::int FROM matched_pages) AS actor_count
+         (SELECT count(DISTINCT (actor_id, session_id))::int FROM matched_pages) AS identity_count
        FROM matched_pages
-       ORDER BY viewed_at DESC
+       ORDER BY viewed_at DESC, session_id, actor_id, route
        LIMIT 1`,
       params,
     );
-    const ambiguousActor = !q.actorId && Number(rows[0]?.actor_count ?? 0) > 1;
+    const ambiguousActor = Number(rows[0]?.identity_count ?? 0) > 1;
     return {
       page: rows[0] && !ambiguousActor ? this.webPageEngagement(rows[0]) : null,
       ambiguous_actor: ambiguousActor,
@@ -579,33 +865,52 @@ export class PostgresEventStore implements EventStore {
           const keyFilters = andFilters(q.keyMetric.filters, 'k.properties', params);
           return `key_sessions AS (
             SELECT DISTINCT
+              k.project_id,
+              k.env,
               k.session_id,
               poolstatis_resolve_actor(k.project_id, k.env, k.distinct_id) AS actor_id
             FROM events k
-            WHERE k.project_id = $1 AND k.env = $2
+            WHERE k.project_id = $1
+              AND k.env = $2
               AND k.event = $${eventParam}
-              AND k."timestamp" >= $4 AND k."timestamp" < $5
-              AND k.session_id IS NOT NULL${keyFilters}
+              AND k."timestamp" >= $4
+              AND k."timestamp" < $5
+              AND k.session_id IS NOT NULL
+              AND k.session_id <> ''${keyFilters}
           )`;
         })()
       : `key_sessions AS (
-          SELECT NULL::text AS session_id, NULL::text AS actor_id WHERE false
+          SELECT
+            NULL::uuid AS project_id,
+            NULL::text AS env,
+            NULL::text AS session_id,
+            NULL::text AS actor_id
+          WHERE false
         )`;
     return `
       WITH page_views AS (
         SELECT
+          p.project_id,
+          p.env,
           p.session_id,
           poolstatis_resolve_actor(p.project_id, p.env, p.distinct_id) AS actor_id,
           p.properties->>'$page_view_id' AS page_view_id,
-          COALESCE(p.properties->>'$page_path', '/') AS path,
+          p.properties->>'$route_key' AS route,
           p."timestamp" AS viewed_at
         FROM events p
-        WHERE p.project_id = $1 AND p.env = $2 AND p.event = $3
-          AND p."timestamp" >= $4 AND p."timestamp" < $5
-          AND p.session_id IS NOT NULL${pageFilters}
+        WHERE p.project_id = $1
+          AND p.env = $2
+          AND p.event = $3
+          AND p."timestamp" >= $4
+          AND p."timestamp" < $5
+          AND p.session_id IS NOT NULL
+          AND p.session_id <> ''
+          AND p.properties->>'$page_view_id' IS NOT NULL${pageFilters}
       ),
       ranked_engagement AS (
         SELECT
+          e.project_id,
+          e.env,
           e.session_id,
           poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id) AS actor_id,
           e.properties->>'$page_view_id' AS page_view_id,
@@ -615,10 +920,10 @@ export class PostgresEventStore implements EventStore {
             THEN (e.properties->>'sequence')::int END AS sequence,
           CASE WHEN e.properties->>'foreground_ms' ~ '^\\d{1,9}$'
             AND (e.properties->>'foreground_ms')::numeric <= 604800000
-            THEN floor((e.properties->>'foreground_ms')::numeric)::bigint END AS foreground_ms,
+            THEN (e.properties->>'foreground_ms')::bigint END AS foreground_ms,
           CASE WHEN e.properties->>'elapsed_ms' ~ '^\\d{1,9}$'
             AND (e.properties->>'elapsed_ms')::numeric <= 604800000
-            THEN floor((e.properties->>'elapsed_ms')::numeric)::bigint END AS elapsed_ms,
+            THEN (e.properties->>'elapsed_ms')::bigint END AS elapsed_ms,
           CASE WHEN e.properties->>'max_scroll_pct' ~ '^\\d{1,3}$'
             AND (e.properties->>'max_scroll_pct')::numeric <= 100
             THEN (e.properties->>'max_scroll_pct')::double precision END AS max_scroll_pct,
@@ -631,6 +936,8 @@ export class PostgresEventStore implements EventStore {
           ) THEN e.properties->>'reason' END AS reason,
           row_number() OVER (
             PARTITION BY
+              e.project_id,
+              e.env,
               poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id),
               e.session_id,
               e.properties->>'$page_view_id'
@@ -638,12 +945,31 @@ export class PostgresEventStore implements EventStore {
               CASE WHEN e.properties->>'sequence' ~ '^\\d{1,10}$'
                 AND (e.properties->>'sequence')::numeric <= 2147483647
                 THEN (e.properties->>'sequence')::int ELSE -1 END DESC,
-              e."timestamp" DESC
+              e."timestamp" DESC,
+              CASE WHEN e.properties->>'foreground_ms' ~ '^\\d{1,9}$'
+                AND (e.properties->>'foreground_ms')::numeric <= 604800000
+                THEN (e.properties->>'foreground_ms')::bigint ELSE -1 END DESC,
+              CASE WHEN e.properties->>'elapsed_ms' ~ '^\\d{1,9}$'
+                AND (e.properties->>'elapsed_ms')::numeric <= 604800000
+                THEN (e.properties->>'elapsed_ms')::bigint ELSE -1 END DESC,
+              CASE WHEN e.properties->>'max_scroll_pct' ~ '^\\d{1,3}$'
+                AND (e.properties->>'max_scroll_pct')::numeric <= 100
+                THEN (e.properties->>'max_scroll_pct')::double precision ELSE -1 END DESC,
+              CASE WHEN e.properties->>'interaction_count' ~ '^\\d{1,10}$'
+                AND (e.properties->>'interaction_count')::numeric <= 2147483647
+                THEN (e.properties->>'interaction_count')::int ELSE -1 END DESC,
+              COALESCE(e.properties->>'reason', '') DESC,
+              e.distinct_id DESC,
+              e.properties::text DESC
           ) AS rank
         FROM events e
-        WHERE e.project_id = $1 AND e.env = $2 AND e.event = 'page.engagement'
-          AND e."timestamp" >= $4 AND e."timestamp" < $5
+        WHERE e.project_id = $1
+          AND e.env = $2
+          AND e.event = 'page.engagement'
+          AND e."timestamp" >= $4
+          AND e."timestamp" < $5
           AND e.session_id IS NOT NULL
+          AND e.session_id <> ''
           AND e.properties->>'$browser_context' = '1'
           AND e.properties->>'$page_view_id' IS NOT NULL
       ),
@@ -652,9 +978,12 @@ export class PostgresEventStore implements EventStore {
       ),
       pages AS (
         SELECT
+          p.project_id,
+          p.env,
           p.page_view_id,
           p.session_id,
-          p.path,
+          p.actor_id,
+          p.route,
           p.viewed_at,
           l.last_snapshot_at,
           l.sequence,
@@ -664,15 +993,13 @@ export class PostgresEventStore implements EventStore {
           l.interaction_count,
           l.reason,
           (
-            p.page_view_id IS NOT NULL
-            AND l.sequence IS NOT NULL
+            l.sequence IS NOT NULL
             AND l.foreground_ms IS NOT NULL
             AND l.elapsed_ms IS NOT NULL
             AND l.foreground_ms <= l.elapsed_ms
           ) AS timed,
           (
-            p.page_view_id IS NOT NULL
-            AND l.sequence IS NOT NULL
+            l.sequence IS NOT NULL
             AND l.foreground_ms IS NOT NULL
             AND l.elapsed_ms IS NOT NULL
             AND l.foreground_ms <= l.elapsed_ms
@@ -681,25 +1008,35 @@ export class PostgresEventStore implements EventStore {
               'pagehide', 'freeze', 'duration_rollover', 'destroy'
             )
           ) AS complete,
-          p.actor_id
+          CASE
+            WHEN l.sequence IS NOT NULL
+              AND l.elapsed_ms IS NOT NULL
+              AND l.elapsed_ms >= 0
+            THEN p.viewed_at + l.elapsed_ms * interval '1 millisecond'
+            ELSE COALESCE(l.last_snapshot_at, p.viewed_at)
+          END AS evidence_ended_at
         FROM page_views p
         LEFT JOIN latest_engagement l
-          ON l.actor_id = p.actor_id
+          ON l.project_id = p.project_id
+          AND l.env = p.env
+          AND l.actor_id = p.actor_id
           AND l.session_id = p.session_id
           AND l.page_view_id = p.page_view_id
       ),
       ${keySessions},
       session_rows AS (
         SELECT
+          p.project_id,
+          p.env,
           p.session_id,
           p.actor_id,
           min(p.viewed_at) AS started_at,
-          max(COALESCE(p.last_snapshot_at, p.viewed_at)) AS ended_at,
+          max(p.evidence_ended_at) AS ended_at,
           count(*)::int AS page_views,
           count(*) FILTER (WHERE p.timed)::int AS timed_page_views,
           COALESCE(sum(p.foreground_ms), 0)::bigint AS foreground_ms,
           floor(extract(epoch FROM (
-            max(COALESCE(p.last_snapshot_at, p.viewed_at)) - min(p.viewed_at)
+            max(p.evidence_ended_at) - min(p.viewed_at)
           )) * 1000)::bigint AS session_span_ms,
           (count(*) FILTER (WHERE p.complete) = count(*)) AS complete,
           CASE
@@ -707,8 +1044,7 @@ export class PostgresEventStore implements EventStore {
               COALESCE(sum(p.foreground_ms), 0) >= 10000
               OR count(*) >= 2
               OR bool_or(k.session_id IS NOT NULL)
-            )
-            THEN true
+            ) THEN true
             WHEN count(*) FILTER (WHERE p.complete) = count(*) THEN false
             ELSE NULL
           END AS engaged,
@@ -724,8 +1060,11 @@ export class PostgresEventStore implements EventStore {
           (count(*) = 1) AS single_page
         FROM pages p
         LEFT JOIN key_sessions k
-          ON k.actor_id = p.actor_id AND k.session_id = p.session_id
-        GROUP BY p.actor_id, p.session_id
+          ON k.project_id = p.project_id
+          AND k.env = p.env
+          AND k.actor_id = p.actor_id
+          AND k.session_id = p.session_id
+        GROUP BY p.project_id, p.env, p.actor_id, p.session_id
       )`;
   }
 
@@ -734,14 +1073,16 @@ export class PostgresEventStore implements EventStore {
       page_view_id: String(row.page_view_id),
       session_id: String(row.session_id),
       actor_id: String(row.actor_id),
-      path: String(row.path),
+      route: String(row.route),
       viewed_at: toIso(row.viewed_at as string | Date),
-      last_snapshot_at: row.last_snapshot_at ? toIso(row.last_snapshot_at as string | Date) : null,
-      sequence: row.sequence === null || row.sequence === undefined ? null : Number(row.sequence),
-      foreground_ms: row.foreground_ms === null || row.foreground_ms === undefined ? null : Number(row.foreground_ms),
-      elapsed_ms: row.elapsed_ms === null || row.elapsed_ms === undefined ? null : Number(row.elapsed_ms),
-      max_scroll_pct: row.max_scroll_pct === null || row.max_scroll_pct === undefined ? null : Number(row.max_scroll_pct),
-      interaction_count: row.interaction_count === null || row.interaction_count === undefined ? null : Number(row.interaction_count),
+      last_snapshot_at: row.last_snapshot_at
+        ? toIso(row.last_snapshot_at as string | Date)
+        : null,
+      sequence: nullableNumber(row.sequence),
+      foreground_ms: nullableNumber(row.foreground_ms),
+      elapsed_ms: nullableNumber(row.elapsed_ms),
+      max_scroll_pct: nullableNumber(row.max_scroll_pct),
+      interaction_count: nullableNumber(row.interaction_count),
       reason: row.reason === null || row.reason === undefined ? null : String(row.reason),
       timed: Boolean(row.timed),
       complete: Boolean(row.complete),
@@ -1053,20 +1394,46 @@ export class PostgresEventStore implements EventStore {
     };
   }
 
-  async experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]> {
-    const { rows } = await this.pool.query<{ event: string; timestamp: Date; properties: Record<string, unknown> }>(
-      `SELECT event, "timestamp", properties
-       FROM events
-       WHERE project_id = $1 AND env = $2 AND session_id = $3
-         AND event_source = 'experience'
-         AND event IN ('experience.page_viewed', 'experience.element_clicked', 'experience.scroll_depth', 'experience.section_exposed', 'experience.client_error')
-         AND properties->>'surface' = $4
-         AND "timestamp" >= $5 AND "timestamp" < $6
-       ORDER BY "timestamp", (properties->>'sequence')::int
-       LIMIT $7`,
-      [q.projectId, q.env, q.sessionId, q.surface, q.from, q.to, q.limit],
-    );
-    return rows.map((row) => toExperienceSessionEvent(row));
+  async experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionResult> {
+    const params: unknown[] = [
+      q.projectId, q.env, q.sessionId, q.surface, q.from, q.to,
+    ];
+    const actorFilter = q.actorId
+      ? ` AND poolstatis_resolve_actor(project_id, env, distinct_id)
+          = poolstatis_resolve_actor($1::uuid, $2, $${params.push(q.actorId)})`
+      : '';
+    const where = `project_id = $1 AND env = $2 AND session_id = $3
+      AND event_source = 'experience'
+      AND event IN ('experience.page_viewed', 'experience.element_clicked', 'experience.scroll_depth', 'experience.section_exposed', 'experience.client_error')
+      AND properties->>'surface' = $4
+      AND "timestamp" >= $5 AND "timestamp" < $6${actorFilter}`;
+    const eventParams = [...params, q.limit];
+    const [actors, events] = await Promise.all([
+      this.pool.query<{ actor_id: string }>(
+        `SELECT DISTINCT poolstatis_resolve_actor(project_id, env, distinct_id) AS actor_id
+         FROM events WHERE ${where}
+         ORDER BY actor_id
+         LIMIT 2`,
+        params,
+      ),
+      this.pool.query<{
+        event: string;
+        timestamp: Date;
+        properties: Record<string, unknown>;
+      }>(
+        `SELECT event, "timestamp", properties
+         FROM events
+         WHERE ${where}
+         ORDER BY "timestamp", (properties->>'sequence')::int,
+                  poolstatis_resolve_actor(project_id, env, distinct_id)
+         LIMIT $${eventParams.length}`,
+        eventParams,
+      ),
+    ]);
+    return {
+      actorIds: actors.rows.map((row) => row.actor_id),
+      events: events.rows.map((row) => toExperienceSessionEvent(row)),
+    };
   }
 
   async experienceLastCaptures(projectId: string, env: string, surfaces: string[]): Promise<Record<string, string>> {
@@ -1261,18 +1628,126 @@ export class PostgresEventStore implements EventStore {
   }
 
   async purge(projectId: string, env?: string, distinctId?: string): Promise<number> {
-    const params: unknown[] = [projectId];
-    let sql = 'DELETE FROM events WHERE project_id = $1';
+    const candidateParams: unknown[] = [projectId];
+    const currentWhere = ['e.project_id = $1'];
+    const auditWhere = ['r.project_id = $1'];
     if (env !== undefined) {
-      params.push(env);
-      sql += ` AND env = $${params.length}`;
+      candidateParams.push(env);
+      currentWhere.push(`e.env = $${candidateParams.length}`);
+      auditWhere.push(`r.env = $${candidateParams.length}`);
     }
     if (distinctId !== undefined) {
-      params.push(distinctId);
-      sql += ` AND distinct_id = $${params.length}`;
+      candidateParams.push(distinctId);
+      currentWhere.push(`e.distinct_id = $${candidateParams.length}`);
+      auditWhere.push(
+        `(r.previous_snapshot->>'distinct_id' = $${candidateParams.length}
+          OR r.snapshot->>'distinct_id' = $${candidateParams.length})`,
+      );
     }
-    const { rowCount } = await this.pool.query(sql, params);
-    return rowCount ?? 0;
+    const client = await this.pool.connect();
+    let totalDeleted = 0;
+    try {
+      await client.query(
+        `SELECT set_config(
+           'poolstatis.purge_started_at',
+           clock_timestamp()::text,
+           false
+         )`,
+      );
+      const fenceSql = "current_setting('poolstatis.purge_started_at')::timestamptz";
+      currentWhere.push(`e.ingested_at <= ${fenceSql}`);
+      auditWhere.push(
+        `(e.ingested_at <= ${fenceSql}
+          OR (e.id IS NULL AND r.created_at <= ${fenceSql}))`,
+      );
+      while (true) {
+        await client.query('BEGIN');
+        try {
+          const batchParams = [...candidateParams, PURGE_BATCH_SIZE];
+          const limitParam = `$${batchParams.length}`;
+          const candidates = await client.query<{ event_id: string }>(
+            `SELECT event_id
+             FROM (
+               (SELECT e.id AS event_id
+                FROM events AS e
+                WHERE ${currentWhere.join(' AND ')}
+                LIMIT ${limitParam})
+               UNION
+               (SELECT r.event_id
+                FROM event_revisions AS r
+                LEFT JOIN events AS e
+                  ON e.project_id = r.project_id
+                 AND e.env = r.env
+                 AND e.id = r.event_id
+                WHERE ${auditWhere.join(' AND ')}
+                LIMIT ${limitParam})
+             ) AS candidate_batch
+             LIMIT ${limitParam}`,
+            batchParams,
+          );
+          const candidateIds = candidates.rows.map((row) => row.event_id);
+          if (candidateIds.length === 0) {
+            await client.query('COMMIT');
+            return totalDeleted;
+          }
+
+          const scopedParams: unknown[] = [projectId];
+          const scopedWhere = ['project_id = $1'];
+          if (env !== undefined) {
+            scopedParams.push(env);
+            scopedWhere.push(`env = $${scopedParams.length}`);
+          }
+          scopedParams.push(candidateIds);
+          const idParam = `$${scopedParams.length}`;
+          const locked = await client.query<{ id: string }>(
+            `SELECT id
+             FROM events
+             WHERE ${scopedWhere.join(' AND ')}
+               AND id = ANY(${idParam}::uuid[])
+             FOR UPDATE`,
+            scopedParams,
+          );
+
+          await client.query("SELECT set_config('poolstatis.event_purge', 'on', true)");
+          // These statements run after the event locks are acquired. Under READ
+          // COMMITTED they see revisions committed by a writer that held the
+          // lock first, so purge cannot strand a newer audit snapshot.
+          await client.query(
+            `DELETE FROM event_revisions
+             WHERE ${scopedWhere.join(' AND ')}
+               AND event_id = ANY(${idParam}::uuid[])`,
+            scopedParams,
+          );
+          const lockedIds = locked.rows.map((row) => row.id);
+          if (lockedIds.length > 0) {
+            const deleteParams: unknown[] = [projectId];
+            const deleteWhere = ['project_id = $1'];
+            if (env !== undefined) {
+              deleteParams.push(env);
+              deleteWhere.push(`env = $${deleteParams.length}`);
+            }
+            deleteParams.push(lockedIds);
+            const result = await client.query(
+              `DELETE FROM events
+               WHERE ${deleteWhere.join(' AND ')}
+                 AND id = ANY($${deleteParams.length}::uuid[])`,
+              deleteParams,
+            );
+            totalDeleted += result.rowCount ?? 0;
+          }
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw error;
+        }
+      }
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      await client.query('RESET poolstatis.purge_started_at').catch(() => {});
+      client.release();
+    }
   }
 
   async sample(q: SampleQuery): Promise<RawEvent[]> {
@@ -1307,19 +1782,12 @@ export class PostgresEventStore implements EventStore {
     }
     params.push(q.limit);
     const sql = `
-      SELECT event, "timestamp", distinct_id, session_id, properties, registered, env
+      SELECT id, event, "timestamp", distinct_id, session_id, properties, registered,
+             env, revision, origin, backfill_batch_id, ingested_at, is_system, event_source
       FROM events WHERE ${where.join(' AND ')}
       ORDER BY ingested_at DESC LIMIT $${params.length}`;
     const { rows } = await this.pool.query(sql, params);
-    return rows.map((r) => ({
-      event: r.event,
-      timestamp: toIso(r.timestamp),
-      distinct_id: r.distinct_id,
-      session_id: r.session_id,
-      properties: r.properties,
-      registered: r.registered,
-      env: r.env,
-    }));
+    return rows.map(toRawEvent);
   }
 
   async actorSummary(projectId: string, env: string, distinctId: string): Promise<ActorSummary> {
@@ -1354,6 +1822,387 @@ export class PostgresEventStore implements EventStore {
       sessions: Number(r.sessions),
       registered_share: Number(r.registered_share),
       top_events: top.rows.map((t) => ({ event: t.event, count: Number(t.count) })),
+    };
+  }
+
+  async actors(q: ActorsQuery): Promise<ActorsResult> {
+    const params: unknown[] = [q.projectId, q.env, q.from, q.to, q.snapshotIngestedAt];
+    const windowWhere = [
+      'e.project_id = $1',
+      'e.env = $2',
+      'e."timestamp" >= $3',
+      'e."timestamp" < $4',
+      'e.ingested_at <= $5',
+    ];
+    let populationSql = 'SELECT DISTINCT actor_id FROM window_events';
+    if (q.activity) {
+      params.push(q.activity.event);
+      const activityWhere = [
+        `w.event = $${params.length}`,
+        ...compileFilters(q.activity.filters, 'w.properties', params),
+      ].join(' AND ');
+      populationSql = `SELECT DISTINCT w.actor_id
+        FROM window_events w WHERE ${activityWhere}`;
+    }
+    let searchParam: number | undefined;
+    if (q.searchExactId) {
+      params.push(q.searchExactId);
+      searchParam = params.length;
+      populationSql = `SELECT actor_id FROM (${populationSql}) exact_population
+        WHERE actor_id = poolstatis_resolve_actor($1::uuid, $2, $${searchParam})`;
+    }
+    const exactClosureSql = searchParam
+      ? `exact_target AS (
+           SELECT poolstatis_resolve_actor($1::uuid, $2, $${searchParam}) AS raw_id
+         ), reverse_chain(raw_id, path, cycle) AS (
+           SELECT raw_id, ARRAY[raw_id]::text[], false FROM exact_target
+           UNION ALL
+           SELECT links.source_distinct_id,
+                  ARRAY[links.source_distinct_id]::text[] || chain.path,
+                  links.source_distinct_id = ANY(chain.path)
+           FROM reverse_chain chain
+           JOIN actor_links links
+             ON links.project_id = $1 AND links.env = $2
+            AND links.status = 'active'
+            AND links.target_distinct_id = chain.raw_id
+           WHERE NOT chain.cycle
+         ),`
+      : '';
+    const rawActorsSql = searchParam
+      ? `SELECT DISTINCT e.distinct_id
+         FROM events e
+         JOIN reverse_chain chain
+           ON chain.raw_id = e.distinct_id AND NOT chain.cycle
+         WHERE ${windowWhere.join(' AND ')}`
+      : `SELECT DISTINCT e.distinct_id
+         FROM events e
+         WHERE ${windowWhere.join(' AND ')}`;
+    const restrictPopulation = Boolean(q.activity || q.searchExactId);
+    const selectedEventsSql = restrictPopulation
+      ? `SELECT e.*, selected_raw.actor_id
+         FROM selected_raw
+         JOIN events e ON e.distinct_id = selected_raw.raw_id
+         WHERE ${windowWhere.join(' AND ')}`
+      : 'SELECT * FROM window_events';
+    const selectedRawSql = restrictPopulation
+      ? `SELECT actor_map.raw_id, actor_map.actor_id
+         FROM actor_map
+         JOIN population ON population.actor_id = actor_map.actor_id`
+      : 'SELECT raw_id, actor_id FROM actor_map';
+
+    const browserCondition = q.trustedBrowserSessions
+      ? `(w.registered = true
+          AND w.event_source = 'ingest'
+          AND w.event = 'page.viewed'
+          AND w.properties->>'$browser_context' = '1')`
+      : 'false';
+    const sortColumn = q.order === 'first_seen_desc'
+      ? 'first_seen'
+      : q.order === 'events_desc'
+        ? 'total_events'
+        : 'last_seen';
+    let keysetSql = '';
+    if (q.cursor) {
+      params.push(q.cursor.value, q.cursor.distinctId);
+      const valueParam = `$${params.length - 1}`;
+      const idParam = `$${params.length}`;
+      const cast = q.order === 'events_desc' ? '::int' : '::timestamptz';
+      keysetSql = `WHERE (
+        aggregates.${sortColumn} < ${valueParam}${cast}
+        OR (
+          aggregates.${sortColumn} = ${valueParam}${cast}
+          AND aggregates.distinct_id > ${idParam}
+        )
+      )`;
+    }
+    params.push(q.limit + 1);
+    const { rows } = await this.pool.query<{
+      distinct_id: string;
+      raw_actor_count: number;
+      first_seen: Date;
+      last_seen: Date;
+      total_events: number;
+      distinct_events: number;
+      active_days: number;
+      registered_share: number;
+      session_count: number | null;
+      top_events: Array<{ event: string; count: number }>;
+      identity_status: ActorListItem['identity_status'];
+    }>(
+      `WITH RECURSIVE ${exactClosureSql} raw_actors AS MATERIALIZED (
+         ${rawActorsSql}
+       ), actor_chain(raw_id, current_id, path, depth, cycle, linked) AS (
+         SELECT distinct_id, distinct_id, ARRAY[distinct_id]::text[], 0, false, false
+         FROM raw_actors
+         UNION ALL
+         SELECT chain.raw_id, links.target_distinct_id,
+                chain.path || links.target_distinct_id,
+                chain.depth + 1,
+                links.target_distinct_id = ANY(chain.path),
+                true
+         FROM actor_chain chain
+         JOIN actor_links links
+           ON links.project_id = $1 AND links.env = $2
+          AND links.status = 'active'
+          AND links.source_distinct_id = chain.current_id
+         WHERE NOT chain.cycle
+       ), actor_map AS MATERIALIZED (
+         SELECT DISTINCT ON (raw_id)
+                raw_id, current_id AS actor_id
+         FROM actor_chain
+         WHERE NOT cycle
+         ORDER BY raw_id, depth DESC, current_id
+       ), window_events AS MATERIALIZED (
+         SELECT e.*, actor_map.actor_id
+         FROM events e
+         JOIN actor_map ON actor_map.raw_id = e.distinct_id
+         WHERE ${windowWhere.join(' AND ')}
+       ), population AS (
+         ${populationSql}
+       ), selected_raw AS MATERIALIZED (
+         ${selectedRawSql}
+       ), selected_events AS MATERIALIZED (
+         ${selectedEventsSql}
+       ), identity_flags AS (
+         SELECT selected_raw.actor_id,
+                COALESCE(bool_or(actor_chain.cycle), false) AS ambiguous,
+                COALESCE(bool_or(actor_chain.linked), false) AS linked
+         FROM selected_raw
+         JOIN actor_chain ON actor_chain.raw_id = selected_raw.raw_id
+         GROUP BY selected_raw.actor_id
+       ), aggregates AS (
+         SELECT w.actor_id AS distinct_id,
+                count(DISTINCT w.distinct_id)::int AS raw_actor_count,
+                min(w."timestamp") AS first_seen,
+                max(w."timestamp") AS last_seen,
+                count(*)::int AS total_events,
+                count(DISTINCT w.event)::int AS distinct_events,
+                count(DISTINCT date_trunc('day', w."timestamp"))::int AS active_days,
+                COALESCE(avg(w.registered::int), 0)::float AS registered_share
+         FROM selected_events w
+         GROUP BY w.actor_id
+       ), page AS MATERIALIZED (
+         SELECT aggregates.*,
+                CASE
+                  WHEN identity_flags.ambiguous THEN 'ambiguous'
+                  WHEN aggregates.raw_actor_count > 1 OR identity_flags.linked THEN 'linked'
+                  ELSE 'unknown'
+                END AS identity_status
+         FROM aggregates
+         JOIN identity_flags ON identity_flags.actor_id = aggregates.distinct_id
+         ${keysetSql}
+         ORDER BY aggregates.${sortColumn} DESC, aggregates.distinct_id
+         LIMIT $${params.length}
+       ), page_events AS MATERIALIZED (
+         SELECT w.*
+         FROM selected_events w
+         JOIN page ON page.distinct_id = w.actor_id
+       ), session_counts AS (
+         SELECT w.actor_id,
+                CASE
+                  WHEN count(*) FILTER (WHERE ${browserCondition}) > 0
+                    AND count(*) FILTER (
+                      WHERE ${browserCondition}
+                        AND (w.session_id IS NULL OR w.session_id = '')
+                    ) = 0
+                  THEN count(DISTINCT w.session_id) FILTER (WHERE ${browserCondition})::int
+                  ELSE NULL
+                END AS session_count
+         FROM page_events w
+         GROUP BY w.actor_id
+       ), event_counts AS (
+         SELECT w.actor_id, w.event, count(*)::int AS count
+         FROM page_events w
+         WHERE w.registered = true
+         GROUP BY w.actor_id, w.event
+       ), ranked_events AS (
+         SELECT actor_id, event, count,
+                row_number() OVER (
+                  PARTITION BY actor_id ORDER BY count DESC, event
+                ) AS rank
+         FROM event_counts
+       ), top_events AS (
+         SELECT actor_id,
+                jsonb_agg(jsonb_build_object('event', event, 'count', count)
+                  ORDER BY count DESC, event) AS events
+         FROM ranked_events
+         WHERE rank <= 8
+         GROUP BY actor_id
+       )
+       SELECT page.*,
+              session_counts.session_count,
+              COALESCE(top_events.events, '[]'::jsonb) AS top_events
+       FROM page
+       LEFT JOIN session_counts ON session_counts.actor_id = page.distinct_id
+       LEFT JOIN top_events ON top_events.actor_id = page.distinct_id
+       ORDER BY page.${sortColumn} DESC, page.distinct_id`,
+      params,
+    );
+    const hasMore = rows.length > q.limit;
+    return {
+      actors: rows.slice(0, q.limit).map((row): ActorListRecord => ({
+        distinct_id: row.distinct_id,
+        raw_actor_count: Number(row.raw_actor_count),
+        first_seen: toIso(row.first_seen),
+        last_seen: toIso(row.last_seen),
+        total_events: Number(row.total_events),
+        distinct_events: Number(row.distinct_events),
+        active_days: Number(row.active_days),
+        registered_share: Number(row.registered_share),
+        session_count: row.session_count === null ? null : Number(row.session_count),
+        top_events: row.top_events.map((entry) => ({
+          event: entry.event,
+          count: Number(entry.count),
+        })),
+        pinned_properties: {},
+        identity_status: row.identity_status,
+      })),
+      hasMore,
+    };
+  }
+
+  async actorActivity(q: ActorActivityQuery): Promise<ActorActivityResult> {
+    const params: unknown[] = [
+      q.projectId,
+      q.env,
+      q.distinctId,
+      q.from,
+      q.to,
+      q.snapshotIngestedAt,
+    ];
+    let cursorSql = '';
+    if (q.cursor) {
+      params.push(
+        q.cursor.timestamp,
+        q.cursor.ingestedAt,
+        q.cursor.event,
+        q.cursor.rawDistinctId,
+        q.cursor.sessionId,
+        q.cursor.propertiesHash,
+        q.cursor.duplicateOrdinal,
+      );
+      const first = params.length - 6;
+      cursorSql = `WHERE (
+        "timestamp", ingested_at, event, raw_distinct_id,
+        session_key, properties_hash, duplicate_ordinal
+      ) < (
+        $${first}::timestamptz, $${first + 1}::timestamptz, $${first + 2},
+        $${first + 3}, $${first + 4}, $${first + 5}, $${first + 6}::int
+      )`;
+    }
+    params.push(q.limit + 1);
+    const { rows } = await this.pool.query<{
+      event: string;
+      timestamp: Date;
+      ingested_at: Date;
+      distinct_id: string;
+      raw_distinct_id: string;
+      session_id: string | null;
+      session_key: string;
+      properties_hash: string;
+      duplicate_ordinal: number;
+      env: string;
+    }>(
+      `WITH RECURSIVE target AS (
+         SELECT poolstatis_resolve_actor($1::uuid, $2, $3) AS actor_id
+       ), reverse_chain(raw_id, path, cycle) AS (
+         SELECT actor_id, ARRAY[actor_id]::text[], false FROM target
+         UNION ALL
+         SELECT links.source_distinct_id,
+                ARRAY[links.source_distinct_id]::text[] || chain.path,
+                links.source_distinct_id = ANY(chain.path)
+         FROM reverse_chain chain
+         JOIN actor_links links
+           ON links.project_id = $1 AND links.env = $2
+          AND links.status = 'active'
+          AND links.target_distinct_id = chain.raw_id
+         WHERE NOT chain.cycle
+       ), raw_actors AS MATERIALIZED (
+         SELECT DISTINCT e.distinct_id
+         FROM events e
+         JOIN reverse_chain chain
+           ON chain.raw_id = e.distinct_id AND NOT chain.cycle
+         WHERE e.project_id = $1 AND e.env = $2
+           AND e."timestamp" >= $4 AND e."timestamp" < $5
+           AND e.ingested_at <= $6
+       ), actor_chain(raw_id, current_id, path, depth, cycle) AS (
+         SELECT distinct_id, distinct_id, ARRAY[distinct_id]::text[], 0, false
+         FROM raw_actors
+         UNION ALL
+         SELECT chain.raw_id, links.target_distinct_id,
+                chain.path || links.target_distinct_id,
+                chain.depth + 1,
+                links.target_distinct_id = ANY(chain.path)
+         FROM actor_chain chain
+         JOIN actor_links links
+           ON links.project_id = $1 AND links.env = $2
+          AND links.status = 'active'
+          AND links.source_distinct_id = chain.current_id
+         WHERE NOT chain.cycle
+       ), actor_map AS MATERIALIZED (
+         SELECT DISTINCT ON (raw_id)
+                raw_id, current_id AS actor_id
+         FROM actor_chain
+         WHERE NOT cycle
+         ORDER BY raw_id, depth DESC, current_id
+       ), base AS (
+         SELECT e.event, e."timestamp", e.ingested_at,
+                actor_map.actor_id AS distinct_id,
+                e.distinct_id AS raw_distinct_id,
+                e.session_id,
+                COALESCE(e.session_id, '') AS session_key,
+                md5(e.properties::text) AS properties_hash,
+                e.env
+         FROM events e
+         JOIN actor_map ON actor_map.raw_id = e.distinct_id
+         CROSS JOIN target
+         WHERE e.project_id = $1 AND e.env = $2
+           AND actor_map.actor_id = target.actor_id
+           AND e."timestamp" >= $4 AND e."timestamp" < $5
+           AND e.ingested_at <= $6
+           AND e.registered = true
+       ), numbered AS (
+         SELECT base.*,
+                row_number() OVER (
+                  PARTITION BY "timestamp", ingested_at, event, raw_distinct_id,
+                               session_key, properties_hash
+                  ORDER BY raw_distinct_id
+                )::int AS duplicate_ordinal
+         FROM base
+       )
+       SELECT * FROM numbered
+       ${cursorSql}
+       ORDER BY "timestamp" DESC, ingested_at DESC, event DESC,
+                raw_distinct_id DESC, session_key DESC, properties_hash DESC,
+                duplicate_ordinal DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    const visible = rows.slice(0, q.limit);
+    const last = visible.at(-1);
+    return {
+      events: visible.map((row) => ({
+        event: row.event,
+        timestamp: toIso(row.timestamp),
+        distinct_id: row.distinct_id,
+        raw_distinct_id: row.raw_distinct_id,
+        session_id: row.session_id,
+        properties: {},
+        registered: true,
+        env: row.env,
+      })),
+      hasMore: rows.length > q.limit,
+      ...(last ? {
+        lastKey: {
+          timestamp: toIso(last.timestamp),
+          ingestedAt: toIso(last.ingested_at),
+          event: last.event,
+          rawDistinctId: last.raw_distinct_id,
+          sessionId: last.session_key,
+          propertiesHash: last.properties_hash,
+          duplicateOrdinal: Number(last.duplicate_ordinal),
+        },
+      } : {}),
     };
   }
 
@@ -1576,23 +2425,87 @@ export async function ensureRollingEventPartitions(
   await ensureEventPartitions(pool, timestamps);
 }
 
+/** Pre-create every monthly partition a valid historical backfill may target. */
+export async function ensureHistoricalEventPartitions(
+  pool: pg.Pool,
+  now: Date,
+  monthsBehind: number,
+): Promise<void> {
+  await ensureEventPartitions(pool, historicalPartitionDates(now, monthsBehind));
+}
+
+export async function historicalEventPartitionsReady(
+  pool: pg.Pool,
+  now: Date,
+  monthsBehind: number,
+): Promise<boolean> {
+  return eventPartitionCoverageReady(pool, historicalPartitionDates(now, monthsBehind));
+}
+
 export async function rollingEventPartitionsReady(
   pool: pg.Pool,
   now: Date = new Date(),
   monthsAhead = 12,
 ): Promise<boolean> {
-  const names = rollingPartitionDates(now, monthsAhead).map((date) =>
-    `events_y${date.getUTCFullYear()}m${String(date.getUTCMonth() + 1).padStart(2, '0')}`);
-  const { rows } = await pool.query<{ count: number }>(
-    `SELECT count(DISTINCT child.relname)::int AS count
+  return eventPartitionCoverageReady(pool, rollingPartitionDates(now, monthsAhead));
+}
+
+async function eventPartitionCoverageReady(
+  pool: pg.Pool,
+  dates: Date[],
+): Promise<boolean> {
+  const names = dates.map(partitionName);
+  const { rows } = await pool.query<{ relname: string }>(
+    `SELECT child.relname
      FROM pg_inherits
      JOIN pg_class parent ON parent.oid = inhparent
      JOIN pg_class child ON child.oid = inhrelid
      WHERE parent.oid = 'events'::regclass
        AND child.relname = ANY($1::text[])`,
-    [names],
+    [[...names, 'events_default']],
   );
-  return rows[0]?.count === names.length;
+  const attached = new Set(rows.map((row) => row.relname));
+  const missing = dates.filter((date) => !attached.has(partitionName(date)));
+  if (missing.length === 0) return true;
+  if (!attached.has('events_default')) return false;
+
+  // PostgreSQL refuses to attach a dedicated partition when matching rows
+  // already live in events_default. Those rows are still safely covered, but
+  // an absent empty/future partition is not ready and must fail the deploy.
+  const first = missing.reduce((min, date) => date < min ? date : min);
+  const last = missing.reduce((max, date) => date > max ? date : max);
+  const afterLast = new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth() + 1, 1));
+  const fallback = await pool.query<{ month: string }>(
+    `SELECT DISTINCT to_char(
+       date_trunc('month', "timestamp" AT TIME ZONE 'UTC'),
+       'YYYY-MM'
+     ) AS month
+     FROM events_default
+     WHERE "timestamp" >= $1 AND "timestamp" < $2`,
+    [first, afterLast],
+  );
+  const covered = new Set(fallback.rows.map((row) => row.month));
+  return missing.every((date) => covered.has(partitionMonth(date)));
+}
+
+function partitionName(date: Date): string {
+  return `events_y${date.getUTCFullYear()}m${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function partitionMonth(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function historicalPartitionDates(now: Date, monthsBehind: number): Date[] {
+  const timestamps: Date[] = [];
+  for (let offset = -monthsBehind; offset <= 0; offset += 1) {
+    timestamps.push(new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth() + offset,
+      1,
+    )));
+  }
+  return timestamps;
 }
 
 function rollingPartitionDates(now: Date, monthsAhead: number): Date[] {
@@ -1646,6 +2559,54 @@ function toUsageWarning(warning: PendingUsageWarning): UsageWarning {
   return { meter: warning.meter, threshold: warning.threshold, quantity: warning.quantity };
 }
 
+function toRawEvent(row: Record<string, unknown>): RawEvent {
+  return {
+    id: String(row.id),
+    event: String(row.event),
+    timestamp: toIso(row.timestamp as Date | string),
+    distinct_id: String(row.distinct_id),
+    session_id: row.session_id === null ? null : String(row.session_id),
+    properties: row.properties as Record<string, unknown>,
+    registered: Boolean(row.registered),
+    env: String(row.env),
+    revision: Number(row.revision),
+    origin: row.origin as RawEvent['origin'],
+    backfill_batch_id: row.backfill_batch_id === null ? null : String(row.backfill_batch_id),
+    ingested_at: toIso(row.ingested_at as Date | string),
+    editable: row.is_system === false && row.event_source === 'ingest',
+  };
+}
+
+function toBackfillRecord(row: Record<string, unknown>): BackfillRecord {
+  return {
+    id: String(row.id),
+    env: String(row.env),
+    batch_id: String(row.batch_id),
+    payload_sha256: String(row.payload_sha256),
+    reason: String(row.reason),
+    actor: String(row.actor),
+    event_count: Number(row.event_count),
+    registered_count: Number(row.registered_count),
+    unregistered_count: Number(row.unregistered_count),
+    min_timestamp: toIso(row.min_timestamp as Date | string),
+    max_timestamp: toIso(row.max_timestamp as Date | string),
+    created_at: toIso(row.created_at as Date | string),
+  };
+}
+
+function toEventRevisionRecord(row: Record<string, unknown>): EventRevisionRecord {
+  return {
+    id: String(row.id),
+    event_id: String(row.event_id),
+    revision: Number(row.revision),
+    actor: String(row.actor),
+    reason: String(row.reason),
+    previous_snapshot: row.previous_snapshot as RawEvent,
+    snapshot: row.snapshot as RawEvent,
+    created_at: toIso(row.created_at as Date | string),
+  };
+}
+
 function hasBillableEvents(events: StorableEvent[]): boolean {
   return events.some((event) => event.isSystem !== true && event.eventSource !== 'system');
 }
@@ -1669,6 +2630,10 @@ function isPartitionOverlapError(err: unknown): boolean {
 
 function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function nullableNumber(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
 }
 
 function toExperienceSessionEvent(

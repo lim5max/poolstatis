@@ -1,7 +1,9 @@
 import type {
   AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage,
-  PersonSummary, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
+  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
+import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
+import type { OperationalQueryInput, OperationalQueryResult, PersonResult } from '../analysis/operations';
 
 export class ApiError extends Error {
   constructor(public code: string, message: string, public hint?: string, public status?: number) {
@@ -126,9 +128,10 @@ export class PoolstatisClient {
     ).then((response) => response.properties);
   }
 
-  proposeBrowserAnalytics(slug: string) {
+  proposeBrowserAnalytics(slug: string, routeKeys: string[]) {
     return this.req<{ properties: PropertyDefinition[]; metrics: Metric[] }>(
-      'POST', `/api/v1/projects/${slug}/properties/browser-analytics`, {},
+      'POST', `/api/v1/projects/${slug}/properties/browser-analytics`,
+      { route_keys: routeKeys },
     );
   }
 
@@ -345,6 +348,14 @@ export class PoolstatisClient {
     return this.req<{ funnels: Funnel[] }>('GET', `/api/v1/projects/${slug}/funnels`).then((r) => r.funnels);
   }
 
+  query(slug: string, query: AnalysisQueryInput) {
+    return this.req<AnalysisQueryResult>('POST', `/api/v1/projects/${slug}/query`, query);
+  }
+
+  operationalQuery<T extends OperationalQueryResult>(slug: string, query: OperationalQueryInput) {
+    return this.req<T>('POST', `/api/v1/projects/${slug}/query`, query);
+  }
+
   // ---- feature delivery ----
   flags(slug: string) {
     return this.req<{ flags: FeatureFlag[] }>('GET', `/api/v1/projects/${slug}/flags`).then((r) => r.flags);
@@ -547,8 +558,72 @@ export class PoolstatisClient {
     return this.req<{ events: SampleEvent[] }>('GET', `/api/v1/projects/${slug}/events/sample?${qs}`).then((r) => r.events);
   }
 
-  personSummary(slug: string, distinctId: string, env = 'prod') {
-    return this.req<PersonSummary>('GET', `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinctId)}?env=${encodeURIComponent(env)}`);
+  personSummary(slug: string, distinctId: string, input: {
+    env: string; from?: string; to?: string | null; limit?: number; cursor?: string;
+  }) {
+    const query = new URLSearchParams({ env: input.env });
+    if (input.from) query.set('from', input.from);
+    if (input.to) query.set('to', input.to);
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    return this.req<PersonResult>(
+      'GET',
+      `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinctId)}?${query}`,
+    );
+  }
+
+  previewBackfill(slug: string, body: { env: string; events: unknown[] }) {
+    return this.req<BackfillPreview>('POST', `/api/v1/projects/${slug}/events/backfill/preview`, body);
+  }
+
+  commitBackfill(slug: string, body: {
+    env: string;
+    batch_id: string;
+    reason: string;
+    expected_payload_sha256: string;
+    events: unknown[];
+  }) {
+    return this.req<{ batch: BackfillRecord; inserted: number; duplicate?: boolean }>(
+      'POST',
+      `/api/v1/projects/${slug}/events/backfill`,
+      body,
+    );
+  }
+
+  backfills(slug: string, env: string, limit = 50) {
+    return this.req<{ backfills: BackfillRecord[] }>(
+      'GET',
+      `/api/v1/projects/${slug}/events/backfills?env=${encodeURIComponent(env)}&limit=${limit}`,
+    ).then((response) => response.backfills);
+  }
+
+  eventHistory(slug: string, eventId: string, env: string) {
+    return this.req<{ event: SampleEvent; revisions: EventRevision[] }>(
+      'GET',
+      `/api/v1/projects/${slug}/events/${encodeURIComponent(eventId)}?env=${encodeURIComponent(env)}`,
+    );
+  }
+
+  previewEventRevision(slug: string, eventId: string, body: { env: string; patch: EventRevisionPatch }) {
+    return this.req<EventRevisionPreview>(
+      'POST',
+      `/api/v1/projects/${slug}/events/${encodeURIComponent(eventId)}/revisions/preview`,
+      body,
+    );
+  }
+
+  commitEventRevision(slug: string, eventId: string, body: {
+    env: string;
+    patch: EventRevisionPatch;
+    expected_revision: number;
+    expected_preview_sha256: string;
+    reason: string;
+  }) {
+    return this.req<{ revision: EventRevision }>(
+      'POST',
+      `/api/v1/projects/${slug}/events/${encodeURIComponent(eventId)}/revisions`,
+      body,
+    );
   }
 
   entities(slug: string, q: { entity_type: string; limit?: number; env: string }) {

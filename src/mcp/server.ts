@@ -10,14 +10,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
-  actorLinkSchema,
+  actorDistinctIdSchema, actorLinkSchema, actorsQuerySchema, browserRouteKeysSchema,
   applyMeasurementDeclarationSchema,
   concludeExperimentSchema, createExperimentSchema,
   createMetricCategorySchema,
   deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
   experienceRouteRegistrationSchema, experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
-  editDecisionSchema, measurementDeclarationSchema, measurementTrustSchema, posthogConnectionSchema, propertyDefinitionSchema,
+  editDecisionSchema, eventRevisionPatchSchema, measurementDeclarationSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, propertyDefinitionSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
   registerReleaseSchema, reviewDecisionSchema,
   retentionQuerySchema, stickinessQuerySchema, trendQuerySchema, webAnalyticsQuerySchema,
@@ -25,7 +25,9 @@ import {
   updateExperimentSchema, updateFeatureFlagSchema,
   updateMetricCategorySchema, updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
 } from '../schemas.js';
-import { BROWSER_ANALYTICS_STANDARD, INSTRUMENTATION_STANDARD } from './standard.js';
+import { INSTRUMENTATION_STANDARD } from './standard.js';
+import { BROWSER_ANALYTICS_STANDARD } from './browserStandard.js';
+import { ACTORS_STANDARD } from './actorsStandard.js';
 
 export interface McpConfig { baseUrl: string; token: string; }
 
@@ -90,7 +92,7 @@ function wrap<A>(fn: (args: A) => Promise<unknown>): (args: A) => Promise<ToolRe
   };
 }
 
-const server = new McpServer({ name: 'poolstatis', version: '0.2.0' });
+const server = new McpServer({ name: 'poolstatis', version: '0.4.0' });
 const project = z.string().describe('project slug, see list_projects');
 
 function asStructuredContent(data: unknown): Record<string, unknown> {
@@ -197,9 +199,13 @@ jsonTool(
 
 jsonTool(
   'propose_browser_analytics',
-  'Idempotently propose the canonical privacy-bounded browser properties plus page-view and visitor metrics. Everything remains proposed until owner review.',
-  { project },
-  wrap(({ project: slug }) => api('POST', `/api/v1/projects/${slug}/properties/browser-analytics`, {})),
+  'Atomically propose canonical privacy-safe browser properties, a finite route vocabulary, acquisition properties and Web metrics. Definitions remain proposed until owner review.',
+  { project, route_keys: browserRouteKeysSchema },
+  wrap(({ project: slug, route_keys }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/properties/browser-analytics`,
+    { route_keys },
+  )),
 );
 
 jsonTool(
@@ -731,42 +737,42 @@ jsonTool(
 
 jsonTool(
   'query_web_analytics',
-  'Return distinct visitors, sessions and page views plus count-and-percentage breakdowns by country, device, browser, OS, language, timezone or acquisition source. Definitions and privacy caveats are included.',
+  'Return the bounded privacy-safe Web overview. Country remains unavailable; missing measurement denominators stay null.',
   { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_analytics', ...query })),
 );
 
 jsonTool(
   'get_web_overview',
-  'Return a bounded web overview with visitors, sessions, page views, measured engagement, bounce only for complete sessions, single-page sessions, foreground time, wall-clock span, breakdown truncation and privacy/accounting definitions.',
+  'Return visitors, actor-correct sessions, canonical page views, measured coverage, engagement rates and bounded trusted-route breakdowns.',
   { project, query: webAnalyticsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_analytics', ...query })),
 );
 
 jsonTool(
   'list_web_sessions',
-  'List recent browser-tab sessions in one project/environment and period. Results are bounded and report truncation; incomplete timing remains explicit.',
+  'List bounded canonical Web sessions in deterministic started_at/session_id/actor_id order with tri-state engagement and bounce.',
   { project, query: webSessionsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_sessions', ...query })),
 );
 
 jsonTool(
   'get_web_session',
-  'Read one privacy-bounded browser-tab session with ordered page paths, foreground timing, wall-clock span and completeness. This is not DOM/video replay.',
+  'Read one actor-scoped canonical session with bounded safe routes. Ambiguous reused session IDs fail closed.',
   { project, query: webSessionQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_session', ...query })),
 );
 
 jsonTool(
   'get_session_engagement',
-  'Explain measured engagement for one known browser-tab session. Returns the same bounded server evidence as get_web_session and never invents bounce for incomplete sessions.',
+  'Explain measured engagement for one actor-scoped canonical session without converting incomplete negatives into false.',
   { project, query: webSessionQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'web_session', ...query })),
 );
 
 jsonTool(
   'get_page_engagement',
-  'Read the latest cumulative snapshot for one page_view_id. Duplicate or out-of-order snapshots are reduced by highest sequence; missing evidence stays explicit.',
+  'Read the highest-sequence cumulative snapshot for one actor/session-scoped page view. Reused IDs fail closed.',
   { project, query: pageEngagementQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'page_engagement', ...query })),
 );
@@ -874,6 +880,16 @@ jsonTool(
 );
 
 jsonTool(
+  'list_actors',
+  'List bounded query-time canonical actors with exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. activityMetric must be a registry metric key; unsupported actor property filters fail closed.',
+  { project, query: actorsQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, {
+    kind: 'actors',
+    ...query,
+  })),
+);
+
+jsonTool(
   'query_retention',
   'Retention grid: of the actors who did `start_metric` in each cohort bucket, how many returned (did `return_metric`, defaults to start) in each later period. Returns cohorts with size + retained counts/percentages.',
   { project, query: retentionQuerySchema.omit({ kind: true }) },
@@ -903,7 +919,7 @@ jsonTool(
 
 jsonTool(
   'get_experience_session',
-  'Read the privacy-safe ordered interaction timeline for one known Browser Experience session. It contains only paths, stable labels, coordinates, scroll depth and coarse error type — never DOM/text.',
+  'Read one actor-scoped privacy-safe Browser Experience session timeline. Reused session IDs require actor_id or fail with typed ambiguity. The response includes canonical actor/link provenance and never DOM/text.',
   { project, query: experienceSessionQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'experience_session', ...query })),
 );
@@ -924,14 +940,107 @@ jsonTool(
 
 jsonTool(
   'get_person',
-  'Engagement summary for one actor (distinct_id): first/last seen, total/distinct events, active days, sessions, registered share, top events, plus their identity entity. Use to profile or segment a user.',
-  { project, distinct_id: z.string(), env: z.string().default('prod') },
-  wrap(({ project: slug, distinct_id, env }) => api('GET', `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinct_id)}?env=${encodeURIComponent(env)}`)),
+  'Canonical actor detail with bounded raw IDs/link provenance, registered-only masked activity and opaque keyset pagination. Entity/pinned properties fail closed until a deterministic approved source exists.',
+  {
+    project,
+    distinct_id: actorDistinctIdSchema,
+    ...personQuerySchema.shape,
+  },
+  wrap(({ project: slug, distinct_id, env, from, to, limit, cursor }) => {
+    const query = new URLSearchParams({ env, limit: String(limit) });
+    if (from) query.set('from', from);
+    if (to) query.set('to', to);
+    if (cursor) query.set('cursor', cursor);
+    return api(
+      'GET',
+      `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinct_id)}?${query}`,
+    );
+  }),
+);
+
+jsonTool(
+  'preview_event_backfill',
+  'Validate an all-or-nothing historical import without writing anything. Preserves each supplied timestamp, enforces retention/privacy rules, and returns the payload_sha256 required by import_historical_events.',
+  {
+    project,
+    env: z.string().default('prod'),
+    events: z.array(z.unknown()).min(1).max(500),
+  },
+  wrap(({ project: slug, env, events }) =>
+    api('POST', `/api/v1/projects/${slug}/events/backfill/preview`, { env, events })),
+);
+
+jsonTool(
+  'import_historical_events',
+  'Commit an exact previously-previewed historical batch. batch_id is permanently idempotent: an exact retry is safe, while reuse with different events is rejected.',
+  {
+    project,
+    env: z.string().default('prod'),
+    batch_id: z.string().min(1).max(200),
+    reason: z.string().trim().min(10),
+    expected_payload_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    events: z.array(z.unknown()).min(1).max(500),
+  },
+  wrap(({ project: slug, ...body }) =>
+    api('POST', `/api/v1/projects/${slug}/events/backfill`, body)),
+);
+
+jsonTool(
+  'list_event_backfills',
+  'List durable historical import batches with actor, reason, exact time range, registered counts, and payload hash.',
+  {
+    project,
+    env: z.string().default('prod'),
+    limit: z.number().int().min(1).max(100).default(50),
+  },
+  wrap(({ project: slug, env, limit }) =>
+    api('GET', `/api/v1/projects/${slug}/events/backfills?env=${encodeURIComponent(env)}&limit=${limit}`)),
+);
+
+jsonTool(
+  'preview_event_revision',
+  'Preview an auditable correction to one native event. Use set_properties/unset_properties to add or remove parameters. No write occurs; review before/after and retain both expected_revision and preview_sha256.',
+  {
+    project,
+    event_id: z.string().uuid(),
+    env: z.string().default('prod'),
+    patch: eventRevisionPatchSchema,
+  },
+  wrap(({ project: slug, event_id, env, patch }) =>
+    api('POST', `/api/v1/projects/${slug}/events/${event_id}/revisions/preview`, { env, patch })),
+);
+
+jsonTool(
+  'revise_event',
+  'Apply the exact previously-reviewed native event correction with optimistic locking, a preview fingerprint, and an append-only before/after audit record. System and Browser Experience events are intentionally not editable.',
+  {
+    project,
+    event_id: z.string().uuid(),
+    env: z.string().default('prod'),
+    patch: eventRevisionPatchSchema,
+    expected_revision: z.number().int().positive(),
+    expected_preview_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    reason: z.string().trim().min(10),
+  },
+  wrap(({ project: slug, event_id, ...body }) =>
+    api('POST', `/api/v1/projects/${slug}/events/${event_id}/revisions`, body)),
+);
+
+jsonTool(
+  'get_event_history',
+  'Read the current event plus every immutable correction with actor, reason, and before/after snapshots.',
+  {
+    project,
+    event_id: z.string().uuid(),
+    env: z.string().default('prod'),
+  },
+  wrap(({ project: slug, event_id, env }) =>
+    api('GET', `/api/v1/projects/${slug}/events/${event_id}?env=${encodeURIComponent(env)}`)),
 );
 
 jsonTool(
   'sample_events',
-  'Latest raw events — use to verify instrumentation works (did the event arrive? is it registered?).',
+  'Latest raw events with stable event id, origin, and revision — use to verify instrumentation or choose one native event for an audited correction.',
   {
     project,
     event: z.string().optional(),
@@ -1029,6 +1138,14 @@ server.resource(
   'poolstatis://standard/browser-analytics',
   async (uri) => ({
     contents: [{ uri: uri.href, mimeType: 'text/markdown', text: BROWSER_ANALYTICS_STANDARD }],
+  }),
+);
+
+server.resource(
+  'actors-standard',
+  'poolstatis://standard/actors',
+  async (uri) => ({
+    contents: [{ uri: uri.href, mimeType: 'text/markdown', text: ACTORS_STANDARD }],
   }),
 );
 

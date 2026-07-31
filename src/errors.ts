@@ -4,6 +4,8 @@
  * so every 4xx should teach the caller how to fix the call.
  */
 export class ApiError extends Error {
+  public readonly retryable: boolean | undefined;
+
   constructor(
     public readonly statusCode: number,
     public readonly code: string,
@@ -13,14 +15,16 @@ export class ApiError extends Error {
   ) {
     super(message);
     this.name = 'ApiError';
+    this.retryable = typeof details?.retryable === 'boolean' ? details.retryable : undefined;
   }
 
-  toBody(): { error: { code: string; message: string; hint?: string; details?: Record<string, unknown> } } {
+  toBody(): { error: { code: string; message: string; hint?: string; retryable?: boolean; details?: Record<string, unknown> } } {
     return {
       error: {
         code: this.code,
         message: this.message,
         ...(this.hint ? { hint: this.hint } : {}),
+        ...(this.retryable !== undefined ? { retryable: this.retryable } : {}),
         ...(this.details ? { details: this.details } : {}),
       },
     };

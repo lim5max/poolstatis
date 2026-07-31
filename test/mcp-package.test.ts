@@ -34,7 +34,12 @@ let fixtureUrl: string;
 let generatedPackDir: string | undefined;
 const requests: Array<{ method: string; url: string; authorization?: string; client?: string }> = [];
 
-async function connect(command: string, args: string[] = [], cwd = tempProject) {
+async function connect(
+  command: string,
+  args: string[] = [],
+  cwd = tempProject,
+  extraEnv: Record<string, string> = {},
+) {
   const stderr: Buffer[] = [];
   const transport = new StdioClientTransport({
     command,
@@ -44,6 +49,7 @@ async function connect(command: string, args: string[] = [], cwd = tempProject) 
       PATH: process.env.PATH ?? '',
       POOLSTATIS_URL: fixtureUrl,
       POOLSTATIS_TOKEN: safeToken,
+      ...extraEnv,
     },
     stderr: 'pipe',
   });
@@ -88,6 +94,10 @@ beforeAll(async () => {
     'LICENSE',
     'README.md',
     'dist/cli.js',
+    'dist/core/mcp/actorsStandard.d.ts',
+    'dist/core/mcp/actorsStandard.js',
+    'dist/core/mcp/browserStandard.d.ts',
+    'dist/core/mcp/browserStandard.js',
     'dist/core/mcp/server.d.ts',
     'dist/core/mcp/server.js',
     'dist/core/mcp/standard.js',
@@ -307,14 +317,26 @@ describe('@poolstatis/mcp release artifact', () => {
   it('initializes, lists tools, and performs a project-scoped read against a safe fixture', async () => {
     const { client, stderr } = await connect(process.execPath, [cliModule]);
     try {
-      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.2.0' });
+      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.4.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
+      expect(tools.tools).toHaveLength(100);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'get_project_schema',
+        'get_web_overview',
+        'list_web_sessions',
+        'get_web_session',
+        'get_session_engagement',
+        'get_page_engagement',
         'list_visual_experience_versions',
         'get_visual_experience_map',
         'compare_visual_experience',
+        'preview_event_backfill',
+        'import_historical_events',
+        'list_event_backfills',
+        'preview_event_revision',
+        'revise_event',
+        'get_event_history',
       ]));
       const result = await client.callTool({
         name: 'get_project_schema',
@@ -430,7 +452,11 @@ describe('@poolstatis/mcp release artifact', () => {
       `file:${tarball}`,
       'dlx',
       'poolstatis-mcp',
-    ], dlxProject);
+    ], dlxProject, {
+      // Node 24 reports DEP0169 from pnpm's own dlx wrapper. The direct
+      // executable test above still enforces zero stderr from the MCP package.
+      NODE_OPTIONS: '--no-deprecation',
+    });
     try {
       const tools = await client.listTools(undefined, { timeout: 30_000 });
       expect(tools.tools.length).toBeGreaterThan(20);

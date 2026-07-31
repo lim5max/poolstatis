@@ -26,6 +26,30 @@ list_projects()                      → [{slug, name, env_list, events_30d}]
 get_project_schema(project)          → то же, что ресурс schema (для клиентов без resources)
 ```
 
+### Historical data and corrections
+
+```
+preview_event_backfill(project, {env, events})
+import_historical_events(project, {
+  env, batch_id, reason, expected_payload_sha256, events
+})
+list_event_backfills(project, {env?, limit?})
+
+preview_event_revision(project, {event_id, env?, patch})
+revise_event(project, {
+  event_id, env?, patch, expected_revision, expected_preview_sha256, reason
+})
+get_event_history(project, {event_id, env?})
+```
+
+Backfill используется только для восстановления уже существующих фактов из
+trusted product database. Сначала агент обязан показать preview; commit
+all-or-nothing сохраняет исходные даты и permanent idempotency key. Для больших
+выгрузок агент делит источник на стабильные chunks до 500 событий и не меняет
+`batch_id` при retry. Correction сначала показывает before/after и
+`preview_sha256`; commit принимает fingerprint ровно этого patch и никогда не
+перезаписывает событие без append-only audit revision.
+
 ### Реестр (design-time)
 
 ```
@@ -163,7 +187,7 @@ create_experience_surface(project, {key, name, purpose})
 list_experience_surfaces(project)
 archive_experience_surface(project, key)
 query_interaction_map(project, {surface, date_from, date_to?, grid?, env?})
-get_experience_session(project, {surface, session_id, date_from?, date_to?, limit?, env?})
+get_experience_session(project, {surface, session_id, actor_id?, date_from?, date_to?, limit?, env?})
 register_experience_route(project, {surface, route:{key,name,path_pattern}})
 list_visual_experience_versions(project, {surface?, route?, env?})
 get_visual_experience_map(project, {surface, route, version, device, date_from, date_to?, grid?, env?})
@@ -175,6 +199,9 @@ capture. Карта показывает нормализованные **кли
 Timeline содержит только developer-provided stable route key, stable label,
 координаты, scroll depth и тип клиентской ошибки — DOM, URL/path, текст, input
 values, stacks и network data в Poolstatis не отправляются.
+Если один `session_id` использован несколькими акторами в том же tenant/env/
+surface/window, чтение без `actor_id` завершается typed ambiguity error.
+Ответ всегда содержит canonical actor identity и active-link provenance.
 
 Visual map tools additionally return an agent-ready `agent_context`: the
 purpose-tagged scope, sample sizes, ordered section labels, counts and
@@ -205,8 +232,12 @@ query_retention(project, {start_metric, return_metric?, interval, periods, date_
 query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning/resurrecting/dormant
 query_stickiness(project, {metric, interval, date_from, env?})
 query_entities(project, {entity_type, filters?, limit, order_by?})
+list_actors(project, {env?, from?, to?, limit?, cursor?, order?, search?,
+  propertyFilters?, activityMetric?})
 
-get_person(project, {distinct_id, env?})       // engagement summary + identity entity
+propose_browser_analytics(project, route_keys[]) // finite reviewed vocabulary; atomic
+get_person(project, {distinct_id, env?, from?, to?, limit?, cursor?})
+  // distinct_id≤200; canonical ID + bounded raw IDs/links + registered-only masked activity
 sample_events(project, {event?, registered?, distinct_id?, limit≤100})  // отладка ингеста
 list_ingest_warnings(project, {env?, kind?})   // rejected/unregistered/clock_skew (лог ошибок)
 list_data_quality_issues(project, {env?, limit?, since_days?})
@@ -214,6 +245,11 @@ list_data_quality_issues(project, {env?, limit?, since_days?})
 ```
 
 MCP tools expose structured JSON output (`structuredContent`) with a text JSON fallback for older clients.
+Web tools используют только typed Query DSL и registry metric keys: raw SQL и
+raw event-name escape hatch отсутствуют. Полный контракт:
+[13-browser-analytics.md](13-browser-analytics.md).
+Контракт Actors/Person доступен агенту как
+`poolstatis://standard/actors`.
 
 ### Инсайты
 
@@ -227,9 +263,11 @@ resolve_insight(project, id, {status: 'ack'|'resolved'})
 
 1. **Тул = одно намерение агента.** Не «универсальный query endpoint с 20 параметрами», а отдельные тулы под trend/funnel/entities — так агент реже ошибается в параметрах, а описания тулов короче.
 2. **Ошибки учат.** Ответ на невалидный вызов содержит исправление: `register_metric` с занятым key возвращает существующую метрику и подсказку «используй update_metric или другой key». Агент — основной пользователь, и сообщение об ошибке — это его документация.
-3. **Ингеста в MCP нет.** События шлёт продукт по HTTP в рантайме, а не агент в чате. Единственное исключение — `sample_events` для проверки, что инструментация работает.
+3. **Runtime-ингеста в MCP нет.** События шлёт продукт по HTTP. Узкое исключение —
+   previewed historical backfill из доверенной базы продукта; это не замена SDK
+   и не способ генерировать текущий трафик из чата.
 4. **Запись метаданных безопасна по умолчанию.** Всё, что создаёт агент, рождается `proposed`; активация — отдельное действие, которое владелец может оставить за собой. Retirement идёт через `deprecate_metric(reason)`, чтобы следующий агент видел, почему метрика больше не используется.
 
 ## Транспорт
 
-MVP: stdio-сервер и публичный version-pinned npm-пакет `@poolstatis/mcp@0.2.0` (токен только в env). Пакет прошёл fresh-install initialize/list-tools и project-scoped Visual Experience read smoke, поэтому hosted deploy может включить этот точный pin. Новые версии остаются `publish_pending` до повторения тех же проверок. Поддерживаемые presets: Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers и custom MCP host. Streamable HTTP — отдельный этап после hosted-стабилизации.
+MVP: stdio-сервер и version-pinned npm-пакет `@poolstatis/mcp@0.4.0` (токен только в env). Это release candidate для исторического backfill и аудируемых corrections; hosted deploy держит его `publish_pending`, пока exact registry artifact не пройдёт fresh-install initialize, 99-tool list и project-scoped read smoke. Поддерживаемые presets: Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers и custom MCP host. Streamable HTTP — отдельный этап после hosted-стабилизации.

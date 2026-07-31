@@ -314,11 +314,16 @@ export interface TrendResponse {
   };
 }
 
-export type WebAnalyticsDimension = 'country' | 'device' | 'browser' | 'os' | 'language' | 'timezone' | 'source';
+export type WebAnalyticsDimension = 'route' | 'device' | 'browser' | 'os' | 'language' | 'timezone' | 'source';
 
 export interface WebAnalyticsResponse {
   kind: 'web_analytics';
-  summary: { visitors: number; sessions: number; page_views: number };
+  summary: {
+    visitors: number;
+    sessions: number;
+    page_views: number;
+    average_session_duration_ms: number | null;
+  };
   engagement: {
     measured_sessions: number;
     incomplete_sessions: number;
@@ -340,28 +345,14 @@ export interface WebAnalyticsResponse {
     visitors: number;
     sessions: number;
     page_views: number;
-    percentage: number;
+    percentage: number | null;
   }>>>;
   meta: {
     computed_at: string;
     truncated_dimensions: WebAnalyticsDimension[];
-    definitions: {
-      visitors: string;
-      sessions: string;
-      page_views: string;
-      measured_sessions: string;
-      unknown_sessions: string;
-      engaged_sessions: string;
-      bounce_sessions: string;
-      engaged_rate: string;
-      bounce_rate: string;
-      single_page_sessions: string;
-      foreground_ms: string;
-      session_span_ms: string;
-    };
+    definitions: Record<string, string>;
     accepted_event_accounting: string;
     privacy: string;
-    country_attribution?: { label: string; url: string };
   };
 }
 
@@ -369,7 +360,7 @@ export interface WebPageEngagement {
   page_view_id: string;
   session_id: string;
   actor_id: string;
-  path: string;
+  route: string;
   viewed_at: string;
   last_snapshot_at: string | null;
   sequence: number | null;
@@ -791,6 +782,7 @@ export interface DecisionHistoryItem {
 }
 
 export interface SampleEvent {
+  id: string;
   event: string;
   timestamp: string;
   distinct_id: string;
@@ -798,6 +790,66 @@ export interface SampleEvent {
   properties: Record<string, unknown>;
   registered: boolean;
   env: string;
+  revision: number;
+  origin: 'live' | 'backfill';
+  backfill_batch_id: string | null;
+  ingested_at: string;
+  editable: boolean;
+}
+
+export interface EventRevisionPatch {
+  event?: string;
+  timestamp?: string;
+  distinct_id?: string;
+  session_id?: string | null;
+  set_properties?: Record<string, unknown>;
+  unset_properties?: string[];
+}
+
+export interface EventRevisionPreview {
+  event_id: string;
+  expected_revision: number;
+  preview_sha256: string;
+  changed_fields: string[];
+  before: SampleEvent;
+  after: SampleEvent;
+}
+
+export interface EventRevision {
+  id: string;
+  event_id: string;
+  revision: number;
+  actor: string;
+  reason: string;
+  previous_snapshot: SampleEvent;
+  snapshot: SampleEvent;
+  created_at: string;
+}
+
+export interface BackfillPreview {
+  valid: boolean;
+  payload_sha256: string | null;
+  event_count: number;
+  registered_count: number;
+  unregistered_count: number;
+  min_timestamp: string | null;
+  max_timestamp: string | null;
+  errors: Array<{ index: number; message: string }>;
+}
+
+export interface BackfillRecord {
+  id: string;
+  env: string;
+  batch_id: string;
+  payload_sha256: string;
+  reason: string;
+  actor: string;
+  event_count: number;
+  registered_count: number;
+  unregistered_count: number;
+  min_timestamp: string;
+  max_timestamp: string;
+  created_at: string;
 }
 
 export interface EntityRow {
@@ -811,24 +863,6 @@ export interface SampleFilter {
   property: string;
   op: FilterOp;
   value?: string | number | Array<string | number>;
-}
-
-export interface ActorSummary {
-  first_seen: string | null;
-  last_seen: string | null;
-  total_events: number;
-  distinct_events: number;
-  active_days: number;
-  sessions: number;
-  registered_share: number;
-  top_events: Array<{ event: string; count: number }>;
-}
-
-export interface PersonSummary {
-  distinct_id: string;
-  env: string;
-  summary: ActorSummary;
-  entity: { entity_type: string; properties: Record<string, unknown>; updated_at: string } | null;
 }
 
 export interface IngestWarning {

@@ -14,6 +14,7 @@ import { WebhookService } from '../services/webhooks.js';
 import type { OutboundPolicyOptions } from '../security/outbound.js';
 import { LocalArtifactStore, type ArtifactStore } from '../stores/artifactStore.js';
 import type { CountryResolver } from '../services/country.js';
+import { EventManagementService } from '../services/eventManagement.js';
 
 /** Shared service wiring for the HTTP server, CLI, and tests. */
 export interface AppContext {
@@ -24,6 +25,8 @@ export interface AppContext {
   posthog: PostHogAdapter;
   webhooks: WebhookService;
   artifacts: ArtifactStore;
+  cursorSigningSecret?: string;
+  events: EventManagementService;
 }
 
 export interface CreateContextOptions {
@@ -35,6 +38,7 @@ export interface CreateContextOptions {
   artifactStore?: ArtifactStore;
   artifactDir?: string;
   countryAttribution?: CountryResolver['attribution'];
+  cursorSigningSecret?: string;
 }
 
 export function createContext(pool: pg.Pool, options: CreateContextOptions = {}): AppContext {
@@ -52,9 +56,20 @@ export function createContext(pool: pg.Pool, options: CreateContextOptions = {})
     pool,
     eventStore,
     ingest: new IngestService(pool, eventStore),
-    query: new QueryService(pool, eventStore, queryCache, posthog, options.countryAttribution),
+    query: new QueryService(
+      pool,
+      eventStore,
+      queryCache,
+      posthog,
+      options.countryAttribution,
+      options.cursorSigningSecret,
+    ),
     posthog,
     webhooks: new WebhookService(pool, options.connectorEncryptionKey, options.outboundPolicy),
     artifacts: options.artifactStore ?? new LocalArtifactStore(options.artifactDir ?? './data/experience-artifacts'),
+    ...(options.cursorSigningSecret
+      ? { cursorSigningSecret: options.cursorSigningSecret }
+      : {}),
+    events: new EventManagementService(pool, eventStore),
   };
 }

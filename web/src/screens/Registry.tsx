@@ -404,7 +404,7 @@ function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, o
             {!isRedundantKey(m.name, m.key) && <div className="text-xs text-muted-foreground">{m.key}</div>}
             {(m.tags ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1">
-                {m.tags.map((t) => <span key={t} className="text-[11px] rounded-full border px-1.5 py-px text-muted-foreground">#{t}</span>)}
+                {m.tags.map((t) => <span key={t} className="rounded-full border px-1.5 py-px text-xs text-muted-foreground">#{t}</span>)}
               </div>
             )}
           </TableCell>

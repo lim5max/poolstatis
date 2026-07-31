@@ -10,6 +10,18 @@ beforeAll(async () => {
   env = await createTestEnv();
   await activeMetric(env, { key: 'signup_completed', type: 'unique_actors', source: { event: 'signup.completed' } });
   await activeMetric(env, { key: 'session_started', type: 'unique_actors', source: { event: 'session.started' } });
+  const browserSetup = await api(env, env.secretToken, 'POST', `${P()}/properties/browser-analytics`, {
+    route_keys: ['signup', 'checkout'],
+  });
+  expect(browserSetup.status).toBe(200);
+  const trustedRoute = await api(
+    env,
+    env.secretToken,
+    'PATCH',
+    `${P()}/properties/event/%24route_key`,
+    { status: 'trusted' },
+  );
+  expect(trustedRoute.status).toBe(200);
 });
 
 afterAll(() => env.close());
@@ -40,7 +52,7 @@ describe('browser acquisition attribution end to end', () => {
     });
     const consent = consentController(true);
     const analytics = createAttributionClient({
-      client, browser, distinctId: () => actor, hasConsent: consent.has, subscribeConsent: consent.subscribe, route: () => '/signup', createSessionId: () => 'browser-session-1',
+      client, browser, distinctId: () => actor, hasConsent: consent.has, subscribeConsent: consent.subscribe, route: () => 'signup', createSessionId: () => 'browser-session-1',
     });
 
     await analytics.start();
@@ -91,7 +103,7 @@ describe('browser acquisition attribution end to end', () => {
     const events = await api(env, env.secretToken, 'GET', `${P()}/events/sample?limit=20`);
     const signup = events.body.events.find((event: { event: string }) => event.event === 'signup.completed');
     const session = events.body.events.find((event: { event: string }) => event.event === 'session.started');
-    expect(signup).toMatchObject({ distinct_id: 'user-browser-1', session_id: 'browser-session-1', properties: { $utm_source: 'newsletter', landing_path: '/landing', referrer_origin: 'https://publisher.example' } });
+    expect(signup).toMatchObject({ distinct_id: 'user-browser-1', session_id: 'browser-session-1', properties: { $utm_source: 'newsletter', landing_route: 'signup', referrer_origin: 'https://publisher.example' } });
     expect(session).toMatchObject({ distinct_id: 'anon-browser-1', session_id: 'browser-session-1' });
     expect(JSON.stringify(events.body)).not.toContain('unknown=do-not-store');
     expect(JSON.stringify(events.body)).not.toContain('publisher.example/article');
@@ -101,7 +113,7 @@ describe('browser acquisition attribution end to end', () => {
     const consent = consentController(true);
     const client = createClient({ url: 'http://poolstatis.test', ingestKey: env.ingestToken, fetch: async (input, init) => injectedFetch(env, input, init), flushIntervalMs: 60_000 });
     const analytics = createAttributionClient({
-      client, distinctId: 'anon-revoked', hasConsent: consent.has, subscribeConsent: consent.subscribe, route: '/checkout', createSessionId: () => 'browser-session-revoked',
+      client, distinctId: 'anon-revoked', hasConsent: consent.has, subscribeConsent: consent.subscribe, route: 'checkout', createSessionId: () => 'browser-session-revoked',
       browser: { location: { href: 'https://app.example/checkout?utm_source=ads' }, document: { referrer: '' } },
     });
     await analytics.start();

@@ -2,6 +2,7 @@ import type { PropertyFilter } from '../schemas.js';
 
 /** A validated event ready for storage. */
 export interface StorableEvent {
+  id?: string;
   projectId: string;
   env: string;
   event: string;
@@ -14,6 +15,10 @@ export interface StorableEvent {
   isSystem?: boolean;
   /** Physical ingest route that accepted the event; never a user-defined property. */
   eventSource?: 'ingest' | 'experience' | 'system';
+  /** How this fact entered the current store materialization. */
+  origin?: 'live' | 'backfill';
+  backfillBatchId?: string | null;
+  revision?: number;
 }
 
 /** A transport batch whose idempotency must cover the event write itself. */
@@ -77,7 +82,7 @@ export interface WebAnalyticsCounts {
 }
 
 export interface WebAnalyticsResult {
-  summary: WebAnalyticsCounts;
+  summary: WebAnalyticsCounts & { average_session_duration_ms: number | null };
   engagement: WebEngagementSummary;
   breakdowns: Record<string, Array<WebAnalyticsCounts & { value: string }>>;
   truncatedDimensions: string[];
@@ -123,13 +128,14 @@ export interface WebSessionQuery extends WebEngagementBaseQuery {
 export interface PageEngagementQuery extends WebEngagementBaseQuery {
   pageViewId: string;
   actorId?: string;
+  sessionId?: string;
 }
 
 export interface WebPageEngagement {
   page_view_id: string;
   session_id: string;
   actor_id: string;
-  path: string;
+  route: string;
   viewed_at: string;
   last_snapshot_at: string | null;
   sequence: number | null;
@@ -212,7 +218,92 @@ export interface ActorSummary {
   top_events: Array<{ event: string; count: number }>;
 }
 
+export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
+export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+
+export interface ActorListItem {
+  distinct_id: string;
+  raw_actor_count: number;
+  first_seen: string;
+  last_seen: string;
+  total_events: number;
+  active_days: number;
+  session_count: number | null;
+  top_events: Array<{ event: string; count: number }>;
+  pinned_properties: Record<string, unknown>;
+  identity_status: ActorIdentityStatus;
+}
+
+/** Internal detail fields retained for Person compatibility, not Actors DSL output. */
+export interface ActorListRecord extends ActorListItem {
+  distinct_events: number;
+  registered_share: number;
+}
+
+export interface ActorsKeyset {
+  value: string | number;
+  distinctId: string;
+}
+
+export interface ActorsQuery {
+  projectId: string;
+  env: string;
+  from: Date;
+  to: Date;
+  snapshotIngestedAt: Date;
+  limit: number;
+  order: ActorOrder;
+  cursor?: ActorsKeyset;
+  searchExactId?: string;
+  activity?: FunnelStepQuery;
+  trustedBrowserSessions: boolean;
+}
+
+export interface ActorsResult {
+  actors: ActorListRecord[];
+  hasMore: boolean;
+}
+
+export interface ActorActivityKeyset {
+  timestamp: string;
+  ingestedAt: string;
+  event: string;
+  rawDistinctId: string;
+  sessionId: string;
+  propertiesHash: string;
+  duplicateOrdinal: number;
+}
+
+export interface ActorActivityQuery {
+  projectId: string;
+  env: string;
+  distinctId: string;
+  from: Date;
+  to: Date;
+  snapshotIngestedAt: Date;
+  limit: number;
+  cursor?: ActorActivityKeyset;
+}
+
+export interface ActorActivityEvent {
+  event: string;
+  timestamp: string;
+  distinct_id: string;
+  raw_distinct_id: string;
+  session_id: string | null;
+  properties: Record<string, unknown>;
+  registered: true;
+  env: string;
+}
+
+export interface ActorActivityResult {
+  events: ActorActivityEvent[];
+  hasMore: boolean;
+  lastKey?: ActorActivityKeyset;
+}
+
 export interface RawEvent {
+  id: string;
   event: string;
   timestamp: string;
   distinct_id: string;
@@ -220,6 +311,64 @@ export interface RawEvent {
   properties: Record<string, unknown>;
   registered: boolean;
   env: string;
+  revision: number;
+  origin: 'live' | 'backfill';
+  backfill_batch_id: string | null;
+  ingested_at: string;
+  editable: boolean;
+}
+
+export interface HistoricalBackfill {
+  projectId: string;
+  env: string;
+  batchId: string;
+  payloadSha256: string;
+  reason: string;
+  actor: string;
+  events: StorableEvent[];
+}
+
+export interface BackfillRecord {
+  id: string;
+  env: string;
+  batch_id: string;
+  payload_sha256: string;
+  reason: string;
+  actor: string;
+  event_count: number;
+  registered_count: number;
+  unregistered_count: number;
+  min_timestamp: string;
+  max_timestamp: string;
+  created_at: string;
+}
+
+export interface BackfillResult {
+  batch: BackfillRecord;
+  inserted: number;
+  duplicate?: boolean;
+  warnings?: UsageWarning[];
+}
+
+export interface EventRevisionInput {
+  projectId: string;
+  env: string;
+  eventId: string;
+  expectedRevision: number;
+  actor: string;
+  reason: string;
+  event: StorableEvent;
+}
+
+export interface EventRevisionRecord {
+  id: string;
+  event_id: string;
+  revision: number;
+  actor: string;
+  reason: string;
+  previous_snapshot: RawEvent;
+  snapshot: RawEvent;
+  created_at: string;
 }
 
 export interface EventNameStat {
@@ -391,6 +540,7 @@ export interface ExperienceSessionQuery {
   env: string;
   surface: string;
   sessionId: string;
+  actorId?: string;
   from: Date;
   to: Date;
   limit: number;
@@ -451,6 +601,11 @@ export interface VisualExperienceResult {
   sections_truncated: boolean;
 }
 
+export interface ExperienceSessionResult {
+  events: ExperienceSessionEvent[];
+  actorIds: string[];
+}
+
 /**
  * The narrow storage interface the whole platform depends on.
  * Every method must be implementable efficiently on both Postgres and
@@ -471,10 +626,18 @@ export interface EventStore {
   stickiness(q: IntervalActivityQuery): Promise<StickinessBin[]>;
   experimentResults(q: ExperimentResultsQuery): Promise<ExperimentVariantOutcome[]>;
   interactionMap(q: InteractionMapQuery): Promise<InteractionMapResult>;
-  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]>;
+  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionResult>;
   experienceLastCaptures(projectId: string, env: string, surfaces: string[]): Promise<Record<string, string>>;
   visualExperience(q: VisualExperienceQuery): Promise<VisualExperienceResult>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
+  getEvent(projectId: string, env: string, eventId: string): Promise<RawEvent | null>;
+  backfill(batch: HistoricalBackfill): Promise<BackfillResult>;
+  reviseEvent(input: EventRevisionInput): Promise<EventRevisionRecord>;
+  eventHistory(projectId: string, env: string, eventId: string): Promise<{
+    event: RawEvent;
+    revisions: EventRevisionRecord[];
+  } | null>;
+  listBackfills(projectId: string, env: string, limit: number): Promise<BackfillRecord[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;
   measurementCoverage(q: MeasurementCoverageQuery): Promise<MeasurementCoverage>;
@@ -488,4 +651,6 @@ export interface EventStore {
   purge(projectId: string, env?: string, distinctId?: string): Promise<number>;
   /** Engagement summary for one actor — powers the person page. */
   actorSummary(projectId: string, env: string, distinctId: string): Promise<ActorSummary>;
+  actors(q: ActorsQuery): Promise<ActorsResult>;
+  actorActivity(q: ActorActivityQuery): Promise<ActorActivityResult>;
 }

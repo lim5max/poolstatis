@@ -40,6 +40,8 @@ export const hostedOnboardingSchema = z.object({
   project_name: z.string().trim().min(1).max(200),
 });
 
+export const actorDistinctIdSchema = z.string().trim().min(1).max(200);
+
 const eventName = z
   .string()
   .min(1)
@@ -57,8 +59,8 @@ export const keySchema = z
 // ===== Product decision loop trust foundation =====
 
 export const actorLinkSchema = z.object({
-  source_distinct_id: z.string().trim().min(1).max(200),
-  target_distinct_id: z.string().trim().min(1).max(200),
+  source_distinct_id: actorDistinctIdSchema,
+  target_distinct_id: actorDistinctIdSchema,
   env: z.string().trim().min(1).max(100).default('prod'),
 }).refine(
   (link) => link.source_distinct_id !== link.target_distinct_id,
@@ -698,6 +700,57 @@ export const ingestEnvelopeSchema = z.object({
 
 export type IngestEnvelope = z.infer<typeof ingestEnvelopeSchema>;
 
+export const historicalEventSchema = ingestEventSchema.extend({
+  timestamp: z.string().datetime({ offset: true }),
+}).strict();
+
+export const previewEventBackfillSchema = z.object({
+  env: z.string().min(1).max(100).default('prod'),
+  events: z.array(z.unknown()).min(1).max(500),
+}).strict();
+
+export const commitEventBackfillSchema = previewEventBackfillSchema.extend({
+  batch_id: z.string().trim().min(1).max(200),
+  reason: semanticText,
+  expected_payload_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
+export const eventRevisionPatchSchema = z.object({
+  event: eventName.optional(),
+  timestamp: z.string().datetime({ offset: true }).optional(),
+  distinct_id: z.string().min(1).max(200).optional(),
+  session_id: z.string().max(200).nullable().optional(),
+  set_properties: z.record(z.unknown()).default({}),
+  unset_properties: z.array(z.string().min(1).max(200)).max(100).default([]),
+}).strict().refine(
+  (value) => value.event !== undefined
+    || value.timestamp !== undefined
+    || value.distinct_id !== undefined
+    || value.session_id !== undefined
+    || Object.keys(value.set_properties).length > 0
+    || value.unset_properties.length > 0,
+  'at least one event field or property change is required',
+).refine(
+  (value) => value.unset_properties.every(
+    (key) => !Object.prototype.hasOwnProperty.call(value.set_properties, key),
+  ),
+  'a property cannot be set and unset in the same revision',
+);
+
+export const previewEventRevisionSchema = z.object({
+  env: z.string().min(1).max(100).default('prod'),
+  patch: eventRevisionPatchSchema,
+}).strict();
+
+export const commitEventRevisionSchema = previewEventRevisionSchema.extend({
+  expected_revision: z.number().int().positive(),
+  expected_preview_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  reason: semanticText,
+}).strict();
+
+export type HistoricalEventInput = z.infer<typeof historicalEventSchema>;
+export type EventRevisionPatch = z.infer<typeof eventRevisionPatchSchema>;
+
 /** UTC calendar month used by the server-side accepted-event meter. */
 export const usagePeriodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 
@@ -739,10 +792,30 @@ export const webAnalyticsQuerySchema = z.object({
   date_to: dateStr.nullable().optional(),
   filters: z.array(propertyFilterSchema).max(20).default([]),
   dimensions: z.array(z.enum([
-    'country', 'device', 'browser', 'os', 'language', 'timezone', 'source',
-  ])).min(1).max(7).default(['country', 'device', 'source']),
-  env: z.string().default('prod'),
-});
+    'route',
+    'source',
+    'device',
+    'browser',
+    'os',
+    'language',
+    'timezone',
+    'country',
+  ])).min(1).max(8).default(['route', 'device', 'browser']),
+  env: z.string().trim().min(1).max(100).default('prod'),
+}).strict();
+
+const browserRouteKeySchema = z.string().trim().min(1).max(100)
+  .regex(/^[a-z][a-z0-9_.:-]{0,99}$/, 'route keys must be stable lowercase identifiers');
+
+export const browserRouteKeysSchema = z.array(browserRouteKeySchema).min(1).max(100);
+
+export const browserAnalyticsSetupSchema = z.object({
+  route_keys: browserRouteKeysSchema,
+}).strict().transform((input) => ({
+  route_keys: [...new Set(input.route_keys)].sort(),
+}));
+
+export type BrowserAnalyticsSetupInput = z.infer<typeof browserAnalyticsSetupSchema>;
 
 export const webSessionsQuerySchema = z.object({
   kind: z.literal('web_sessions'),
@@ -752,32 +825,33 @@ export const webSessionsQuerySchema = z.object({
   date_to: dateStr.nullable().optional(),
   filters: z.array(propertyFilterSchema).max(20).default([]),
   limit: z.number().int().min(1).max(100).default(50),
-  env: z.string().default('prod'),
-});
+  env: z.string().trim().min(1).max(100).default('prod'),
+}).strict();
 
 export const webSessionQuerySchema = z.object({
   kind: z.literal('web_session'),
   metric: keySchema,
   key_metric: keySchema.optional(),
-  session_id: z.string().min(1).max(200),
-  actor_id: z.string().min(1).max(200).optional(),
+  session_id: z.string().trim().min(1).max(200),
+  actor_id: z.string().trim().min(1).max(200).optional(),
   date_from: dateStr,
   date_to: dateStr.nullable().optional(),
   filters: z.array(propertyFilterSchema).max(20).default([]),
   page_limit: z.number().int().min(1).max(200).default(100),
-  env: z.string().default('prod'),
-});
+  env: z.string().trim().min(1).max(100).default('prod'),
+}).strict();
 
 export const pageEngagementQuerySchema = z.object({
   kind: z.literal('page_engagement'),
   metric: keySchema,
-  page_view_id: z.string().min(1).max(200),
-  actor_id: z.string().min(1).max(200).optional(),
+  page_view_id: z.string().trim().min(1).max(200),
+  actor_id: z.string().trim().min(1).max(200).optional(),
+  session_id: z.string().trim().min(1).max(200).optional(),
   date_from: dateStr,
   date_to: dateStr.nullable().optional(),
   filters: z.array(propertyFilterSchema).max(20).default([]),
-  env: z.string().default('prod'),
-});
+  env: z.string().trim().min(1).max(100).default('prod'),
+}).strict();
 
 // funnel XOR steps is enforced in QueryService (zod .refine would break the
 // discriminated union below).
@@ -798,6 +872,30 @@ export const entitiesQuerySchema = z.object({
   limit: z.number().int().positive().max(200).default(50),
   env: z.string().default('prod'),
 });
+
+export const actorsQuerySchema = z.object({
+  kind: z.literal('actors'),
+  env: z.string().trim().min(1).max(100).default('prod'),
+  from: dateStr.optional(),
+  to: dateStr.nullable().optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+  cursor: z.string().trim().min(1).max(8192).optional(),
+  order: z.enum(['last_seen_desc', 'first_seen_desc', 'events_desc']).default('last_seen_desc'),
+  search: z.object({
+    kind: z.literal('exact_id'),
+    value: z.string().trim().min(1).max(200),
+  }).strict().optional(),
+  propertyFilters: z.array(propertyFilterSchema).max(20).default([]),
+  activityMetric: keySchema.optional(),
+}).strict();
+
+export const personQuerySchema = z.object({
+  env: z.string().trim().min(1).max(100).default('prod'),
+  from: dateStr.optional(),
+  to: dateStr.nullable().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().trim().min(1).max(8192).optional(),
+}).strict();
 
 // Retention: of the actors who did `start_metric` in a cohort bucket, how many
 // came back and did `return_metric` in each later bucket. Both reference
@@ -850,6 +948,7 @@ export const experienceSessionQuerySchema = z.object({
   kind: z.literal('experience_session'),
   surface: keySchema,
   session_id: z.string().min(1).max(200),
+  actor_id: z.string().trim().min(1).max(200).optional(),
   date_from: dateStr.default('-7d'),
   date_to: dateStr.nullable().optional(),
   limit: z.number().int().min(1).max(500).default(200),
@@ -905,6 +1004,7 @@ export const querySchema = z.discriminatedUnion('kind', [
   pageEngagementQuerySchema,
   funnelQuerySchema,
   entitiesQuerySchema,
+  actorsQuerySchema,
   retentionQuerySchema,
   lifecycleQuerySchema,
   stickinessQuerySchema,
@@ -921,6 +1021,8 @@ export type WebSessionQueryInput = z.infer<typeof webSessionQuerySchema>;
 export type PageEngagementQueryInput = z.infer<typeof pageEngagementQuerySchema>;
 export type FunnelQueryInput = z.infer<typeof funnelQuerySchema>;
 export type EntitiesQueryInput = z.infer<typeof entitiesQuerySchema>;
+export type ActorsQueryInput = z.infer<typeof actorsQuerySchema>;
+export type PersonQueryInput = z.infer<typeof personQuerySchema>;
 export type RetentionQueryInput = z.infer<typeof retentionQuerySchema>;
 export type LifecycleQueryInput = z.infer<typeof lifecycleQuerySchema>;
 export type StickinessQueryInput = z.infer<typeof stickinessQuerySchema>;

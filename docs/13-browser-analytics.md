@@ -57,9 +57,9 @@ transport.
 
 When collection is enabled, the module stores an opaque visitor id
 in first-party local storage and a 30-minute inactivity session in session
-storage. It captures the initial pathname and SPA history changes. Query
-strings, fragments, full URLs, DOM, page text, form values and referrer paths
-are never captured.
+storage. It maps the initial pathname and SPA history changes to a
+product-owned finite route key. Raw paths, query strings, fragments, full
+URLs, DOM, page text, form values and referrer paths are never captured.
 
 The session is scoped to one browser tab because its id lives in session
 storage. A second tab is a separate session. Activity rotates after 30 minutes
@@ -70,20 +70,25 @@ session and then opens the new page under the rotated session.
 `@poolstatis/sdk/attribution` bounded UTM snapshot into the same session and
 the same page-view event. Do not run `createAttributionClient` beside this
 browser module: both own page views and would intentionally create two
-billable events. The composed mode stores only allowlisted UTM values, landing
-pathname and referrer origin.
+billable events. The composed mode stores only allowlisted UTM values, the
+trusted `landing_route` key and referrer origin.
 
-If routes can contain customer or invitation slugs, provide `mapPagePath` and
-return a finite product-route vocabulary. The mapped path is used for both
-`$page_path` and `landing_path`; a mapper error falls back to `/other` and never
-falls back to the raw pathname.
+Provide `mapPagePath` and return a key from the exact finite vocabulary passed
+to setup. The mapped key is used for both `$route_key` and `landing_route`.
+Mapper exceptions fall back to `other`; unsafe returned values fail closed and
+never fall back to the raw pathname.
+
+Attribution-only capture uses the same contract: run browser analytics setup
+with its finite `route_keys` first and mark `$route_key` as trusted.
+`landing_route` is rejected unless it belongs to that vocabulary, even when
+`createAttributionClient` is used without the full browser module.
 
 `contextProperties` can narrow the typed coarse dimension list. It cannot add
 custom fields: unknown names are ignored at runtime. The default preserves all
 documented coarse dimensions for existing integrations.
 
 Reserved context is bounded to device class, browser family, OS family, primary
-language, IANA timezone, coarse viewport/screen buckets and pathname. Full user
+language, IANA timezone, coarse viewport/screen buckets and a finite route key. Full user
 agent, browser/OS versions, precise dimensions, hardware concurrency, canvas,
 fonts and other fingerprinting inputs are not sent.
 
@@ -147,64 +152,30 @@ precise pointer replay.
 
 ## Country
 
-Country is never inferred from locale or timezone. Core supports two mutually
-exclusive trusted modes.
-
-For a proxy that already derives a country value, Core accepts ISO alpha-2
-only when the direct socket peer is in an explicit trusted proxy CIDR:
-
-```dotenv
-POOLSTATIS_COUNTRY_HEADER=cf-ipcountry
-POOLSTATIS_TRUSTED_PROXY_CIDRS=10.0.0.0/8,2001:db8::/32
-```
-
-Without both settings Core records `unknown`. It ignores forwarded client IP
-headers and never persists or returns the socket IP. Configure this only when
-the reverse proxy derives the header from its own local GeoIP database. City
-and region are unsupported. VPNs, privacy relays, corporate gateways and mobile
-networks can make country inaccurate.
-
-For a direct-VPS deployment, Core can instead read a local MaxMind-format
-country database:
-
-```dotenv
-POOLSTATIS_COUNTRY_MMDB_PATH=/run/geoip/dbip-country-lite.mmdb
-POOLSTATIS_CLIENT_IP_HEADER=x-poolstatis-client-ip
-POOLSTATIS_TRUSTED_PROXY_CIDRS=172.30.0.0/24
-```
-
-The direct peer must still be an allowlisted proxy. The configured client-IP
-header must contain exactly one public address; proxy chains, arrays, private,
-reserved, loopback, link-local and malformed addresses fail closed to
-`unknown` before lookup. The address exists only in request memory and is
-never added to an event, response, or log. Startup requires the exact
-`DBIP-Country-Lite` database type plus a valid known-address smoke lookup.
-A configured missing, wrong-type, or openable-but-invalid MMDB aborts startup
-so an operator cannot mistake a broken resolver for working country coverage.
-
-DB-IP Lite Country is a no-account monthly MMDB source under CC BY 4.0. Pin
-the dated download and published checksum, install it read-only out of band,
-and restart Core to load the replacement. When this resolver is active,
-Web analytics responses and UI include the required
-`IP Geolocation by DB-IP` attribution link. Do not download the database from
-the request path.
+Country is unavailable in the E1 Web Analytics contract. It is never inferred
+from locale or timezone, and canonical browser events do not persist an IP or
+country property. The source tree retains fail-closed proxy/MMDB resolver
+primitives for a separately reviewed future lifecycle, but configuring them
+does not activate geography in E1 ingest or queries.
 
 ## Registry, query and billing
 
-Call `propose_browser_analytics` or
-`POST /api/v1/projects/{slug}/properties/browser-analytics`. It idempotently
+Call `propose_browser_analytics(project, route_keys)` or
+`POST /api/v1/projects/{slug}/properties/browser-analytics` with the complete
+finite `route_keys` vocabulary. It idempotently
 creates canonical properties plus proposed `web_page_views` and `web_visitors`
 metrics. The same setup request also creates the existing bounded UTM
 definitions required by composed acquisition and the source breakdown.
 Conflicting meanings fail with `409`; the owner reviews and activates the
-bundle. Setup is idempotent but not transactional across the three registry
-groups; after resolving a conflict, repeat it to complete any partial bundle.
+bundle. Setup is one serialized `SERIALIZABLE` transaction with full preflight
+and bounded retry, so a conflict cannot leave a partial bundle.
 
 `get_web_overview` / `query_web_analytics` (Query DSL
 `kind: "web_analytics"`) references the page-view count metric and returns the
 three headline counts, measured engagement coverage and count/page-view
-percentage breakdowns for country, device, browser, OS, language, timezone and
-source. `list_web_sessions`, `get_web_session`,
+percentage breakdowns for route, device, browser, OS, language, timezone and
+source. Country requests return an explicit unavailable error.
+`list_web_sessions`, `get_web_session`,
 `get_session_engagement` and `get_page_engagement` expose bounded session/page
 evidence. `get_click_map` and `get_scroll_map` require the exact
 surface/version/route/device tuple and default to unique-session aggregation.
@@ -227,10 +198,8 @@ read-time aggregate, not accepted stored-event accounting.
 No database migration is required.
 
 1. Deploy Core/customer admin from the reviewed SHA.
-2. Configure exactly one reviewed trusted-proxy country mode, or accept
-   `unknown`. A shared proxy without fixed source CIDRs and an authoritative
-   client-IP contract is not eligible for local-MMDB mode.
-3. Propose, review and activate the canonical registry bundle.
+2. Define the complete finite non-sensitive route vocabulary.
+3. Propose it atomically, then review and activate the canonical registry bundle.
 4. Upgrade the SDK and import only `@poolstatis/sdk/browser`.
 5. Choose and document the host's policy. Keep the default `opt-in`, explicitly
    select `opt-out`, or integrate an `external` CMP; wire Disable/withdrawal.
@@ -238,7 +207,7 @@ No database migration is required.
 
 The Core source contains `query_web_analytics`, but a public MCP package must
 be independently released and smoke-tested before Setup may promise that
-tool. GeoIP rollout does not publish or alter the MCP package.
+tool.
 
 Older SDK/base-SDK users are unchanged. Attribution remains a separate
 entrypoint for acquisition-only instrumentation; Browser Experience remains

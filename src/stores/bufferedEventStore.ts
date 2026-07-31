@@ -1,15 +1,24 @@
 import { ApiError } from '../errors.js';
 import type {
   ActorSummary,
+  ActorActivityQuery,
+  ActorActivityResult,
+  ActorsQuery,
+  ActorsResult,
+  BackfillRecord,
+  BackfillResult,
   EntityStatusEvidence,
   EntityStatusEvidenceQuery,
   ExperimentResultsQuery,
   ExperimentVariantOutcome,
-  ExperienceSessionEvent,
   ExperienceSessionQuery,
+  ExperienceSessionResult,
   EventNameStat,
   EventStatsQuery,
   EventStore,
+  EventRevisionInput,
+  EventRevisionRecord,
+  HistoricalBackfill,
   AppendResult,
   IdempotentAppend,
   FunnelQuery,
@@ -188,7 +197,7 @@ export class BufferedEventStore implements EventStore {
     return this.inner.interactionMap(q);
   }
 
-  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionEvent[]> {
+  experienceSession(q: ExperienceSessionQuery): Promise<ExperienceSessionResult> {
     return this.inner.experienceSession(q);
   }
 
@@ -202,6 +211,30 @@ export class BufferedEventStore implements EventStore {
 
   sample(q: SampleQuery): Promise<RawEvent[]> {
     return this.inner.sample(q);
+  }
+
+  getEvent(projectId: string, env: string, eventId: string): Promise<RawEvent | null> {
+    return this.inner.getEvent(projectId, env, eventId);
+  }
+
+  backfill(batch: HistoricalBackfill): Promise<BackfillResult> {
+    return this.inner.backfill(batch);
+  }
+
+  reviseEvent(input: EventRevisionInput): Promise<EventRevisionRecord> {
+    return this.inner.reviseEvent(input);
+  }
+
+  eventHistory(
+    projectId: string,
+    env: string,
+    eventId: string,
+  ): Promise<{ event: RawEvent; revisions: EventRevisionRecord[] } | null> {
+    return this.inner.eventHistory(projectId, env, eventId);
+  }
+
+  listBackfills(projectId: string, env: string, limit: number): Promise<BackfillRecord[]> {
+    return this.inner.listBackfills(projectId, env, limit);
   }
 
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]> {
@@ -230,6 +263,14 @@ export class BufferedEventStore implements EventStore {
 
   actorSummary(projectId: string, env: string, distinctId: string): Promise<ActorSummary> {
     return this.inner.actorSummary(projectId, env, distinctId);
+  }
+
+  actors(q: ActorsQuery): Promise<ActorsResult> {
+    return this.inner.actors(q);
+  }
+
+  actorActivity(q: ActorActivityQuery): Promise<ActorActivityResult> {
+    return this.inner.actorActivity(q);
   }
 
   private scheduleFlush(): void {

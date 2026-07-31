@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   approvedOAuthRedirect,
   AuthPortal,
+  authenticatedAppRedirect,
   signedOAuthQuery,
   verificationContinueUrl,
 } from './screens/AuthPortal';
@@ -41,6 +42,24 @@ describe('Better Auth portal', () => {
     expect(approvedOAuthRedirect('https://evil.test/')).toBeNull();
   });
 
+  it('continues a saved direct session to the customer app but preserves signed OAuth', () => {
+    const session = { user: { id: 'user-1' }, session: { id: 'session-1' } };
+    expect(authenticatedAppRedirect(session, '')).toBe('https://app.poolstatis.xyz/');
+    expect(authenticatedAppRedirect(
+      session,
+      '?sig=signed&ba_param=client_id&ba_param=ba_param&client_id=customer',
+    )).toBeNull();
+    expect(authenticatedAppRedirect({ user: null, session: null }, '')).toBeNull();
+  });
+
+  it('uses the same 3D split shell for sign in and account creation', () => {
+    renderPortal('/signup');
+
+    expect(screen.getByRole('region', { name: 'Why Poolstatis' })).toBeInTheDocument();
+    expect(screen.getByText('See the signals behind every product decision.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
+  });
+
   it('creates an unverified account and keeps the password inside the auth request', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ user: { emailVerified: false } }), {
@@ -65,6 +84,30 @@ describe('Better Auth portal', () => {
     });
     expect(screen.getByLabelText('Password')).toHaveValue('');
     expect(document.body.textContent).not.toContain('correct horse battery');
+  });
+
+  it('reveals and hides the sign-in password without changing its value', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ user: null, session: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    renderPortal('/login');
+    const password = await screen.findByLabelText('Password');
+    fireEvent.change(password, { target: { value: 'correct horse battery' } });
+
+    expect(password).toHaveAttribute('type', 'password');
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
+
+    expect(password).toHaveAttribute('type', 'text');
+    expect(password).toHaveValue('correct horse battery');
+    expect(screen.getByRole('button', { name: 'Hide password' }))
+      .toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
+    expect(password).toHaveAttribute('type', 'password');
+    expect(password).toHaveValue('correct horse battery');
   });
 
   it('uses the same forgot-password result for every account', async () => {
@@ -241,7 +284,7 @@ describe('Better Auth portal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send a new verification email' }));
     const result = await screen.findByRole('status');
     expect(result).toHaveTextContent('Please wait before requesting another verification email.');
-    expect(result).toHaveFocus();
+    await waitFor(() => expect(result).toHaveFocus());
     expect(document.body.textContent).not.toContain('unknown@example.test');
   });
 
@@ -269,6 +312,6 @@ describe('Better Auth portal', () => {
     expect(await screen.findByText('Your account')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Poolstatis' }))
       .toHaveAttribute('href', 'https://app.poolstatis.xyz/profile');
-    expect(view.container.querySelector('.bg-gradient-to-r')).toBeNull();
+    expect(view.container.querySelector('main .bg-gradient-to-r')).toBeNull();
   });
 });

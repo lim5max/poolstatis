@@ -1,5 +1,14 @@
 # Instrumenting a product with Poolstatis
 
+> Optional Web analytics requires the SDK browser helper and a finite safe
+> route mapper. Never send a raw pathname that may contain customer,
+> invitation, document or token identifiers. Custom product events use the
+> neutral base SDK path; `$browser_context` is reserved for canonical
+> `page.viewed`/`page.engagement`. Run atomic browser registry setup with the
+> complete finite route vocabulary first, then explicitly review/trust the
+> enum `$route_key` and activate `web_page_views`.
+> See [Browser analytics](13-browser-analytics.md).
+
 Two ways to get metrics into Poolstatis:
 
 - **A — Let a coding agent do it** (recommended): connect the MCP, point the agent
@@ -46,7 +55,7 @@ for the client you use; the paste location depends on the host.
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.2.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.4.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_…"
@@ -59,9 +68,9 @@ for the client you use; the paste location depends on the host.
 `--silent` is required — otherwise pnpm prints a banner to stdout and corrupts the
 stdio MCP protocol.
 
-`@poolstatis/mcp@0.2.0` passed a fresh registry install, initialize, tool-list,
-and project-scoped read smoke. Hosted deployments may enable this exact pin;
-future versions remain fail-closed until they pass the same checks.
+`@poolstatis/mcp@0.4.0` is the historical data and audited correction release
+candidate. Hosted deployments keep this pin fail-closed until its exact registry
+artifact passes fresh install, initialize, 99-tool list, and project-scoped read.
 
 Verify the connection from the MCP client itself: ask it to call
 `get_onboarding_status` with the target `project` and explicit `env`, then
@@ -177,11 +186,15 @@ follow that installed version's guide instead.
 [SDK guide](../sdk/README.md#browser-acquisition-attribution-optional-module).
 Не обещайте npm-установку, пока registry lookup пакета не проходит.
 
-Модуль пишет только pathname landing, origin referrer и стандартные UTM; raw URL,
-full referrer, click ids и unknown query params не отправляются. Для SPA вызывай
+Модуль пишет только обязательный finite `landing_route`, origin referrer и
+стандартные UTM; raw path/URL, full referrer, click ids и unknown query params
+не отправляются. Для SPA вызывай
 `pageViewed()` после навигации. Передай обязательный `subscribeConsent` callback,
 который синхронно вызывает listener при отзыве product-analytics consent: модуль сам
 вызовет `stop()` и удалит unsent/retrying attribution events.
+До attribution-only capture запусти browser analytics setup с конечным
+`route_keys` vocabulary и переведи `$route_key` в `trusted`: `landing_route`
+валидируется по тому же словарю даже без полного browser-модуля.
 Связь anonymous→authenticated делается отдельно через audited actor link: история
 immutable events не переписывается. UTM trend — только session landing association,
 не доказательство причинного эффекта кампании.

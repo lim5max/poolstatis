@@ -13,6 +13,7 @@ const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 function normalizeMcpRoute(raw: string): string {
   return raw
     .replaceAll('${slug}', ':slug')
+    .replaceAll('${event_id}', ':eventId')
     .replaceAll('${scope}', ':scope')
     .replace(/\$\{[^}]*key[^}]*\}/g, ':key')
     .replace(/\$\{[^}]*\}/g, ':id');
@@ -29,9 +30,9 @@ describe('organization write policy inventory', () => {
       source.matchAll(/app\.(post|patch|delete)\('([^']+)'/g),
       (match) => `${match[1]!.toUpperCase()} ${match[2]!}`,
     );
-    expect(allRoutes).toHaveLength(112);
+    expect(allRoutes).toHaveLength(118);
     expect(new Set(allRoutes).size).toBe(allRoutes.length);
-    expect(routes).toHaveLength(67);
+    expect(routes).toHaveLength(71);
     expect(routes.every((route) =>
       route.includes(' /api/v1/') || route.includes(' /i/v1/'))).toBe(true);
 
@@ -41,8 +42,8 @@ describe('organization write policy inventory', () => {
         return requiresOrganizationWriteReadiness(method, path);
       });
     const allowed = allRoutes.filter((route) => !blocked.includes(route));
-    expect(blocked).toHaveLength(58);
-    expect(allowed).toHaveLength(54);
+    expect(blocked).toHaveLength(60);
+    expect(allowed).toHaveLength(58);
 
     const exemptions = routes
       .filter((route) => {
@@ -63,7 +64,7 @@ describe('organization write policy inventory', () => {
   it('keeps MCP on the centralized HTTP boundary and classifies every mutating tool call', async () => {
     const source = await readFile(resolve(repoDir, 'src/mcp/server.ts'), 'utf8');
     expect(source.match(/\bfetch\(/g)).toHaveLength(1);
-    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(93);
+    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(100);
 
     const calls = Array.from(
       source.matchAll(/api\(\s*'(POST|PATCH|DELETE)'\s*,\s*(`[^`]+`|'[^']+')/g),
@@ -75,17 +76,19 @@ describe('organization write policy inventory', () => {
         };
       },
     );
-    expect(calls).toHaveLength(65);
+    expect(calls).toHaveLength(70);
     expect(calls.every(({ route }) => route.startsWith('/api/v1/'))).toBe(true);
 
     const exemptMcpCalls = calls
       .filter(({ method, route }) =>
         !requiresOrganizationWriteReadiness(method, route))
       .map(({ method, route }) => `${method} ${route}`);
-    expect(exemptMcpCalls).toHaveLength(24);
-    expect(calls.length - exemptMcpCalls.length).toBe(41);
+    expect(exemptMcpCalls).toHaveLength(27);
+    expect(calls.length - exemptMcpCalls.length).toBe(43);
     expect(new Set(exemptMcpCalls)).toEqual(new Set([
       'POST /api/v1/projects/:slug/onboarding/observe-agent',
+      'POST /api/v1/projects/:slug/events/backfill/preview',
+      'POST /api/v1/projects/:slug/events/:eventId/revisions/preview',
       'POST /api/v1/projects/:slug/contracts/validate',
       'POST /api/v1/projects/:slug/contracts/diff',
       'POST /api/v1/projects/:slug/contracts/similar',

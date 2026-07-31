@@ -50,7 +50,7 @@ Run the version-pinned public MCP package:
 ```bash
 POOLSTATIS_URL=http://localhost:3300 \
 POOLSTATIS_TOKEN=pt_... \
-pnpm dlx @poolstatis/mcp@0.2.0
+pnpm dlx @poolstatis/mcp@0.4.0
 ```
 
 To execute the exact server from a local Core checkout instead, use:
@@ -83,8 +83,19 @@ docker compose --env-file .env.selfhost -f docker-compose.selfhost.yml up -d --b
 Set at minimum:
 
 - `POSTGRES_PASSWORD` to a strong value,
+- `POOLSTATIS_CURSOR_SIGNING_SECRET` to an independent server-only random
+  secret of at least 32 characters (do not reuse `pk_`/`sk_`/`pt_` tokens),
 - `POOLSTATIS_PUBLIC_URL` to the public HTTPS URL,
 - `POOLSTATIS_ADMIN_PORT` and `POOLSTATIS_API_PORT` only if the defaults conflict.
+
+Generate the cursor secret before starting Compose:
+
+```bash
+openssl rand -base64 48
+```
+
+The example leaves this value empty intentionally; Compose fails closed until
+you set it.
 
 Protection defaults are enabled without extra setup: per-key/project token
 buckets and a retention sweep every 15 minutes. Tune `RATE_LIMIT_*` only from

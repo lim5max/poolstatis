@@ -157,13 +157,27 @@ describe('decision-loop trust MCP tools', () => {
 
     const browser = await client.callTool({
       name: 'propose_browser_analytics',
-      arguments: { project: env.projectSlug },
+      arguments: { project: env.projectSlug, route_keys: ['home', 'pricing'] },
     });
     expect(browser.isError).not.toBe(true);
     expect(browser.structuredContent).toMatchObject({
-      properties: expect.arrayContaining([expect.objectContaining({ key: '$country', status: 'proposed' })]),
+      properties: expect.arrayContaining([expect.objectContaining({
+        key: '$route_key',
+        status: 'proposed',
+        enum_values: ['home', 'pricing'],
+      })]),
       metrics: expect.arrayContaining([expect.objectContaining({ key: 'web_page_views', status: 'proposed' })]),
     });
+    const trustedRoute = await client.callTool({
+      name: 'update_property',
+      arguments: {
+        project: env.projectSlug,
+        scope: 'event',
+        key: '$route_key',
+        patch: { status: 'trusted' },
+      },
+    });
+    expect(trustedRoute.isError).not.toBe(true);
     const activatedBrowserMetric = await client.callTool({
       name: 'update_metric',
       arguments: {
@@ -181,7 +195,7 @@ describe('decision-loop trust MCP tools', () => {
       name: 'query_web_analytics',
       arguments: {
         project: env.projectSlug,
-        query: { metric: 'web_page_views', date_from: '-1d', dimensions: ['country', 'device'] },
+        query: { metric: 'web_page_views', date_from: '-1d', dimensions: ['route', 'device'] },
       },
     });
     expect(traffic.isError).not.toBe(true);
@@ -197,13 +211,13 @@ describe('decision-loop trust MCP tools', () => {
         bounce_rate: null,
         timed_page_coverage: null,
       },
-      meta: { definitions: expect.any(Object), privacy: expect.stringContaining('Raw IP') },
+      meta: { definitions: expect.any(Object), privacy: expect.stringContaining('raw IP') },
     });
     const overview = await client.callTool({
       name: 'get_web_overview',
       arguments: {
         project: env.projectSlug,
-        query: { metric: 'web_page_views', date_from: '-1d', dimensions: ['country'] },
+        query: { metric: 'web_page_views', date_from: '-1d', dimensions: ['route'] },
       },
     });
     expect(overview.isError).not.toBe(true);
@@ -259,7 +273,8 @@ describe('decision-loop trust MCP tools', () => {
 
     const browserStandard = await client.readResource({ uri: 'poolstatis://standard/browser-analytics' });
     expect(browserStandard.contents[0]).toMatchObject({ mimeType: 'text/markdown' });
-    expect((browserStandard.contents[0] as { text: string }).text).toContain('Visitors: unique query-time resolved actors');
+    expect((browserStandard.contents[0] as { text: string }).text)
+      .toContain('A visitor is a query-time resolved actor');
 
     const configured = await client.callTool({
       name: 'configure_posthog',

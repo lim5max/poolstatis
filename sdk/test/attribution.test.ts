@@ -34,7 +34,7 @@ describe('browser acquisition attribution', () => {
     };
     let actor = 'anon-7';
     const consent = consentController(true);
-    const analytics = createAttributionClient({ client, browser, distinctId: () => actor, hasConsent: consent.has, subscribeConsent: consent.subscribe, route: () => '/welcome', createSessionId: () => 'session-1' });
+    const analytics = createAttributionClient({ client, browser, distinctId: () => actor, hasConsent: consent.has, subscribeConsent: consent.subscribe, route: () => 'welcome', createSessionId: () => 'session-1' });
 
     await analytics.start();
     browser.location.href = 'https://app.example/signup';
@@ -46,12 +46,12 @@ describe('browser acquisition attribution', () => {
     expect(client.queued.map((event) => event.event)).toEqual(['session.started', 'page.viewed']);
     expect(client.queued[0]).toMatchObject({
       distinct_id: 'anon-7', session_id: 'session-1',
-      properties: { landing_path: '/welcome', referrer_origin: 'https://publisher.example', $utm_source: 'News', $utm_campaign: 'Café' },
+      properties: { landing_route: 'welcome', referrer_origin: 'https://publisher.example', $utm_source: 'News', $utm_campaign: 'Café' },
     });
 
     await analytics.flush();
     expect(client.queued.slice(2)).toEqual([
-      expect.objectContaining({ event: 'page.viewed', distinct_id: 'user-7', session_id: 'session-1', properties: expect.objectContaining({ path: '/welcome', $utm_source: 'News', landing_path: '/welcome' }) }),
+      expect.objectContaining({ event: 'page.viewed', distinct_id: 'user-7', session_id: 'session-1', properties: expect.objectContaining({ $utm_source: 'News', landing_route: 'welcome' }) }),
       expect.objectContaining({ event: 'signup.completed', distinct_id: 'user-7', session_id: 'session-1', properties: expect.objectContaining({ custom: 'kept', referrer_origin: 'https://publisher.example', $utm_source: 'News' }) }),
     ]);
     expect(JSON.stringify(client.queued)).not.toContain('unknown=secret');
@@ -59,10 +59,18 @@ describe('browser acquisition attribution', () => {
   });
 
   it('keeps an untagged browser session isolated from a prior campaign', async () => {
-    const tagged = snapshotFromBrowser({ location: { href: 'https://app.example/?utm_source=ads' }, document: { referrer: '' } }, 'one');
-    const untagged = snapshotFromBrowser({ location: { href: 'https://app.example/pricing?unknown=ads' }, document: { referrer: '' } }, 'two');
+    const tagged = snapshotFromBrowser({ location: { href: 'https://app.example/?utm_source=ads' }, document: { referrer: '' } }, 'one', 'home');
+    const untagged = snapshotFromBrowser({ location: { href: 'https://app.example/pricing?unknown=ads' }, document: { referrer: '' } }, 'two', 'pricing');
     expect(tagged.$utm_source).toBe('ads');
-    expect(untagged).toEqual({ session_id: 'two', landing_path: '/pricing' });
+    expect(untagged).toEqual({ session_id: 'two', landing_route: 'pricing' });
+  });
+
+  it('uses the same finite route-key grammar as Core', () => {
+    const browser = { location: { href: 'https://app.example/' }, document: { referrer: '' } };
+    expect(() => snapshotFromBrowser(browser, 'session', 'Checkout')).toThrow('finite safe route key');
+    expect(() => snapshotFromBrowser(browser, 'session', '1checkout')).toThrow('finite safe route key');
+    expect(() => snapshotFromBrowser(browser, 'session', 'checkout+secret')).toThrow('finite safe route key');
+    expect(snapshotFromBrowser(browser, 'session', 'checkout.start').landing_route).toBe('checkout.start');
   });
 
   it('does not read browser values before consent and drops queued attribution on revocation', async () => {
@@ -73,7 +81,7 @@ describe('browser acquisition attribution', () => {
       location: { get href() { reads += 1; return 'https://app.example/?utm_source=ads'; } },
       document: { get referrer() { reads += 1; return 'https://publisher.example/private'; } },
     };
-    const analytics = createAttributionClient({ client, browser, distinctId: 'anon', hasConsent: consent.has, subscribeConsent: consent.subscribe, route: '/home', createSessionId: () => 'session-2' });
+    const analytics = createAttributionClient({ client, browser, distinctId: 'anon', hasConsent: consent.has, subscribeConsent: consent.subscribe, route: 'home', createSessionId: () => 'session-2' });
     await analytics.start();
     expect(reads).toBe(0);
     expect(client.queued).toEqual([]);
@@ -93,7 +101,7 @@ describe('browser acquisition attribution', () => {
     Object.defineProperty(globalThis, 'document', { configurable: true, get: () => { throw new Error('document must not be read'); } });
     try {
       const consent = consentController(false);
-      const analytics = createAttributionClient({ client: fakeClient(), distinctId: 'anon', hasConsent: consent.has, subscribeConsent: consent.subscribe, route: '/home' });
+      const analytics = createAttributionClient({ client: fakeClient(), distinctId: 'anon', hasConsent: consent.has, subscribeConsent: consent.subscribe, route: 'home' });
       await analytics.start();
     } finally {
       if (location) Object.defineProperty(globalThis, 'location', location);
@@ -115,7 +123,7 @@ describe('browser acquisition attribution', () => {
       },
     });
     const analytics = createAttributionClient({
-      client, distinctId: 'anon', hasConsent: consent.has, subscribeConsent: consent.subscribe, route: '/home', createSessionId: () => 'retry-session',
+      client, distinctId: 'anon', hasConsent: consent.has, subscribeConsent: consent.subscribe, route: 'home', createSessionId: () => 'retry-session',
       browser: { location: { href: 'https://app.example/?utm_source=ads' }, document: { referrer: '' } },
     });
     await analytics.start();

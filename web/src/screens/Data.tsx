@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Add as Plus, X } from '@/components/icons';
 import { useStore, useAsync } from '../store';
@@ -12,7 +12,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import type { DataQualityIssue, EntityRow, FilterOp, ObservedEvent, SampleFilter } from '../api/types';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import type {
+  BackfillPreview, DataQualityIssue, EntityRow, EventRevisionPatch, EventRevisionPreview, FilterOp,
+  ObservedEvent, SampleEvent, SampleFilter,
+} from '../api/types';
 
 function EnvSelect() {
   const { env, setEnv, availableEnvs } = useStore();
@@ -40,10 +46,11 @@ export function Data() {
   return (
     <Tabs value={tab} onValueChange={setTab} className="gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="max-w-full overflow-x-auto pb-1">
+        <div className="min-w-0 max-w-full flex-1 overflow-x-auto pb-1">
           <TabsList className="w-max">
             <TabsTrigger value="health">Data health</TabsTrigger>
             <TabsTrigger value="events">Event stream</TabsTrigger>
+            <TabsTrigger value="backfill">Backfill</TabsTrigger>
             <TabsTrigger value="entities">Entities</TabsTrigger>
             <TabsTrigger value="warnings">Warnings</TabsTrigger>
           </TabsList>
@@ -52,6 +59,7 @@ export function Data() {
       </div>
       <TabsContent value="health"><Health observed={schema.data.observed_events_30d} /></TabsContent>
       <TabsContent value="events"><EventStream initialEvent={eventParam} initialActor={actorParam} observed={schema.data.observed_events_30d} /></TabsContent>
+      <TabsContent value="backfill"><BackfillManager /></TabsContent>
       <TabsContent value="entities"><Entities types={schema.data.entity_types.map((t) => t.name)} /></TabsContent>
       <TabsContent value="warnings"><Warnings /></TabsContent>
     </Tabs>
@@ -153,8 +161,9 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
   const [registered, setRegistered] = useState<'all' | 'reg' | 'wild'>('all');
   const [search, setSearch] = useState('');
   const [adding, setAdding] = useState(false);
+  const [selected, setSelected] = useState<SampleEvent | null>(null);
 
-  const { data, error, loading } = useAsync(
+  const { data, error, loading, reload } = useAsync(
     () => client!.sample(project!, {
       env, limit: 100,
       ...(eventFilter && { event: eventFilter }),
@@ -191,10 +200,10 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
           </>
         }
         right={
-          <div className="flex h-9 rounded-md border overflow-hidden text-sm">
+          <div className="flex h-9 rounded-field border overflow-hidden text-sm">
             {(['all', 'reg', 'wild'] as const).map((v) => (
               <button key={v} onClick={() => setRegistered(v)}
-                className={cn('px-3 border-r last:border-r-0', registered === v ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>
+                className={cn('px-3 border-r last:border-r-0', registered === v ? 'bg-brand text-brand-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>
                 {v === 'all' ? 'all' : v === 'reg' ? 'registered' : 'off-standard'}
               </button>
             ))}
@@ -219,22 +228,337 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
       {data && (rows.length === 0 ? <EmptyState headline="No events" lead={hasFilters || q ? 'nothing matches these filters' : 'nothing yet'} /> : (
         <div className="overflow-x-auto">
           <Table>
-            <TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Actor</TableHead><TableHead>Properties</TableHead><TableHead>When</TableHead><TableHead /></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Actor</TableHead><TableHead>Properties</TableHead><TableHead>When</TableHead><TableHead>Origin</TableHead><TableHead /></TableRow></TableHeader>
             <TableBody>
-              {rows.map((e, i) => (
-                <TableRow key={i}>
+              {rows.map((e) => (
+                <TableRow key={e.id}>
                   <TableCell className="font-medium">{e.event}</TableCell>
                   <TableCell><Link to={`/data/person/${encodeURIComponent(e.distinct_id)}`} className="text-xs font-mono text-primary hover:underline">{e.distinct_id}</Link></TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-sm truncate" title={JSON.stringify(e.properties)}>{JSON.stringify(e.properties)}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{new Date(e.timestamp).toLocaleString()}</TableCell>
-                  <TableCell><RegBadge registered={e.registered} /></TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {e.origin}{e.revision > 1 ? ` · rev ${e.revision}` : ''}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <RegBadge registered={e.registered} />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSelected(e)}
+                        disabled={!e.editable}
+                        title={e.editable ? 'Preview an audited correction' : 'System evidence is immutable'}
+                      >
+                        Correct
+                      </Button>
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </div>
       ))}
+      {selected && (
+        <EventCorrectionDialog
+          event={selected}
+          onClose={() => setSelected(null)}
+          onCommitted={() => { setSelected(null); reload(); }}
+        />
+      )}
     </Panel>
+  );
+}
+
+function EventCorrectionDialog({
+  event,
+  onClose,
+  onCommitted,
+}: {
+  event: SampleEvent;
+  onClose: () => void;
+  onCommitted: () => void;
+}) {
+  const { client, project, env } = useStore();
+  const [timestamp, setTimestamp] = useState(event.timestamp);
+  const [setProperties, setSetProperties] = useState('{}');
+  const [unsetProperties, setUnsetProperties] = useState('');
+  const [reason, setReason] = useState('');
+  const [preview, setPreview] = useState<EventRevisionPreview | null>(null);
+  const [previewPatch, setPreviewPatch] = useState<EventRevisionPatch | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const previewGeneration = useRef(0);
+  const history = useAsync(
+    () => client!.eventHistory(project!, event.id, env),
+    [project, env, event.id],
+  );
+
+  const buildPatch = () => {
+    const parsed = JSON.parse(setProperties) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Set properties must be a JSON object');
+    }
+    return {
+      ...(timestamp !== event.timestamp ? { timestamp: new Date(timestamp).toISOString() } : {}),
+      set_properties: parsed as Record<string, unknown>,
+      unset_properties: unsetProperties.split(',').map((key) => key.trim()).filter(Boolean),
+    };
+  };
+  const invalidate = () => {
+    previewGeneration.current += 1;
+    setPreview(null);
+    setPreviewPatch(null);
+    setError(null);
+  };
+  const runPreview = async () => {
+    setBusy(true); setError(null);
+    const generation = previewGeneration.current + 1;
+    previewGeneration.current = generation;
+    const patch = buildPatch();
+    try {
+      const reviewed = await client!.previewEventRevision(project!, event.id, { env, patch });
+      if (generation !== previewGeneration.current) return;
+      setPreview(reviewed);
+      setPreviewPatch(patch);
+    } catch (caught) {
+      if (generation !== previewGeneration.current) return;
+      setError((caught as Error).message);
+    } finally {
+      if (generation === previewGeneration.current) setBusy(false);
+    }
+  };
+  const commit = async () => {
+    if (!preview || !previewPatch) return;
+    setBusy(true); setError(null);
+    try {
+      await client!.commitEventRevision(project!, event.id, {
+        env,
+        patch: previewPatch,
+        expected_revision: preview.expected_revision,
+        expected_preview_sha256: preview.preview_sha256,
+        reason,
+      });
+      onCommitted();
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Correct event</DialogTitle>
+          <DialogDescription>
+            The current row is revised in analytics; Poolstatis keeps immutable before/after evidence.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
+          <div className="rounded-md border p-3 text-xs">
+            <div className="font-medium">{event.event}</div>
+            <div className="font-mono text-muted-foreground mt-1">{event.id} · revision {event.revision}</div>
+          </div>
+          <label className="grid gap-1.5 text-sm">
+            Timestamp
+            <Input value={timestamp} onChange={(e) => { setTimestamp(e.target.value); invalidate(); }} />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            Set properties
+            <textarea
+              className="min-h-28 rounded-md border bg-background px-3 py-2 font-mono text-xs"
+              value={setProperties}
+              onChange={(e) => { setSetProperties(e.target.value); invalidate(); }}
+              spellCheck={false}
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            Remove properties
+            <Input
+              placeholder="legacy_key, wrong_parameter"
+              value={unsetProperties}
+              onChange={(e) => { setUnsetProperties(e.target.value); invalidate(); }}
+            />
+          </label>
+          {preview && (
+            <div className="rounded-md border p-3 text-sm">
+              <div className="font-medium">Preview · revision {preview.expected_revision} → {preview.after.revision}</div>
+              <div className="text-muted-foreground mt-1">{preview.changed_fields.join(', ')}</div>
+              <pre className="mt-3 overflow-x-auto text-xs font-mono whitespace-pre-wrap">{JSON.stringify(preview.after, null, 2)}</pre>
+            </div>
+          )}
+          {history.data && history.data.revisions.length > 0 && (
+            <div className="rounded-md border p-3 text-sm">
+              <div className="font-medium">Correction history</div>
+              {history.data.revisions.map((revision) => (
+                <div key={revision.id} className="mt-2 text-xs text-muted-foreground">
+                  rev {revision.revision} · {revision.reason} · {new Date(revision.created_at).toLocaleString()}
+                </div>
+              ))}
+            </div>
+          )}
+          <label className="grid gap-1.5 text-sm">
+            Reason
+            <Input
+              placeholder="Why this correction is necessary"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            />
+          </label>
+          {error && <ErrorNote>{error}</ErrorNote>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={runPreview} disabled={busy}>Preview</Button>
+          <Button onClick={commit} disabled={busy || !preview || !previewPatch || reason.trim().length < 10}>Apply revision</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BackfillManager() {
+  const { client, project, env } = useStore();
+  const [payload, setPayload] = useState('[]');
+  const [batchId, setBatchId] = useState(`historical-${new Date().toISOString().slice(0, 10)}`);
+  const [reason, setReason] = useState('');
+  const [preview, setPreview] = useState<BackfillPreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const recent = useAsync(() => client!.backfills(project!, env), [project, env]);
+
+  const parseEvents = (): unknown[] => {
+    const parsed = JSON.parse(payload) as unknown;
+    const events = Array.isArray(parsed)
+      ? parsed
+      : (parsed && typeof parsed === 'object' ? (parsed as { events?: unknown }).events : undefined);
+    if (!Array.isArray(events)) throw new Error('Paste a JSON array or an object with an events array');
+    return events;
+  };
+  const invalidate = () => { setPreview(null); setResult(null); setError(null); };
+  const runPreview = async () => {
+    setBusy(true); setError(null); setResult(null);
+    try {
+      setPreview(await client!.previewBackfill(project!, { env, events: parseEvents() }));
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const commit = async () => {
+    if (!preview?.valid || !preview.payload_sha256) return;
+    setBusy(true); setError(null);
+    try {
+      const imported = await client!.commitBackfill(project!, {
+        env,
+        batch_id: batchId,
+        reason,
+        expected_payload_sha256: preview.payload_sha256,
+        events: parseEvents(),
+      });
+      setResult(imported.duplicate
+        ? `Batch already stored · ${imported.batch.event_count} events`
+        : `Imported ${imported.inserted} events`);
+      recent.reload();
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <Panel
+        title={<>Historical backfill <span className="font-sans text-sm font-normal text-muted-foreground ml-2">previewed, idempotent, source timestamps preserved</span></>}
+      >
+        <div className="grid gap-4">
+          <label className="grid gap-1.5 text-sm">
+            Events JSON
+            <textarea
+              className="min-h-72 rounded-md border bg-background px-3 py-2 font-mono text-xs"
+              value={payload}
+              onChange={(e) => { setPayload(e.target.value); invalidate(); }}
+              placeholder={'[{"event":"skill.enabled","timestamp":"2026-05-20T09:00:00Z","distinct_id":"user-1","properties":{"skill":"search"}}]'}
+              spellCheck={false}
+            />
+          </label>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="grid gap-1.5 text-sm">
+              Permanent batch ID
+              <Input value={batchId} onChange={(e) => setBatchId(e.target.value)} />
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              Reason
+              <Input
+                placeholder="Source table and purpose of this import"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </label>
+          </div>
+          {preview && (
+            <div className="rounded-md border p-3 text-sm">
+              <div className="font-medium">{preview.valid ? 'Ready to import' : 'Fix validation errors'}</div>
+              <div className="text-muted-foreground mt-1">
+                {preview.event_count} events · {preview.registered_count} registered · {preview.unregistered_count} off-standard
+              </div>
+              {preview.min_timestamp && (
+                <div className="text-xs text-muted-foreground mt-1">
+                  {new Date(preview.min_timestamp).toLocaleString()} — {new Date(preview.max_timestamp!).toLocaleString()}
+                </div>
+              )}
+              {preview.errors.map((item) => (
+                <div key={`${item.index}:${item.message}`} className="text-xs text-destructive mt-2">
+                  Event {item.index}: {item.message}
+                </div>
+              ))}
+            </div>
+          )}
+          {error && <ErrorNote>{error}</ErrorNote>}
+          {result && <div className="text-sm text-primary">{result}</div>}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={runPreview} disabled={busy}>Preview</Button>
+            <Button
+              onClick={commit}
+              disabled={busy || !preview?.valid || reason.trim().length < 10 || !batchId.trim()}
+            >
+              Import exact preview
+            </Button>
+          </div>
+        </div>
+      </Panel>
+      <Panel title="Backfill audit">
+        {recent.loading && <Loading />}
+        {recent.error && <ErrorNote>{recent.error}</ErrorNote>}
+        {recent.data && (recent.data.length === 0 ? (
+          <EmptyState headline="No historical imports" lead="completed batches will appear here" />
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader><TableRow><TableHead>Batch</TableHead><TableHead>Events</TableHead><TableHead>Range</TableHead><TableHead>Reason</TableHead><TableHead>Imported</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {recent.data.map((batch) => (
+                  <TableRow key={batch.id}>
+                    <TableCell className="font-mono text-xs">{batch.batch_id}</TableCell>
+                    <TableCell className="tabular-nums">{fmtNum(batch.event_count)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {new Date(batch.min_timestamp).toLocaleDateString()} — {new Date(batch.max_timestamp).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="max-w-sm text-xs">{batch.reason}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{new Date(batch.created_at).toLocaleString()}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ))}
+      </Panel>
+    </div>
   );
 }
 

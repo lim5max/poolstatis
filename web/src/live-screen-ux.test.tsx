@@ -112,6 +112,49 @@ describe('live customer screen UX', () => {
     expect(screen.getByText(/Check ingest and CORS/)).toBeInTheDocument();
   });
 
+  it('submits an explicit finite route vocabulary when proposing browser analytics', async () => {
+    const proposeBrowserAnalytics = vi.fn().mockResolvedValue({ properties: [], metrics: [] });
+    mockedStore.mockReturnValue(store({
+      properties: vi.fn().mockResolvedValue([]),
+      actorLinks: vi.fn().mockResolvedValue({ links: [], audit: [] }),
+      sources: vi.fn().mockResolvedValue([]),
+      metrics: vi.fn().mockResolvedValue([metric]),
+      contracts: vi.fn().mockResolvedValue([]),
+      measurementTrust: vi.fn().mockResolvedValue({
+        status: 'untrusted',
+        primary_metric: {
+          key: metric.key,
+          purpose: metric.purpose,
+          category: 'acquisition',
+          observed_events: 0,
+          observed_actors: 0,
+          registered_coverage: 0,
+        },
+        identity: { distinct_id_coverage: 0, raw_actors: 0, resolved_actors: 0 },
+        properties: [],
+        blockers: [],
+        warnings: [],
+      }),
+      trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
+      exportContracts: vi.fn(),
+      proposeBrowserAnalytics,
+    }));
+
+    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+
+    const propose = await screen.findByRole('button', { name: 'Propose browser analytics' });
+    expect(propose).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Safe route keys'), {
+      target: { value: 'pricing, home, pricing, docs.article' },
+    });
+    fireEvent.click(propose);
+
+    await waitFor(() => expect(proposeBrowserAnalytics).toHaveBeenCalledWith(
+      'alpha',
+      ['docs.article', 'home', 'pricing'],
+    ));
+  });
+
   it('runs a real UTM report from canonical metric breakdowns and labels missing attribution', async () => {
     const trend = vi.fn()
       .mockResolvedValueOnce({ kind: 'trend', series: [{ bucket: '2026-07-01', value: 8, breakdown_value: 'google' }, { bucket: '2026-07-01', value: 2, breakdown_value: '(none)' }], meta: {} })
@@ -145,7 +188,7 @@ describe('live customer screen UX', () => {
     };
     const webAnalytics = vi.fn().mockResolvedValue({
       kind: 'web_analytics',
-      summary: { visitors: 8, sessions: 11, page_views: 20 },
+      summary: { visitors: 8, sessions: 11, page_views: 20, average_session_duration_ms: null },
       engagement: {
         measured_sessions: 9, incomplete_sessions: 2, unknown_sessions: 2, engaged_sessions: 6,
         bounce_sessions: 3, single_page_sessions: 7,
@@ -154,13 +197,13 @@ describe('live customer screen UX', () => {
         foreground_ms: 125_000, session_span_ms: 240_000,
       },
       breakdowns: {
-        country: [{ value: 'US', visitors: 6, sessions: 8, page_views: 15, percentage: 75 }],
+        route: [{ value: 'home', visitors: 6, sessions: 8, page_views: 15, percentage: 75 }],
         device: [{ value: 'mobile', visitors: 5, sessions: 7, page_views: 12, percentage: 60 }],
-        browser: [], os: [], source: [],
+        browser: [], os: [], language: [], timezone: [], source: [],
       },
       meta: {
         computed_at: '2026-07-27T00:00:00Z',
-        truncated_dimensions: ['country'],
+        truncated_dimensions: ['route'],
         definitions: {
           visitors: 'Unique resolved actors.',
           sessions: 'Distinct session ids.',
@@ -176,11 +219,7 @@ describe('live customer screen UX', () => {
           session_span_ms: 'Wall-clock span.',
         },
         accepted_event_accounting: 'Accepted stored events.',
-        privacy: 'Raw IP is not stored.',
-        country_attribution: {
-          label: 'IP Geolocation by DB-IP',
-          url: 'https://db-ip.com',
-        },
+        privacy: 'Country is unavailable; raw IP is not stored.',
       },
     });
     const webSessions = vi.fn().mockResolvedValue({
@@ -210,7 +249,7 @@ describe('live customer screen UX', () => {
         engaged: true, bounce: false, single_page: true, complete: true,
       },
       pages: [{
-        page_view_id: 'page-1', session_id: 'session-1', actor_id: 'actor-1', path: '/pricing',
+        page_view_id: 'page-1', session_id: 'session-1', actor_id: 'actor-1', route: 'pricing',
         viewed_at: '2026-07-27T00:00:00Z', last_snapshot_at: '2026-07-27T00:00:15Z',
         sequence: 2, foreground_ms: 15_000, elapsed_ms: 15_000, max_scroll_pct: 75,
         interaction_count: 2, reason: 'pagehide', complete: true,
@@ -244,19 +283,17 @@ describe('live customer screen UX', () => {
     expect(screen.getByText('2m 5s')).toBeInTheDocument();
     expect(screen.getByText(/2 incomplete sessions/)).toBeInTheDocument();
     expect(screen.getByText('75%')).toBeInTheDocument();
-    expect(screen.getByText('🇺🇸 United States')).toBeInTheDocument();
+    expect(screen.getByText('home')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh traffic summary' })).toBeInTheDocument();
     expect(screen.getByText(/Snapshot/)).toHaveTextContent('Jul 27, 2026');
-    expect(screen.getByRole('link', { name: 'IP Geolocation by DB-IP' })).toHaveAttribute(
-      'href',
-      'https://db-ip.com',
-    );
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Device' }), { key: 'Enter' });
     expect(screen.getByText('60%')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Visitors' })).toBeInTheDocument();
     expect(screen.getByText(/Showing 1 of 1 returned groups/)).toBeInTheDocument();
     expect(webAnalytics).toHaveBeenCalledWith('alpha', expect.objectContaining({
-      metric: 'web_page_views', dimensions: ['country', 'device', 'browser', 'os', 'source'], env: 'prod',
+      metric: 'web_page_views',
+      dimensions: ['route', 'device', 'browser', 'os', 'language', 'timezone', 'source'],
+      env: 'prod',
     }));
     fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));
     expect(await screen.findByText('15s')).toBeInTheDocument();
@@ -270,7 +307,7 @@ describe('live customer screen UX', () => {
     expect(detail).toHaveAttribute('aria-live', 'polite');
     expect(within(detail).getByRole('alert')).toHaveTextContent('session detail temporarily unavailable');
     fireEvent.click(within(detail).getByRole('button', { name: 'Retry session details' }));
-    expect(await within(detail).findByText('/pricing')).toBeInTheDocument();
+    expect(await within(detail).findByText('pricing')).toBeInTheDocument();
     expect(webSession).toHaveBeenNthCalledWith(2, 'alpha', expect.objectContaining({
       session_id: 'session-1',
       actor_id: 'actor-1',
@@ -296,7 +333,7 @@ describe('live customer screen UX', () => {
         page_view_id: 'page-2',
         session_id: 'session-2',
         actor_id: 'actor-2',
-        path: '/docs',
+        route: 'docs',
       }],
     };
     let resolveFirst!: (value: typeof webSessionResponse) => void;
@@ -307,9 +344,9 @@ describe('live customer screen UX', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]!);
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]!);
     await act(async () => { resolveSecond(secondSessionResponse); });
-    expect(await within(screen.getByRole('region', { name: 'Session detail' })).findByText('/docs')).toBeInTheDocument();
+    expect(await within(screen.getByRole('region', { name: 'Session detail' })).findByText('docs')).toBeInTheDocument();
     await act(async () => { resolveFirst(webSessionResponse); });
-    expect(within(screen.getByRole('region', { name: 'Session detail' })).queryByText('/pricing')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Session detail' })).queryByText('pricing')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     let resolveStalled!: (value: typeof webSessionResponse) => void;
@@ -340,7 +377,7 @@ describe('live customer screen UX', () => {
     expect(within(noData).getByText(/No matching accepted page-view session/)).toBeInTheDocument();
   });
 
-  it('keeps unknown country honest and explains why historical traffic cannot be backfilled', async () => {
+  it('keeps country explicitly unavailable in the E1 privacy contract', async () => {
     const webMetric = {
       ...metric,
       id: 'web-unknown', key: 'web_page_views', name: 'Web page views',
@@ -357,7 +394,7 @@ describe('live customer screen UX', () => {
       trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
       webAnalytics: vi.fn().mockResolvedValue({
         kind: 'web_analytics',
-        summary: { visitors: 1, sessions: 1, page_views: 1 },
+        summary: { visitors: 1, sessions: 1, page_views: 1, average_session_duration_ms: null },
         engagement: {
           measured_sessions: 0, incomplete_sessions: 1, unknown_sessions: 1, engaged_sessions: 0,
           bounce_sessions: 0, single_page_sessions: 1,
@@ -366,8 +403,8 @@ describe('live customer screen UX', () => {
           foreground_ms: 0, session_span_ms: 0,
         },
         breakdowns: {
-          country: [{ value: 'ZZ', visitors: 1, sessions: 1, page_views: 1, percentage: 100 }],
-          device: [], browser: [], os: [], source: [],
+          route: [{ value: 'home', visitors: 1, sessions: 1, page_views: 1, percentage: 100 }],
+          device: [], browser: [], os: [], language: [], timezone: [], source: [],
         },
         meta: {
           computed_at: '2026-07-27T00:00:00Z',
@@ -387,17 +424,17 @@ describe('live customer screen UX', () => {
             session_span_ms: 'Wall-clock span.',
           },
           accepted_event_accounting: 'Accepted stored events.',
-          privacy: 'Raw IP is not stored.',
+          privacy: 'Country is unavailable; raw IP is not stored.',
         },
       }),
     }));
     render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Web analytics');
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
-    const unknown = await screen.findByRole('button', { name: 'Unknown country explanation' });
-    fireEvent.focus(unknown);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(/Historical events stay Unknown because raw IP is not stored/);
-    expect(screen.getByRole('tooltip')).toHaveTextContent(/VPN or proxy traffic may also be unresolved/);
+    expect(await screen.findByText('home')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Country' })).not.toBeInTheDocument();
+    fireEvent.focus(screen.getByRole('button', { name: 'Privacy' }));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(/Country is unavailable/);
   });
 
   it('ignores an older traffic response after the reporting period changes', async () => {
@@ -408,7 +445,12 @@ describe('live customer screen UX', () => {
     };
     const response = (computedAt: string, pageViews: number) => ({
       kind: 'web_analytics',
-      summary: { visitors: pageViews, sessions: pageViews, page_views: pageViews },
+      summary: {
+        visitors: pageViews,
+        sessions: pageViews,
+        page_views: pageViews,
+        average_session_duration_ms: null,
+      },
       engagement: {
         measured_sessions: 0, incomplete_sessions: pageViews, unknown_sessions: pageViews, engaged_sessions: 0,
         bounce_sessions: 0, single_page_sessions: pageViews,
@@ -416,7 +458,7 @@ describe('live customer screen UX', () => {
         timed_page_views: 0, total_page_views: pageViews, timed_page_coverage: 0,
         foreground_ms: 0, session_span_ms: 0,
       },
-      breakdowns: { country: [], device: [], browser: [], os: [], source: [] },
+      breakdowns: { route: [], device: [], browser: [], os: [], language: [], timezone: [], source: [] },
       meta: {
         computed_at: computedAt,
         truncated_dimensions: [],
@@ -525,7 +567,12 @@ describe('live customer screen UX', () => {
       trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
       webAnalytics: vi.fn().mockResolvedValue({
         kind: 'web_analytics',
-        summary: { visitors: sourceCount, sessions: sourceCount, page_views: pageViews },
+        summary: {
+          visitors: sourceCount,
+          sessions: sourceCount,
+          page_views: pageViews,
+          average_session_duration_ms: null,
+        },
         engagement: {
           measured_sessions: 0, incomplete_sessions: sourceCount, unknown_sessions: sourceCount, engaged_sessions: 0,
           bounce_sessions: 0, single_page_sessions: sourceCount,
@@ -534,8 +581,8 @@ describe('live customer screen UX', () => {
           foreground_ms: 0, session_span_ms: 0,
         },
         breakdowns: {
-          country: [{ value: 'unknown', visitors: sourceCount, sessions: sourceCount, page_views: pageViews, percentage: 100 }],
-          device: [], browser: [], os: [], source: sources,
+          route: [{ value: 'home', visitors: sourceCount, sessions: sourceCount, page_views: pageViews, percentage: 100 }],
+          device: [], browser: [], os: [], language: [], timezone: [], source: sources,
         },
         meta: {
           computed_at: '2026-07-27T00:00:00Z',
@@ -562,7 +609,7 @@ describe('live customer screen UX', () => {
     render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Web analytics');
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
-    expect(await screen.findByText('Unknown')).toBeInTheDocument();
+    expect(await screen.findByText('home')).toBeInTheDocument();
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2);
 
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Source' }), { key: 'Enter' });

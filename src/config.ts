@@ -10,6 +10,7 @@ export interface Config {
   connectorEncryptionKey: string | null;
   outboundPolicy: { allowLocalHttp: boolean };
   experienceArtifactDir: string;
+  cursorSigningSecret: string | null;
   ingestBuffer: {
     maxEvents: number;
     maxDelayMs: number;
@@ -88,7 +89,7 @@ export function assertHostedApiCredentialBoundary(config: Config): void {
   }
 }
 
-export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.2.0';
+export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.4.0';
 const LOCAL_MCP_ARGS = ['--silent', '--dir', '<path-to-poolstatis-core>', 'mcp'];
 
 function parseArgs(raw: string | undefined, packageStatus: 'published' | 'publish_pending'): string[] {
@@ -342,6 +343,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       );
     }
   }
+  const cursorSigningSecret = env.POOLSTATIS_CURSOR_SIGNING_SECRET?.trim() || null;
+  if (cursorSigningSecret && cursorSigningSecret.length < 32) {
+    throw new Error('POOLSTATIS_CURSOR_SIGNING_SECRET must be at least 32 characters');
+  }
   return {
     databaseUrl,
     migrationDatabaseUrl,
@@ -352,6 +357,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     connectorEncryptionKey: env.POOLSTATIS_CONNECTOR_ENCRYPTION_KEY?.trim() || null,
     outboundPolicy: { allowLocalHttp: booleanValue(env.OUTBOUND_ALLOW_LOCAL_HTTP, false, 'OUTBOUND_ALLOW_LOCAL_HTTP') },
     experienceArtifactDir: env.POOLSTATIS_EXPERIENCE_ARTIFACT_DIR?.trim() || './data/experience-artifacts',
+    cursorSigningSecret,
     ingestBuffer,
     queryCache: {
       ttlMs: positiveInt(env.QUERY_CACHE_TTL_MS, 1_000, 'QUERY_CACHE_TTL_MS'),

@@ -153,6 +153,54 @@ describe('retention maintenance', () => {
     expect(warnings.rows.map((row) => row.event)).not.toContain('stale.warning');
   });
 
+  it('expires correction snapshots together with their event', async () => {
+    const now = new Date('2026-07-16T12:00:00.000Z');
+    const project = await projectId(short);
+    await short.pool.query('UPDATE projects SET retention_months = 1 WHERE id = $1', [project]);
+    const event = await short.pool.query<{ id: string }>(
+      `INSERT INTO events (
+         project_id, env, event, "timestamp", distinct_id, properties, registered, revision
+       ) VALUES ($1, 'prod', 'revised.expired', '2026-05-01T00:00:00.000Z',
+                 'expired-actor', '{"stage":"after"}', true, 2)
+       RETURNING id`,
+      [project],
+    );
+    const eventId = event.rows[0]!.id;
+    await short.pool.query(
+      `INSERT INTO event_revisions (
+         event_id, project_id, env, revision, actor, reason,
+         previous_snapshot, snapshot
+       ) VALUES (
+         $1, $2, 'prod', 2, 'test:retention',
+         'Retention must remove personal correction evidence.',
+         $3::jsonb, $4::jsonb
+       )`,
+      [
+        eventId,
+        project,
+        JSON.stringify({ id: eventId, distinct_id: 'expired-actor', properties: { stage: 'before' } }),
+        JSON.stringify({ id: eventId, distinct_id: 'expired-actor', properties: { stage: 'after' } }),
+      ],
+    );
+
+    const result = await runRetentionOnce(short.pool, {
+      now,
+      projectId: project,
+      batchSize: 10,
+      maxBatchesPerRun: 40,
+      maxRowsPerRun: 100,
+      maxRunMs: 5_000,
+    });
+    expect(result.eventsDeleted).toBeGreaterThanOrEqual(1);
+    const remaining = await short.pool.query<{ events: number; revisions: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM events WHERE id = $1) AS events,
+         (SELECT count(*)::int FROM event_revisions WHERE event_id = $1) AS revisions`,
+      [eventId],
+    );
+    expect(remaining.rows[0]).toEqual({ events: 0, revisions: 0 });
+  });
+
   it('rejects retention policies that could delete fresh data', async () => {
     const project = await projectId(short);
     await expect(short.pool.query(

@@ -36,12 +36,13 @@ CREATE TABLE api_keys (
 
 Среда (`env`) — атрибут ключа, а не сущность: ingest-ключ `pk_…` выпускается на `prod`/`dev`, и все принятые им события автоматически помечаются этим env. Так невозможно «случайно» прислать дев-события в прод — у дев-сборки просто другой ключ.
 
-## 2. Events — неизменяемые факты
+## 2. Events — факты с аудируемыми исправлениями
 
 Логическая схема (физическая — в адаптере хранилища):
 
 | Поле | Тип | Описание |
 |------|-----|----------|
+| `id` | uuid | стабильный id события для inspection и correction |
 | `project_id` | uuid | изоляция тенанта |
 | `env` | text | `prod` / `dev` / … — из ingest-ключа |
 | `event` | text | имя события, стандарт `object.action`: `checkout.completed` |
@@ -51,10 +52,27 @@ CREATE TABLE api_keys (
 | `properties` | json | произвольные свойства события |
 | `registered` | bool | соответствует ли событие активной метрике реестра |
 | `ingested_at` | timestamptz | время приёма сервером |
+| `revision` | integer | текущая версия materialized-факта, начиная с 1 |
+| `origin` | text | `live` или `backfill` |
+| `backfill_batch_id` | uuid? | ссылка на исторический batch-аудит |
 
 Правила:
 
-- **Append-only.** События не редактируются и не удаляются (кроме GDPR-удаления по `distinct_id`).
+- Обычный ingest остаётся **append-only**. Исправить нативное событие можно только
+  через preview + optimistic revision: текущая materialized-строка меняется для
+  всех запросов, а `event_revisions` навсегда сохраняет actor, reason и
+  before/after. System/Browser Experience evidence не редактируется.
+- Исторический backfill — отдельный Platform API: все timestamps обязательны,
+  batch валидируется целиком и сохраняется только all-or-nothing. Постоянный
+  `batch_id` и payload hash делают retry идемпотентным.
+- GDPR-удаление ищет `distinct_id` и в текущем событии, и во всех before/after
+  snapshots, затем под тем же row lock удаляет событие и персональный audit.
+  Batch-аудит без event payload остаётся. Большой purge идёт ограниченными
+  batch-ами по server-time snapshot: события, принятые после начала операции,
+  относятся уже к следующему purge, поэтому непрерывный ingest не удерживает
+  необратимый HTTP-запрос бесконечно.
+- Retention удаляет revision snapshots атомарно с истёкшим событием: audit не
+  продлевает срок хранения PII.
 - **Имена:** `snake_case`, формат `object.action`. Префикс `$` зарезервирован за системными событиями и свойствами (`$session_start`, `$utm_source`).
 - **`registered`:** ставится на ингесте сверкой с реестром метрик. Незарегистрированные события принимаются и хранятся — но платформа видит долю «дикой» инструментации по проекту (метрика качества данных, вход для инсайтов).
 
@@ -64,6 +82,20 @@ CREATE TABLE api_keys (
 anonymous→identified flow поддерживается через `actor_links`. Связь ограничена project + env,
 проверяется на циклы/конфликты и может быть отозвана. События не переписываются: canonical
 actor вычисляется при чтении, а создание/отзыв попадают в append-only `actor_link_audit`.
+
+Typed `actors` query агрегирует canonical population в bounded временном окне:
+first/last seen, total events, active days, registered-only top events и
+nullable trusted Browser session count. Это read model поверх immutable
+events, а не новая `users` table. `linked` доказывается active link provenance
+или несколькими raw IDs; без server-owned stable/anonymous provenance статус
+`unknown`, а обнаруженный конфликт даёт `ambiguous`.
+
+Person detail использует ту же canonical population, возвращает bounded raw
+IDs/link provenance и keyset-paginated registered activity. Arbitrary entity
+или event properties не становятся identity/pinned properties автоматически:
+без deterministic mapping, allowlist и masking policy они fail closed.
+GDPR/admin purge по `distinct_id` остаётся exact raw-ID удалением и никогда
+не расширяет blast radius на canonical actor.
 
 ## 3. Entities — «статичные» данные с состоянием
 

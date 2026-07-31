@@ -1,15 +1,20 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { LayoutGrid, List, Database, GridView, KeyRound, Settings, SystemSettings, Target, PackageBox, Check, ChevronsUpDown, Menu, X, ArrowLeft, ArrowRight, type PoolstatisIcon } from '@/components/icons';
 import { hostedAuthEnabled, useHostedAuth } from './oidc';
 import { useStore } from './store';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { NAVIGATION_ZONES, type NavigationItem } from './analysis/navigation';
 import { Connect } from './screens/Connect';
 import { Projects } from './screens/Projects';
+import { Overview } from './screens/Overview';
+import { ProductAnalytics } from './screens/ProductAnalytics';
+import { WebAnalytics } from './screens/WebAnalytics';
+import { Users } from './screens/Users';
 import { Registry } from './screens/Registry';
 import { Data } from './screens/Data';
 import { Keys } from './screens/Keys';
@@ -25,32 +30,51 @@ import { Profile } from './screens/Profile';
 import { Usage } from './screens/Usage';
 import { AuthPortal } from './screens/AuthPortal';
 
-type NavItem = { to: string; Icon: PoolstatisIcon; label: string; end?: boolean };
-const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
-  { label: 'Get started', items: [
-    { to: '/', Icon: LayoutGrid, label: 'Projects', end: true },
-    { to: '/setup', Icon: Settings, label: 'Setup & MCP' },
-  ] },
-  { label: 'Measure', items: [
-    { to: '/registry', Icon: List, label: 'Registry' },
-    { to: '/data', Icon: Database, label: 'Data' },
-    { to: '/measurement', Icon: SystemSettings, label: 'Measurement' },
-  ] },
-  { label: 'Ship & learn', items: [
-    { to: '/experiments', Icon: Target, label: 'Experiments' },
-    { to: '/experience', Icon: GridView, label: 'Experience' },
-    { to: '/changes', Icon: PackageBox, label: 'Changes' },
-    { to: '/decisions', Icon: Check, label: 'Decisions' },
-  ] },
-  { label: 'Workspace', items: [
-    { to: '/keys', Icon: KeyRound, label: 'Keys' },
-    { to: '/usage', Icon: Database, label: 'Usage' },
-    { to: '/profile', Icon: Settings, label: 'Profile' },
-  ] },
+const NAV_ICONS: Record<string, PoolstatisIcon> = {
+  Overview: LayoutGrid,
+  'Product analytics': GridView,
+  'Web analytics': GridView,
+  Users: List,
+  Changes: PackageBox,
+  Experiments: Target,
+  Decisions: Check,
+  Data: Database,
+  Registry: List,
+  Measurement: SystemSettings,
+  'Browser experience': GridView,
+  Keys: KeyRound,
+  'Setup & MCP': Settings,
+  Usage: Database,
+  Profile: Settings,
+};
+const WORKSPACE_ITEMS: NavigationItem[] = [
+  { label: 'Usage', to: '/usage', availability: 'available' },
+  { label: 'Profile', to: '/profile', availability: 'available' },
 ];
-const TITLES: Record<string, string> = { '/': 'Projects', '/usage': 'Usage', '/profile': 'Profile', '/registry': 'Registry', '/measurement': 'Measurement', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/changes': 'Changes', '/decisions': 'Decisions', '/setup': 'Setup & MCP' };
-const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' : TITLES[path] ?? 'Poolstatis');
-const isProjectScoped = (path: string) => path === '/' || path.startsWith('/setup') || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
+const TITLES: Record<string, string> = {
+  '/': 'Overview',
+  '/projects': 'Projects',
+  '/analyze/product': 'Product analytics',
+  '/usage': 'Usage',
+  '/profile': 'Profile',
+  '/analyze/web': 'Web analytics',
+  '/analyze/users': 'Users',
+  '/registry': 'Registry',
+  '/measurement': 'Measurement',
+  '/data': 'Data',
+  '/keys': 'Keys',
+  '/experiments': 'Experiments',
+  '/experience': 'Browser experience',
+  '/changes': 'Changes',
+  '/decisions': 'Decisions',
+  '/setup': 'Setup & MCP',
+};
+const titleFor = (path: string) => (
+  path.startsWith('/data/person') || path.startsWith('/analyze/users/')
+    ? 'Actor profile'
+    : TITLES[path] ?? 'Poolstatis'
+);
+const isProjectScoped = (path: string) => path === '/' || path.startsWith('/analyze') || path.startsWith('/setup') || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
 const SIDEBAR_KEY = 'poolstatis.sidebar.collapsed';
 const loadSidebarState = () => {
   try { return localStorage.getItem(SIDEBAR_KEY) === 'true'; } catch { return false; }
@@ -90,10 +114,7 @@ function AdminApp() {
       <a href="#main-content" className="fixed left-3 top-3 z-50 -translate-y-20 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground shadow-lg transition-transform focus:translate-y-0">
         Skip to content
       </a>
-      <div className={cn(
-        'min-h-screen bg-background md:grid md:h-screen md:transition-[grid-template-columns] md:duration-200',
-        sidebarCollapsed ? 'md:grid-cols-[72px_1fr]' : 'md:grid-cols-[232px_1fr]',
-      )}>
+      <div className="min-h-screen bg-background md:flex md:h-screen">
         <MobileTopbar />
         <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
         <MobileNavDrawer onNavigate={() => setMobileNavOpen(false)} />
@@ -105,7 +126,13 @@ function AdminApp() {
 
 function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   return (
-    <aside className="hidden min-h-0 flex-col border-r bg-sidebar py-4 md:flex" aria-label="Primary navigation">
+    <aside
+      className={cn(
+        'hidden min-h-0 shrink-0 flex-col border-r bg-sidebar py-4 transition-[width] duration-200 md:flex',
+        collapsed ? 'w-18' : 'w-60',
+      )}
+      aria-label="Primary navigation"
+    >
       <div className={cn('flex items-center pb-3', collapsed ? 'flex-col gap-2 px-2' : 'justify-between gap-2 px-4')}>
         <div className={cn('min-w-0', collapsed && 'flex justify-center')}>
           <div className={cn('brand-wordmark flex items-center gap-2.5 text-2xl', collapsed && 'justify-center')}>
@@ -140,7 +167,7 @@ function MobileTopbar() {
         <span className="brand-wordmark truncate text-xl text-foreground">Poolstatis</span>
       </div>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Open navigation">
+        <Button variant="ghost" size="icon-sm" className="size-11" aria-label="Open navigation">
           <Menu className="size-5" />
         </Button>
       </DialogTrigger>
@@ -165,7 +192,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
             </div>
           </div>
           <DialogClose asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="Close navigation">
+            <Button variant="ghost" size="icon-sm" className="size-11" aria-label="Close navigation">
               <X className="size-4" />
             </Button>
           </DialogClose>
@@ -182,30 +209,60 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
 function NavGroups({ onNavigate, collapsed = false }: { onNavigate?: () => void; collapsed?: boolean }) {
   return (
     <>
-      {NAV_GROUPS.map((g) => (
+      {[...NAVIGATION_ZONES, { label: 'Workspace', items: WORKSPACE_ITEMS }].map((g) => (
         <div key={g.label} className="mb-1">
           {collapsed
             ? <div className="mx-2 my-2 border-t" aria-hidden="true" />
-            : <div className="px-3 pb-1.5 pt-3.5 text-xs font-medium text-muted-foreground/70">{g.label}</div>}
-          {g.items.map(({ to, Icon, label, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              onClick={onNavigate}
-              title={collapsed ? label : undefined}
-              aria-label={collapsed ? label : undefined}
-              className={({ isActive }) => cn('flex min-h-9 items-center rounded-md text-sm transition-colors',
-                collapsed ? 'justify-center px-2' : 'gap-2.5 px-3 py-2',
-                isActive ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground')}
-            >
-              <Icon className="size-4 shrink-0" />
-              <span className={collapsed ? 'sr-only' : undefined}>{label}</span>
-            </NavLink>
+            : <div className="px-3 pb-1.5 pt-3.5 text-xs font-medium text-muted-foreground">{g.label}</div>}
+          {g.items.map((item) => (
+            <NavigationRow key={item.label} item={item} collapsed={collapsed} onNavigate={onNavigate} />
           ))}
         </div>
       ))}
     </>
+  );
+}
+
+function NavigationRow({ item, collapsed, onNavigate }: {
+  item: NavigationItem;
+  collapsed: boolean;
+  onNavigate?: () => void;
+}) {
+  const Icon = NAV_ICONS[item.label] ?? LayoutGrid;
+  if (item.availability === 'unavailable' || !item.to) {
+    return (
+      <div
+        aria-disabled="true"
+        title={item.reason}
+        className={cn(
+          'flex min-h-11 cursor-not-allowed items-center rounded-control text-sm text-muted-foreground/60 md:min-h-9',
+          collapsed ? 'justify-center px-2' : 'gap-2.5 px-3',
+        )}
+      >
+        <Icon className="size-4 shrink-0" />
+        <span className={collapsed ? 'sr-only' : undefined}>{item.label}</span>
+        {!collapsed && <span className="ml-auto text-xs">Later</span>}
+      </div>
+    );
+  }
+  return (
+    <NavLink
+      to={item.to}
+      end={item.to === '/'}
+      onClick={onNavigate}
+      title={collapsed ? item.label : undefined}
+      aria-label={collapsed ? item.label : undefined}
+      className={({ isActive }) => cn(
+        'flex min-h-11 items-center rounded-control text-sm transition-colors md:min-h-9',
+        collapsed ? 'justify-center px-2' : 'gap-2.5 px-3',
+        isActive
+          ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+          : 'text-muted-foreground hover:bg-sidebar-accent/65 hover:text-foreground',
+      )}
+    >
+      <Icon className="size-4 shrink-0" />
+      <span className={collapsed ? 'sr-only' : undefined}>{item.label}</span>
+    </NavLink>
   );
 }
 
@@ -250,12 +307,13 @@ function HostedConnectionFooter({ onDisconnect, collapsed = false }: { onDisconn
 
 function Main() {
   const loc = useLocation();
+  const navigate = useNavigate();
   const { projects, project, setProject, env } = useStore();
   const title = titleFor(loc.pathname);
   const showProject = isProjectScoped(loc.pathname);
 
   return (
-    <div className="min-h-0 md:h-screen md:overflow-y-auto">
+    <div className="min-h-0 min-w-0 flex-1 md:h-screen md:overflow-y-auto">
       <div className="sticky top-14 z-10 flex min-h-14 items-center border-b bg-background/90 px-4 py-3 backdrop-blur-md md:top-0 md:px-8">
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
@@ -265,7 +323,7 @@ function Main() {
                 <span className="text-muted-foreground/50">/</span>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-7 max-w-full gap-1.5">
+                    <Button variant="outline" size="sm" className="h-11 max-w-full gap-1.5 md:h-7">
                       <span className="max-w-40 truncate md:max-w-none">{project}</span>
                       <ChevronsUpDown className="size-3 shrink-0" />
                     </Button>
@@ -274,6 +332,8 @@ function Main() {
                     {projects.map((p) => (
                       <DropdownMenuItem key={p.slug} onClick={() => setProject(p.slug)}>{p.slug}</DropdownMenuItem>
                     ))}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => navigate('/projects')}>Manage projects</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </>
@@ -287,10 +347,15 @@ function Main() {
       <motion.main id="main-content" tabIndex={-1} className="max-w-6xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
         initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
         <Routes>
-          <Route path="/" element={<Projects />} />
+          <Route path="/" element={<Guarded><Overview /></Guarded>} />
+          <Route path="/projects" element={<Projects />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/usage" element={<Usage />} />
+          <Route path="/analyze/product" element={<Guarded><ProductAnalytics /></Guarded>} />
+          <Route path="/analyze/web" element={<Guarded><WebAnalytics /></Guarded>} />
+          <Route path="/analyze/users" element={<Guarded><Users /></Guarded>} />
+          <Route path="/analyze/users/:distinctId" element={<Guarded><Person /></Guarded>} />
           <Route path="/registry" element={<Guarded><Registry /></Guarded>} />
           <Route path="/measurement" element={<Guarded><Measurement /></Guarded>} />
           <Route path="/data" element={<Guarded><Data /></Guarded>} />
@@ -309,7 +374,17 @@ function Main() {
 }
 
 function Guarded({ children }: { children: ReactNode }) {
-  const { project } = useStore();
-  if (!project) return <div className="flex flex-col items-center gap-2 py-14 text-center text-muted-foreground"><div className="serif text-xl text-foreground/70">No project selected</div><div>Choose a project in Projects.</div></div>;
+  const { project, envReady, envError, retryEnvValidation } = useStore();
+  if (!project) return <div className="flex flex-col items-center gap-2 py-14 text-center text-muted-foreground"><div className="serif text-xl text-foreground/70">No project selected</div><div>Choose one from the project switcher.</div></div>;
+  if (envError) {
+    return (
+      <div role="alert" className="flex flex-col items-center gap-3 py-14 text-center">
+        <div className="serif text-xl text-foreground">Environment unavailable</div>
+        <div className="max-w-sm text-sm text-muted-foreground">{envError} Retry before running queries.</div>
+        <Button variant="outline" className="h-11 md:h-9" onClick={retryEnvValidation}>Retry validation</Button>
+      </div>
+    );
+  }
+  if (!envReady) return <div className="py-14 text-center text-sm text-muted-foreground">Validating project environment…</div>;
   return <>{children}</>;
 }

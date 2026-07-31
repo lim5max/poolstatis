@@ -1,6 +1,6 @@
 {
   "name": "@poolstatis/mcp",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Official stdio MCP server for Poolstatis agent-native product analytics",
   "license": "PolyForm-Shield-1.0.0",
   "type": "module",
@@ -22,11 +22,12 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "pnpm --dir ../.. build && rm -rf dist && tsc -p tsconfig.json && mkdir -p dist/core/mcp && cp ../../dist/mcp/server.js ../../dist/mcp/server.d.ts ../../dist/mcp/standard.js dist/core/mcp/ && cp ../../dist/schemas.js dist/core/ && cp ../../LICENSE LICENSE && chmod 755 dist/cli.js",
+    "build": "pnpm --dir ../.. build && rm -rf dist && tsc -p tsconfig.json && mkdir -p dist/core/mcp && cp ../../dist/mcp/server.js ../../dist/mcp/server.d.ts ../../dist/mcp/standard.js ../../dist/mcp/browserStandard.js ../../dist/mcp/browserStandard.d.ts ../../dist/mcp/actorsStandard.js ../../dist/mcp/actorsStandard.d.ts dist/core/mcp/ && cp ../../dist/schemas.js dist/core/ && cp ../../LICENSE LICENSE && chmod 755 dist/cli.js",
     "prepack": "pnpm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@hono/node-server": "2.0.12",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "3.25.76"
   }
 }
