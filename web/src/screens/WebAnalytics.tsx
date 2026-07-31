@@ -31,9 +31,11 @@ const RANGE_OPTIONS: Array<{ value: AnalyticsRange; label: string }> = [
   { value: '30d', label: 'Last 30 days' },
   { value: '90d', label: 'Last 90 days' },
 ];
-const DIMENSIONS: Array<{ value: WebDimension | 'country'; label: string }> = [
-  { value: 'route', label: 'Routes' },
+const DIMENSIONS: Array<{ value: WebDimension; label: string }> = [
   { value: 'source', label: 'Sources' },
+  { value: 'campaign', label: 'Campaigns' },
+  { value: 'medium', label: 'Mediums' },
+  { value: 'route', label: 'Routes' },
   { value: 'device', label: 'Devices' },
   { value: 'browser', label: 'Browsers' },
   { value: 'country', label: 'Countries' },
@@ -42,7 +44,7 @@ const DIMENSIONS: Array<{ value: WebDimension | 'country'; label: string }> = [
 export function WebAnalytics() {
   const { client, project, env } = useStore();
   const [range, setRange] = useState<AnalyticsRange>('30d');
-  const [dimension, setDimension] = useState<WebDimension | 'country'>('route');
+  const [dimension, setDimension] = useState<WebDimension>('source');
   const [selectedSession, setSelectedSession] = useState<WebSessionSummary | null>(null);
   const workspace = useAsync<WebWorkspaceResult | null>(async () => {
     const metrics = await client!.metrics(project!, { status: 'active' });
@@ -58,7 +60,7 @@ export function WebAnalytics() {
       client!.operationalQuery<WebAnalyticsResult>(project!, {
         kind: 'web_analytics',
         ...base,
-        dimensions: ['route', 'source', 'device', 'browser'],
+        dimensions: ['source', 'campaign', 'medium', 'route', 'device', 'browser', 'country'],
       }),
       client!.operationalQuery<WebSessionsResult>(project!, {
         kind: 'web_sessions',
@@ -90,7 +92,7 @@ export function WebAnalytics() {
         <Panel>
           <EmptyState
             headline="Web analytics is not configured"
-            lead={`Activate ${WEB_PAGE_VIEW_METRIC} and trust the finite route vocabulary before reading web traffic.`}
+            lead={`Activate ${WEB_PAGE_VIEW_METRIC} before reading canonical web traffic.`}
             action={<Button asChild variant="outline"><Link to="/measurement">Open measurement</Link></Button>}
           />
         </Panel>
@@ -100,7 +102,10 @@ export function WebAnalytics() {
 
   const { metric, overview, sessions, trend } = workspace.data;
   const spec = webTrendSpec(project!, env, metric.name, metric.purpose, overview, trend);
-  const breakdown = dimension === 'country' ? [] : overview.breakdowns[dimension] ?? [];
+  const breakdown = overview.breakdowns[dimension] ?? [];
+  const unavailableDimensions = overview.meta.unavailable_dimensions ?? {};
+  const unavailable = unavailableDimensions[dimension];
+  const routeAvailable = !unavailableDimensions.route;
 
   return (
     <div className="space-y-5">
@@ -129,17 +134,19 @@ export function WebAnalytics() {
         title="Breakdowns"
         right={overview.meta.truncated_dimensions.length > 0
           ? <Badge variant="outline">Top values · truncated</Badge>
+          : Object.keys(unavailableDimensions).length > 0
+            ? <Badge variant="outline">{Object.keys(unavailableDimensions).length} unavailable</Badge>
           : <Badge variant="outline">Complete result</Badge>}
       >
         <div className="mb-4 max-w-full overflow-x-auto">
-          <Tabs value={dimension} onValueChange={(value) => setDimension(value as WebDimension | 'country')}>
+          <Tabs value={dimension} onValueChange={(value) => setDimension(value as WebDimension)}>
             <TabsList className="w-max">
               {DIMENSIONS.map((item) => <TabsTrigger key={item.value} value={item.value}>{item.label}</TabsTrigger>)}
             </TabsList>
           </Tabs>
         </div>
-        {dimension === 'country' ? (
-          <UnavailableDimension />
+        {unavailable ? (
+          <UnavailableDimension label={DIMENSIONS.find((item) => item.value === dimension)?.label ?? dimension} unavailable={unavailable} />
         ) : breakdown.length === 0 ? (
           <EmptyState headline="No breakdown values" lead="No canonical page views matched this period." />
         ) : (
@@ -209,15 +216,19 @@ export function WebAnalytics() {
                     <TableCell className="text-right tabular-nums">{formatDurationMs(session.foreground_ms)}</TableCell>
                     <TableCell><SessionState session={session} /></TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        className="size-11 md:size-8"
-                        aria-label={`Open session ${session.session_id}`}
-                        onClick={() => setSelectedSession(session)}
-                      >
-                        <ArrowRight className="size-4" />
-                      </Button>
+                      {routeAvailable ? (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="size-11 md:size-8"
+                          aria-label={`Open session ${session.session_id}`}
+                          onClick={() => setSelectedSession(session)}
+                        >
+                          <ArrowRight className="size-4" />
+                        </Button>
+                      ) : (
+                        <span className="whitespace-nowrap text-xs text-muted-foreground">Route setup required</span>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -277,13 +288,17 @@ function SessionState({ session }: { session: WebSessionSummary }) {
   return <Badge variant={variant}>{label}</Badge>;
 }
 
-function UnavailableDimension() {
+function UnavailableDimension({ label, unavailable }: {
+  label: string;
+  unavailable: { reason: string; next_action: string };
+}) {
   return (
-    <div className="rounded-panel border border-dashed px-4 py-8 text-center">
-      <div className="serif text-xl">Country is unavailable</div>
+    <div className="border-y border-dashed px-4 py-7 text-center">
+      <div className="serif text-xl">{label} unavailable</div>
       <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
-        Geography stays disabled until a trusted proxy or MMDB contract is reviewed. Poolstatis does not infer it from client data.
+        {unavailable.reason}
       </p>
+      <p className="mx-auto mt-2 max-w-lg text-xs text-muted-foreground">{unavailable.next_action}</p>
     </div>
   );
 }
@@ -392,7 +407,7 @@ function webTrendSpec(
     source: { kind: 'metric', key: WEB_PAGE_VIEW_METRIC, query },
     trust: {
       status: 'trusted',
-      reason: 'The server accepted an active canonical browser metric and trusted finite route vocabulary.',
+      reason: 'The server accepted an active canonical browser metric for this exact project and environment.',
       blockers: [],
     },
     evidence: {

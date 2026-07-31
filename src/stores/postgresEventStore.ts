@@ -750,9 +750,14 @@ export class PostgresEventStore implements EventStore {
       const dimensionParams = [...params, dimension.property, dimension.missingValue];
       const propertyParam = dimensionParams.length - 1;
       const missingParam = dimensionParams.length;
+      let dimensionWhere = where;
+      if (dimension.allowedValues) {
+        dimensionParams.push(dimension.allowedValues);
+        dimensionWhere += ` AND properties->>$${propertyParam} = ANY($${dimensionParams.length}::text[])`;
+      }
       const rows = await this.pool.query(
         `SELECT COALESCE(properties->>$${propertyParam}, $${missingParam}) AS value, ${counts}
-         FROM events WHERE ${where}
+         FROM events WHERE ${dimensionWhere}
          GROUP BY 1 ORDER BY page_views DESC, value ASC LIMIT 51`,
         dimensionParams,
       );
