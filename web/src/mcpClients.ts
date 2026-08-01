@@ -41,6 +41,18 @@ export interface McpClientProfile {
   setupSteps: string[];
 }
 
+export type McpConfigFormat = 'claude-json' | 'codex-toml' | 'generic-stdio';
+
+export interface McpClientConfig {
+  format: McpConfigFormat;
+  label: string;
+  verifiedFormat: boolean;
+  code: string;
+  command: string;
+  args: string[];
+  env: Record<'POOLSTATIS_URL' | 'POOLSTATIS_TOKEN', string>;
+}
+
 export const MCP_CLIENTS: McpClientProfile[] = [
   {
     id: 'claude-code',
@@ -52,7 +64,7 @@ export const MCP_CLIENTS: McpClientProfile[] = [
     pasteTarget: 'Paste the stdio command, args, and env into your Claude Code MCP configuration.',
     setupSteps: [
       'Open the MCP/server settings for the Claude Code workspace that edits this product.',
-      'Add or merge the JSON below under a server named poolstatis.',
+      'Add or merge the verified JSON below under a server named poolstatis.',
       'Reload Claude Code, then ask the agent to call list_projects.',
     ],
   },
@@ -80,7 +92,7 @@ export const MCP_CLIENTS: McpClientProfile[] = [
     pasteTarget: 'Add a Poolstatis MCP server in Codex with the command, args, and env below.',
     setupSteps: [
       'Open Codex MCP settings for this workspace.',
-      'Create a poolstatis server and paste the command, args, and env values below.',
+      'Add the verified TOML below to the Codex config for this workspace.',
       'Reload the Codex thread, then ask it to list Poolstatis projects.',
     ],
   },
@@ -93,7 +105,7 @@ export const MCP_CLIENTS: McpClientProfile[] = [
     pasteTarget: 'Add Poolstatis in Cursor MCP settings with the command, args, and env below.',
     setupSteps: [
       'Open Cursor settings and go to the MCP/server section.',
-      'Add a poolstatis server using the JSON or the command/env fields below.',
+      'Add a poolstatis stdio server using the command, args, and env fields below.',
       'Reload the window or restart the agent, then verify list_projects works.',
     ],
   },
@@ -132,7 +144,7 @@ export const MCP_CLIENTS: McpClientProfile[] = [
     pasteTarget: 'Use these Poolstatis command, args, and env values in your VS Code MCP configuration.',
     setupSteps: [
       'Open the MCP configuration used by your VS Code agent extension.',
-      'Add a poolstatis stdio server with the JSON below.',
+      'Add a poolstatis stdio server with the command, args, and env fields below.',
       'Reload VS Code, then ask the agent to call list_metrics.',
     ],
   },
@@ -171,7 +183,7 @@ export const MCP_CLIENTS: McpClientProfile[] = [
     pasteTarget: 'Add Poolstatis to Continue with the stdio command, args, and env below.',
     setupSteps: [
       'Open Continue configuration for the workspace.',
-      'Add the poolstatis MCP server using the JSON or command/env fields below.',
+      'Add the poolstatis MCP server using the command, args, and env fields below.',
       'Reload Continue, then ask it to query a trend or list metrics.',
     ],
   },
@@ -233,7 +245,7 @@ export function mcpClientById(id: McpClientId): McpClientProfile {
   return MCP_CLIENTS.find((client) => client.id === id) ?? MCP_CLIENTS[0]!;
 }
 
-export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.5.0';
+export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.6.0';
 
 function parseRunnerArgs(
   raw: string | undefined,
@@ -300,4 +312,74 @@ export function mcpServerConfig(command: string, args: string[], url: string, to
       },
     },
   }, null, 2);
+}
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function codexServerConfig(command: string, args: string[], url: string, token: string): string {
+  return [
+    '[mcp_servers.poolstatis]',
+    `command = ${tomlString(command)}`,
+    `args = [${args.map(tomlString).join(', ')}]`,
+    '',
+    '[mcp_servers.poolstatis.env]',
+    `POOLSTATIS_URL = ${tomlString(url)}`,
+    `POOLSTATIS_TOKEN = ${tomlString(token)}`,
+  ].join('\n');
+}
+
+function genericStdioFields(command: string, args: string[], url: string, token: string): string {
+  return [
+    'Server name: poolstatis',
+    'Transport: stdio',
+    `Command: ${command}`,
+    'Args:',
+    ...args.map((arg) => `  - ${arg}`),
+    'Environment:',
+    `  POOLSTATIS_URL=${url}`,
+    `  POOLSTATIS_TOKEN=${token}`,
+  ].join('\n');
+}
+
+export function mcpClientConfig(
+  clientId: McpClientId,
+  command: string,
+  args: string[],
+  url: string,
+  token: string,
+): McpClientConfig {
+  const env = { POOLSTATIS_URL: url, POOLSTATIS_TOKEN: token };
+  if (clientId === 'claude-code' || clientId === 'claude-desktop') {
+    return {
+      format: 'claude-json',
+      label: 'Verified Claude MCP JSON',
+      verifiedFormat: true,
+      code: mcpServerConfig(command, args, url, token),
+      command,
+      args,
+      env,
+    };
+  }
+  if (clientId === 'codex') {
+    return {
+      format: 'codex-toml',
+      label: 'Verified Codex config.toml',
+      verifiedFormat: true,
+      code: codexServerConfig(command, args, url, token),
+      command,
+      args,
+      env,
+    };
+  }
+  return {
+    format: 'generic-stdio',
+    label: 'Generic stdio fields',
+    verifiedFormat: false,
+    code: genericStdioFields(command, args, url, token),
+    command,
+    args,
+    env,
+  };
 }

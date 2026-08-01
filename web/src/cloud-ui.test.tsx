@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Projects } from './screens/Projects';
 import { Profile } from './screens/Profile';
 import { Usage } from './screens/Usage';
+import { Onboarding } from './screens/Onboarding';
 import { useStore } from './store';
 
 vi.mock('./store', async (importOriginal) => ({ ...(await importOriginal<typeof import('./store')>()), useStore: vi.fn() }));
@@ -131,6 +132,46 @@ describe('cloud workspace project controls', () => {
     expect(screen.queryByRole('button', { name: 'Create workspace' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Workspace name')).not.toBeInTheDocument();
     expect(screen.getByText('The existing organization remains the tenant boundary.')).toBeInTheDocument();
+  });
+});
+
+describe('hosted intent onboarding', () => {
+  it('keeps project creation backwards compatible and generates a secret-free request', async () => {
+    const completeOnboarding = vi.fn().mockResolvedValue({
+      organization: { id: 'org-1', name: 'Acme' },
+      project: { slug: 'my-product', name: 'My product', timezone: 'UTC' },
+      tokens: { personal: 'pt_onetime_secret', ingest_prod: 'pk_onetime_secret' },
+      mcp: {
+        command: 'pnpm',
+        args: ['--silent', 'dlx', '@poolstatis/mcp@0.5.0'],
+        package_status: 'published',
+        note: 'Registry package verified.',
+        env: { POOLSTATIS_URL: 'https://api.poolstatis.test', POOLSTATIS_TOKEN: 'pt_onetime_secret' },
+      },
+    });
+    mockedStore.mockReturnValue({
+      account: { organization: { name: 'Acme' } },
+      client: { completeOnboarding },
+      refreshProjects: vi.fn(),
+      setProject: vi.fn(),
+    } as never);
+
+    render(<MemoryRouter><Onboarding /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: /Measure a release/ }));
+    fireEvent.change(screen.getByLabelText('Product-specific outcome · optional'), { target: { value: 'More teams publish successfully' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create first project' }));
+
+    await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith({
+      workspace_name: 'Acme',
+      project_name: 'My product',
+      project_slug: 'my-product',
+    }));
+    const request = await screen.findByTestId('hosted-agent-request');
+    expect(within(request).getByText(/project "my-product" in environment "prod"/)).toBeInTheDocument();
+    expect(request).toHaveTextContent('Product outcome: More teams publish successfully');
+    expect(request).not.toHaveTextContent('pt_onetime_secret');
+    expect(request).not.toHaveTextContent('pk_onetime_secret');
+    expect(screen.getByText('pt_onetime_secret')).toBeInTheDocument();
   });
 });
 

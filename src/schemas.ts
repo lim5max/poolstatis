@@ -375,6 +375,7 @@ export const featureFlagSchema = z.object({
   purpose: semanticText,
   variants: z.array(featureFlagVariantSchema).min(1).max(10),
   status: z.enum(['draft', 'active']).default('draft'),
+  env: z.string().trim().min(1).nullable().optional(),
 }).superRefine((flag, ctx) => validateVariants(flag.variants, ctx));
 
 export type CreateFeatureFlagInput = z.infer<typeof featureFlagSchema>;
@@ -503,6 +504,8 @@ export const createExperimentSchema = z.object({
   flag_key: keySchema,
   primary_metric_key: keySchema,
   secondary_metric_keys: experimentMetricKeysSchema,
+  env: z.string().trim().min(1).nullable().optional(),
+  control_variant_key: keySchema.nullable().optional(),
 });
 
 export type CreateExperimentInput = z.infer<typeof createExperimentSchema>;
@@ -516,12 +519,41 @@ export const updateExperimentSchema = z.object({
 
 export type UpdateExperimentInput = z.infer<typeof updateExperimentSchema>;
 
+export const prepareExperimentSchema = z.object({
+  env: z.string().trim().min(1),
+  control_variant_key: keySchema,
+  flag: z.object({
+    key: keySchema,
+    name: z.string().trim().min(1),
+    purpose: semanticText,
+    variants: z.array(featureFlagVariantSchema).min(1).max(10),
+  }).superRefine((flag, ctx) => validateVariants(flag.variants, ctx)),
+  experiment: createExperimentSchema.omit({ flag_key: true, env: true, control_variant_key: true }),
+});
+
+export type PrepareExperimentInput = z.infer<typeof prepareExperimentSchema>;
+
 export const concludeExperimentSchema = z.object({
   decision: z.object({
     outcome: z.enum(['ship', 'iterate', 'stop', 'inconclusive']),
     rationale: semanticText,
   }).optional(),
 });
+
+export const applyExperimentDecisionSchema = z.object({
+  decision: concludeExperimentSchema.shape.decision.unwrap(),
+  ship_variant_key: keySchema.optional(),
+}).superRefine((input, ctx) => {
+  if (input.ship_variant_key && input.decision.outcome !== 'ship') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ship_variant_key'],
+      message: 'ship_variant_key is allowed only when decision.outcome is ship',
+    });
+  }
+});
+
+export type ApplyExperimentDecisionInput = z.infer<typeof applyExperimentDecisionSchema>;
 
 // ===== Metric registry =====
 

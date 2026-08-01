@@ -44,7 +44,7 @@ const proof = {
     { key: 'first_query_produced', complete: true, evidence: { query_run_id: 'q1', source: 'native', created_at: '2026-07-26T18:35:00.000Z' }, blocker: null, next_action: null },
     { key: 'first_decision_saved', complete: false, evidence: {}, blocker: 'No decision saved.', next_action: 'Save a decision.' },
   ],
-  next_blocker: null,
+  next_blocker: { key: 'metrics_activated', complete: false, evidence: {}, blocker: 'No active metric has verified source evidence.', next_action: 'Review and activate a metric.' },
   final_result: null,
 } as const;
 
@@ -163,41 +163,52 @@ describe('server-verified setup flow', () => {
     mockedStore.mockReturnValue(baseStore());
   });
 
-  it('shows concise proof statuses with timestamps from persisted server evidence', async () => {
+  it('shows a compact count, one next action, and all eight checks on demand', async () => {
     renderSetup();
     expect(await screen.findByText('Project created')).toBeInTheDocument();
-    expect(screen.getByText('Ingest key created')).toBeInTheDocument();
-    expect(screen.getByText('First accepted event')).toBeInTheDocument();
-    expect(screen.getByText('First query completed')).toBeInTheDocument();
-    expect(screen.getByText('MCP request last recorded')).toBeInTheDocument();
-    expect(screen.getAllByText(/Codex/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('of 8')).toBeInTheDocument();
+    expect(screen.getByText('Data source ready')).toBeInTheDocument();
+    expect(screen.getByText('First product observation')).toBeInTheDocument();
+    expect(screen.getByText('First query produced')).toBeInTheDocument();
+    expect(screen.getByText('Last MCP-marked use')).toBeInTheDocument();
+    expect(screen.getAllByText('Review and activate a metric.')).toHaveLength(1);
     expect(screen.queryByText('MCP connected')).not.toBeInTheDocument();
-    expect(screen.getAllByRole('listitem')).toHaveLength(5);
+    expect(screen.queryByRole('list', { name: 'All setup checks' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^View all 8 checks/ }));
+    const allChecks = screen.getByRole('list', { name: 'All setup checks' });
+    expect(within(allChecks).getAllByRole('listitem')).toHaveLength(8);
+    expect(within(allChecks).getByText(/Codex/i)).toBeInTheDocument();
   });
 
   it('shows client logos in one chooser and reuses the selected agent below', async () => {
     renderSetup();
-    await screen.findByText('MCP request last recorded');
+    await screen.findByText('Last MCP-marked use');
     const chooser = screen.getByRole('button', { name: 'Coding agent: Claude Code' });
     expect(within(chooser).getByLabelText('Claude Code logo')).toHaveAttribute('data-brand-logo', 'claude-code');
     expect(screen.getByRole('button', { name: 'Copy Claude Code install' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy Codex install' })).not.toBeInTheDocument();
   });
 
-  it('presents the real client path as connect, verify, send event, then first query', async () => {
+  it('leads with four intents and keeps manual controls behind recovery disclosure', async () => {
     renderSetup();
-    await screen.findByText('MCP request last recorded');
-    expect(screen.getByRole('heading', { name: '1. Connect MCP' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '2. Verify MCP' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '3. Send your first event' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '4. Run your first query' })).toBeInTheDocument();
+    await screen.findByText('Last MCP-marked use');
+    for (const job of ['Understand activation', 'Find funnel drop-off', 'Add web analytics', 'Measure a release']) {
+      expect(screen.getByRole('button', { name: new RegExp(job) })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('heading', { name: 'Prerequisite 1 · Agent connection' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Prerequisite 2 · Poolstatis skills' })).toBeInTheDocument();
+    expect(screen.getByText('Give this to your agent')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy request' })).toBeInTheDocument();
+    expect(screen.queryByText(/Before editing:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Activate a metric before sending')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show manual setup and recovery' }));
     expect(screen.getByText('Activate a metric before sending')).toBeInTheDocument();
-    expect(screen.getByText(/last-use evidence, not a heartbeat/i)).toBeInTheDocument();
+    expect(screen.getByText(/not a heartbeat or transport attestation/i)).toBeInTheDocument();
   });
 
   it('copies the selected agent three-skill install command without credentials or an unpublished SDK', async () => {
     renderSetup();
-    await screen.findByText('Install Poolstatis skills');
+    await screen.findByRole('heading', { name: 'Prerequisite 2 · Poolstatis skills' });
     expect(screen.getByText('poolstatis-instrument')).toBeInTheDocument();
     expect(screen.getByText('poolstatis-analyze')).toBeInTheDocument();
     expect(screen.getByText('poolstatis-maintain')).toBeInTheDocument();
@@ -217,7 +228,8 @@ describe('server-verified setup flow', () => {
 
   it('offers focused first-query prompts and copies the selected variant', async () => {
     renderSetup();
-    await screen.findByText('MCP request last recorded');
+    await screen.findByText('Last MCP-marked use');
+    fireEvent.click(screen.getByRole('button', { name: 'Show manual setup and recovery' }));
     expect(screen.getByRole('button', { name: 'Quick trend' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Compare periods' }));
     expect(screen.getByRole('button', { name: 'Compare periods' })).toHaveAttribute('aria-pressed', 'true');
@@ -259,19 +271,35 @@ describe('server-verified setup flow', () => {
 
   it('treats copied config as local progress, not a verified connection', async () => {
     renderSetup();
-    await screen.findByText('MCP request last recorded');
+    await screen.findByText('Last MCP-marked use');
     fireEvent.click(screen.getByRole('button', { name: 'Copy MCP config' }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
     const copied = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
     expect(copied).toContain('<replace-with-pt-or-sk>');
     expect(copied).not.toContain('sk_test');
-    await waitFor(() => expect(screen.getByText('Config copied. This action does not verify MCP use.')).toBeInTheDocument());
-    expect(screen.getByText('MCP request last recorded')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Connection values copied. This action does not verify MCP use.')).toBeInTheDocument());
+    expect(screen.getByText('Last MCP-marked use')).toBeInTheDocument();
+  });
+
+  it('generates one scoped intent request without session or MCP credentials', async () => {
+    renderSetup();
+    await screen.findByText('Last MCP-marked use');
+    fireEvent.click(screen.getByRole('button', { name: /Find funnel drop-off/ }));
+    fireEvent.change(screen.getByLabelText('Product-specific outcome · optional'), { target: { value: 'More teams finish checkout' } });
+    const requestPanel = screen.getByText('Give this to your agent').closest('[data-slot="card"]');
+    expect(requestPanel).not.toBeNull();
+    fireEvent.click(within(requestPanel as HTMLElement).getByRole('button', { name: 'Copy request' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
+    const copied = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
+    expect(copied).toContain('project "alpha" in environment "prod"');
+    expect(copied).toContain('Product outcome: More teams finish checkout');
+    expect(copied).not.toContain('sk_test');
+    expect(copied).not.toContain('<replace-with-pt-or-sk>');
   });
 
   it('keeps reference material and destructive actions behind progressive disclosure', async () => {
     renderSetup();
-    await screen.findByText('Connect Poolstatis in four steps');
+    await screen.findByText('Add analytics with your agent');
     expect(screen.getByRole('button', { name: 'Show advanced setup' })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText('MCP tool reference')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced setup' }));
@@ -282,7 +310,7 @@ describe('server-verified setup flow', () => {
 
   it('advertises only tools present in the pinned public runner contract', async () => {
     renderSetup();
-    await screen.findByText('Connect Poolstatis in four steps');
+    await screen.findByText('Add analytics with your agent');
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced setup' }));
     for (const tool of [
       'get_web_overview',
@@ -315,7 +343,7 @@ describe('server-verified setup flow', () => {
   it('reveals a manual fallback when clipboard access is blocked', async () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('blocked')) } });
     renderSetup();
-    await screen.findByText('MCP request last recorded');
+    await screen.findByText('Last MCP-marked use');
     fireEvent.click(screen.getByRole('button', { name: 'Copy MCP config' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Copy blocked');
     expect(screen.getByRole('button', { name: 'Hide config and client steps' })).toBeInTheDocument();
@@ -340,7 +368,8 @@ describe('server-verified setup flow', () => {
     store.client.onboardingStatus = vi.fn().mockResolvedValue(posthogProof);
     mockedStore.mockReturnValue(store);
     renderSetup();
-    expect(await screen.findByText('External observation verified')).toBeInTheDocument();
+    await screen.findByText('First product observation');
+    fireEvent.click(screen.getByRole('button', { name: /^View all 8 checks/ }));
     expect(screen.getByText(/PostHog query/)).toBeInTheDocument();
     expect(screen.queryByText(/0 accepted/)).not.toBeInTheDocument();
   });

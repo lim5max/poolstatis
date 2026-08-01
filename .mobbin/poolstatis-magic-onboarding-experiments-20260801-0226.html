@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Poolstatis — magic onboarding & experiments UX</title>
+  <style>
+    :root {
+      --ink: #171713;
+      --muted: #6f7168;
+      --line: #dedfd8;
+      --paper: #f7f7f2;
+      --card: #ffffff;
+      --lime: #caff5a;
+      --lime-soft: #efffd0;
+      --blue: #e8f2ff;
+      --amber: #fff2cd;
+      --radius: 22px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: inherit; }
+    .shell { width: min(1440px, calc(100% - 40px)); margin: 0 auto; }
+    .hero { padding: 64px 0 42px; border-bottom: 1px solid var(--line); }
+    .kicker { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
+    .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--lime); box-shadow: inset 0 0 0 1px #94bd34; }
+    h1, h2, h3 { margin: 0; line-height: 1.05; letter-spacing: -0.035em; }
+    h1 { max-width: 980px; margin-top: 20px; font: 600 clamp(44px, 7vw, 92px)/.96 Georgia, serif; }
+    .lede { max-width: 820px; margin: 26px 0 0; font-size: 20px; color: #52544e; }
+    .chips { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 28px; }
+    .chip { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); font-size: 12px; }
+    .chip.done { background: var(--lime-soft); border-color: #b8db6c; }
+    .chip.next { background: var(--blue); border-color: #cbdcf2; }
+    section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+    .section-head { display: grid; grid-template-columns: minmax(220px, .45fr) minmax(300px, 1fr); gap: 32px; align-items: end; margin-bottom: 28px; }
+    h2 { font: 600 clamp(30px, 4vw, 52px)/1 Georgia, serif; }
+    .section-note { max-width: 720px; margin: 0; color: var(--muted); }
+    .principles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .principle { min-height: 180px; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+    .principle b { display: block; font-size: 38px; font-weight: 500; letter-spacing: -0.05em; }
+    .principle h3 { margin-top: 30px; font-size: 17px; letter-spacing: -0.01em; }
+    .principle p { margin: 9px 0 0; color: var(--muted); font-size: 13px; }
+    .screens { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .screen { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+    .screen-media { display: block; aspect-ratio: 16 / 10; overflow: hidden; background: #eee; }
+    .screen img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .25s ease; }
+    .screen:hover img { transform: scale(1.015); }
+    .screen-copy { display: grid; grid-template-columns: 130px 1fr; gap: 16px; padding: 18px; border-top: 1px solid var(--line); }
+    .app { font-weight: 700; }
+    .observation { color: var(--muted); font-size: 13px; }
+    .observation b { color: var(--ink); }
+    .wide { grid-column: 1 / -1; }
+    .wide .screen-media { aspect-ratio: 2.2 / 1; }
+    .decision-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 18px; }
+    .flow { padding: 26px; border: 1px solid var(--line); border-radius: var(--radius); background: #12130f; color: #f7f7f2; }
+    .flow-head { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding-bottom: 22px; border-bottom: 1px solid #34362e; }
+    .flow-head span { color: #a8ab9f; font-size: 12px; }
+    .steps { display: grid; gap: 10px; margin-top: 20px; }
+    .step { display: grid; grid-template-columns: 34px 1fr auto; gap: 13px; align-items: center; padding: 14px; border: 1px solid #34362e; border-radius: 14px; background: #191b16; }
+    .step .n { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--lime); color: #171713; font-weight: 800; }
+    .step p { margin: 2px 0 0; color: #a8ab9f; font-size: 12px; }
+    .status { padding: 5px 8px; border-radius: 999px; background: #2c3026; color: #cfd3c5; font-size: 11px; white-space: nowrap; }
+    .status.hot { background: var(--lime); color: #171713; }
+    .wire { padding: 26px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+    .wire h3 { font-size: 18px; letter-spacing: -0.015em; }
+    .wire p { color: var(--muted); }
+    .wire-card { margin-top: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; }
+    .wire-card.active { border-color: #9cc641; box-shadow: inset 3px 0 0 var(--lime); }
+    .wire-card small { color: var(--muted); }
+    .button { display: inline-block; margin-top: 12px; padding: 9px 13px; border-radius: 10px; background: var(--ink); color: white; font-size: 12px; }
+    .button.lime { background: var(--lime); color: var(--ink); }
+    .matrix { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+    .row { display: grid; grid-template-columns: 170px 1fr 1fr; gap: 0; border-top: 1px solid var(--line); }
+    .row:first-child { border-top: 0; background: #efefe9; font-weight: 700; }
+    .row > div { padding: 16px 18px; border-left: 1px solid var(--line); }
+    .row > div:first-child { border-left: 0; }
+    .yes { color: #4a7000; font-weight: 700; }
+    .roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .road { padding: 22px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+    .road .tag { display: inline-block; padding: 4px 8px; border-radius: 999px; background: var(--amber); font-size: 11px; }
+    .road h3 { margin-top: 24px; font-size: 20px; letter-spacing: -0.02em; }
+    .road p { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
+    footer { padding: 30px 0 70px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 900px) {
+      .principles, .roadmap { grid-template-columns: repeat(2, 1fr); }
+      .section-head, .decision-grid { grid-template-columns: 1fr; }
+      .screen-copy { grid-template-columns: 1fr; gap: 6px; }
+      .row { grid-template-columns: 120px 1fr 1fr; font-size: 12px; }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 24px, 1440px); }
+      .hero { padding-top: 38px; }
+      .screens, .principles, .roadmap { grid-template-columns: 1fr; }
+      .wide { grid-column: auto; }
+      .wide .screen-media, .screen-media { aspect-ratio: 4 / 3; }
+      .matrix { overflow-x: auto; }
+      .row { min-width: 650px; }
+      .step { grid-template-columns: 34px 1fr; }
+      .step .status { grid-column: 2; justify-self: start; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="shell">
+      <div class="kicker"><span class="dot"></span> Poolstatis · UX research + implemented direction · 1 августа 2026</div>
+      <h1>Аналитика должна начинаться с вопроса, а не с панели настроек.</h1>
+      <p class="lede">Референсы Mobbin подтверждают один устойчивый паттерн: лучшие onboarding-флоу дают один следующий шаг, скрывают второстепенное и постоянно показывают доказательство прогресса. Для Poolstatis это можно усилить агентом: выбрать задачу → скопировать один secret-free запрос → получить серверное доказательство.</p>
+      <div class="chips">
+        <span class="chip done">Реализовано: intent-first Setup</span>
+        <span class="chip done">Реализовано: safe Experiments</span>
+        <span class="chip done">Реализовано: env isolation</span>
+        <span class="chip next">Следом: zero-copy agent handoff</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="shell">
+        <div class="section-head">
+          <h2>Четыре правила «магии»</h2>
+          <p class="section-note">Это не попытка спрятать сложность. Сложность остаётся в платформе и в доказательствах, но пользователь видит её только в момент, когда она нужна для безопасного решения.</p>
+        </div>
+        <div class="principles">
+          <article class="principle"><b>01</b><h3>Начинать с намерения</h3><p>«Понять активацию» понятнее, чем «создать metric + funnel + query».</p></article>
+          <article class="principle"><b>02</b><h3>Один главный action</h3><p>Один запрос агенту на первом экране; config, curl и справочник — ниже раскрытия.</p></article>
+          <article class="principle"><b>03</b><h3>Прогресс = server proof</h3><p>Не «вы скопировали config», а «событие принято, metric активна, query выполнен».</p></article>
+          <article class="principle"><b>04</b><h3>Опасное — только явно</h3><p>Запуск, env и rollout проходят readiness и человеческое подтверждение.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="section-head">
+          <h2>Onboarding: что делают сильные продукты</h2>
+          <p class="section-note">Поиск был широким: setup аналитики, подключение SDK или источника и guided progress. Ниже — только то, что действительно видно на найденных экранах.</p>
+        </div>
+        <div class="screens">
+          <article class="screen">
+            <a class="screen-media" href="https://mobbin.com/screens/212f4d12-a18f-4638-bc57-f1aa20521294" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/VXRUF15l" alt="June getting started checklist"></a>
+            <div class="screen-copy"><div class="app">June</div><div class="observation"><b>Один раскрытый шаг.</b> Общий checklist виден целиком, но детали показаны только для текущего действия; рядом — docs и demo.</div></div>
+          </article>
+          <article class="screen">
+            <a class="screen-media" href="https://mobbin.com/screens/cb0e6ab2-7942-4517-ad9a-2963ac25c104" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/xm7pxldl" alt="Mixpanel setup guide"></a>
+            <div class="screen-copy"><div class="app">Mixpanel</div><div class="observation"><b>Copy → verify.</b> В wizard одновременно видны стадия, SDK tabs, один snippet и одна кнопка Verify Connection.</div></div>
+          </article>
+          <article class="screen">
+            <a class="screen-media" href="https://mobbin.com/screens/9284c0a4-bf3e-4e4c-b168-af599bffe87b" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/OpewUrX7" alt="Vercel analytics setup"></a>
+            <div class="screen-copy"><div class="app">Vercel</div><div class="observation"><b>Три действия, плюс agent path.</b> Install package, add component, deploy & visit; отдельный блок обещает автоматическую установку агентом.</div></div>
+          </article>
+          <article class="screen">
+            <a class="screen-media" href="https://mobbin.com/screens/ebe88ab5-e29d-4227-9f41-5ecc8bead282" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/wO1oVgm7" alt="Cloudflare web analytics setup"></a>
+            <div class="screen-copy"><div class="app">Cloudflare</div><div class="observation"><b>Одна форма на один этап.</b> Верхний tracker «hostname → installation → analytics», в текущем шаге только hostname и Done.</div></div>
+          </article>
+          <article class="screen wide">
+            <a class="screen-media" href="https://mobbin.com/screens/3ff91f13-2fdb-49a1-af0f-5848226c33f7" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/jNzlv7cP" alt="Google Analytics data collection progress"></a>
+            <div class="screen-copy"><div class="app">Google Analytics</div><div class="observation"><b>Постоянный этап и статус источника.</b> Пять стадий наверху, data collection в фокусе, один stream и явное «No data received» вместо ложного успеха.</div></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="section-head">
+          <h2>Как это переведено в Poolstatis</h2>
+          <p class="section-note">Ключевое отличие от обычного wizard: пользователь не обязан руками собирать taxonomy. Агент получает ограниченный запрос, но завершение определяется не его текстовым отчётом, а persisted server evidence.</p>
+        </div>
+        <div class="decision-grid">
+          <div class="flow">
+            <div class="flow-head"><strong>Новый Setup</strong><span>реализовано</span></div>
+            <div class="steps">
+              <div class="step"><div class="n">1</div><div><strong>Выбрать, что узнать</strong><p>Activation · funnel drop-off · web analytics · release impact.</p></div><span class="status hot">intent</span></div>
+              <div class="step"><div class="n">2</div><div><strong>Скопировать один запрос</strong><p>Project + env, без pt_/sk_; полный prompt скрыт по умолчанию.</p></div><span class="status hot">1 action</span></div>
+              <div class="step"><div class="n">3</div><div><strong>Следовать одному blocker</strong><p>8 server gates остаются доступными по раскрытию.</p></div><span class="status">proof</span></div>
+              <div class="step"><div class="n">4</div><div><strong>Получить первый ответ</strong><p>Только из выполненного typed query и связанного insight/decision.</p></div><span class="status">evidence</span></div>
+            </div>
+          </div>
+          <div class="wire">
+            <h3>Первый экран теперь отвечает на три вопроса</h3>
+            <p>Что я хочу узнать? Что дать агенту? Что подтверждено сервером?</p>
+            <div class="wire-card active"><small>Выбранная задача</small><br><strong>Understand activation</strong></div>
+            <div class="wire-card"><small>Один secret-free handoff</small><br><strong>Give this to your agent</strong><br><span class="button lime">Copy request</span></div>
+            <div class="wire-card"><small>Следующий blocker</small><br><strong>Call get_onboarding_status</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="section-head">
+          <h2>Experiments: полезные и опасные паттерны</h2>
+          <p class="section-note">У конкурентов хорошо видны два полюса: безопасный stepper с блокировками и «сырой» экран инфраструктуры. Poolstatis берёт safety-паттерны, но не делает feature flag формой по умолчанию.</p>
+        </div>
+        <div class="screens">
+          <article class="screen">
+            <a class="screen-media" href="https://mobbin.com/screens/b99f7448-89af-443d-aaeb-ceb42f33f205" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/I625q2Bv" alt="Amplitude experiment variants setup"></a>
+            <div class="screen-copy"><div class="app">Amplitude</div><div class="observation"><b>Сильный safety stepper.</b> Variants, Goals, Pages, Targeting и blocking warning. Минус — много стадий до первого результата.</div></div>
+          </article>
+          <article class="screen">
+            <a class="screen-media" href="https://mobbin.com/screens/0180ce57-ec25-4feb-a521-feee3c8b7191" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/cullTcOl" alt="Vercel feature flag variants and environment rules"></a>
+            <div class="screen-copy"><div class="app">Vercel Flags</div><div class="observation"><b>Variants отдельно от env rules.</b> Production и Preview видны как самостоятельные правила — хороший ориентир для явного scope.</div></div>
+          </article>
+          <article class="screen">
+            <a class="screen-media" href="https://mobbin.com/screens/0926a2cd-c47f-4a4d-8eeb-d594b10ccbe2" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/rphlq62n" alt="Churnkey A/B tests list"></a>
+            <div class="screen-copy"><div class="app">Churnkey</div><div class="observation"><b>Decision-first список.</b> Active и Finished различаются сразу; для активного доступны Results, Finish и Pause без входа в таблицу настроек.</div></div>
+          </article>
+          <article class="screen">
+            <a class="screen-media" href="https://mobbin.com/screens/0c37071a-8553-4150-afeb-6138d1c72126" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/5N2va3E7" alt="GitLab new feature flag form"></a>
+            <div class="screen-copy"><div class="app">GitLab</div><div class="observation"><b>Анти-паттерн для нашего default.</b> Name, description, strategy, type и environments до понимания пользовательской задачи.</div></div>
+          </article>
+          <article class="screen wide">
+            <a class="screen-media" href="https://mobbin.com/screens/12f141bb-d3ff-4d6f-b6cb-0df4cc845489" target="_blank" rel="noreferrer"><img src="https://mobbin.com/api/mcp/short/2pDEblIU" alt="Braintrust feature flags settings"></a>
+            <div class="screen-copy"><div class="app">Braintrust</div><div class="observation"><b>Operator settings, не продуктовый workflow.</b> Длинный список toggle подходит внутренней админке, но плохо объясняет цель, rollout и доказательство результата.</div></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="section-head">
+          <h2>Новый контракт экрана Experiments</h2>
+          <p class="section-note">Пользователь выбирает работу, а не primitive. Под капотом остаются flag, experiment, exposure и metric snapshots, но UI раскрывает их в безопасной последовательности.</p>
+        </div>
+        <div class="matrix">
+          <div class="row"><div>Стадия</div><div>Раньше</div><div>Теперь</div></div>
+          <div class="row"><div>Старт</div><div>Таблицы flags/experiments и несколько форм</div><div class="yes">Safe rollout · A/B experiment · Remote config</div></div>
+          <div class="row"><div>Создание</div><div>Flag и experiment можно рассинхронизировать</div><div class="yes">Atomic prepare создаёт два draft или ничего</div></div>
+          <div class="row"><div>Запуск</div><div>Кнопка Start без полной картины readiness</div><div class="yes">Server checks + deploy/identity confirmations + atomic launch</div></div>
+          <div class="row"><div>Окружение</div><div>Риск увидеть или изменить другой env</div><div class="yes">Текущий env отфильтрован; legacy all-env read-only</div></div>
+          <div class="row"><div>Результат</div><div>Live definitions могли изменить прошлый смысл</div><div class="yes">Frozen flag + metric snapshots и integrity badge</div></div>
+          <div class="row"><div>Решение</div><div>Conclude и rollout воспринимаются как одно действие</div><div class="yes">Decision отдельно; 100% rollout только по явному выбору winner</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="section-head">
+          <h2>Что даст ещё больше «Lovable-эффекта»</h2>
+          <p class="section-note">Это следующая очередь, не выданная за уже готовую функциональность.</p>
+        </div>
+        <div class="roadmap">
+          <article class="road"><span class="tag">P1 · next</span><h3>Zero-copy connect</h3><p>Deep link или локальный helper, который добавляет MCP server и skills в поддерживаемые агенты с preview и подтверждением — без ручной вставки JSON/TOML.</p></article>
+          <article class="road"><span class="tag">P1 · next</span><h3>Repo-aware proposal</h3><p>Агент сначала показывает найденные capture paths и 2–4 proposed definitions; owner подтверждает смысл одним review, после чего агент внедряет и проверяет.</p></article>
+          <article class="road"><span class="tag">P1 · next</span><h3>Live magic receipt</h3><p>Один compact receipt: файлы изменены, события приняты, coverage, warnings, query grain/window, первый результат и следующий blocker.</p></article>
+          <article class="road"><span class="tag">P2</span><h3>Experiment templates</h3><p>Signup copy, onboarding step, pricing CTA и guarded rollout как готовые intent-шаблоны с control, metric и exposure contract.</p></article>
+          <article class="road"><span class="tag">P2</span><h3>Safe auto-rollout</h3><p>После решения — отдельный plan с canary 5% → 25% → 100%, health gates и остановкой; не автоматизировать без явной политики владельца.</p></article>
+          <article class="road"><span class="tag">P2</span><h3>Data contract diff</h3><p>Перед merge агент показывает семантический diff registry: новые события, properties, purpose, identity и privacy; UI принимает только ограниченный change set.</p></article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">Mobbin links ведут на исходные curated screens. Наблюдения основаны на видимых элементах найденных экранов; продуктовые решения Poolstatis отмечены отдельно как реализованные или следующие.</div>
+  </footer>
+</body>
+</html>

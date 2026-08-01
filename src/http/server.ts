@@ -32,7 +32,8 @@ import {
   archiveFeatureFlag, createFeatureFlag, evaluateFeatureFlag, listFeatureFlags, updateFeatureFlag,
 } from '../services/flags.js';
 import {
-  concludeExperiment, createExperiment, getExperimentResults, listExperiments, startExperiment, updateExperiment,
+  applyExperimentDecision, concludeExperiment, createExperiment, getExperimentReadiness, getExperimentResults,
+  launchExperiment, listExperiments, prepareExperiment, startExperiment, updateExperiment,
 } from '../services/experiments.js';
 import {
   archiveExperienceSurface, captureExperienceEvents, createExperienceSnapshot, createExperienceSurface,
@@ -72,7 +73,7 @@ import {
   RateLimitExceeded, TenantRateLimiter, type TenantRateLimitOptions,
 } from '../services/rateLimiter.js';
 import {
-  deprecateMetricSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, rejectDecisionActionSchema, reviewDecisionSchema,
+  deprecateMetricSchema, applyExperimentDecisionSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, prepareExperimentSchema, rejectDecisionActionSchema, reviewDecisionSchema,
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
@@ -968,6 +969,13 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     return reply.status(201).send(await createExperiment(ctx.pool, project.id, input));
   });
 
+  app.post('/api/v1/projects/:slug/experiments/prepare', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const input = prepareExperimentSchema.parse(req.body);
+    return reply.status(201).send(await prepareExperiment(ctx.pool, project.id, input));
+  });
+
   app.get('/api/v1/projects/:slug/experiments', async (req) => {
     platform(req);
     const project = await resolveProject(req);
@@ -979,6 +987,21 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await resolveProject(req);
     const { key } = req.params as { key: string };
     return updateExperiment(ctx.pool, project.id, key, updateExperimentSchema.parse(req.body));
+  });
+
+  app.get('/api/v1/projects/:slug/experiments/:key/readiness', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const { env } = req.query as { env?: string };
+    return getExperimentReadiness(ctx.pool, project.id, key, env);
+  });
+
+  app.post('/api/v1/projects/:slug/experiments/:key/launch', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return launchExperiment(ctx.pool, project.id, key);
   });
 
   app.post('/api/v1/projects/:slug/experiments/:key/start', async (req) => {
@@ -993,6 +1016,13 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     const project = await resolveProject(req);
     const { key } = req.params as { key: string };
     return concludeExperiment(ctx.pool, project.id, key, concludeExperimentSchema.parse(req.body).decision ?? null);
+  });
+
+  app.post('/api/v1/projects/:slug/experiments/:key/apply-decision', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return applyExperimentDecision(ctx.pool, project.id, key, applyExperimentDecisionSchema.parse(req.body));
   });
 
   app.get('/api/v1/projects/:slug/experiments/:key/results', async (req) => {

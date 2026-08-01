@@ -1,7 +1,8 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Check, Copy, KeyRound, Loader2, Settings } from '@/components/icons';
 import { useStore } from '../store';
-import { MCP_CLIENTS, mcpClientById, mcpServerConfig, type McpClientId } from '../mcpClients';
+import { MCP_CLIENTS, mcpClientById, mcpClientConfig, type McpClientId } from '../mcpClients';
+import { ANALYTICS_JOBS, buildAnalyticsAgentRequest, type AnalyticsJobId } from '../onboardingIntent';
 import type { HostedOnboardingResult } from '../api/types';
 import { Panel, ErrorNote } from '../components/ui';
 import { Button } from '@/components/ui/button';
@@ -24,15 +25,20 @@ export function Onboarding() {
   const [projectName, setProjectName] = useState('My product');
   const [projectSlug, setProjectSlug] = useState('my-product');
   const [clientId, setClientId] = useState<McpClientId>('claude-code');
+  const [jobId, setJobId] = useState<AnalyticsJobId>('activation');
+  const [outcome, setOutcome] = useState('');
   const [result, setResult] = useState<HostedOnboardingResult | null>(null);
   const [savedSecrets, setSavedSecrets] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const selectedClient = mcpClientById(clientId);
-  const mcpConfig = useMemo(() => result
-    ? mcpServerConfig(result.mcp.command, result.mcp.args, result.mcp.env.POOLSTATIS_URL, result.mcp.env.POOLSTATIS_TOKEN)
-    : '', [result]);
+  const mcpConnection = useMemo(() => result
+    ? mcpClientConfig(clientId, result.mcp.command, result.mcp.args, result.mcp.env.POOLSTATIS_URL, result.mcp.env.POOLSTATIS_TOKEN)
+    : null, [clientId, result]);
+  const agentRequest = useMemo(() => result
+    ? buildAnalyticsAgentRequest({ jobId, outcome, project: result.project.slug, env: 'prod' })
+    : '', [jobId, outcome, result]);
 
   const submit = async () => {
     if (!client) return;
@@ -61,6 +67,30 @@ export function Onboarding() {
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+      <div className="lg:col-span-2">
+        <Panel title="Start with a product question" right={<Badge variant="outline">one agent request</Badge>}>
+          <p className="mb-4 max-w-2xl text-sm text-muted-foreground">Choose the first answer you want. Poolstatis will keep this intent while the project and agent connection are created.</p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4" role="group" aria-label="Analytics job">
+            {ANALYTICS_JOBS.map((job) => (
+              <button
+                key={job.id}
+                type="button"
+                aria-pressed={jobId === job.id}
+                onClick={() => setJobId(job.id)}
+                className={`rounded-md border p-3 text-left outline-none transition-colors hover:border-foreground/25 focus-visible:ring-2 focus-visible:ring-ring/50 ${jobId === job.id ? 'border-primary bg-primary/5' : 'bg-muted/15'}`}
+              >
+                <span className="block text-sm font-medium">{job.label}</span>
+                <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{job.description}</span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 max-w-2xl space-y-1.5">
+            <Label htmlFor="onboarding-outcome" className="text-xs font-medium text-muted-foreground">Product-specific outcome · optional</Label>
+            <Input id="onboarding-outcome" value={outcome} maxLength={240} onChange={(event) => setOutcome(event.target.value)} placeholder="For example: more teams invite a second member" />
+          </div>
+        </Panel>
+      </div>
+
       <Panel title="Create your first project">
         <div className="mb-5 grid gap-3 md:grid-cols-2">
           <Step icon={<KeyRound className="size-4" />} title="Project" body="Create the first data boundary." />
@@ -104,7 +134,7 @@ export function Onboarding() {
             </SelectContent>
           </Select>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            {selectedClient.description} Poolstatis uses the same stdio command, args, and env; paste location depends on the host.
+            {selectedClient.description} {mcpConnection?.verifiedFormat ? mcpConnection.label : 'Poolstatis will show portable command, args, and env fields for this host.'}
           </p>
         </div>
 
@@ -128,8 +158,8 @@ export function Onboarding() {
       </Panel>
 
       {result && (
-        <div className="lg:col-span-2">
-          <Panel title={<>{selectedClient.name} MCP config <Badge variant="outline" className="ml-2 font-mono">token shown once</Badge></>}>
+        <div className="space-y-4 lg:col-span-2">
+          <Panel title={<>{selectedClient.name} MCP connection <Badge variant="outline" className="ml-2 font-mono">token shown once</Badge></>}>
             <p className="mb-3.5 text-sm text-muted-foreground">{selectedClient.pasteTarget}</p>
             {result.mcp.package_status !== 'published' && (
               <div className="mb-3.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
@@ -137,7 +167,14 @@ export function Onboarding() {
               </div>
             )}
             <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
-              <CodeBlock code={mcpConfig} />
+              <div className="min-w-0">
+                <div className="mb-2 text-xs text-muted-foreground">
+                  {mcpConnection?.verifiedFormat
+                    ? `${mcpConnection.label}. The structure matches the current host documentation.`
+                    : 'Generic stdio fields. Enter them in the host without assuming a Claude JSON shape.'}
+                </div>
+                <CodeBlock code={mcpConnection?.code ?? ''} />
+              </div>
               <div className="space-y-3">
                 <TokenBox label="Personal MCP token" value={result.tokens.personal} />
                 <TokenBox label="Prod ingest key" value={result.tokens.ingest_prod} />
@@ -155,6 +192,11 @@ export function Onboarding() {
               </label>
               <Button onClick={finish} disabled={!savedSecrets}>Open project</Button>
             </div>
+          </Panel>
+
+          <Panel title="Your one agent request" right={<Badge variant="outline" className="font-mono">{result.project.slug} · prod</Badge>}>
+            <p className="mb-3.5 text-sm text-muted-foreground">Run this in the product repository after storing the one-time keys. The request is scoped to the project and contains no token value.</p>
+            <div data-testid="hosted-agent-request"><CodeBlock code={agentRequest} /></div>
           </Panel>
         </div>
       )}

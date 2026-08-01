@@ -5,7 +5,7 @@ Thin stdio MCP runner for a Poolstatis API instance.
 ```sh
 POOLSTATIS_URL=https://api.example.com \
 POOLSTATIS_TOKEN=pt_your_token \
-pnpm dlx @poolstatis/mcp@0.5.0
+pnpm dlx @poolstatis/mcp@0.6.0
 ```
 
 `POOLSTATIS_TOKEN` must be a `pt_` personal token or project-scoped `sk_` key.
@@ -19,7 +19,7 @@ MCP over stdio only; stdout is reserved for protocol messages.
 ## Browser analytics contract
 
 Read `poolstatis://standard/browser-analytics` before instrumenting or
-diagnosing browser traffic. In `0.5.0` the embedded standard matches the
+diagnosing browser traffic. In `0.6.0` the embedded standard matches the
 production SDK/Core contract:
 
 - `@poolstatis/sdk/browser` starts collection immediately when the host calls
