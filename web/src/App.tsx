@@ -90,6 +90,7 @@ const TITLES: Record<string, string> = {
   '/changes': 'Changes',
   '/decisions': 'Decisions',
   '/setup': 'Setup & MCP',
+  '/onboarding': 'Onboarding',
 };
 const titleFor = (path: string) => (
   path.startsWith('/data/person') || path.startsWith('/analyze/users/')
@@ -396,7 +397,19 @@ function Main() {
 }
 
 function Guarded({ children }: { children: ReactNode }) {
-  const { project, envReady, envError, retryEnvValidation } = useStore();
+  const {
+    account,
+    project,
+    projects,
+    tokenKind,
+    envReady,
+    envError,
+    retryEnvValidation,
+  } = useStore();
+  const canCreateFirstProject = tokenKind === 'user'
+    && projects.length === 0
+    && (account?.membership.role === 'owner' || account?.membership.role === 'admin');
+  if (!project && canCreateFirstProject) return <Navigate to="/onboarding" replace />;
   if (!project) return <div className="flex flex-col items-center gap-2 py-14 text-center text-muted-foreground"><div className="serif text-xl text-foreground/70">No project selected</div><div>Choose one from the project switcher.</div></div>;
   if (envError) {
     return (

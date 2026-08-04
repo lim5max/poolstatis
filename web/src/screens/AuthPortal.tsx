@@ -17,7 +17,34 @@ import authEvidenceInstrument from '@/assets/auth-evidence-instrument.jpg';
 const authOrigin = 'https://auth.poolstatis.xyz';
 const customerAppUrl = 'https://app.poolstatis.xyz/';
 const neutralFailure = 'The request could not be completed. Check the details and try again.';
-export const verificationContinueUrl = customerAppUrl;
+const loginAfterVerificationPath = '/login?verified=1&reauth=1';
+export const verificationContinueUrl = `${authOrigin}${loginAfterVerificationPath}`;
+
+type EmailProvider = {
+  href: string;
+  label: string;
+};
+
+const emailProviders: Record<string, EmailProvider> = {
+  'yandex.ru': { href: 'https://mail.yandex.ru/', label: 'Open Yandex Mail' },
+  'ya.ru': { href: 'https://mail.yandex.ru/', label: 'Open Yandex Mail' },
+  'yandex.com': { href: 'https://mail.yandex.com/', label: 'Open Yandex Mail' },
+  'gmail.com': { href: 'https://mail.google.com/', label: 'Open Gmail' },
+  'googlemail.com': { href: 'https://mail.google.com/', label: 'Open Gmail' },
+  'outlook.com': { href: 'https://outlook.live.com/mail/', label: 'Open Outlook' },
+  'hotmail.com': { href: 'https://outlook.live.com/mail/', label: 'Open Outlook' },
+  'live.com': { href: 'https://outlook.live.com/mail/', label: 'Open Outlook' },
+  'mail.ru': { href: 'https://e.mail.ru/inbox/', label: 'Open Mail.ru' },
+  'inbox.ru': { href: 'https://e.mail.ru/inbox/', label: 'Open Mail.ru' },
+  'list.ru': { href: 'https://e.mail.ru/inbox/', label: 'Open Mail.ru' },
+  'bk.ru': { href: 'https://e.mail.ru/inbox/', label: 'Open Mail.ru' },
+};
+
+export function emailProviderForAddress(email: string): EmailProvider | null {
+  const separator = email.lastIndexOf('@');
+  if (separator < 1) return null;
+  return emailProviders[email.slice(separator + 1).trim().toLowerCase()] ?? null;
+}
 
 type ApiResult = Record<string, unknown>;
 type VerificationState =
@@ -214,21 +241,23 @@ function Field({
           onChange={(event) => onChange(event.target.value)}
         />
         {isPassword && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            aria-label={passwordVisible ? 'Hide password' : 'Show password'}
-            aria-controls={id}
-            aria-pressed={passwordVisible}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => setPasswordVisible((visible) => !visible)}
-          >
-            {passwordVisible
-              ? <EyeOff className="size-4" aria-hidden="true" />
-              : <Eye className="size-4" aria-hidden="true" />}
-          </Button>
+          <span className="absolute inset-y-0 right-1 flex items-center">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground hover:text-foreground"
+              aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+              aria-controls={id}
+              aria-pressed={passwordVisible}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setPasswordVisible((visible) => !visible)}
+            >
+              {passwordVisible
+                ? <EyeOff className="size-4" aria-hidden="true" />
+                : <Eye className="size-4" aria-hidden="true" />}
+            </Button>
+          </span>
         )}
       </div>
     </div>
@@ -311,18 +340,32 @@ function Login() {
   const { search } = useLocation();
   const query = useMemo(() => new URLSearchParams(search), [search]);
   const oauthQuery = useMemo(() => signedOAuthQuery(search), [search]);
+  const forceReauthentication = query.get('reauth') === '1';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [sessionChecked, setSessionChecked] = useState(Boolean(oauthQuery));
+  const [sessionChecked, setSessionChecked] = useState(
+    Boolean(oauthQuery) && !forceReauthentication,
+  );
+  const [sessionError, setSessionError] = useState('');
   const submission = useSubmission();
   const callbackURL = safeAuthCallback('/login', search);
 
   useEffect(() => {
+    let live = true;
+    if (forceReauthentication) {
+      void authPost('/sign-out', {})
+        .catch(() => {
+          if (live) setSessionError(neutralFailure);
+        })
+        .finally(() => {
+          if (live) setSessionChecked(true);
+        });
+      return () => { live = false; };
+    }
     if (oauthQuery) {
       setSessionChecked(true);
       return;
     }
-    let live = true;
     void authGet('/get-session')
       .then((result) => {
         if (!live) return;
@@ -337,7 +380,7 @@ function Login() {
         if (live) setSessionChecked(true);
       });
     return () => { live = false; };
-  }, [oauthQuery, search]);
+  }, [forceReauthentication, oauthQuery, search]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -365,7 +408,7 @@ function Login() {
         <Field id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />
         <Field id="password" label="Password" type="password" autoComplete="current-password" value={password} onChange={setPassword} minLength={12} />
         <FormMessage
-          error={submission.error || (query.has('error') ? neutralFailure : '')}
+          error={submission.error || sessionError || (query.has('error') ? neutralFailure : '')}
           message={
             submission.message
             || (query.has('verified') ? 'Email verified. You can sign in now.' : '')
@@ -387,22 +430,58 @@ function Signup() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [completedEmail, setCompletedEmail] = useState('');
   const submission = useSubmission();
-  const callbackURL = safeAuthCallback('/login', `?verified=1&${search.replace(/^\?/, '')}`);
+  const callbackParams = new URLSearchParams(signedOAuthQuery(search));
+  callbackParams.set('verified', '1');
+  callbackParams.set('reauth', '1');
+  const callbackURL = safeAuthCallback('/login', `?${callbackParams.toString()}`);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void submission.run(async () => {
+      const signupEmail = email.trim();
+      await authPost('/sign-out', {});
       await authPost('/sign-up/email', {
-        name,
-        email,
+        name: name.trim(),
+        email: signupEmail,
         password,
         callbackURL,
         ...oauthBody(search),
       });
       setPassword('');
-      submission.setMessage('Check your email to verify the account, then sign in.');
+      setCompletedEmail(signupEmail);
     });
   };
+  if (completedEmail) {
+    const provider = emailProviderForAddress(completedEmail);
+    return (
+      <AuthCard
+        title="Check your inbox"
+        description={`We sent a verification link to ${completedEmail}. Open it before signing in.`}
+      >
+        <div className="grid gap-3">
+          {provider && (
+            <Button asChild>
+              <a href={provider.href} target="_blank" rel="noreferrer">{provider.label}</a>
+            </Button>
+          )}
+          {!provider && (
+            <p className="text-sm text-muted-foreground">Open your email provider to find the verification message.</p>
+          )}
+          <Button asChild variant="outline">
+            <Link to={loginAfterVerificationPath}>Already verified? Sign in</Link>
+          </Button>
+          <button
+            type="button"
+            className="mt-1 text-sm text-muted-foreground hover:text-foreground"
+            onClick={() => setCompletedEmail('')}
+          >
+            Use a different email
+          </button>
+        </div>
+      </AuthCard>
+    );
+  }
   return (
     <AuthCard title="Create your account" description="Verify your email before creating a Poolstatis workspace.">
       <form className="grid gap-4" onSubmit={submit}>
@@ -606,7 +685,7 @@ function VerificationResult() {
   const content = {
     verified: {
       title: 'Email verified',
-      description: 'Your identity is confirmed. Redirecting you to Poolstatis…',
+      description: 'Your identity is confirmed. Redirecting you to sign in…',
     },
     email_change_confirmed: {
       title: 'Email change confirmed',
@@ -614,7 +693,7 @@ function VerificationResult() {
     },
     email_changed: {
       title: 'Email updated',
-      description: 'Your new address is verified. Redirecting you to Poolstatis…',
+      description: 'Your new address is verified. Redirecting you to sign in…',
     },
     already_verified: {
       title: 'Email already verified',
@@ -647,7 +726,7 @@ function VerificationResult() {
       ) : (
         <div className="grid gap-4">
           <Button asChild>
-            <a href={verificationContinueUrl}>Continue to Poolstatis</a>
+            <a href={verificationContinueUrl}>Continue and sign in</a>
           </Button>
           {state === 'temporarily_unavailable' && (
             <Button type="button" variant="outline" onClick={exchangeVerification}>
