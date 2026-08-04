@@ -125,6 +125,27 @@ describe('customer admin shell', () => {
     expect(screen.queryByText('Connect an agent, send data, and verify the first query.')).not.toBeInTheDocument();
   });
 
+  it('routes a new hosted owner with no projects into first-project onboarding', async () => {
+    mockedStore.mockReturnValue({
+      ...(baseStore() as any),
+      tokenKind: 'user',
+      projects: [],
+      project: null,
+      account: {
+        organization: { id: 'org-new', name: 'Lion workspace' },
+        membership: { organization_id: 'org-new', role: 'owner' },
+      },
+      client: { completeOnboarding: vi.fn() },
+      refreshProjects: vi.fn(),
+    } as never);
+
+    render(<MemoryRouter initialEntries={['/']}><App /></MemoryRouter>);
+
+    expect(await screen.findByText('Create your first project')).toBeInTheDocument();
+    expect(screen.getByText('Start with a product question')).toBeInTheDocument();
+    expect(screen.queryByText('No project selected')).not.toBeInTheDocument();
+  });
+
   it('keeps the project context and project management reachable from Analyze', async () => {
     render(<MemoryRouter initialEntries={['/analyze/product']}><App /></MemoryRouter>);
     const projectSwitcher = screen.getByRole('button', { name: /alpha/i });

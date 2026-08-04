@@ -6,6 +6,7 @@ import {
   approvedOAuthRedirect,
   AuthPortal,
   authenticatedAppRedirect,
+  emailProviderForAddress,
   signedOAuthQuery,
   verificationContinueUrl,
 } from './screens/AuthPortal';
@@ -60,29 +61,45 @@ describe('Better Auth portal', () => {
     expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
   });
 
-  it('creates an unverified account and keeps the password inside the auth request', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ user: { emailVerified: false } }), {
+  it('offers a known mailbox without guessing a destination for custom email domains', () => {
+    expect(emailProviderForAddress('new-user@yandex.ru')).toEqual({
+      href: 'https://mail.yandex.ru/',
+      label: 'Open Yandex Mail',
+    });
+    expect(emailProviderForAddress('owner@company.example')).toBeNull();
+  });
+
+  it('ends an existing session, creates an unverified account, and opens a dedicated inbox step', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
-      }),
-    );
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ user: { emailVerified: false } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
     renderPortal('/signup?sig=signed&ba_param=client_id&ba_param=ba_param&client_id=customer');
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Mira' } });
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'mira@example.test' } });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'new-user@yandex.ru' } });
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
-    await screen.findByText('Check your email to verify the account, then sign in.');
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, request] = fetchMock.mock.calls[0]!;
+    await screen.findByRole('heading', { name: 'Check your inbox' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/auth/sign-out');
+    const [url, request] = fetchMock.mock.calls[1]!;
     expect(url).toBe('/api/auth/sign-up/email');
     expect(JSON.parse(String(request?.body))).toMatchObject({
       name: 'Mira',
-      email: 'mira@example.test',
+      email: 'new-user@yandex.ru',
       password: 'correct horse battery',
       oauth_query: expect.stringContaining('sig=signed'),
     });
-    expect(screen.getByLabelText('Password')).toHaveValue('');
+    expect(screen.getByRole('link', { name: 'Open Yandex Mail' }))
+      .toHaveAttribute('href', 'https://mail.yandex.ru/');
+    expect(screen.getByRole('link', { name: 'Already verified? Sign in' }))
+      .toHaveAttribute('href', '/login?verified=1&reauth=1');
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain('correct horse battery');
   });
 
@@ -105,9 +122,35 @@ describe('Better Auth portal', () => {
     expect(screen.getByRole('button', { name: 'Hide password' }))
       .toHaveAttribute('aria-pressed', 'true');
 
+    const toggle = screen.getByRole('button', { name: 'Hide password' });
+    expect(toggle).not.toHaveClass('absolute', '-translate-y-1/2');
+    expect(toggle.parentElement).toHaveClass('absolute', 'inset-y-0', 'right-1', 'flex', 'items-center');
+
     fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
     expect(password).toHaveAttribute('type', 'password');
     expect(password).toHaveValue('correct horse battery');
+  });
+
+  it('clears a saved identity before showing the post-verification sign-in form', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    renderPortal(
+      '/login?verified=1&reauth=1&sig=signed'
+      + '&ba_param=client_id&ba_param=ba_param&client_id=customer',
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/auth/sign-out',
+      expect.objectContaining({ credentials: 'include', method: 'POST' }),
+    );
+    expect(screen.getByText('Email verified. You can sign in now.')).toBeInTheDocument();
   });
 
   it('uses the same forgot-password result for every account', async () => {
@@ -146,7 +189,7 @@ describe('Better Auth portal', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     renderPortal(`/verify?state=${state}`);
     expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Continue to Poolstatis' }))
+    expect(screen.getByRole('link', { name: 'Continue and sign in' }))
       .toHaveAttribute('href', verificationContinueUrl);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -290,15 +333,21 @@ describe('Better Auth portal', () => {
 
   it('disables duplicate signup submissions while the request is pending', async () => {
     let resolve: ((response: Response) => void) | undefined;
-    vi.spyOn(globalThis, 'fetch').mockReturnValue(new Promise((done) => { resolve = done; }));
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true }), { status: 200 }))
+      .mockReturnValueOnce(new Promise((done) => { resolve = done; }));
     renderPortal('/signup');
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Mira' } });
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'mira@example.test' } });
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
-    expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled();
+    const pending = await screen.findByRole('button', { name: 'Creating…' });
+    expect(pending).toBeDisabled();
+    fireEvent.click(pending);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     resolve?.(new Response(JSON.stringify({ user: {} }), { status: 200 }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Create account' })).toBeEnabled());
+    expect(await screen.findByRole('heading', { name: 'Check your inbox' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('returns from account management to the app without an AI gradient strip', async () => {
