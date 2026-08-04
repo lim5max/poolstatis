@@ -141,8 +141,8 @@ describe('customer admin shell', () => {
 
     render(<MemoryRouter initialEntries={['/']}><App /></MemoryRouter>);
 
-    expect(await screen.findByText('Create your first project')).toBeInTheDocument();
-    expect(screen.getByText('Start with a product question')).toBeInTheDocument();
+    expect(await screen.findByText('What do you want to learn?')).toBeInTheDocument();
+    expect(screen.getByText('Step 1 of 3')).toBeInTheDocument();
     expect(screen.queryByText('No project selected')).not.toBeInTheDocument();
   });
 
