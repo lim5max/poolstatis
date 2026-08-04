@@ -127,11 +127,12 @@ describe('cloud workspace project controls', () => {
     } as never);
     renderProjects();
 
-    expect(screen.getByText('Create your first project')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create first project' })).toBeInTheDocument();
+    expect(screen.getByText('What do you want to learn?')).toBeInTheDocument();
+    expect(screen.getByText('Step 1 of 3')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Project name')).not.toBeInTheDocument();
+    expect(screen.queryByText('What this creates')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create workspace' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Workspace name')).not.toBeInTheDocument();
-    expect(screen.getByText('The existing organization remains the tenant boundary.')).toBeInTheDocument();
   });
 });
 
@@ -157,9 +158,16 @@ describe('hosted intent onboarding', () => {
     } as never);
 
     render(<MemoryRouter><Onboarding /></MemoryRouter>);
-    fireEvent.click(screen.getByRole('button', { name: /Measure a release/ }));
-    fireEvent.change(screen.getByLabelText('Product-specific outcome · optional'), { target: { value: 'More teams publish successfully' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create first project' }));
+    fireEvent.change(screen.getByLabelText('Ask your own question'), {
+      target: { value: 'Did the latest release help more teams publish successfully?' },
+    });
+    expect(screen.getByText('Suggested: Measure a release')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(screen.getByText('Step 2 of 3')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Name your product' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Understand activation/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
 
     await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith({
       workspace_name: 'Acme',
@@ -167,8 +175,10 @@ describe('hosted intent onboarding', () => {
       project_slug: 'my-product',
     }));
     const request = await screen.findByTestId('hosted-agent-request');
+    expect(screen.getByText('Step 3 of 3')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Give this to your agent' })).toBeInTheDocument();
     expect(within(request).getByText(/project "my-product" in environment "prod"/)).toBeInTheDocument();
-    expect(request).toHaveTextContent('Product outcome: More teams publish successfully');
+    expect(request).toHaveTextContent('Product question: Did the latest release help more teams publish successfully?');
     expect(request).not.toHaveTextContent('pt_onetime_secret');
     expect(request).not.toHaveTextContent('pk_onetime_secret');
     expect(screen.getByText('pt_onetime_secret')).toBeInTheDocument();

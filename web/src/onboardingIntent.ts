@@ -38,20 +38,35 @@ export function analyticsJobById(id: AnalyticsJobId): AnalyticsJob {
   return ANALYTICS_JOBS.find((job) => job.id === id) ?? ANALYTICS_JOBS[0]!;
 }
 
+const JOB_SIGNALS: Array<[AnalyticsJobId, RegExp]> = [
+  ['release', /\b(release|launch|deploy|shipped|version|experiment|impact)\b|релиз|запуск|депло|эксперимент|изменени/i],
+  ['funnel', /\b(funnel|drop|checkout|signup|conversion|journey|step)\b|воронк|отвал|чекаут|регистрац|конверси|шаг/i],
+  ['web', /\b(web|website|landing|page|traffic|visitor|utm|source|campaign)\b|сайт|лендинг|трафик|посетител|страниц|источник|кампани/i],
+  ['activation', /\b(activation|activate|onboarding|first value|invite)\b|активац|онбординг|первая ценност|приглаш/i],
+];
+
+export function suggestAnalyticsJob(question: string): AnalyticsJob {
+  const match = JOB_SIGNALS.find(([, pattern]) => pattern.test(question.trim()));
+  return analyticsJobById(match?.[0] ?? 'activation');
+}
+
 export function buildAnalyticsAgentRequest(input: {
   jobId: AnalyticsJobId;
   outcome?: string;
+  question?: string;
   project: string;
   env: string;
 }): string {
   const job = analyticsJobById(input.jobId);
   const outcome = input.outcome?.trim();
+  const question = input.question?.trim();
   const scope = `Poolstatis project ${JSON.stringify(input.project)} in environment ${JSON.stringify(input.env)}`;
 
   return [
     `Set up the smallest trustworthy analytics loop for ${scope}.`,
     '',
     `Job: ${job.request}`,
+    ...(question ? [`Product question: ${question}`] : []),
     ...(outcome ? [`Product outcome: ${outcome}`] : []),
     '',
     'Work in the product repository and use the connected Poolstatis MCP server plus the installed poolstatis-instrument workflow.',
