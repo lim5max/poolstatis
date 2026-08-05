@@ -39,7 +39,7 @@ function skillAgentForClient(clientId: McpClientId): 'codex' | 'claude-code' | "
 }
 
 export function Setup() {
-  const { client, baseUrl, project, env } = useStore();
+  const { client, baseUrl, project, env, tokenKind } = useStore();
   const [clientId, setClientId] = useState<McpClientId>('claude-code');
   const [configCopied, setConfigCopied] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
@@ -226,6 +226,11 @@ export function Setup() {
           </CopyButton>
           <CopyButton value={mcpCommand} onFailed={() => setConfigOpen(true)}>Copy command</CopyButton>
           <CopyButton value={mcpEnv} onFailed={() => setConfigOpen(true)}>Copy environment</CopyButton>
+          <Button asChild variant="outline" size="sm">
+            <Link to={tokenKind === 'user' ? '/profile' : '/keys'}>
+              {tokenKind === 'user' ? 'Create MCP token' : 'Review project keys'}
+            </Link>
+          </Button>
         </div>
         <div aria-live="polite" role="status" className="mt-3 min-h-5 text-xs text-muted-foreground">
           {configCopied ? 'Connection values copied. This action does not verify MCP use.' : 'No server evidence changes until an MCP-marked request reaches the server.'}
@@ -286,7 +291,11 @@ export function Setup() {
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={proof.reload} disabled={proof.loading}>Refresh server progress</Button>
-              <Button asChild variant="ghost" size="sm"><Link to="/keys">Review MCP tokens</Link></Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link to={tokenKind === 'user' ? '/profile' : '/keys'}>
+                  {tokenKind === 'user' ? 'Create or review MCP token' : 'Review project keys'}
+                </Link>
+              </Button>
             </div>
           </Panel>
 

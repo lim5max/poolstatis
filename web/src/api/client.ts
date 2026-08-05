@@ -90,6 +90,12 @@ export class PoolstatisClient {
     return this.req<ProjectWithStats>('POST', '/api/v1/projects', body);
   }
 
+  deleteProject(slug: string, confirmSlug: string) {
+    return this.req<{ deleted: true; slug: string; events_deleted: number; artifacts_deleted: number }>(
+      'DELETE', `/api/v1/projects/${encodeURIComponent(slug)}`, { confirm_slug: confirmSlug },
+    );
+  }
+
   schema(slug: string, env = 'prod') {
     return this.req<ProjectSchema>('GET', `/api/v1/projects/${slug}/schema?env=${encodeURIComponent(env)}`);
   }

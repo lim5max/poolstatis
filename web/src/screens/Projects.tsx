@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useStore } from '../store';
-import { Panel, EmptyState, ErrorNote, fmtNum, TableScroll } from '../components/ui';
+import { DangerConfirm, Panel, EmptyState, ErrorNote, fmtNum, TableScroll } from '../components/ui';
 import { Onboarding } from './Onboarding';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,20 @@ export function Projects() {
   const canCreate = tokenKind === 'personal'
     || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
   const open = (slug: string) => { setProject(slug); nav('/registry'); };
+  const [deleteTarget, setDeleteTarget] = useState<{ slug: string; name: string } | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const remove = async () => {
+    if (!deleteTarget || !client) return;
+    setDeleteError(null);
+    try {
+      await client.deleteProject(deleteTarget.slug, deleteTarget.slug);
+      setDeleteTarget(null);
+      await refreshProjects();
+    } catch (error) {
+      setDeleteError((error as Error).message);
+    }
+  };
 
   const canOnboard = tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin');
   if (canOnboard && projects.length === 0) return <Onboarding />;
@@ -39,7 +53,20 @@ export function Projects() {
                   <TableCell className="text-right tabular-nums">{p.active_metrics}</TableCell>
                   <TableCell className="text-right tabular-nums">{p.funnels}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(p.events_30d)}</TableCell>
-                  <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => open(p.slug)} aria-label={`Open ${p.name}`}>Open</Button></TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="sm" onClick={() => open(p.slug)} aria-label={`Open ${p.name}`}>Open</Button>
+                      {canCreate && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => { setDeleteError(null); setDeleteTarget({ slug: p.slug, name: p.name }); }}
+                          aria-label={`Delete ${p.name}`}
+                        >Delete</Button>
+                      )}
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -47,6 +74,20 @@ export function Projects() {
         )}
       </Panel>
       {canCreate && <CreateProject onCreated={async (created) => { await refreshProjects(); setProject(created.slug); }} create={(b) => client!.createProject(b)} />}
+      {deleteTarget && (
+        <DangerConfirm
+          title={`Delete ${deleteTarget.name}?`}
+          blastRadius="The project and its data will be permanently removed."
+          willDelete={['Events and entities', 'Metrics, funnels, and keys', 'Setup and decision history']}
+          willKeep={['Workspace and members', 'Other projects']}
+          error={deleteError}
+          matchValue={deleteTarget.slug}
+          matchLabel="Type the project slug"
+          confirmLabel="Delete project"
+          onConfirm={remove}
+          onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
+        />
+      )}
     </div>
   );
 }

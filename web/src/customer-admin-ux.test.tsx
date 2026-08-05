@@ -142,7 +142,7 @@ describe('customer admin shell', () => {
     render(<MemoryRouter initialEntries={['/']}><App /></MemoryRouter>);
 
     expect(await screen.findByText('What do you want to learn?')).toBeInTheDocument();
-    expect(screen.getByText('Step 1 of 3')).toBeInTheDocument();
+    expect(screen.getByText('Step 1 of 4')).toBeInTheDocument();
     expect(screen.queryByText('No project selected')).not.toBeInTheDocument();
   });
 
@@ -208,6 +208,13 @@ describe('server-verified setup flow', () => {
     expect(within(chooser).getByLabelText('Claude Code logo')).toHaveAttribute('data-brand-logo', 'claude-code');
     expect(screen.getByRole('button', { name: 'Copy Claude Code install' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy Codex install' })).not.toBeInTheDocument();
+  });
+
+  it('lets a hosted user create a replacement MCP token after skipping onboarding', async () => {
+    mockedStore.mockReturnValue({ ...(baseStore() as any), tokenKind: 'user' } as never);
+    renderSetup();
+    await screen.findByText('Last MCP-marked use');
+    expect(screen.getByRole('link', { name: 'Create MCP token' })).toHaveAttribute('href', '/profile');
   });
 
   it('leads with four intents and keeps manual controls behind recovery disclosure', async () => {

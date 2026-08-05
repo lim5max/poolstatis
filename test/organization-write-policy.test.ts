@@ -30,9 +30,9 @@ describe('organization write policy inventory', () => {
       source.matchAll(/app\.(post|patch|delete)\('([^']+)'/g),
       (match) => `${match[1]!.toUpperCase()} ${match[2]!}`,
     );
-    expect(allRoutes).toHaveLength(122);
+    expect(allRoutes).toHaveLength(123);
     expect(new Set(allRoutes).size).toBe(allRoutes.length);
-    expect(routes).toHaveLength(74);
+    expect(routes).toHaveLength(75);
     expect(routes.every((route) =>
       route.includes(' /api/v1/') || route.includes(' /i/v1/'))).toBe(true);
 
@@ -42,7 +42,7 @@ describe('organization write policy inventory', () => {
         return requiresOrganizationWriteReadiness(method, path);
       });
     const allowed = allRoutes.filter((route) => !blocked.includes(route));
-    expect(blocked).toHaveLength(63);
+    expect(blocked).toHaveLength(64);
     expect(allowed).toHaveLength(59);
 
     const exemptions = routes
