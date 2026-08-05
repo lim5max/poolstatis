@@ -38,6 +38,38 @@ export async function createProject(
   return rows[0];
 }
 
+export async function deleteProject(
+  pool: pg.Pool,
+  orgId: string,
+  slug: string,
+): Promise<Project> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query<Project>(
+      `SELECT id, org_id, slug, name, timezone, retention_months
+       FROM projects
+       WHERE org_id = $1 AND slug = $2
+       FOR UPDATE`,
+      [orgId, slug],
+    );
+    const project = rows[0];
+    if (!project) throw notFound('project', `no project with slug "${slug}" in this organization`);
+    const deleted = await client.query(
+      'DELETE FROM projects WHERE org_id = $1 AND id = $2',
+      [orgId, project.id],
+    );
+    if (deleted.rowCount !== 1) throw notFound('project');
+    await client.query('COMMIT');
+    return project;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function createApiKey(
   pool: pg.Pool,
   opts: CreateApiKeyInput,

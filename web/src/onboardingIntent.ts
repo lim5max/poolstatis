@@ -51,13 +51,17 @@ export function suggestAnalyticsJob(question: string): AnalyticsJob {
 }
 
 export function buildAnalyticsAgentRequest(input: {
-  jobId: AnalyticsJobId;
+  jobId?: AnalyticsJobId;
+  jobIds?: AnalyticsJobId[];
   outcome?: string;
   question?: string;
   project: string;
   env: string;
 }): string {
-  const job = analyticsJobById(input.jobId);
+  const jobIds = input.jobIds?.length
+    ? [...new Set(input.jobIds)]
+    : [input.jobId ?? 'activation'];
+  const jobs = jobIds.map(analyticsJobById);
   const outcome = input.outcome?.trim();
   const question = input.question?.trim();
   const scope = `Poolstatis project ${JSON.stringify(input.project)} in environment ${JSON.stringify(input.env)}`;
@@ -65,7 +69,9 @@ export function buildAnalyticsAgentRequest(input: {
   return [
     `Set up the smallest trustworthy analytics loop for ${scope}.`,
     '',
-    `Job: ${job.request}`,
+    ...(jobs.length === 1
+      ? [`Job: ${jobs[0]!.request}`]
+      : ['Jobs:', ...jobs.map((job) => `- ${job.request}`)]),
     ...(question ? [`Product question: ${question}`] : []),
     ...(outcome ? [`Product outcome: ${outcome}`] : []),
     '',

@@ -62,6 +62,89 @@ describe('projects admin', () => {
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('slug_taken');
   });
+
+  it('requires the exact slug and deletes only the confirmed project with all project-scoped data', async () => {
+    const slug = `delete-${Date.now()}`;
+    const created = await api(env, env.personalToken, 'POST', '/api/v1/projects', { slug, name: 'Delete me' });
+    expect(created.status).toBe(201);
+
+    const project = await env.pool.query<{ id: string; org_id: string }>(
+      'SELECT id, org_id FROM projects WHERE slug = $1',
+      [slug],
+    );
+    const projectId = project.rows[0]!.id;
+    const orgId = project.rows[0]!.org_id;
+    const key = await api(env, env.personalToken, 'POST', `/api/v1/projects/${slug}/keys`, { kind: 'ingest' });
+    expect(key.status).toBe(201);
+    expect((await api(env, key.body.token, 'POST', '/i/v1/events', {
+      events: [{ event: 'delete.tested', distinct_id: 'local-user' }],
+    })).status).toBe(200);
+
+    const actorLink = await env.pool.query<{ id: string }>(
+      `INSERT INTO actor_links (
+         project_id, env, source_distinct_id, target_distinct_id, created_by
+       ) VALUES ($1, 'prod', 'anon-delete', 'user-delete', 'test')
+       RETURNING id`,
+      [projectId],
+    );
+    await env.pool.query(
+      `INSERT INTO actor_link_audit (
+         actor_link_id, project_id, env, action, actor, snapshot
+       ) VALUES ($1, $2, 'prod', 'created', 'test', '{}'::jsonb)`,
+      [actorLink.rows[0]!.id, projectId],
+    );
+    await env.pool.query(
+      `INSERT INTO usage_ledger (
+         org_id, project_id, env, meter_key, period_start, quantity, source_batch, dedupe_key
+       ) VALUES ($1, $2, 'prod', 'events_stored', date_trunc('month', now())::date, 1, $3, $3)`,
+      [orgId, projectId, `delete-${projectId}`],
+    );
+
+    const mismatch = await api(env, env.personalToken, 'DELETE', `/api/v1/projects/${slug}`, {
+      confirm_slug: 'another-project',
+    });
+    expect(mismatch.status).toBe(400);
+    expect(mismatch.body.error.code).toBe('confirmation_mismatch');
+
+    const deleted = await api(env, env.personalToken, 'DELETE', `/api/v1/projects/${slug}`, {
+      confirm_slug: slug,
+    });
+    expect(deleted.status).toBe(200);
+    expect(deleted.body).toMatchObject({ deleted: true, slug });
+
+    const remaining = await env.pool.query<{ projects: number; events: number; keys: number; audits: number; usage: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM projects WHERE id = $1) AS projects,
+         (SELECT count(*)::int FROM events WHERE project_id = $1) AS events,
+         (SELECT count(*)::int FROM api_keys WHERE project_id = $1) AS keys,
+         (SELECT count(*)::int FROM actor_link_audit WHERE project_id = $1) AS audits,
+         (SELECT count(*)::int FROM usage_ledger WHERE project_id = $1) AS usage`,
+      [projectId],
+    );
+    expect(remaining.rows[0]).toEqual({ projects: 0, events: 0, keys: 0, audits: 0, usage: 0 });
+    expect((await api(env, env.personalToken, 'GET', '/api/v1/projects')).body.projects.map((p: any) => p.slug))
+      .toContain(env.projectSlug);
+  });
+
+  it('does not let an exact-project secret key delete its project', async () => {
+    const denied = await api(env, env.secretToken, 'DELETE', `/api/v1/projects/${env.projectSlug}`, {
+      confirm_slug: env.projectSlug,
+    });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error.code).toBe('insufficient_scope');
+  });
+
+  it('keeps every project reference cascading so deletion cannot strand tenant data', async () => {
+    const constraints = await env.pool.query<{ table_name: string; constraint_name: string }>(
+      `SELECT conrelid::regclass::text AS table_name, conname AS constraint_name
+       FROM pg_constraint
+       WHERE contype = 'f'
+         AND confrelid = 'projects'::regclass
+         AND confdeltype <> 'c'
+       ORDER BY 1, 2`,
+    );
+    expect(constraints.rows).toEqual([]);
+  });
 });
 
 describe('api key admin', () => {

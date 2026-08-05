@@ -30,6 +30,10 @@ export const createProjectSchema = z.object({
   name: z.string().trim().min(1).max(200),
 });
 
+export const deleteProjectSchema = z.object({
+  confirm_slug: z.string().trim().min(1).max(200),
+}).strict();
+
 export const createPersonalTokenSchema = z.object({
   label: z.string().trim().min(1).max(200).optional(),
 });

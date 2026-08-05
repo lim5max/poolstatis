@@ -256,8 +256,8 @@ export function Confirm({ title, body, error, confirmLabel, tone = 'neutral', on
   );
 }
 
-export function DangerConfirm({ title, blastRadius, willDelete, willKeep, matchValue, matchLabel, confirmLabel, onConfirm, onCancel }: {
-  title: string; blastRadius?: ReactNode; willDelete: string[]; willKeep: string[];
+export function DangerConfirm({ title, blastRadius, willDelete, willKeep, error, matchValue, matchLabel, confirmLabel, onConfirm, onCancel }: {
+  title: string; blastRadius?: ReactNode; willDelete: string[]; willKeep: string[]; error?: ReactNode;
   matchValue: string; matchLabel: string; confirmLabel: string; onConfirm: () => void; onCancel: () => void;
 }) {
   const [typed, setTyped] = useState('');
@@ -280,6 +280,7 @@ export function DangerConfirm({ title, blastRadius, willDelete, willKeep, matchV
             <ul className="space-y-1 text-muted-foreground">{willKeep.map((x, i) => <li key={i}>✓ {x}</li>)}</ul>
           </div>
         </div>
+        {error && <ErrorNote>{error}</ErrorNote>}
         <p className="text-destructive text-xs">This cannot be undone.</p>
         <div className="space-y-1.5">
           <label className="text-xs text-muted-foreground flex items-center gap-2">{matchLabel}

@@ -32,6 +32,20 @@ describe('analytics onboarding intent', () => {
     expect(prompt).toContain('Product question: Did the new checkout improve paid conversion?');
   });
 
+  it('keeps several selected jobs in one scoped agent request', () => {
+    const prompt = buildAnalyticsAgentRequest({
+      jobIds: ['activation', 'web', 'release'],
+      question: 'Which release improved activation on the website?',
+      project: 'website',
+      env: 'prod',
+    });
+
+    expect(prompt).toContain('Jobs:');
+    expect(prompt).toContain('shortest trustworthy path from a new user to first value');
+    expect(prompt).toContain('privacy-safe web analytics');
+    expect(prompt).toContain('Measure a real release');
+  });
+
   it('suggests a starter path from plain-language questions', () => {
     expect(suggestAnalyticsJob('Did the release improve conversion?').id).toBe('release');
     expect(suggestAnalyticsJob('Where do users drop during checkout?').id).toBe('funnel');

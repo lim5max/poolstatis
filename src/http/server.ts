@@ -11,7 +11,7 @@ import {
 } from '../services/accounts.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
-  createApiKey, createProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
+  createApiKey, createProject, deleteProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
   listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
 } from '../services/projects.js';
 import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
@@ -77,7 +77,7 @@ import {
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
-  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
+  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -231,7 +231,7 @@ function requireOrganizationManagementAccess(auth: AuthContext): void {
     throw new ApiError(
       403,
       'insufficient_scope',
-      'a secret key is scoped to one project and cannot create organization projects',
+      'a secret key is scoped to one project and cannot manage organization projects',
       'use a personal token or hosted owner/admin account',
     );
   }
@@ -764,6 +764,34 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
       }
       throw err;
     }
+  });
+
+  app.delete('/api/v1/projects/:slug', async (req) => {
+    requireOrganizationManagementAccess(req.auth);
+    const project = await resolveProject(req);
+    const body = deleteProjectSchema.parse(req.body);
+    if (body.confirm_slug !== project.slug) {
+      throw badRequest('confirmation_mismatch', 'confirm_slug must equal the project slug');
+    }
+
+    const artifacts = await ctx.pool.query<{ artifact_key: string }>(
+      'SELECT artifact_key FROM experience_snapshots WHERE project_id = $1 ORDER BY id',
+      [project.id],
+    );
+    for (const artifact of artifacts.rows) await ctx.artifacts.delete(artifact.artifact_key);
+
+    // Keep the EventStore seam explicit for future non-Postgres stores. The
+    // database cascade remains the final race-safe ownership boundary.
+    const eventsDeleted = await ctx.eventStore.purge(project.id);
+    await deleteProject(ctx.pool, req.auth.orgId, project.slug);
+    ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
+    return {
+      deleted: true,
+      slug: project.slug,
+      events_deleted: eventsDeleted,
+      artifacts_deleted: artifacts.rows.length,
+    };
   });
 
   // ----- API key management (admin) -----
