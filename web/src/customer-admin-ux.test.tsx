@@ -342,7 +342,7 @@ describe('server-verified setup flow', () => {
     expect(await screen.findByText('MCP tool groups')).toBeInTheDocument();
     expect(screen.getByText('Which key goes where?')).toBeInTheDocument();
     expect(screen.getByText('Danger zone · prod')).toBeInTheDocument();
-    expect(screen.getByText('Instrumentation standard')).toBeInTheDocument();
+    expect(screen.getAllByText('Instrumentation standard').length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows a safe manual fallback when task copying is blocked', async () => {
