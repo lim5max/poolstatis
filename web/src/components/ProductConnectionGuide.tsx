@@ -121,7 +121,7 @@ export function ProductConnectionGuide({
               )}
             </div>
           )}
-          {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
+          {error && <p role="alert" className="mt-3 text-xs text-destructive">{error}</p>}
         </div>
       </section>
 
@@ -180,7 +180,7 @@ export function ProductConnectionGuide({
                       The task installs all three Poolstatis skills, adds the SDK, and verifies the build. It contains no API key.
                     </p>
                   </div>
-                  <CopyButton value={agentTask}>Copy task for {selectedAgent.name}</CopyButton>
+                  <CopyButton value={agentTask} showFallback>Copy task for {selectedAgent.name}</CopyButton>
                 </div>
                 <ol className="mt-4 grid gap-2 sm:grid-cols-3">
                   <TinyStep number="1" text={`Save the key in your product's local environment.`} />
@@ -364,22 +364,32 @@ function CodeRow({ label, code, copyLabel, sensitive }: { label: string; code: s
   );
 }
 
-export function CopyButton({ value, children }: { value: string; children: ReactNode }) {
+export function CopyButton({ value, children, showFallback = false }: { value: string; children: ReactNode; showFallback?: boolean }) {
   const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(value);
+      setFailed(false);
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
     } catch {
-      // Clipboard can be blocked by browser policy.
+      setFailed(true);
     }
   };
   return (
-    <Button variant="outline" size="sm" onClick={copy}>
-      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-      {copied ? 'Copied' : children}
-    </Button>
+    <span className="inline-flex flex-col items-start gap-2">
+      <Button variant="outline" size="sm" onClick={copy}>
+        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        {copied ? 'Copied' : children}
+      </Button>
+      {failed && (
+        <span role="alert" className="max-w-xl text-xs text-destructive">
+          Copy was blocked by the browser.{showFallback ? ' Select the task below and copy it manually.' : ''}
+        </span>
+      )}
+      {failed && showFallback && <pre className="max-h-72 max-w-full overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 text-xs text-foreground">{value}</pre>}
+    </span>
   );
 }
 
