@@ -38,9 +38,9 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     { to: '/changes', Icon: PackageBox, label: 'Changes' },
     { to: '/decisions', Icon: Check, label: 'Decisions' },
   ] },
-  { label: 'System', items: [{ to: '/setup', Icon: Settings, label: 'Setup & MCP' }] },
+  { label: 'System', items: [{ to: '/setup', Icon: Settings, label: 'Setup' }] },
 ];
-const TITLES: Record<string, string> = { '/': 'Projects', '/registry': 'Registry', '/measurement': 'Measurement', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/changes': 'Changes', '/decisions': 'Decisions', '/setup': 'Setup & MCP' };
+const TITLES: Record<string, string> = { '/': 'Projects', '/registry': 'Registry', '/measurement': 'Measurement', '/data': 'Data', '/keys': 'Keys', '/experiments': 'Experiments', '/experience': 'Experience', '/changes': 'Changes', '/decisions': 'Decisions', '/setup': 'Setup' };
 const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' : TITLES[path] ?? 'Poolstatis');
 const isProjectScoped = (path: string) => path === '/' || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
 

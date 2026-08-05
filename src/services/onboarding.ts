@@ -15,6 +15,7 @@ export interface OnboardingGate {
     | 'first_query_produced'
     | 'first_decision_saved';
   complete: boolean;
+  required: boolean;
   evidence: Record<string, unknown>;
   blocker: string | null;
   next_action: string | null;
@@ -227,8 +228,9 @@ export async function getOnboardingStatus(
       'agent_connected',
       Boolean(agent.rows[0]),
       agent.rows[0] ?? {},
-      'No real MCP tool call has reached this project.',
-      'Connect the MCP client and call get_onboarding_status.',
+      'No real MCP tool call has reached this project. MCP is optional.',
+      'Optional: connect an MCP client and call get_onboarding_status.',
+      false,
     ),
     gate(
       'data_source_connected',
@@ -292,9 +294,9 @@ export async function getOnboardingStatus(
 
   const finalResult = await finalResultFor(pool, projectId, queryRow, insightRow, decisionRow);
   return {
-    complete: gates.every((item) => item.complete),
+    complete: gates.filter((item) => item.required).every((item) => item.complete),
     gates,
-    next_blocker: gates.find((item) => !item.complete) ?? null,
+    next_blocker: gates.find((item) => item.required && !item.complete) ?? null,
     final_result: finalResult,
   };
 }
@@ -305,10 +307,12 @@ function gate(
   evidence: Record<string, unknown>,
   blocker: string,
   nextAction: string,
+  required = true,
 ): OnboardingGate {
   return {
     key,
     complete,
+    required,
     evidence,
     blocker: complete ? null : blocker,
     next_action: complete ? null : nextAction,
