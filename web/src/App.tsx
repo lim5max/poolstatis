@@ -65,7 +65,7 @@ export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Measurement: Ruler,
   'Browser experience': Browser,
   Keys: KeyRound,
-  'Setup & MCP': Plug,
+  Setup: Plug,
   Usage: DashboardSpeed,
   Profile: UserCircle,
 };
@@ -89,7 +89,7 @@ const TITLES: Record<string, string> = {
   '/experience': 'Browser experience',
   '/changes': 'Changes',
   '/decisions': 'Decisions',
-  '/setup': 'Setup & MCP',
+  '/setup': 'Setup',
   '/onboarding': 'Onboarding',
 };
 const titleFor = (path: string) => (

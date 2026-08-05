@@ -41,7 +41,7 @@ export const NAVIGATION_ZONES: NavigationZone[] = [
       { label: 'Measurement', to: '/measurement', availability: 'available' },
       { label: 'Browser experience', to: '/experience', availability: 'available' },
       { label: 'Keys', to: '/keys', availability: 'available' },
-      { label: 'Setup & MCP', to: '/setup', availability: 'available' },
+      { label: 'Setup', to: '/setup', availability: 'available' },
     ],
   },
 ];
