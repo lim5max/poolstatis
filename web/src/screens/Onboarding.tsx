@@ -24,9 +24,9 @@ function slugify(value: string): string {
 }
 
 export function Onboarding() {
-  const { client, baseUrl, refreshProjects, setProject } = useStore();
+  const { account, client, baseUrl, refreshProjects, setProject } = useStore();
   const navigate = useNavigate();
-  const [workspace, setWorkspace] = useState('My workspace');
+  const [workspace] = useState(account?.organization.name ?? 'My workspace');
   const [projectName, setProjectName] = useState('My product');
   const [projectSlug, setProjectSlug] = useState('my-product');
   const [goalId, setGoalId] = useState<(typeof GOALS)[number]['id']>('activation');
@@ -162,11 +162,7 @@ export function Onboarding() {
 
         <details className="mt-3 rounded-md border bg-muted/10 px-3 py-2">
           <summary className="cursor-pointer text-xs text-muted-foreground">Advanced project settings</summary>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="workspace-name" className="text-xs font-medium text-muted-foreground">Workspace name</Label>
-              <Input id="workspace-name" value={workspace} onChange={(event) => setWorkspace(event.target.value)} />
-            </div>
+          <div className="mt-3 max-w-sm">
             <div className="space-y-1.5">
               <Label htmlFor="project-slug" className="text-xs font-medium text-muted-foreground">Project slug</Label>
               <Input id="project-slug" value={projectSlug} onChange={(event) => setProjectSlug(slugify(event.target.value))} />

@@ -116,7 +116,7 @@ describe('cloud workspace project controls', () => {
     expect(screen.queryByText('Create your workspace')).not.toBeInTheDocument();
   });
 
-  it('creates the first project inside an existing owner organization without offering a new workspace', () => {
+  it('starts first-project onboarding inside the existing owner organization', () => {
     mockedStore.mockReturnValue({
       projects: [], project: null, setProject, tokenKind: 'user', client: {
         completeOnboarding: vi.fn(),
@@ -128,10 +128,9 @@ describe('cloud workspace project controls', () => {
     } as never);
     renderProjects();
 
-    expect(screen.getByText('What do you want to learn?')).toBeInTheDocument();
-    expect(screen.getByText('Step 1 of 4')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Project name')).not.toBeInTheDocument();
-    expect(screen.queryByText('What this creates')).not.toBeInTheDocument();
+    expect(screen.getByText('What do you want to learn first?')).toBeInTheDocument();
+    expect(screen.getByLabelText('Product name')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create product and continue' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create workspace' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Workspace name')).not.toBeInTheDocument();
   });
@@ -159,7 +158,7 @@ describe('cloud workspace project controls', () => {
 });
 
 describe('hosted intent onboarding', () => {
-  it('preserves multiple goals and project data across Back, then shows SDK before optional MCP', async () => {
+  it('creates one product, protects the write key, and offers an agent task before optional MCP', async () => {
     const completeOnboarding = vi.fn().mockResolvedValue({
       organization: { id: 'org-1', name: 'Acme' },
       project: { slug: 'lion-product', name: 'Lion product', timezone: 'UTC' },
@@ -174,63 +173,52 @@ describe('hosted intent onboarding', () => {
     });
     const refresh = vi.fn().mockResolvedValue(undefined);
     const selectProject = vi.fn();
+    const onboardingStatus = vi.fn().mockResolvedValue({
+      complete: false,
+      gates: [{ key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: 'No event.', next_action: 'Send one event.' }],
+      next_blocker: null,
+      final_result: null,
+    });
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
     mockedStore.mockReturnValue({
       account: { organization: { name: 'Acme' } },
-      client: { completeOnboarding },
+      client: { completeOnboarding, onboardingStatus },
+      baseUrl: 'https://api.poolstatis.test',
       refreshProjects: refresh,
       setProject: selectProject,
     } as never);
 
     render(<MemoryRouter><Onboarding /></MemoryRouter>);
-    fireEvent.click(screen.getByRole('button', { name: /Understand activation/ }));
-    expect(screen.getByRole('button', { name: /Understand activation/ })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: /Find funnel drop-off/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Add web analytics/ }));
-    fireEvent.change(screen.getByLabelText(/ask your own question/i), {
-      target: { value: 'Did the latest release help more teams publish successfully?' },
-    });
-    expect(screen.getByText('Suggested: Measure a release')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Find funnel drop-off/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: /Add web analytics/ })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-
-    expect(screen.getByText('Step 2 of 4')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Name your product' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Understand activation/ })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Lion product' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    expect(screen.getByRole('button', { name: /Find funnel drop-off/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: /Add web analytics/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByLabelText(/ask your own question/i)).toHaveValue('Did the latest release help more teams publish successfully?');
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    expect(screen.getByLabelText('Project name')).toHaveValue('Lion product');
-    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    expect(screen.getByRole('button', { name: /See where users get stuck/ })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: /Measure a product change/ }));
+    expect(screen.getByRole('button', { name: /Measure a product change/ })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.change(screen.getByLabelText('Product name'), { target: { value: 'Lion product' } });
+    fireEvent.click(screen.getByText('Advanced project settings'));
+    expect(screen.getByLabelText('Project slug')).toHaveValue('lion-product');
+    expect(screen.queryByLabelText('Workspace name')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create product and continue' }));
 
     await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith({
       workspace_name: 'Acme',
       project_name: 'Lion product',
       project_slug: 'lion-product',
     }));
-    expect(await screen.findByText('Step 3 of 4')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Install the SDK' })).toBeInTheDocument();
-    expect(screen.getByText('Project created')).toBeInTheDocument();
-    expect(screen.getByText(/npm install @poolstatis\/sdk@0\.3\.0/)).toBeInTheDocument();
-    expect(screen.getByText(/createBrowserAnalytics/)).toBeInTheDocument();
-    expect(screen.getByText('pk_onetime_secret')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('I saved the ingest key.'));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to MCP' }));
-
-    const request = await screen.findByTestId('hosted-agent-request');
-    expect(screen.getByText('Step 4 of 4')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Give this to your agent' })).toBeInTheDocument();
-    expect(within(request).getByText(/project "lion-product" in environment "prod"/)).toBeInTheDocument();
-    expect(request).toHaveTextContent('Jobs:');
-    expect(request).toHaveTextContent('Product question: Did the latest release help more teams publish successfully?');
-    expect(request).not.toHaveTextContent('pt_onetime_secret');
-    expect(request).not.toHaveTextContent('pk_onetime_secret');
-    expect(screen.getByText('pt_onetime_secret')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Skip for now' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+    expect(await screen.findByText('Product key ready')).toBeInTheDocument();
+    expect(screen.getByText('pk_ write only')).toBeInTheDocument();
+    expect(screen.getByText('VITE_POOLSTATIS_INGEST_KEY=pk_••••••••••••')).toBeInTheDocument();
+    expect(screen.queryByText('pk_onetime_secret')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy .env line' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy task for Codex' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy task for Codex' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
+    const task = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
+    expect(task).toContain('Install the Poolstatis workflows before editing code');
+    expect(task).toContain('poolstatis-instrument poolstatis-analyze poolstatis-maintain');
+    expect(task).toContain('Measure a product change');
+    expect(task).toContain('MCP is optional');
+    expect(task).not.toContain('pk_onetime_secret');
+    expect(task).not.toContain('pt_onetime_secret');
+    expect(screen.getByRole('button', { name: 'Finish later' })).toBeInTheDocument();
     await waitFor(() => expect(selectProject).toHaveBeenCalledWith('lion-product'));
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   });

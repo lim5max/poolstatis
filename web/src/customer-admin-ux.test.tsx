@@ -35,14 +35,14 @@ const renderSetup = () => render(<MemoryRouter><Setup /></MemoryRouter>);
 const proof = {
   complete: false,
   gates: [
-    { key: 'workspace_created', complete: true, evidence: { project: 'alpha' }, blocker: null, next_action: null },
-    { key: 'agent_connected', complete: true, evidence: { client: 'codex', observed_at: '2026-07-26T18:30:00.000Z' }, blocker: null, next_action: null },
-    { key: 'data_source_connected', complete: true, evidence: { native: true, posthog: false, native_key_created_at: '2026-07-26T18:28:00.000Z' }, blocker: null, next_action: null },
-    { key: 'first_event_observed', complete: true, evidence: { observation_source: 'native', native_events: 12, last_seen: '2026-07-26T18:32:00.000Z', posthog_query_at: null }, blocker: null, next_action: null },
-    { key: 'metrics_activated', complete: false, evidence: {}, blocker: 'No active metric has verified source evidence.', next_action: 'Review and activate a metric.' },
-    { key: 'data_quality_accepted', complete: true, evidence: { issues: 0 }, blocker: null, next_action: null },
-    { key: 'first_query_produced', complete: true, evidence: { query_run_id: 'q1', source: 'native', created_at: '2026-07-26T18:35:00.000Z' }, blocker: null, next_action: null },
-    { key: 'first_decision_saved', complete: false, evidence: {}, blocker: 'No decision saved.', next_action: 'Save a decision.' },
+    { key: 'workspace_created', complete: true, required: true, evidence: { project: 'alpha' }, blocker: null, next_action: null },
+    { key: 'agent_connected', complete: true, required: false, evidence: { client: 'codex', observed_at: '2026-07-26T18:30:00.000Z' }, blocker: null, next_action: null },
+    { key: 'data_source_connected', complete: true, required: true, evidence: { native: true, posthog: false, native_key_created_at: '2026-07-26T18:28:00.000Z' }, blocker: null, next_action: null },
+    { key: 'first_event_observed', complete: true, required: true, evidence: { observation_source: 'native', native_events: 12, last_seen: '2026-07-26T18:32:00.000Z', posthog_query_at: null }, blocker: null, next_action: null },
+    { key: 'metrics_activated', complete: false, required: true, evidence: {}, blocker: 'No active metric has verified source evidence.', next_action: 'Review and activate a metric.' },
+    { key: 'data_quality_accepted', complete: true, required: true, evidence: { issues: 0 }, blocker: null, next_action: null },
+    { key: 'first_query_produced', complete: true, required: true, evidence: { query_run_id: 'q1', source: 'native', created_at: '2026-07-26T18:35:00.000Z' }, blocker: null, next_action: null },
+    { key: 'first_decision_saved', complete: false, required: true, evidence: {}, blocker: 'No decision saved.', next_action: 'Save a decision.' },
   ],
   next_blocker: { key: 'metrics_activated', complete: false, evidence: {}, blocker: 'No active metric has verified source evidence.', next_action: 'Review and activate a metric.' },
   final_result: null,
@@ -105,7 +105,7 @@ describe('customer admin shell', () => {
     expect(NAV_ICONS.Registry).toBe(Catalogue);
     expect(NAV_ICONS.Measurement).toBe(Ruler);
     expect(NAV_ICONS['Browser experience']).toBe(Browser);
-    expect(NAV_ICONS['Setup & MCP']).toBe(Plug);
+    expect(NAV_ICONS.Setup).toBe(Plug);
     expect(NAV_ICONS.Usage).toBe(DashboardSpeed);
     expect(NAV_ICONS.Profile).toBe(UserCircle);
 
@@ -119,9 +119,9 @@ describe('customer admin shell', () => {
 
   it('keeps the project and environment visible on Setup', async () => {
     render(<MemoryRouter initialEntries={['/setup']}><App /></MemoryRouter>);
-    await screen.findByText('Project created');
+    await screen.findByRole('heading', { name: 'Connect your product' });
     expect(screen.getByRole('button', { name: /alpha/i })).toBeInTheDocument();
-    expect(screen.getAllByText('prod').length).toBeGreaterThan(0);
+    expect(screen.getByText('Alpha · prod')).toBeInTheDocument();
     expect(screen.queryByText('Connect an agent, send data, and verify the first query.')).not.toBeInTheDocument();
   });
 
@@ -141,8 +141,8 @@ describe('customer admin shell', () => {
 
     render(<MemoryRouter initialEntries={['/']}><App /></MemoryRouter>);
 
-    expect(await screen.findByText('What do you want to learn?')).toBeInTheDocument();
-    expect(screen.getByText('Step 1 of 4')).toBeInTheDocument();
+    expect(await screen.findByText('What do you want to learn first?')).toBeInTheDocument();
+    expect(screen.getByLabelText('Product name')).toBeInTheDocument();
     expect(screen.queryByText('No project selected')).not.toBeInTheDocument();
   });
 
@@ -176,6 +176,7 @@ describe('customer admin shell', () => {
   });
 });
 
+
 describe('server-verified setup flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -184,221 +185,174 @@ describe('server-verified setup flow', () => {
     mockedStore.mockReturnValue(baseStore());
   });
 
-  it('shows a compact count, one next action, and all eight checks on demand', async () => {
+  it('shows the three product-connection steps and real server confirmation', async () => {
     renderSetup();
-    expect(await screen.findByText('Project created')).toBeInTheDocument();
-    expect(screen.getByText('of 8')).toBeInTheDocument();
-    expect(screen.getByText('Data source ready')).toBeInTheDocument();
-    expect(screen.getByText('First product observation')).toBeInTheDocument();
-    expect(screen.getByText('First query produced')).toBeInTheDocument();
-    expect(screen.getByText('Last MCP-marked use')).toBeInTheDocument();
-    expect(screen.getAllByText('Review and activate a metric.')).toHaveLength(1);
-    expect(screen.queryByText('MCP connected')).not.toBeInTheDocument();
-    expect(screen.queryByRole('list', { name: 'All setup checks' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^View all 8 checks/ }));
-    const allChecks = screen.getByRole('list', { name: 'All setup checks' });
-    expect(within(allChecks).getAllByRole('listitem')).toHaveLength(8);
-    expect(within(allChecks).getByText(/Codex/i)).toBeInTheDocument();
+
+    expect(await screen.findByText('Alpha is connected')).toBeInTheDocument();
+    const progress = screen.getByLabelText('Connection progress');
+    expect(within(progress).getByText('Product key')).toBeInTheDocument();
+    expect(within(progress).getByText('Add Poolstatis')).toBeInTheDocument();
+    expect(within(progress).getByText('First event')).toBeInTheDocument();
+    expect(screen.getByText(/Poolstatis received a real product event/)).toBeInTheDocument();
+    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View MCP setup' })).toBeInTheDocument();
   });
 
-  it('shows client logos in one chooser and reuses the selected agent below', async () => {
+  it('creates a fresh write-only key and copies it as an environment variable', async () => {
+    const store = baseStore() as any;
+    store.client.issueKey = vi.fn().mockResolvedValue({ token: 'pk_fresh_once' });
+    mockedStore.mockReturnValue(store);
     renderSetup();
-    await screen.findByText('Last MCP-marked use');
-    const chooser = screen.getByRole('button', { name: 'Coding agent: Claude Code' });
-    expect(within(chooser).getByLabelText('Claude Code logo')).toHaveAttribute('data-brand-logo', 'claude-code');
-    expect(screen.getByRole('button', { name: 'Copy Claude Code install' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Copy Codex install' })).not.toBeInTheDocument();
-  });
 
-  it('lets a hosted user create a replacement MCP token after skipping onboarding', async () => {
-    mockedStore.mockReturnValue({ ...(baseStore() as any), tokenKind: 'user' } as never);
-    renderSetup();
-    await screen.findByText('Last MCP-marked use');
-    expect(screen.getByRole('link', { name: 'Create MCP token' })).toHaveAttribute('href', '/profile');
-  });
-
-  it('leads with four intents and keeps manual controls behind recovery disclosure', async () => {
-    renderSetup();
-    await screen.findByText('Last MCP-marked use');
-    for (const job of ['Understand activation', 'Find funnel drop-off', 'Add web analytics', 'Measure a release']) {
-      expect(screen.getByRole('button', { name: new RegExp(job) })).toBeInTheDocument();
-    }
-    expect(screen.getByRole('heading', { name: 'Prerequisite 1 · Agent connection' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Prerequisite 2 · Poolstatis skills' })).toBeInTheDocument();
-    expect(screen.getByText('Give this to your agent')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Copy request' })).toBeInTheDocument();
-    expect(screen.queryByText(/Before editing:/)).not.toBeInTheDocument();
-    expect(screen.queryByText('Activate a metric before sending')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Show manual setup and recovery' }));
-    expect(screen.getByText('Activate a metric before sending')).toBeInTheDocument();
-    expect(screen.getByText(/not a heartbeat or transport attestation/i)).toBeInTheDocument();
-  });
-
-  it('copies the selected agent three-skill install command without credentials or an unpublished SDK', async () => {
-    renderSetup();
-    await screen.findByRole('heading', { name: 'Prerequisite 2 · Poolstatis skills' });
-    expect(screen.getByText('poolstatis-instrument')).toBeInTheDocument();
-    expect(screen.getByText('poolstatis-analyze')).toBeInTheDocument();
-    expect(screen.getByText('poolstatis-maintain')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy Claude Code install' }));
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      expect.stringContaining('https://github.com/lim5max/poolstatis'),
+    await screen.findByText('A product key already exists');
+    fireEvent.click(screen.getByRole('button', { name: 'Create fresh key' }));
+    await waitFor(() => expect(store.client.issueKey).toHaveBeenCalledWith(
+      'alpha',
+      { kind: 'ingest', env: 'prod', label: 'Setup guide' },
     ));
-    const copied = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
-    expect(copied).toContain('--agent');
-    expect(copied).toContain('claude-code');
-    expect(copied).toContain('poolstatis-instrument');
-    expect(copied).toContain('poolstatis-analyze');
-    expect(copied).toContain('poolstatis-maintain');
-    expect(copied).not.toContain('POOLSTATIS_TOKEN');
-    expect(copied).not.toContain('@poolstatis/sdk');
-  });
+    expect(await screen.findByText('Product key ready')).toBeInTheDocument();
+    expect(screen.getByText('VITE_POOLSTATIS_INGEST_KEY=pk_••••••••••••')).toBeInTheDocument();
+    expect(screen.queryByText('pk_fresh_once')).not.toBeInTheDocument();
 
-  it('offers focused first-query prompts and copies the selected variant', async () => {
-    renderSetup();
-    await screen.findByText('Last MCP-marked use');
-    fireEvent.click(screen.getByRole('button', { name: 'Show manual setup and recovery' }));
-    expect(screen.getByRole('button', { name: 'Quick trend' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Compare periods' }));
-    expect(screen.getByRole('button', { name: 'Compare periods' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText(/preceding 7 days/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy compare periods prompt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy .env line' }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      expect.stringContaining('Do not claim causality'),
+      'VITE_POOLSTATIS_INGEST_KEY=pk_fresh_once',
     ));
   });
 
-  it('renders server-proof failure as retryable without implying a connection', async () => {
+  it('copies one secret-free task that installs all skills and the SDK', async () => {
+    renderSetup();
+    await screen.findByText('Alpha is connected');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Claude Code' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy task for Claude Code' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
+    const task = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
+    expect(task).toContain('poolstatis-instrument poolstatis-analyze poolstatis-maintain');
+    expect(task).toContain('@poolstatis/sdk@latest');
+    expect(task).toContain('--agent claude-code');
+    expect(task).toContain('never ask me to paste a pk_, sk_, or pt_ token into chat');
+    expect(task).toContain('MCP is optional');
+    expect(task).not.toContain('sk_test');
+  });
+
+  it('keeps a complete manual SDK path beside the recommended agent path', async () => {
+    renderSetup();
+    await screen.findByText('Alpha is connected');
+
+    fireEvent.click(screen.getByRole('button', { name: /Install manually/ }));
+    expect(screen.getByText('npm install @poolstatis/sdk@latest')).toBeInTheDocument();
+    expect(screen.getByText(/createClient/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'React / Vite' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Node / server' }));
+    expect(screen.getByText(/process\.env\.POOLSTATIS_INGEST_KEY/)).toBeInTheDocument();
+  });
+
+  it('keeps MCP optional and puts its credential only in the copied settings', async () => {
+    renderSetup();
+    await screen.findByText('Alpha is connected');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View MCP setup' }));
+    expect(screen.getByText('1. Install the Poolstatis skills')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy skills command' })).toBeInTheDocument();
+    expect(screen.getAllByText(/Never paste it into chat/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('sk_test')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy config for Codex' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
+    const config = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
+    expect(config).toContain('POOLSTATIS_TOKEN');
+    expect(config).toContain('sk_test');
+    expect(config).toContain('POOLSTATIS_URL');
+  });
+
+  it('lets a hosted user create a dedicated agent token after skipping MCP', async () => {
+    const store = baseStore() as any;
+    store.tokenKind = 'user';
+    store.token = null;
+    store.client.issuePersonalToken = vi.fn().mockResolvedValue({ token: 'pt_fresh_once' });
+    mockedStore.mockReturnValue(store);
+    renderSetup();
+
+    await screen.findByText('Alpha is connected');
+    fireEvent.click(screen.getByRole('button', { name: 'View MCP setup' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create agent token' }));
+    await waitFor(() => expect(store.client.issuePersonalToken).toHaveBeenCalledWith({ label: 'Codex MCP' }));
+    expect(screen.queryByText('pt_fresh_once')).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Copy config for Codex' })).toBeInTheDocument();
+  });
+
+  it('renders a proof failure as retryable without claiming a connection', async () => {
     const store = baseStore() as any;
     store.client.onboardingStatus = vi.fn().mockRejectedValue(new Error('proof unavailable'));
     mockedStore.mockReturnValue(store);
     renderSetup();
+
     expect(await screen.findByRole('alert')).toHaveTextContent('proof unavailable');
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
-    expect(screen.queryByText('MCP connected')).not.toBeInTheDocument();
+    expect(screen.queryByText('Alpha is connected')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check connection' })).toBeInTheDocument();
   });
 
-  it('shows a project-scoped loading state while server proof is pending', async () => {
+  it('shows a project-scoped checking state while server proof is pending', async () => {
     const store = baseStore() as any;
     let resolveProof: ((value: typeof proof) => void) | undefined;
     store.client.onboardingStatus = vi.fn().mockReturnValue(new Promise((resolve) => { resolveProof = resolve; }));
     mockedStore.mockReturnValue(store);
     renderSetup();
-    expect(screen.getByText('Checking setup proof…')).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: 'Checking…' })).toBeDisabled();
     await act(async () => resolveProof?.(proof));
-    expect(await screen.findByText('Project created')).toBeInTheDocument();
+    expect(await screen.findByText('Alpha is connected')).toBeInTheDocument();
   });
 
-  it('explains the empty proof state when no project is selected', async () => {
+  it('explains that a project must be selected before setup', () => {
     const store = baseStore() as any;
     store.project = null;
     mockedStore.mockReturnValue(store);
     renderSetup();
-    expect(await screen.findByText('Choose a project to read its setup proof.')).toBeInTheDocument();
+
+    expect(screen.getByText('Select a project first.')).toBeInTheDocument();
   });
 
-  it('treats copied config as local progress, not a verified connection', async () => {
-    renderSetup();
-    await screen.findByText('Last MCP-marked use');
-    fireEvent.click(screen.getByRole('button', { name: 'Copy MCP config' }));
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
-    const copied = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
-    expect(copied).toContain('<replace-with-pt-or-sk>');
-    expect(copied).not.toContain('sk_test');
-    await waitFor(() => expect(screen.getByText('Connection values copied. This action does not verify MCP use.')).toBeInTheDocument());
-    expect(screen.getByText('Last MCP-marked use')).toBeInTheDocument();
-  });
-
-  it('generates one scoped intent request without session or MCP credentials', async () => {
-    renderSetup();
-    await screen.findByText('Last MCP-marked use');
-    fireEvent.click(screen.getByRole('button', { name: /Find funnel drop-off/ }));
-    fireEvent.change(screen.getByLabelText('Product-specific outcome · optional'), { target: { value: 'More teams finish checkout' } });
-    const requestPanel = screen.getByText('Give this to your agent').closest('[data-slot="card"]');
-    expect(requestPanel).not.toBeNull();
-    fireEvent.click(within(requestPanel as HTMLElement).getByRole('button', { name: 'Copy request' }));
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
-    const copied = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
-    expect(copied).toContain('project "alpha" in environment "prod"');
-    expect(copied).toContain('Product outcome: More teams finish checkout');
-    expect(copied).not.toContain('sk_test');
-    expect(copied).not.toContain('<replace-with-pt-or-sk>');
-  });
-
-  it('keeps reference material and destructive actions behind progressive disclosure', async () => {
-    renderSetup();
-    await screen.findByText('Add analytics with your agent');
-    expect(screen.getByRole('button', { name: 'Show advanced setup' })).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByText('MCP tool reference')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Show advanced setup' }));
-    expect(screen.getByText('MCP tool reference')).toBeInTheDocument();
-    expect(screen.getByText('Data deletion')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText('reading webhook status…')).not.toBeInTheDocument());
-  });
-
-  it('advertises only tools present in the pinned public runner contract', async () => {
-    renderSetup();
-    await screen.findByText('Add analytics with your agent');
-    fireEvent.click(screen.getByRole('button', { name: 'Show advanced setup' }));
-    for (const tool of [
-      'get_web_overview',
-      'list_web_sessions',
-      'get_web_session',
-      'get_session_engagement',
-      'get_page_engagement',
-      'preview_event_backfill',
-      'import_historical_events',
-      'list_event_backfills',
-      'preview_event_revision',
-      'revise_event',
-      'get_event_history',
-    ]) {
-      expect(screen.getByText(tool, { exact: true })).toBeInTheDocument();
-    }
-    for (const tool of [
-      'list_metric_categories',
-      'create_metric_category',
-      'update_metric_category',
-      'delete_metric_category',
-      'get_click_map',
-      'get_scroll_map',
-    ]) {
-      expect(screen.queryByText(tool, { exact: true })).not.toBeInTheDocument();
-    }
-    await waitFor(() => expect(screen.queryByText('reading webhook status…')).not.toBeInTheDocument());
-  });
-
-  it('reveals a manual fallback when clipboard access is blocked', async () => {
-    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('blocked')) } });
-    renderSetup();
-    await screen.findByText('Last MCP-marked use');
-    fireEvent.click(screen.getByRole('button', { name: 'Copy MCP config' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Copy blocked');
-    expect(screen.getByRole('button', { name: 'Hide config and client steps' })).toBeInTheDocument();
-  });
-
-  it('labels PostHog-only evidence without claiming native accepted events', async () => {
-    const posthogProof = {
+  it('polls the same server proof until the first event arrives', async () => {
+    const pendingProof = {
       ...proof,
       gates: proof.gates.map((item) => item.key === 'first_event_observed'
-        ? {
-            ...item,
-            evidence: {
-              observation_source: 'posthog',
-              native_events: 0,
-              last_seen: null,
-              posthog_query_at: '2026-07-26T18:32:00.000Z',
-            },
-          }
+        ? { ...item, complete: false, evidence: { observation_source: null, native_events: 0, last_seen: null } }
         : item),
     };
     const store = baseStore() as any;
-    store.client.onboardingStatus = vi.fn().mockResolvedValue(posthogProof);
+    store.client.onboardingStatus = vi.fn().mockResolvedValue(pendingProof);
     mockedStore.mockReturnValue(store);
     renderSetup();
-    await screen.findByText('First product observation');
-    fireEvent.click(screen.getByRole('button', { name: /^View all 8 checks/ }));
-    expect(screen.getByText(/PostHog query/)).toBeInTheDocument();
-    expect(screen.queryByText(/0 accepted/)).not.toBeInTheDocument();
+
+    expect(await screen.findByText('Waiting for the first event from Alpha…')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Check connection' }));
+    await waitFor(() => expect(store.client.onboardingStatus.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('keeps administration and destructive actions behind one advanced disclosure', async () => {
+    renderSetup();
+    await screen.findByText('Alpha is connected');
+
+    const advanced = screen.getByText('Advanced setup and administration').closest('details');
+    expect(advanced).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Advanced setup and administration'));
+    expect(advanced).toHaveAttribute('open');
+    expect(await screen.findByText('MCP tool groups')).toBeInTheDocument();
+    expect(screen.getByText('Which key goes where?')).toBeInTheDocument();
+    expect(screen.getByText('Danger zone · prod')).toBeInTheDocument();
+    expect(screen.getByText('Instrumentation standard')).toBeInTheDocument();
+  });
+
+  it('shows a safe manual fallback when task copying is blocked', async () => {
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('blocked')) } });
+    renderSetup();
+    await screen.findByText('Alpha is connected');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy task for Codex' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Select the task below and copy it manually');
+    expect(screen.getByText(/Set up Poolstatis analytics in this repository/)).toBeInTheDocument();
+    expect(screen.queryByText('sk_test')).not.toBeInTheDocument();
   });
 });
