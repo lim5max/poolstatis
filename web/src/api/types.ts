@@ -604,6 +604,7 @@ export type OnboardingGateKey =
 export interface OnboardingGate {
   key: OnboardingGateKey;
   complete: boolean;
+  required: boolean;
   evidence: Record<string, unknown>;
   blocker: string | null;
   next_action: string | null;
