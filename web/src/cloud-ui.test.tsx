@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Projects } from './screens/Projects';
 import { Profile } from './screens/Profile';
 import { Usage } from './screens/Usage';
-import { Onboarding } from './screens/Onboarding';
 import { useStore } from './store';
 
 vi.mock('./store', async (importOriginal) => ({ ...(await importOriginal<typeof import('./store')>()), useStore: vi.fn() }));
@@ -128,9 +127,9 @@ describe('cloud workspace project controls', () => {
     } as never);
     renderProjects();
 
-    expect(screen.getByText('What do you want to learn first?')).toBeInTheDocument();
-    expect(screen.getByLabelText('Product name')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create product and continue' })).toBeInTheDocument();
+    expect(screen.getByText('What are you connecting?')).toBeInTheDocument();
+    expect(screen.getByLabelText('Project name')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create workspace' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Workspace name')).not.toBeInTheDocument();
   });
@@ -157,72 +156,6 @@ describe('cloud workspace project controls', () => {
   });
 });
 
-describe('hosted intent onboarding', () => {
-  it('creates one product, protects the write key, and offers an agent task before optional MCP', async () => {
-    const completeOnboarding = vi.fn().mockResolvedValue({
-      organization: { id: 'org-1', name: 'Acme' },
-      project: { slug: 'lion-product', name: 'Lion product', timezone: 'UTC' },
-      tokens: { personal: 'pt_onetime_secret', ingest_prod: 'pk_onetime_secret' },
-      mcp: {
-        command: 'pnpm',
-        args: ['--silent', 'dlx', '@poolstatis/mcp@0.6.0'],
-        package_status: 'published',
-        note: 'Registry package verified.',
-        env: { POOLSTATIS_URL: 'https://api.poolstatis.test', POOLSTATIS_TOKEN: 'pt_onetime_secret' },
-      },
-    });
-    const refresh = vi.fn().mockResolvedValue(undefined);
-    const selectProject = vi.fn();
-    const onboardingStatus = vi.fn().mockResolvedValue({
-      complete: false,
-      gates: [{ key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: 'No event.', next_action: 'Send one event.' }],
-      next_blocker: null,
-      final_result: null,
-    });
-    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
-    mockedStore.mockReturnValue({
-      account: { organization: { name: 'Acme' } },
-      client: { completeOnboarding, onboardingStatus },
-      baseUrl: 'https://api.poolstatis.test',
-      refreshProjects: refresh,
-      setProject: selectProject,
-    } as never);
-
-    render(<MemoryRouter><Onboarding /></MemoryRouter>);
-    expect(screen.getByRole('button', { name: /See where users get stuck/ })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: /Measure a product change/ }));
-    expect(screen.getByRole('button', { name: /Measure a product change/ })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.change(screen.getByLabelText('Product name'), { target: { value: 'Lion product' } });
-    fireEvent.click(screen.getByText('Advanced project settings'));
-    expect(screen.getByLabelText('Project slug')).toHaveValue('lion-product');
-    expect(screen.queryByLabelText('Workspace name')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Create product and continue' }));
-
-    await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith({
-      workspace_name: 'Acme',
-      project_name: 'Lion product',
-      project_slug: 'lion-product',
-    }));
-    expect(await screen.findByText('Product key ready')).toBeInTheDocument();
-    expect(screen.getByText('pk_ write only')).toBeInTheDocument();
-    expect(screen.getByText('VITE_POOLSTATIS_INGEST_KEY=pk_••••••••••••')).toBeInTheDocument();
-    expect(screen.queryByText('pk_onetime_secret')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Copy .env line' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Copy task for Codex' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy task for Codex' }));
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
-    const task = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
-    expect(task).toContain('Install the Poolstatis workflows before editing code');
-    expect(task).toContain('poolstatis-instrument poolstatis-analyze poolstatis-maintain');
-    expect(task).toContain('Measure a product change');
-    expect(task).toContain('MCP is optional');
-    expect(task).not.toContain('pk_onetime_secret');
-    expect(task).not.toContain('pt_onetime_secret');
-    expect(screen.getByRole('button', { name: 'Finish later' })).toBeInTheDocument();
-    await waitFor(() => expect(selectProject).toHaveBeenCalledWith('lion-product'));
-    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
-  });
-});
 
 describe('hosted profile and personal token lifecycle', () => {
   const personalTokens = vi.fn();

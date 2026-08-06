@@ -1,8 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import { MCP_CLIENTS, MCP_RUNNER, mcpClientById, mcpServerConfig, type McpClientId } from '../mcpClients';
-import { CopyButton, ProductConnectionGuide } from '../components/ProductConnectionGuide';
+import {
+  CopyButton,
+  ProductConnectionGuide,
+  type AgentId,
+  type SetupTaskResponse,
+} from '../components/ProductConnectionGuide';
 import { Panel, Loading, DangerConfirm, ErrorNote } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -24,11 +30,24 @@ const TOOLS = [
   ['Delivery', ['configure_webhook', 'verify_webhook']],
 ] as const;
 
+interface SetupIntent {
+  project_mode: 'website' | 'product' | 'both';
+  goal_ids: string[];
+}
+
+interface SetupClient {
+  projectIntent(slug: string): Promise<{ intent: SetupIntent | null }>;
+  setupTask(slug: string, body: { agent_id: AgentId; prefer_llm?: boolean }): Promise<SetupTaskResponse>;
+}
+
 export function Setup() {
   const { client, baseUrl, token, tokenKind, projects, project, env } = useStore();
+  const navigate = useNavigate();
   const [freshIngestKey, setFreshIngestKey] = useState<string | null>(null);
   const [creatingKey, setCreatingKey] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
+  const [connectionOpen, setConnectionOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(() => window.location.hash === '#agent-access');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const publicUrl =
     (import.meta.env.VITE_POOLSTATIS_PUBLIC_URL as string | undefined) ||
@@ -37,10 +56,17 @@ export function Setup() {
   const serverUrl = (baseUrl || publicUrl).replace(/\/$/, '');
   const selectedProject = projects.find((item) => item.slug === project);
   const projectName = selectedProject?.name ?? project ?? 'Product';
+  const setupClient = client as unknown as SetupClient | null;
 
   const proof = useAsync(
     () => project ? client!.onboardingStatus(project, env) : Promise.resolve(null),
     [project, env],
+  );
+  const intent = useAsync(
+    () => project && setupClient && typeof setupClient.projectIntent === 'function'
+      ? setupClient.projectIntent(project)
+      : Promise.resolve({ intent: null }),
+    [project],
   );
   const standard = useAsync(
     () => advancedOpen ? client!.standard() : Promise.resolve(null),
@@ -52,6 +78,21 @@ export function Setup() {
   const agentGate = proof.data?.gates.find((gate) => gate.key === 'agent_connected');
   const eventSeen = eventGate?.complete ?? false;
   const lastSeen = typeof eventGate?.evidence.last_seen === 'string' ? eventGate.evidence.last_seen : null;
+  const eventName = typeof eventGate?.evidence.event_name === 'string'
+    ? eventGate.evidence.event_name
+    : typeof eventGate?.evidence.event === 'string'
+      ? eventGate.evidence.event
+      : null;
+  const eventEnvironment = typeof eventGate?.evidence.environment === 'string'
+    ? eventGate.evidence.environment
+    : typeof eventGate?.evidence.env === 'string'
+      ? eventGate.evidence.env
+      : env;
+  const eventRegistered = typeof eventGate?.evidence.registered === 'boolean'
+    ? eventGate.evidence.registered
+    : eventGate?.evidence.unregistered === true
+      ? false
+      : null;
 
   useEffect(() => {
     if (!project || eventSeen) return;
@@ -76,56 +117,131 @@ export function Setup() {
     }
   };
 
+  const getSetupTask = useCallback(async (agentId: AgentId) => {
+    if (!setupClient || !project || typeof setupClient.setupTask !== 'function') {
+      throw new Error('Setup task generation is unavailable on this server.');
+    }
+    return setupClient.setupTask(project, { agent_id: agentId });
+  }, [project, setupClient]);
+
   if (!project) {
     return <Panel title="Setup"><p className="text-sm text-muted-foreground">Select a project first.</p></Panel>;
   }
+
+  const sourceReady = sourceGate?.complete ?? false;
+  const projectMode = intent.data?.intent?.project_mode;
+  const blocker = proof.loading && !proof.data
+    ? { title: 'Checking connection', why: 'Reading the latest server proof for this project.', action: null }
+    : proof.error
+      ? { title: 'Connection status unavailable', why: proof.error, action: 'Try again' }
+      : !sourceReady
+        ? { title: 'No product key yet', why: 'Create a write-only key before your product can send data.', action: 'Continue setup' }
+        : !eventSeen
+          ? { title: 'No events yet', why: 'Copy one setup task, run the product, and perform the suggested action.', action: 'Copy setup task' }
+          : eventRegistered === false
+            ? { title: 'An event needs a definition', why: 'The data arrived, but its purpose must be reviewed before it becomes a trusted answer.', action: 'Review proposed metrics' }
+            : null;
+
+  const blockerAction = () => {
+    if (proof.error) proof.reload();
+    else if (eventRegistered === false) navigate('/registry');
+    else setConnectionOpen(true);
+  };
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
       <header>
         <div className="mb-1 text-xs text-muted-foreground">{projectName} · {env}</div>
-        <h1 className="serif text-3xl font-normal">Connect your product</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          The setup is complete when Poolstatis receives a real product event. A coding agent can install the SDK, but MCP is optional.
-        </p>
+        <h1 className="serif text-3xl font-normal">Setup</h1>
+        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">What is blocking this project from sending useful data?</p>
       </header>
 
-      <ProductConnectionGuide
-        ingestKey={freshIngestKey}
-        keyReady={sourceGate?.complete ?? false}
-        serverUrl={serverUrl}
-        projectName={projectName}
-        projectSlug={project}
-        eventSeen={eventSeen}
-        lastSeen={lastSeen}
-        checking={proof.loading}
-        creatingKey={creatingKey}
-        error={keyError ?? proof.error}
-        onCreateKey={() => void createIngestKey()}
-        onCheck={proof.reload}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3 border-y py-3">
+        <div className="text-sm font-medium">
+          {eventSeen ? <>Connected <span className="font-normal text-muted-foreground">· {lastSeen ? `last event ${relativeTime(lastSeen)} · ` : ''}{env}</span></> : <>1 step left <span className="font-normal text-muted-foreground">· Send your first event</span></>}
+        </div>
+        {!eventSeen && <Button size="sm" onClick={() => setConnectionOpen(true)}>Continue setup</Button>}
+      </div>
 
-      <OptionalMcp
-        serverUrl={serverUrl}
-        storedToken={tokenKind === 'personal' || tokenKind === 'secret' ? token : null}
-        canIssuePersonalToken={tokenKind === 'user'}
-        connected={agentGate?.complete ?? false}
-      />
-
-      <details
-        className="rounded-md border bg-card"
-        onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
-      >
-        <summary className="cursor-pointer list-none px-4 py-3.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
-          <div className="flex items-center justify-between gap-3">
+      {blocker && (
+        <section className="rounded-lg border bg-muted/10 p-4" aria-live="polite">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <div className="text-sm font-medium">Advanced setup and administration</div>
-              <p className="mt-1 text-xs text-muted-foreground">HTTP ingest, key types, webhooks, MCP tools, instrumentation standard, and data deletion.</p>
+              <h2 className="text-sm font-medium">{blocker.title}</h2>
+              <p className="mt-1 text-xs text-muted-foreground">{blocker.why}</p>
             </div>
-            <Badge variant="outline">Advanced</Badge>
+            {blocker.action && <Button size="sm" onClick={blockerAction}>{blocker.action}</Button>}
           </div>
-        </summary>
-        <div className="space-y-4 border-t p-4">
+        </section>
+      )}
+
+      <section className="overflow-hidden rounded-lg border bg-card" aria-label="Setup status">
+        <SetupRow
+          title="Product connection"
+          status={eventSeen ? 'Connected' : sourceReady ? 'Waiting for event' : 'Needs setup'}
+          description={eventSeen ? `Last server-verified event${lastSeen ? ` ${relativeTime(lastSeen)}` : ''}.` : 'Product key, SDK, and first server-verified event.'}
+          action={connectionOpen ? 'Hide' : eventSeen ? 'View' : 'Continue'}
+          onAction={() => setConnectionOpen((value) => !value)}
+        />
+        <SetupRow
+          title="Tracking plan"
+          status={intent.loading ? 'Checking' : intent.data?.intent ? `${intent.data.intent.goal_ids.length} goals` : 'Not set'}
+          description={intent.data?.intent ? 'Selected outcomes shape the setup task and first answers.' : 'Existing projects keep working without choosing a mode.'}
+          action="Review"
+          onAction={() => navigate('/measurement')}
+        />
+        <SetupRow
+          title="Agent access"
+          status={agentGate?.complete ? 'Connected' : 'Optional'}
+          description="Let your agent read analytics and manage Poolstatis with MCP."
+          action={mcpOpen ? 'Hide' : agentGate?.complete ? 'View' : 'Connect'}
+          onAction={() => setMcpOpen((value) => !value)}
+        />
+        <SetupRow
+          title="Destinations & advanced"
+          status="Optional"
+          description="Webhooks, raw examples, key types, standards, and project controls."
+          action={advancedOpen ? 'Hide' : 'Open'}
+          onAction={() => setAdvancedOpen((value) => !value)}
+          last
+        />
+      </section>
+
+      {connectionOpen && (
+        <ProductConnectionGuide
+          ingestKey={freshIngestKey}
+          keyReady={sourceReady}
+          serverUrl={serverUrl}
+          projectName={projectName}
+          projectSlug={project}
+          projectMode={projectMode ?? 'product'}
+          eventSeen={eventSeen}
+          lastSeen={lastSeen}
+          eventName={eventName}
+          eventEnvironment={eventEnvironment}
+          eventRegistered={eventRegistered}
+          checking={proof.loading}
+          creatingKey={creatingKey}
+          error={keyError ?? proof.error}
+          onCreateKey={() => void createIngestKey()}
+          getSetupTask={getSetupTask}
+          onCheck={proof.reload}
+          onOpenProject={() => navigate(projectMode === 'website' ? '/analyze/web' : projectMode === 'product' ? '/analyze/product' : '/')}
+          onReviewMetrics={() => navigate('/registry')}
+        />
+      )}
+
+      {mcpOpen && (
+        <OptionalMcp
+          serverUrl={serverUrl}
+          storedToken={tokenKind === 'personal' || tokenKind === 'secret' ? token : null}
+          canIssuePersonalToken={tokenKind === 'user'}
+          connected={agentGate?.complete ?? false}
+        />
+      )}
+
+      {advancedOpen && (
+        <section className="space-y-4 rounded-lg border bg-card p-4" aria-label="Advanced setup and administration">
           <KeyMap />
           <HttpExample serverUrl={serverUrl} />
           <WebhookSetup project={project} />
@@ -147,8 +263,26 @@ export function Setup() {
               : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border bg-background p-4 text-xs leading-relaxed">{standard.error ? `Could not load standard: ${standard.error}` : standard.data}</pre>}
           </Panel>
           <DangerZone slug={project} env={env} />
-        </div>
-      </details>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function SetupRow({ title, status, description, action, onAction, last = false }: {
+  title: string;
+  status: string;
+  description: string;
+  action: string;
+  onAction: () => void;
+  last?: boolean;
+}) {
+  return (
+    <div className={cn('grid gap-2 px-4 py-3.5 sm:grid-cols-[10rem_8rem_1fr_auto] sm:items-center', !last && 'border-b')}>
+      <div className="text-sm font-medium">{title}</div>
+      <div><Badge variant={status === 'Connected' ? 'default' : 'outline'}>{status}</Badge></div>
+      <p className="text-xs text-muted-foreground">{description}</p>
+      <Button size="sm" variant="ghost" onClick={onAction}>{action}</Button>
     </div>
   );
 }
@@ -160,7 +294,6 @@ function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected 
   connected: boolean;
 }) {
   const { client } = useStore();
-  const [open, setOpen] = useState(false);
   const [clientId, setClientId] = useState<McpClientId>('codex');
   const [freshToken, setFreshToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -191,20 +324,13 @@ function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected 
   };
 
   return (
-    <section className="rounded-md border bg-card">
-      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-medium">Connect analytics tools to your agent</h2>
-            <Badge variant={connected ? 'default' : 'outline'}>{connected ? 'Connected' : 'Optional'}</Badge>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">MCP lets an agent query metrics and manage the registry. It is not needed to send product events.</p>
-        </div>
-        <Button variant="outline" onClick={() => setOpen((value) => !value)}>{open ? 'Hide MCP setup' : connected ? 'View MCP setup' : 'Set up MCP'}</Button>
+    <section className="rounded-lg border bg-card p-4" id="agent-access" aria-labelledby="agent-access-title">
+      <div className="flex items-center gap-2">
+        <h2 id="agent-access-title" className="text-sm font-medium">Let your agent answer questions</h2>
+        <Badge variant={connected ? 'default' : 'outline'}>{connected ? 'Connected' : 'Optional'}</Badge>
       </div>
-
-      {open && (
-        <div className="space-y-4 border-t p-4">
+      <p className="mt-1 text-xs text-muted-foreground">Connect MCP so your agent can read analytics and manage Poolstatis.</p>
+      <div className="mt-4 space-y-4 border-t pt-4">
           <div className="max-w-sm">
             <div className="mb-1.5 text-xs font-medium text-muted-foreground">Where does your agent run?</div>
             <Select value={clientId} onValueChange={(value) => setClientId(value as McpClientId)}>
@@ -258,10 +384,21 @@ function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected 
           </div>
           {MCP_RUNNER.packageStatus !== 'published' && <p className="text-xs text-amber-600">The configured MCP runner is not marked as published for this deploy.</p>}
           {error && <ErrorNote>{error}</ErrorNote>}
-        </div>
-      )}
+      </div>
     </section>
   );
+}
+
+function relativeTime(value: string): string {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return value;
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  return new Date(timestamp).toLocaleDateString();
 }
 
 function KeyMap() {

@@ -34,13 +34,13 @@ function GradientDef({ id }: { id: string }) {
 export function CodexLogo({
   className,
   variant = "icon",
-  mode = "dark",
+  mode = "auto",
 }: {
   className?: string;
   variant?: "icon" | "icon-color" | "wordmark" | "logo" | "logo-color";
-  mode?: "dark" | "light";
+  mode?: "auto" | "dark" | "light";
 }) {
-  const color = COLORS[mode];
+  const color = mode === "auto" ? "currentColor" : COLORS[mode];
 
   if (variant === "icon") {
     return (
