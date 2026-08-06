@@ -7,7 +7,6 @@ import {
   Browser,
   Catalogue,
   ChartAnalysis,
-  ChevronDown,
   ChevronsUpDown,
   DashboardSpeed,
   Database,
@@ -31,6 +30,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { DisclosureSummary } from '@/components/disclosure';
 import { navigationForProject, type NavigationItem, type ProjectMode, type ProjectNavigation } from './analysis/navigation';
 import { Connect } from './screens/Connect';
 import { Projects } from './screens/Projects';
@@ -267,12 +267,11 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
     );
   }
   return (
-    <details className="group mt-2 border-t pt-2">
-      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2.5 rounded-control px-3 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent/10 hover:text-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring md:min-h-9 [&::-webkit-details-marker]:hidden">
+    <details className="group/disclosure mt-2 border-t pt-2">
+      <DisclosureSummary className="flex min-h-11 cursor-pointer items-center gap-2.5 rounded-control px-3 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent/10 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring md:min-h-9">
         <Catalogue className="size-4 shrink-0" />
         Data &amp; settings
-        <ChevronDown className="ml-auto size-3.5 transition-transform group-open:rotate-180" />
-      </summary>
+      </DisclosureSummary>
       <div className="mt-1 border-l pl-2">
         {items.map((item) => <NavigationRow key={item.label} item={item} collapsed={false} onNavigate={onNavigate} />)}
       </div>
@@ -314,7 +313,7 @@ function NavigationRow({ item, collapsed, onNavigate }: {
         collapsed ? 'justify-center px-2' : 'gap-2.5 px-3',
         isActive
           ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-          : 'text-muted-foreground hover:bg-sidebar-accent/10 hover:text-sidebar-accent',
+          : 'text-muted-foreground hover:bg-sidebar-accent/10 hover:text-sidebar-foreground',
       )}
     >
       <Icon className="size-4 shrink-0" />

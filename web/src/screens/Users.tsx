@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { EmptyState, ErrorNote, Loading, fmtNum } from '@/components/ui';
 import { AnswerCanvas } from '@/components/analytics';
+import { DisclosureSummary } from '@/components/disclosure';
 import {
   actorStatusLabel,
   rangeDateFrom,
@@ -211,8 +212,8 @@ export function Users() {
               </div>
             </>
           )}
-          <details className="border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
-            <summary className="min-h-11 cursor-pointer py-3 font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">How people are resolved</summary>
+          <details className="group/disclosure border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
+            <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center py-3 font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">How people are resolved</DisclosureSummary>
             Activity properties remain redacted. Property filters and pinned properties stay unavailable until a deterministic trusted canonical actor-property source exists.
           </details>
         </AnswerCanvas>

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { DisclosureSummary } from '@/components/disclosure';
 import { ShipSectionNav, ShipStageBadge, deriveDecisionStage } from '../components/ship-lifecycle';
 import type { Decision, DecisionAction, DecisionActionType, DecisionDetail, DecisionOutcome } from '../api/types';
 
@@ -67,7 +68,7 @@ function DecisionReview({ detail, env, onChanged }: { detail: DecisionDetail; en
       <p className="mt-2 text-sm text-muted-foreground">{detail.decision.accepted_rationale ?? detail.decision.proposed_rationale}</p>
       <p className="mt-3 border-t pt-3 text-sm">{detail.contract.business_hypothesis}</p>
       <details className="mt-2">
-        <summary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</summary>
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</DisclosureSummary>
         <div className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 border-l pl-3 text-xs text-muted-foreground"><span>Decision <code className="break-all">{detail.decision.id}</code></span><span>Raw status <code>{detail.decision.status}</code></span><span>Release <code>{detail.release.commit_sha.slice(0, 10)}</code></span><span>Contract r{detail.release.contract_revision}</span><span>{detail.release.env}</span><span>{primary.source}</span></div>
       </details>
     </Panel>
@@ -94,18 +95,18 @@ function ContinuousLoopSummary({ inbox, history, deliveries }: {
   deliveries: Awaited<ReturnType<NonNullable<ReturnType<typeof useStore>['client']>['webhookDeliveries']>>;
 }) {
   return <details className="rounded-panel border bg-muted/10">
-    <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-5">
+    <DisclosureSummary className="flex min-h-11 cursor-pointer items-center gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-5">
       <span>Decision operations &amp; audit</span>
-      <span className="text-xs font-normal text-muted-foreground">{inbox.length} inbox · {history.length} history · {deliveries.length} deliveries</span>
-    </summary>
+      <span className="ml-auto text-xs font-normal text-muted-foreground">{inbox.length} inbox · {history.length} history · {deliveries.length} deliveries</span>
+    </DisclosureSummary>
     <div className="grid border-t lg:grid-cols-3">
       <section className="min-w-0 p-4 lg:border-r sm:p-5" aria-labelledby="decision-inbox-heading">
         <h2 id="decision-inbox-heading" className="text-sm font-medium">Decision inbox</h2>
-        <div className="mt-3 divide-y">{inbox.length === 0 ? <p className="text-sm text-muted-foreground">No decisions need attention.</p> : inbox.slice(0, 4).map((item) => <div key={item.decision_id} className="py-3 first:pt-0"><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm">{item.impact.metric_purpose}</span><Badge variant={item.state === 'needs_attention' ? 'destructive' : item.state === 'resolved' ? 'default' : 'outline'}>{item.state.replaceAll('_', ' ')}</Badge></div><div className="mt-1 text-xs text-muted-foreground">Impact {formatChange(item.impact.relative_change)} · requested: {item.requested_choice ?? 'none'}</div>{item.blocker && <div className="mt-2 text-xs text-destructive">{item.blocker.message}</div>}<details className="mt-1"><summary className="cursor-pointer text-xs text-muted-foreground">Metric key</summary><code className="mt-1 block break-all text-xs">{item.impact.metric_key}</code></details></div>)}</div>
+        <div className="mt-3 divide-y">{inbox.length === 0 ? <p className="text-sm text-muted-foreground">No decisions need attention.</p> : inbox.slice(0, 4).map((item) => <div key={item.decision_id} className="py-3 first:pt-0"><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm">{item.impact.metric_purpose}</span><Badge variant={item.state === 'needs_attention' ? 'destructive' : item.state === 'resolved' ? 'default' : 'outline'}>{item.state.replaceAll('_', ' ')}</Badge></div><div className="mt-1 text-xs text-muted-foreground">Impact {formatChange(item.impact.relative_change)} · requested: {item.requested_choice ?? 'none'}</div>{item.blocker && <div className="mt-2 text-xs text-destructive">{item.blocker.message}</div>}<details className="mt-1"><DisclosureSummary className="inline-flex cursor-pointer items-center text-xs text-muted-foreground">Metric key</DisclosureSummary><code className="mt-1 block break-all text-xs">{item.impact.metric_key}</code></details></div>)}</div>
       </section>
       <section className="min-w-0 border-t p-4 lg:border-r lg:border-t-0 sm:p-5" aria-labelledby="decision-memory-heading">
         <h2 id="decision-memory-heading" className="text-sm font-medium">Decision memory</h2>
-        <div className="mt-3 divide-y">{history.length === 0 ? <p className="text-sm text-muted-foreground">No reviewed history yet.</p> : history.slice(0, 4).map((item) => <div key={item.decision_id} className="py-3 text-xs first:pt-0"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{item.proposed_outcome} → {item.accepted_outcome ?? item.status}</span>{item.stale && <Badge variant="outline">stale context</Badge>}</div><div className="mt-1 text-muted-foreground">{item.evidence_quality.sample_size} actors · {item.evidence_quality.trust}{item.proposal_disagreed ? ' · human corrected' : ''}</div><details className="mt-1"><summary className="cursor-pointer text-muted-foreground">Contract key</summary><code className="mt-1 block break-all">{item.contract_key}</code></details></div>)}</div>
+        <div className="mt-3 divide-y">{history.length === 0 ? <p className="text-sm text-muted-foreground">No reviewed history yet.</p> : history.slice(0, 4).map((item) => <div key={item.decision_id} className="py-3 text-xs first:pt-0"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{item.proposed_outcome} → {item.accepted_outcome ?? item.status}</span>{item.stale && <Badge variant="outline">stale context</Badge>}</div><div className="mt-1 text-muted-foreground">{item.evidence_quality.sample_size} actors · {item.evidence_quality.trust}{item.proposal_disagreed ? ' · human corrected' : ''}</div><details className="mt-1"><DisclosureSummary className="inline-flex cursor-pointer items-center text-muted-foreground">Contract key</DisclosureSummary><code className="mt-1 block break-all">{item.contract_key}</code></details></div>)}</div>
       </section>
       <section className="min-w-0 border-t p-4 lg:border-t-0 sm:p-5" aria-labelledby="webhook-delivery-heading">
         <h2 id="webhook-delivery-heading" className="text-sm font-medium">Webhook delivery</h2>
@@ -117,10 +118,10 @@ function ContinuousLoopSummary({ inbox, history, deliveries }: {
 
 function TechnicalDecisionRecord({ detail }: { detail: DecisionDetail }) {
   return <details className="rounded-panel border bg-muted/10">
-    <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-5">
+    <DisclosureSummary className="flex min-h-11 cursor-pointer items-center gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-5">
       <span>Technical record</span>
-      <span className="text-xs font-normal text-muted-foreground">Query · {detail.revisions.length} revisions</span>
-    </summary>
+      <span className="ml-auto text-xs font-normal text-muted-foreground">Query · {detail.revisions.length} revisions</span>
+    </DisclosureSummary>
     <div className="space-y-5 border-t p-4 sm:p-5">
       <section aria-labelledby="reproducible-query-heading">
         <h2 id="reproducible-query-heading" className="text-sm font-medium">Reproducible query</h2>

@@ -182,6 +182,9 @@
     color: var(--accent-foreground);
     background: var(--accent);
   }
+  details[open] > summary [data-slot="disclosure-chevron"] {
+    transform: rotate(90deg);
+  }
 }
 
 @media (pointer: coarse) {

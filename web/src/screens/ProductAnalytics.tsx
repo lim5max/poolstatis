@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ErrorNote, Loading } from '@/components/ui';
 import { AnswerCanvas, EvidenceLine, type EvidenceTrust } from '@/components/analytics';
+import { DisclosureSummary } from '@/components/disclosure';
 import type { Funnel, MeasurementTrust, Metric } from '../api/types';
 import { useAsync, useStore } from '../store';
 import {
@@ -268,10 +269,10 @@ export function ProductAnalytics() {
       {renderState === 'ready' && currentRun && <ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
 
       <details className="group rounded-panel border bg-card">
-        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5 [&::-webkit-details-marker]:hidden">
+        <DisclosureSummary className="flex min-h-14 cursor-pointer items-center gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
           Edit analysis
-          <span className="text-xs font-normal text-muted-foreground group-open:hidden">Range, metric, view and breakdown</span>
-        </summary>
+          <span className="ml-auto text-xs font-normal text-muted-foreground group-open:hidden">Range, metric, view and breakdown</span>
+        </DisclosureSummary>
         <div className="border-t p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
           <div className="w-full lg:max-w-sm">

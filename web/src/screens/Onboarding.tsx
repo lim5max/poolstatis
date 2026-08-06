@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { DisclosureSummary } from '@/components/disclosure';
 import { cn } from '@/lib/utils';
 import {
   captureProductTelemetry,
@@ -351,8 +352,8 @@ export function Onboarding() {
             )}
           </div>
 
-          <details className="mt-4 border-t pt-3">
-            <summary className="cursor-pointer text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Advanced</summary>
+          <details className="group/disclosure mt-4 border-t pt-3">
+            <DisclosureSummary className="inline-flex cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">Advanced</DisclosureSummary>
             <div className="mt-3 max-w-sm space-y-1.5">
               <Label htmlFor="project-slug">Project slug</Label>
               <Input id="project-slug" value={projectSlug} onChange={(event) => setProjectSlug(slugify(event.target.value))} />

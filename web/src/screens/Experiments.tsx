@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DisclosureSummary } from '@/components/disclosure';
 import {
   SHIP_STAGES,
   SHIP_STAGE_LABELS,
@@ -499,7 +500,7 @@ function ExperimentCard({
         />
       )}
       <details className="mt-2 min-w-0">
-        <summary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</summary>
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</DisclosureSummary>
         <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
           <span>Experiment <code className="break-all">{experiment.key}</code></span>
           <span>Raw status <code>{experiment.status}</code></span>
@@ -680,7 +681,7 @@ function ResultEvidence({ result }: { result: ExperimentResult }) {
       )}
       {result.secondary_metrics.length > 0 && (
         <details className="mt-4 rounded-md border bg-background p-3">
-          <summary className="cursor-pointer text-sm font-medium">Guardrails and secondary metrics · {result.secondary_metrics.length}</summary>
+          <DisclosureSummary className="inline-flex cursor-pointer items-center text-sm font-medium">Guardrails and secondary metrics · {result.secondary_metrics.length}</DisclosureSummary>
           <div className="mt-3 space-y-3">
             {result.secondary_metrics.map((entry) => (
               <div key={entry.metric.key} className="text-xs text-muted-foreground">
@@ -719,7 +720,7 @@ function FlagsBoard({ flags, env, onChanged }: { flags: FeatureFlag[]; env: stri
       </div>
       {archived.length > 0 && (
         <details className="mt-4 rounded-md border p-3">
-          <summary className="cursor-pointer text-sm font-medium">Archived · {archived.length}</summary>
+          <DisclosureSummary className="inline-flex cursor-pointer items-center text-sm font-medium">Archived · {archived.length}</DisclosureSummary>
           <div className="mt-3 divide-y">{archived.map((flag) => <FlagCard key={flag.id} flag={flag} env={env} onChanged={onChanged} />)}</div>
         </details>
       )}
@@ -749,7 +750,7 @@ function FlagCard({ flag, env, onChanged }: { flag: FeatureFlag; env: string; on
       <div className="min-w-0 xl:col-span-2">
         <p className="break-words text-sm leading-relaxed">{flag.purpose}</p>
         <details className="mt-2 min-w-0">
-          <summary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Allocation &amp; technical details</summary>
+          <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Allocation &amp; technical details</DisclosureSummary>
           <div className="min-w-0 border-l pl-3 text-xs text-muted-foreground">
             <div>Flag <code className="break-all">{flag.key}</code> · environment <code>{flag.env ?? 'legacy-all'}</code> · {allocation}% allocated</div>
             <div className="mt-2 flex flex-wrap gap-1">{flag.variants.map((variant) => <Badge key={variant.key} variant="outline" className="font-mono text-xs">{variant.key} {variant.rollout_percentage}%</Badge>)}</div>

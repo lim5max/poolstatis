@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { CodexLogo } from '@/components/logos/codex';
 import { ClaudeCodeLogo } from '@/components/logos/claude-code';
 import { CursorLogo } from '@/components/logos/cursor';
+import { DisclosureSummary } from '@/components/disclosure';
 import { cn } from '@/lib/utils';
 import {
   captureProductTelemetry,
@@ -424,8 +425,8 @@ function ManualInstall({
   code: string;
 }) {
   return (
-    <details className="mt-5 border-t pt-3">
-      <summary className="cursor-pointer text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Install manually</summary>
+    <details className="group/disclosure mt-5 border-t pt-3">
+      <DisclosureSummary className="inline-flex cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">Install manually</DisclosureSummary>
       <div className="mt-4 space-y-4">
         <div className="flex flex-wrap gap-2" role="group" aria-label="Runtime">
           <Button variant={runtime === 'browser' ? 'default' : 'outline'} size="sm" onClick={() => onRuntimeChange('browser')}>React / Vite</Button>

@@ -5,6 +5,7 @@ import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, Loading, Panel, RecoverableError } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { DisclosureSummary } from '@/components/disclosure';
 import {
   SHIP_STAGES,
   SHIP_STAGE_LABELS,
@@ -157,10 +158,10 @@ function ReleaseLifecycleRow({ release, detail, busy, onEvaluate }: {
         {detail?.decision.status === 'proposed' && <Button asChild size="sm"><Link to="/decisions">Review decision</Link></Button>}
         {release.experiment_key && <Button asChild size="sm" variant="outline"><Link to="/experiments">Open experiment</Link></Button>}
       </div>
-      <details className="min-w-0 lg:col-span-3">
-        <summary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">
+      <details className="group/disclosure min-w-0 lg:col-span-3">
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">
           Technical details
-        </summary>
+        </DisclosureSummary>
         <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
           <span>Release <code className="break-all">{release.id}</code></span>
           <span>Raw status <code>{release.status}</code></span>
@@ -194,8 +195,8 @@ function ExperimentLifecycleRow({ experiment }: { experiment: Experiment }) {
         <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">{outcome.detail}</p>
       </div>
       <div className="flex items-start lg:justify-end"><Button asChild size="sm" variant="outline"><Link to="/experiments">Open experiment</Link></Button></div>
-      <details className="min-w-0 lg:col-span-3">
-        <summary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</summary>
+      <details className="group/disclosure min-w-0 lg:col-span-3">
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</DisclosureSummary>
         <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
           <span>Experiment <code className="break-all">{experiment.id}</code></span>
           <span>Raw status <code>{experiment.status}</code></span>

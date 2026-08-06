@@ -103,7 +103,7 @@ describe('customer admin shell', () => {
     expect(screen.getAllByRole('link', { name: /^(Home|Web|People|Ship|Setup)$/ })).toHaveLength(5);
   });
 
-  it('uses semantic Hugeicons and a restrained lime hover state', () => {
+  it('uses semantic Hugeicons and readable neutral hover text', () => {
     render(<MemoryRouter initialEntries={['/analyze/web']}><App /></MemoryRouter>);
 
     expect(NAV_ICONS.Product).toBe(ChartAnalysis);
@@ -120,8 +120,12 @@ describe('customer admin shell', () => {
     expect(NAV_ICONS.Profile).toBe(UserCircle);
 
     const product = screen.getAllByRole('link', { name: 'Product' })[0];
-    expect(product).toHaveClass('hover:bg-sidebar-accent/10', 'hover:text-sidebar-accent');
-    expect(product).not.toHaveClass('hover:text-foreground');
+    expect(product).toHaveClass('hover:bg-sidebar-accent/10', 'hover:text-sidebar-foreground');
+    expect(product).not.toHaveClass('hover:text-sidebar-accent');
+
+    const dataAndSettings = screen.getByText('Data & settings').closest('summary');
+    expect(dataAndSettings).toHaveClass('hover:text-sidebar-foreground');
+    expect(dataAndSettings).not.toHaveClass('hover:text-sidebar-accent');
 
     const web = screen.getAllByRole('link', { name: 'Web' })[0];
     expect(web).toHaveClass('bg-sidebar-accent', 'text-sidebar-accent-foreground');

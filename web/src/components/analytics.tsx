@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react';
+import { DisclosureSummary } from '@/components/disclosure';
 import { cn } from '@/lib/utils';
 
 export type EvidenceTrust = 'trusted' | 'partial' | 'unavailable';
@@ -37,11 +38,11 @@ export function EvidenceLine({
 
   if (!children) return <div className={className}>{line}</div>;
   return (
-    <details className={cn('group', className)}>
-      <summary className="w-fit max-w-full cursor-pointer list-none rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+    <details className={cn('group/disclosure', className)}>
+      <DisclosureSummary className="w-fit max-w-full cursor-pointer rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         {line}
-        <span className="ml-4 text-xs font-medium text-foreground underline decoration-border underline-offset-4 group-open:hidden">How this is calculated</span>
-      </summary>
+        <span className="ml-4 text-xs font-medium text-foreground underline decoration-border underline-offset-4 group-open/disclosure:hidden">How this is calculated</span>
+      </DisclosureSummary>
       <div className="mt-2 max-w-3xl border-l pl-4 text-xs leading-relaxed text-muted-foreground">{children}</div>
     </details>
   );

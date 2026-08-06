@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AnswerCanvas } from '@/components/analytics';
+import { DisclosureSummary } from '@/components/disclosure';
 import { isRedundantKey } from '@/lib/utils';
 import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
 
@@ -150,10 +151,10 @@ export function Measurement() {
     </AnswerCanvas>
 
     <details className="group rounded-panel border bg-card">
-      <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5 [&::-webkit-details-marker]:hidden">
+      <DisclosureSummary className="flex min-h-14 cursor-pointer items-center gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
         Advanced web reporting
-        <span className="text-xs font-normal text-muted-foreground group-open:hidden">Traffic definitions and acquisition breakdowns</span>
-      </summary>
+        <span className="ml-auto text-xs font-normal text-muted-foreground group-open:hidden">Traffic definitions and acquisition breakdowns</span>
+      </DisclosureSummary>
       <div className="space-y-4 border-t p-4 sm:p-5 [&_[data-slot=card]]:rounded-none [&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-none">
         <WebAnalyticsPanel metrics={trust.map((row) => row.metric)} env={env} onSetup={audit.reload} />
         <AcquisitionPanel metrics={trust.map((row) => row.metric)} env={env} />
@@ -170,11 +171,11 @@ function DefinitionGroup({ title, summary, action, children }: {
 }) {
   return (
     <details className="group border-b last:border-b-0">
-      <summary className="grid min-h-16 cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[minmax(11rem,1fr)_minmax(10rem,1fr)_auto] sm:px-5 [&::-webkit-details-marker]:hidden">
+      <DisclosureSummary className="grid min-h-16 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[auto_minmax(11rem,1fr)_minmax(10rem,1fr)_auto] sm:px-5">
         <span className="text-sm font-semibold">{title}</span>
         <span className="text-right text-xs text-muted-foreground sm:text-left sm:text-sm">{summary}</span>
-        <span className="col-span-2 text-right text-xs font-medium text-foreground group-open:hidden sm:col-span-1">{action}</span>
-      </summary>
+        <span className="col-start-2 col-end-4 text-right text-xs font-medium text-foreground group-open:hidden sm:col-auto">{action}</span>
+      </DisclosureSummary>
       <div className="border-t bg-background/35 p-4 sm:p-5 [&_[data-slot=card]]:rounded-none [&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-none">{children}</div>
     </details>
   );
