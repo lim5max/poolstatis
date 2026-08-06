@@ -792,12 +792,24 @@ function registerPlatformRoutes(
     platform(req);
     const project = await resolveProject(req);
     const input = setupTaskInputSchema.parse(req.body);
+    const blocker = input.kind === 'fix'
+      ? (await getOnboardingStatus(
+          ctx.pool,
+          ctx.eventStore,
+          project.id,
+          input.env ?? req.auth.env,
+        )).next_blocker?.key ?? null
+      : null;
+    if (input.kind === 'fix' && blocker === null) {
+      throw new ApiError(409, 'setup_blocker_not_found', 'the selected project has no required setup blocker');
+    }
     return generateSetupTask(ctx.pool, {
       projectId: project.id,
       projectSlug: project.slug,
       publicUrl,
       agentId: input.agent_id,
       preferLlm: input.prefer_llm,
+      ...(blocker ? { blocker } : {}),
       ...(setupTaskProvider ? { provider: setupTaskProvider } : {}),
     });
   });

@@ -161,6 +161,8 @@ export const setupTaskAgentSchema = z.enum(['codex', 'claude-code', 'cursor', 'o
 export const setupTaskInputSchema = z.object({
   agent_id: setupTaskAgentSchema,
   prefer_llm: z.boolean().optional().default(false),
+  kind: z.enum(['initial', 'fix']).optional().default('initial'),
+  env: z.string().trim().min(1).max(100).optional(),
 }).strict();
 
 export const setupTaskDraftSchema = z.object({

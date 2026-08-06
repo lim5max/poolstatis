@@ -1135,6 +1135,7 @@ export interface SetupTaskResponse {
   task: string;
   source: SetupTaskSource;
   plan: SetupTaskPlan;
+  blocker: OnboardingGateKey | null;
 }
 
 export interface SetupTaskFeedbackInput {

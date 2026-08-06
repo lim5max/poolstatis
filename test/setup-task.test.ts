@@ -40,6 +40,7 @@ describe('deterministic setup task', () => {
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
       source: 'deterministic',
+      blocker: null,
       plan: {
         schema_version: 1,
         agent_id: 'codex',
@@ -65,6 +66,22 @@ describe('deterministic setup task', () => {
     );
     expect(intent.body.intent.generated_plan).toEqual(response.body.plan);
     expect(intent.body.intent.generated_plan_source).toBe('deterministic');
+  });
+
+  it('builds a fix task from the current server-derived blocker', async () => {
+    const response = await api(
+      alpha,
+      alpha.secretToken,
+      'POST',
+      `/api/v1/projects/${alpha.projectSlug}/setup-task`,
+      { agent_id: 'codex', kind: 'fix', env: 'prod' },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.blocker).toBe('first_event_observed');
+    expect(response.body.task).toContain('Current server-verified blocker: first_event_observed');
+    expect(response.body.task).toContain('Send one real privacy-safe event');
+    expect(response.body.task).not.toContain('No real product observation');
   });
 
   it.each(['codex', 'claude-code', 'cursor', 'other'])('supports agent %s', async (agent_id) => {
@@ -94,9 +111,17 @@ describe('deterministic setup task', () => {
       `/api/v1/projects/${alpha.projectSlug}/setup-task`,
       { agent_id: 'codex', source_files: ['secret.env'] },
     );
+    const spoofedBlocker = await api(
+      alpha,
+      alpha.secretToken,
+      'POST',
+      `/api/v1/projects/${alpha.projectSlug}/setup-task`,
+      { agent_id: 'codex', kind: 'fix', blocker: 'first_decision_saved' },
+    );
     expect(missing.status).toBe(409);
     expect(missing.body.error.code).toBe('project_intent_required');
     expect(invalid.status).toBe(400);
+    expect(spoofedBlocker.status).toBe(400);
   });
 
   it('falls back without blocking when LLM is preferred but no server secret/provider exists', async () => {

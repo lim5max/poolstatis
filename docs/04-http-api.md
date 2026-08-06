@@ -246,6 +246,10 @@ intent row remain valid and `GET .../intent` returns `{ "intent": null }`.
 { "agent_id": "codex", "prefer_llm": true }
 ```
 
+For a repair task, send `"kind": "fix"` and the selected `env`. Core ignores
+client-provided blocker text, rereads onboarding status, and returns the current
+server-derived blocker code with server-owned repair instructions.
+
 The response contains a schema-validated plan and a secret-free task. Package
 versions and security rules are compiled by the server, not accepted from the
 model. When the server has no `OPENROUTER_API_KEY`, or the provider times out or

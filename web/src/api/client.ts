@@ -118,7 +118,12 @@ export class PoolstatisClient {
     );
   }
 
-  setupTask(slug: string, body: { agent_id: SetupTaskAgent; prefer_llm?: boolean }) {
+  setupTask(slug: string, body: {
+    agent_id: SetupTaskAgent;
+    prefer_llm?: boolean;
+    kind?: 'initial' | 'fix';
+    env?: string;
+  }) {
     return this.req<SetupTaskResponse>(
       'POST', `/api/v1/projects/${encodeURIComponent(slug)}/setup-task`, body,
     );
