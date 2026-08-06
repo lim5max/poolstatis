@@ -54,7 +54,7 @@ export async function createTestEnv(serverOptions: ServerOptions = {}): Promise<
 export async function api(
   env: TestEnv,
   token: string,
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   url: string,
   payload?: unknown,
 ): Promise<{ status: number; body: any }> {

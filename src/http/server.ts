@@ -9,6 +9,8 @@ import {
   completeHostedOnboarding, getAuthenticatedProfile, getBillingSummary, organizationHasProjects,
   requireOrganizationWriteReadiness, updateAuthenticatedProfile, type McpRunnerConfig,
 } from '../services/accounts.js';
+import { getProjectIntent, upsertProjectIntent } from '../services/projectIntents.js';
+import { generateDeterministicSetupTask } from '../services/setupTask.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
   createApiKey, createProject, deleteProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
@@ -77,7 +79,7 @@ import {
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
-  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
+  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskInputSchema, updateProfileSchema, usagePeriodSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -523,7 +525,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
 
   registerIngestRoutes(app, ctx);
   registerAccountRoutes(app, ctx, publicUrl, mcpRunner);
-  registerPlatformRoutes(app, ctx);
+  registerPlatformRoutes(app, ctx, publicUrl);
   return app;
 }
 
@@ -705,7 +707,7 @@ async function hostedAccountResponse(ctx: AppContext, auth: AuthContext) {
 
 // ===== Platform (/api/v1, sk_/pt_ keys) =====
 
-function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
+function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext, publicUrl: string): void {
   const platform = (req: FastifyRequest) => {
     requirePlatformAccess(req.auth);
   };
@@ -764,6 +766,31 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
       }
       throw err;
     }
+  });
+
+  app.get('/api/v1/projects/:slug/intent', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { intent: await getProjectIntent(ctx.pool, project.id) };
+  });
+
+  app.put('/api/v1/projects/:slug/intent', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const input = projectIntentInputSchema.parse(req.body);
+    return { intent: await upsertProjectIntent(ctx.pool, project.id, input) };
+  });
+
+  app.post('/api/v1/projects/:slug/setup-task', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const input = setupTaskInputSchema.parse(req.body);
+    return generateDeterministicSetupTask(ctx.pool, {
+      projectId: project.id,
+      projectSlug: project.slug,
+      publicUrl,
+      agentId: input.agent_id,
+    });
   });
 
   app.delete('/api/v1/projects/:slug', async (req) => {

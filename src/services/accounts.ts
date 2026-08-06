@@ -1,6 +1,8 @@
 import type pg from 'pg';
 import { ApiError, badRequest, organizationWriteDisabled } from '../errors.js';
+import { projectIntentInputSchema, type HostedOnboardingInput } from '../schemas.js';
 import { createApiKey, createProject, type Project } from './projects.js';
+import { upsertProjectIntent, type StoredProjectIntent } from './projectIntents.js';
 
 export interface AuthUserInput {
   issuer: string;
@@ -62,15 +64,12 @@ export interface BillingSummary {
   }>;
 }
 
-export interface OnboardingInput {
-  workspace_name: string;
-  project_slug: string;
-  project_name: string;
-}
+export type OnboardingInput = HostedOnboardingInput;
 
 export interface OnboardingResult {
   organization: { id: string; name: string };
   project: Pick<Project, 'slug' | 'name' | 'timezone'>;
+  intent: StoredProjectIntent | null;
   tokens: {
     personal: string;
     ingest_prod: string;
@@ -642,11 +641,22 @@ export async function completeHostedOnboarding(
       env: 'prod',
       label: 'hosted onboarding prod ingest',
     });
+    const hasIntent = input.project_mode !== undefined;
+    const intent = hasIntent
+      ? await upsertProjectIntent(client as unknown as pg.Pool, project.id, projectIntentInputSchema.parse({
+          project_mode: input.project_mode!,
+          website_domain: input.website_domain ?? null,
+          goal_ids: input.goal_ids!,
+          custom_goal: input.custom_goal ?? null,
+          primary_goal_id: input.primary_goal_id!,
+        }))
+      : null;
     await client.query('COMMIT');
 
     return {
       organization: { id: orgRows[0].id, name: orgRows[0].name },
       project: { slug: project.slug, name: project.name, timezone: project.timezone },
+      intent,
       tokens: { personal: personal.token, ingest_prod: ingest.token },
       mcp: {
         command: mcpRunner.command,

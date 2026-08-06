@@ -38,11 +38,107 @@ export const createPersonalTokenSchema = z.object({
   label: z.string().trim().min(1).max(200).optional(),
 });
 
+export const projectModeSchema = z.enum(['website', 'product', 'both']);
+
+export const projectGoalIdSchema = z.enum([
+  'website_traffic',
+  'website_pages',
+  'website_conversion',
+  'campaigns_referrals',
+  'content_engagement',
+  'activation',
+  'feature_adoption',
+  'retention',
+  'release',
+  'reliability_performance',
+  'custom',
+]);
+
+export const websiteDomainSchema = z.string()
+  .trim()
+  .toLowerCase()
+  .min(1)
+  .max(253)
+  .regex(
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/,
+    'website_domain must be a hostname without a scheme, path, port, query, or credentials',
+  );
+
+export const projectIntentInputSchema = z.object({
+  project_mode: projectModeSchema,
+  website_domain: websiteDomainSchema.nullable().default(null),
+  goal_ids: z.array(projectGoalIdSchema).min(1).max(3),
+  custom_goal: z.string().trim().min(10).max(500).nullable().default(null),
+  primary_goal_id: projectGoalIdSchema,
+}).strict().superRefine((intent, ctx) => {
+  if (new Set(intent.goal_ids).size !== intent.goal_ids.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['goal_ids'],
+      message: 'goal_ids must be unique',
+    });
+  }
+  if (!intent.goal_ids.includes(intent.primary_goal_id)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['primary_goal_id'],
+      message: 'primary_goal_id must be one of goal_ids',
+    });
+  }
+  const hasCustom = intent.goal_ids.includes('custom');
+  if (hasCustom && intent.custom_goal === null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['custom_goal'],
+      message: 'custom_goal is required when custom is selected',
+    });
+  }
+  if (!hasCustom && intent.custom_goal !== null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['custom_goal'],
+      message: 'custom_goal must be null unless custom is selected',
+    });
+  }
+}).transform((intent) => ({
+  ...intent,
+  website_domain: intent.project_mode === 'product' ? null : intent.website_domain,
+}));
+
+export type ProjectMode = z.infer<typeof projectModeSchema>;
+export type ProjectGoalId = z.infer<typeof projectGoalIdSchema>;
+export type ProjectIntentInput = z.infer<typeof projectIntentInputSchema>;
+
+const hostedIntentFieldsSchema = z.object({
+  project_mode: projectModeSchema.optional(),
+  website_domain: websiteDomainSchema.nullable().optional(),
+  goal_ids: z.array(projectGoalIdSchema).min(1).max(3).optional(),
+  custom_goal: z.string().trim().min(10).max(500).nullable().optional(),
+  primary_goal_id: projectGoalIdSchema.optional(),
+});
+
 export const hostedOnboardingSchema = z.object({
   workspace_name: z.string().trim().min(1).max(200),
   project_slug: z.string().trim().min(1).max(200),
   project_name: z.string().trim().min(1).max(200),
+}).merge(hostedIntentFieldsSchema).strict().superRefine((input, ctx) => {
+  const intentKeys = ['project_mode', 'website_domain', 'goal_ids', 'custom_goal', 'primary_goal_id'] as const;
+  const hasAnyIntent = intentKeys.some((key) => input[key] !== undefined);
+  if (!hasAnyIntent) return;
+  const candidate = projectIntentInputSchema.safeParse({
+    project_mode: input.project_mode,
+    website_domain: input.website_domain ?? null,
+    goal_ids: input.goal_ids,
+    custom_goal: input.custom_goal ?? null,
+    primary_goal_id: input.primary_goal_id,
+  });
+  if (candidate.success) return;
+  for (const issue of candidate.error.issues) {
+    ctx.addIssue({ ...issue, path: issue.path });
+  }
 });
+
+export type HostedOnboardingInput = z.infer<typeof hostedOnboardingSchema>;
 
 export const actorDistinctIdSchema = z.string().trim().min(1).max(200);
 
@@ -59,6 +155,47 @@ export const keySchema = z
   .min(1)
   .max(100)
   .regex(/^[a-z][a-z0-9_]*$/, 'keys are snake_case identifiers, e.g. checkout_conversion');
+
+export const setupTaskAgentSchema = z.enum(['codex', 'claude-code', 'cursor', 'other']);
+
+export const setupTaskInputSchema = z.object({
+  agent_id: setupTaskAgentSchema,
+  prefer_llm: z.boolean().optional().default(false),
+}).strict();
+
+export const setupTaskPlanSchema = z.object({
+  schema_version: z.literal(1),
+  agent_id: setupTaskAgentSchema,
+  project_mode: projectModeSchema,
+  goal_ids: z.array(projectGoalIdSchema).min(1).max(3),
+  primary_goal_id: projectGoalIdSchema,
+  summary: z.string().trim().min(10).max(240),
+  events: z.array(z.object({
+    name: eventName,
+    purpose: z.string().trim().min(10).max(240),
+  }).strict()).min(1).max(3),
+  smoke_action: z.string().trim().min(5).max(240),
+  release_manifest: z.object({
+    sdk: z.literal('@poolstatis/sdk@0.3.0'),
+    skills: z.tuple([
+      z.literal('poolstatis-instrument'),
+      z.literal('poolstatis-analyze'),
+      z.literal('poolstatis-maintain'),
+    ]),
+  }).strict(),
+  security_rules: z.array(z.string().trim().min(10).max(300)).length(4),
+}).strict().superRefine((plan, ctx) => {
+  if (!plan.goal_ids.includes(plan.primary_goal_id)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['primary_goal_id'],
+      message: 'primary_goal_id must be one of goal_ids',
+    });
+  }
+});
+
+export type SetupTaskAgent = z.infer<typeof setupTaskAgentSchema>;
+export type SetupTaskPlan = z.infer<typeof setupTaskPlanSchema>;
 
 // ===== Product decision loop trust foundation =====
 
