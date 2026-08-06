@@ -33,11 +33,13 @@ const TOOLS = [
 interface SetupIntent {
   project_mode: 'website' | 'product' | 'both';
   goal_ids: string[];
+  custom_goal: string | null;
 }
 
 interface SetupClient {
   projectIntent(slug: string): Promise<{ intent: SetupIntent | null }>;
   setupTask(slug: string, body: { agent_id: AgentId; prefer_llm?: boolean }): Promise<SetupTaskResponse>;
+  setupTaskFeedback(slug: string, body: { outcome: 'blocked'; blocker: string }): Promise<{ recorded: true }>;
 }
 
 export function Setup() {
@@ -93,6 +95,7 @@ export function Setup() {
     : eventGate?.evidence.unregistered === true
       ? false
       : null;
+  const preferLlm = Boolean(intent.data?.intent?.custom_goal);
 
   useEffect(() => {
     if (!project || eventSeen) return;
@@ -121,8 +124,8 @@ export function Setup() {
     if (!setupClient || !project || typeof setupClient.setupTask !== 'function') {
       throw new Error('Setup task generation is unavailable on this server.');
     }
-    return setupClient.setupTask(project, { agent_id: agentId });
-  }, [project, setupClient]);
+    return setupClient.setupTask(project, { agent_id: agentId, prefer_llm: preferLlm });
+  }, [preferLlm, project, setupClient]);
 
   if (!project) {
     return <Panel title="Setup"><p className="text-sm text-muted-foreground">Select a project first.</p></Panel>;
@@ -130,23 +133,20 @@ export function Setup() {
 
   const sourceReady = sourceGate?.complete ?? false;
   const projectMode = intent.data?.intent?.project_mode;
+  const serverBlocker = proof.data?.next_blocker ?? null;
+  const blockerCode = serverBlocker ? normalizeBlockerKey(serverBlocker.key) : null;
+  const reviewBlocker = serverBlocker ? needsRegistryReview(serverBlocker.key) : false;
   const blocker = proof.loading && !proof.data
-    ? { title: 'Checking connection', why: 'Reading the latest server proof for this project.', action: null }
+    ? { kind: 'loading' as const, title: 'Checking connection', why: 'Reading the latest server proof for this project.' }
     : proof.error
-      ? { title: 'Connection status unavailable', why: proof.error, action: 'Try again' }
-      : !sourceReady
-        ? { title: 'No product key yet', why: 'Create a write-only key before your product can send data.', action: 'Continue setup' }
-        : !eventSeen
-          ? { title: 'No events yet', why: 'Copy one setup task, run the product, and perform the suggested action.', action: 'Copy setup task' }
-          : eventRegistered === false
-            ? { title: 'An event needs a definition', why: 'The data arrived, but its purpose must be reviewed before it becomes a trusted answer.', action: 'Review proposed metrics' }
-            : null;
-
-  const blockerAction = () => {
-    if (proof.error) proof.reload();
-    else if (eventRegistered === false) navigate('/registry');
-    else setConnectionOpen(true);
-  };
+      ? { kind: 'error' as const, title: 'Connection status unavailable', why: proof.error }
+      : serverBlocker
+        ? {
+            kind: 'server' as const,
+            title: blockerTitle(serverBlocker.key),
+            why: serverBlocker.blocker ?? serverBlocker.next_action ?? 'Complete the next server-verified setup gate.',
+          }
+        : null;
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
@@ -170,7 +170,22 @@ export function Setup() {
               <h2 className="text-sm font-medium">{blocker.title}</h2>
               <p className="mt-1 text-xs text-muted-foreground">{blocker.why}</p>
             </div>
-            {blocker.action && <Button size="sm" onClick={blockerAction}>{blocker.action}</Button>}
+            {blocker.kind === 'error' && <Button size="sm" onClick={proof.reload}>Try again</Button>}
+            {blocker.kind === 'server' && reviewBlocker && (
+              <Button size="sm" onClick={() => navigate('/registry')}>Review proposed metrics</Button>
+            )}
+            {blocker.kind === 'server' && !reviewBlocker && intent.data?.intent && blockerCode && setupClient && typeof setupClient.setupTaskFeedback === 'function' && (
+              <FixTaskAction
+                key={blockerCode}
+                projectSlug={project}
+                blockerCode={blockerCode}
+                preferLlm={preferLlm}
+                client={setupClient}
+              />
+            )}
+            {blocker.kind === 'server' && !reviewBlocker && !intent.loading && !intent.data?.intent && (
+              <Button size="sm" onClick={() => setConnectionOpen(true)}>Continue setup</Button>
+            )}
           </div>
         </section>
       )}
@@ -285,6 +300,117 @@ function SetupRow({ title, status, description, action, onAction, last = false }
       <Button size="sm" variant="ghost" onClick={onAction}>{action}</Button>
     </div>
   );
+}
+
+function FixTaskAction({ projectSlug, blockerCode, preferLlm, client }: {
+  projectSlug: string;
+  blockerCode: string;
+  preferLlm: boolean;
+  client: SetupClient;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [fallbackTask, setFallbackTask] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const recordFeedback = async () => {
+    await client.setupTaskFeedback(projectSlug, {
+      outcome: 'blocked',
+      blocker: blockerCode,
+    });
+  };
+
+  const copyFixTask = async () => {
+    setBusy(true);
+    setCopied(false);
+    setFallbackTask(null);
+    setError(null);
+    try {
+      const response = await client.setupTask(projectSlug, {
+        agent_id: 'codex',
+        prefer_llm: preferLlm,
+      });
+      const task = response.task.trim();
+      if (!task) throw new Error('The server returned an empty setup task.');
+      if (containsCredentialValue(task)) {
+        throw new Error('Task generation was blocked because it contained credential-like text.');
+      }
+      try {
+        await navigator.clipboard.writeText(task);
+      } catch {
+        setFallbackTask(task);
+        return;
+      }
+      await recordFeedback();
+      setCopied(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not prepare the fix task.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmManualCopy = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await recordFeedback();
+      setFallbackTask(null);
+      setCopied(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not record the copied task.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex max-w-xl flex-col items-start gap-2">
+      <Button size="sm" onClick={() => void copyFixTask()} disabled={busy || Boolean(fallbackTask)}>
+        {busy && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+        {busy ? 'Preparing task…' : copied ? 'Fix task copied' : 'Copy fix task'}
+      </Button>
+      {fallbackTask && (
+        <div className="space-y-2">
+          <p role="alert" className="text-xs text-destructive">Copy was blocked by the browser. Select the task below and copy it manually.</p>
+          <pre tabIndex={0} className="max-h-72 max-w-full overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 text-xs text-foreground">{fallbackTask}</pre>
+          <Button size="sm" variant="outline" onClick={() => void confirmManualCopy()} disabled={busy}>I copied it</Button>
+        </div>
+      )}
+      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+function containsCredentialValue(value: string): boolean {
+  return /\b(?:pk|sk|pt)_[a-z0-9][a-z0-9_-]{3,}/i.test(value);
+}
+
+function normalizeBlockerKey(value: string): string | null {
+  const normalized = value.trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 100)
+    .replace(/_+$/g, '');
+  return /^[a-z][a-z0-9_]*$/.test(normalized) ? normalized : null;
+}
+
+function needsRegistryReview(key: string): boolean {
+  return key === 'metrics_activated' || key === 'data_quality_accepted';
+}
+
+function blockerTitle(key: string): string {
+  switch (key) {
+    case 'workspace_created': return 'Workspace setup is incomplete';
+    case 'data_source_connected': return 'Product connection is incomplete';
+    case 'first_event_observed': return 'No events yet';
+    case 'metrics_activated': return 'Metrics need review';
+    case 'data_quality_accepted': return 'Data quality needs review';
+    case 'first_query_produced': return 'No trusted answer yet';
+    case 'first_decision_saved': return 'No decision saved yet';
+    case 'agent_connected': return 'Agent access is not connected';
+    default: return 'Setup needs attention';
+  }
 }
 
 function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected }: {

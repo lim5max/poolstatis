@@ -175,6 +175,42 @@ describe('Product Experience V2 onboarding', () => {
     expect(refreshProjects).toHaveBeenCalledOnce();
   });
 
+  it('requests an LLM-preferred setup task only after a custom goal is persisted', async () => {
+    const requestTask = vi.fn().mockResolvedValue(setupTask());
+    mockedStore.mockReturnValue({
+      account: { organization: { name: 'Acme' } },
+      client: {
+        completeOnboarding: vi.fn().mockResolvedValue({
+          organization: { id: 'org-1', name: 'Acme' },
+          project: { slug: 'custom-project', name: 'Custom project', timezone: 'UTC' },
+          tokens: { personal: 'pt_private_once', ingest_prod: 'pk_private_once' },
+          mcp: { command: 'pnpm', args: [], package_status: 'published', note: '', env: {} },
+        }),
+        onboardingStatus: vi.fn().mockResolvedValue(pendingProof),
+        setupTask: requestTask,
+      },
+      baseUrl: 'https://api.poolstatis.test',
+      refreshProjects: vi.fn().mockResolvedValue(undefined),
+      setProject: vi.fn(),
+    } as never);
+
+    render(<MemoryRouter><Onboarding /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('radio', { name: /^A product/ }));
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Custom project' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Something else' }));
+    fireEvent.change(screen.getByLabelText('Describe the decision you want to make.'), {
+      target: { value: 'Understand successful workspace activation' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy .env line' }));
+
+    await waitFor(() => expect(requestTask).toHaveBeenCalledWith('custom-project', {
+      agent_id: 'codex',
+      prefer_llm: true,
+    }));
+  });
+
   it('shows a selectable fallback when clipboard permission is denied and does not regenerate on rerender', async () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('blocked')) } });
     const requestTask = vi.fn().mockResolvedValue(setupTask());
@@ -236,6 +272,159 @@ describe('Product Experience V2 onboarding', () => {
 });
 
 describe('condensed Setup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+  });
+
+  it('uses the server next_blocker instead of inferring a blocker from local gates', async () => {
+    const proof = {
+      ...connectedProof,
+      gates: connectedProof.gates.map((gate) => gate.key === 'data_source_connected'
+        ? { ...gate, complete: false, blocker: 'No key.', next_action: 'Create a key.' }
+        : gate),
+      next_blocker: {
+        key: 'metrics_activated',
+        complete: false,
+        required: true,
+        evidence: {},
+        blocker: 'No active metric has verified source evidence.',
+        next_action: 'Review and activate a metric.',
+      },
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(proof),
+        projectIntent: vi.fn().mockResolvedValue({
+          intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
+        }),
+      },
+      baseUrl: 'https://api.poolstatis.test',
+      token: 'sk_private',
+      tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    expect(await screen.findByText('Metrics need review')).toBeInTheDocument();
+    expect(screen.getByText('No active metric has verified source evidence.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review proposed metrics' })).toBeInTheDocument();
+    expect(screen.queryByText('No product key yet')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy fix task' })).not.toBeInTheDocument();
+  });
+
+  it('copies a server fix task and records only the normalized server gate key', async () => {
+    const requestTask = vi.fn().mockResolvedValue(setupTask());
+    const feedback = vi.fn().mockResolvedValue({ recorded: true });
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue({
+          ...connectedProof,
+          next_blocker: {
+            key: 'first_query_produced',
+            complete: false,
+            required: true,
+            evidence: {},
+            blocker: 'No answer has been produced yet.',
+            next_action: 'Run the first trusted query.',
+          },
+        }),
+        projectIntent: vi.fn().mockResolvedValue({
+          intent: { project_mode: 'product', goal_ids: ['custom'], custom_goal: 'Understand successful workspace activation' },
+        }),
+        setupTask: requestTask,
+        setupTaskFeedback: feedback,
+      },
+      baseUrl: 'https://api.poolstatis.test',
+      token: 'sk_private',
+      tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+
+    await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', { agent_id: 'codex', prefer_llm: true }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(setupTask().task));
+    await waitFor(() => expect(feedback).toHaveBeenCalledWith('alpha', {
+      outcome: 'blocked',
+      blocker: 'first_query_produced',
+    }));
+    expect(Object.keys(feedback.mock.calls[0]![1])).toEqual(['outcome', 'blocker']);
+  });
+
+  it('never renders or copies a credential-like server task', async () => {
+    const feedback = vi.fn();
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue({
+          ...connectedProof,
+          next_blocker: {
+            key: 'first_query_produced', complete: false, required: true, evidence: {},
+            blocker: 'No answer yet.', next_action: 'Run a query.',
+          },
+        }),
+        projectIntent: vi.fn().mockResolvedValue({
+          intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
+        }),
+        setupTask: vi.fn().mockResolvedValue({ ...setupTask(), task: 'Paste pk_live_secret_value into the agent chat.' }),
+        setupTaskFeedback: feedback,
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('credential-like text');
+    expect(screen.queryByText(/pk_live_secret_value/)).not.toBeInTheDocument();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(feedback).not.toHaveBeenCalled();
+  });
+
+  it('offers a selectable fallback and records feedback only after manual confirmation', async () => {
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+    const feedback = vi.fn().mockResolvedValue({ recorded: true });
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue({
+          ...connectedProof,
+          next_blocker: {
+            key: 'first_decision_saved', complete: false, required: true, evidence: {},
+            blocker: 'No decision has been saved.', next_action: 'Save the first decision.',
+          },
+        }),
+        projectIntent: vi.fn().mockResolvedValue({
+          intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
+        }),
+        setupTask: vi.fn().mockResolvedValue(setupTask()),
+        setupTaskFeedback: feedback,
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Select the task below');
+    expect(screen.getByText(setupTask().task)).toHaveAttribute('tabindex', '0');
+    expect(feedback).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'I copied it' }));
+    await waitFor(() => expect(feedback).toHaveBeenCalledWith('alpha', {
+      outcome: 'blocked',
+      blocker: 'first_decision_saved',
+    }));
+  });
+
   it('keeps a connected legacy project usable with four compact rows and optional MCP', async () => {
     mockedStore.mockReturnValue({
       client: {
