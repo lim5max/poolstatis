@@ -161,7 +161,7 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe(
-        '034_project_deletion.sql',
+        '035_project_intents.sql',
       );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
@@ -445,7 +445,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '034_project_deletion.sql',
+        last_migration: '035_project_intents.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -669,7 +669,7 @@ describe('hosted policy migration role topology', () => {
       );
       const applied = await migrateWithEvidence(selfHost);
       expect(applied.at(-1)).toBe(
-        '034_project_deletion.sql',
+        '035_project_intents.sql',
       );
       const topology = await selfHost.query<{
         superuser: boolean;
