@@ -9,6 +9,7 @@ export const SHIP_STAGES = [
   'waiting_for_evidence',
   'ready_to_decide',
   'decided',
+  'concluded_without_decision',
 ] as const;
 
 export type ShipStage = typeof SHIP_STAGES[number];
@@ -19,6 +20,7 @@ export const SHIP_STAGE_LABELS: Record<ShipStage, string> = {
   waiting_for_evidence: 'Waiting for evidence',
   ready_to_decide: 'Ready to decide',
   decided: 'Decided',
+  concluded_without_decision: 'Concluded',
 };
 
 export function deriveReleaseStage(release: Release, decision?: Decision): ShipStage {
@@ -30,7 +32,7 @@ export function deriveReleaseStage(release: Release, decision?: Decision): ShipS
 }
 
 export function deriveExperimentStage(experiment: Experiment): ShipStage {
-  if (experiment.status === 'concluded') return experiment.decision ? 'decided' : 'ready_to_decide';
+  if (experiment.status === 'concluded') return experiment.decision ? 'decided' : 'concluded_without_decision';
   if (experiment.status === 'running') return 'running';
   return 'preparing';
 }
@@ -112,7 +114,7 @@ export function experimentOutcome(experiment: Experiment): ShipOutcome {
   if (experiment.status === 'concluded') {
     return {
       title: 'Concluded without decision',
-      detail: 'The measurement window is closed and no rollout decision was recorded.',
+      detail: 'The measurement window is closed and no rollout decision was recorded. This experiment is final.',
       available: false,
     };
   }
@@ -153,7 +155,7 @@ export function ShipSectionNav({ current }: { current: typeof SHIP_VIEWS[number]
 
 export function ShipLifecycleRail({ counts }: { counts: Record<ShipStage, number> }) {
   return (
-    <ol aria-label="Ship lifecycle" className="grid grid-cols-2 border-b md:grid-cols-5">
+    <ol aria-label="Ship lifecycle" className="grid grid-cols-2 border-b md:grid-cols-6">
       {SHIP_STAGES.map((stage, index) => (
         <li key={stage} className="min-w-0 border-b p-3 last:border-b-0 even:border-l md:border-b-0 md:border-l md:first:border-l-0">
           <div className="flex items-center gap-2">

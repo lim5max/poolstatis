@@ -142,7 +142,7 @@ describe('Ship lifecycle', () => {
     expect(deriveReleaseStage(release('decided'), decision('approved'))).toBe('decided');
     expect(deriveExperimentStage(experiment('draft'))).toBe('preparing');
     expect(deriveExperimentStage(experiment('running'))).toBe('running');
-    expect(deriveExperimentStage(experiment('concluded'))).toBe('ready_to_decide');
+    expect(deriveExperimentStage(experiment('concluded'))).toBe('concluded_without_decision');
     expect(deriveExperimentStage(experiment('concluded', {
       outcome: 'inconclusive', rationale: 'The evidence did not support a directional decision.',
     }))).toBe('decided');
@@ -158,7 +158,7 @@ describe('Ship lifecycle', () => {
     });
     expect(experimentOutcome(experiment('concluded'))).toEqual({
       title: 'Concluded without decision',
-      detail: 'The measurement window is closed and no rollout decision was recorded.',
+      detail: 'The measurement window is closed and no rollout decision was recorded. This experiment is final.',
       available: false,
     });
   });
@@ -184,7 +184,7 @@ describe('Ship lifecycle', () => {
     render(<MemoryRouter initialEntries={['/changes']}><Routes>
       <Route path="/changes" element={<>
         <ShipSectionNav current="lifecycle" />
-        <ShipLifecycleRail counts={{ preparing: 1, running: 2, waiting_for_evidence: 1, ready_to_decide: 1, decided: 3 }} />
+        <ShipLifecycleRail counts={{ preparing: 1, running: 2, waiting_for_evidence: 1, ready_to_decide: 1, decided: 3, concluded_without_decision: 1 }} />
       </>} />
       <Route path="/experiments" element={<p>Experiments route opened</p>} />
     </Routes></MemoryRouter>);
@@ -196,8 +196,9 @@ describe('Ship lifecycle', () => {
     expect(within(navigation).getByRole('link', { name: 'Lifecycle' })).toHaveAttribute('aria-current', 'page');
     expect(within(navigation).getByRole('link', { name: 'Experiments & flags' })).toHaveAttribute('href', '/experiments');
     const rail = screen.getByRole('list', { name: 'Ship lifecycle' });
-    expect(rail).toHaveClass('grid-cols-2', 'md:grid-cols-5');
-    expect(within(rail).getAllByRole('listitem')).toHaveLength(5);
+    expect(rail).toHaveClass('grid-cols-2', 'md:grid-cols-6');
+    expect(within(rail).getAllByRole('listitem')).toHaveLength(6);
+    expect(within(rail).getByText('Concluded')).toBeInTheDocument();
     fireEvent.click(within(navigation).getByRole('link', { name: 'Experiments & flags' }));
     expect(screen.getByText('Experiments route opened')).toBeInTheDocument();
   });
@@ -246,7 +247,8 @@ describe('Ship lifecycle', () => {
 
     render(<MemoryRouter><Changes /></MemoryRouter>);
 
-    expect(await screen.findByRole('article', { name: 'Closed legacy test' })).toHaveTextContent('Ready to decide');
+    expect(await screen.findByRole('article', { name: 'Closed legacy test' })).toHaveTextContent('Concluded');
+    expect(screen.getByRole('article', { name: 'Closed legacy test' })).not.toHaveTextContent('Ready to decide');
     expect(screen.getByRole('article', { name: 'Closed legacy test' })).toHaveTextContent('Concluded without decision');
     expect(screen.getByRole('article', { name: 'Recorded outcome' })).toHaveTextContent('Decision recorded · rollout unchanged');
     expect(screen.getByRole('article', { name: 'Delivered winner' })).toHaveTextContent('treatment moved to 100%');
