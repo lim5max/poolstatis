@@ -635,8 +635,8 @@ describe('live customer screen UX', () => {
       flags: vi.fn().mockResolvedValue([]), experiments: vi.fn().mockResolvedValue([]),
       metrics: vi.fn().mockResolvedValue([metric]),
     }));
-    render(<TooltipProvider><Experiments /></TooltipProvider>);
-    expect(await screen.findByText('Ship a change safely')).toBeInTheDocument();
+    render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
+    expect(await screen.findByRole('heading', { name: 'Experiments & flags' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Safe rollout/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /A\/B experiment/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Remote config/ })).toBeInTheDocument();
@@ -666,7 +666,7 @@ describe('live customer screen UX', () => {
       }]),
       metrics: vi.fn().mockResolvedValue([metric]),
     }));
-    render(<TooltipProvider><Experiments /></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
     const card = (await screen.findByText(hypothesis)).closest('article');
     expect(card).toHaveAttribute('aria-label', 'Proof-first CTA');
     expect(screen.getByText(hypothesis)).toHaveClass('break-words');
@@ -681,7 +681,7 @@ describe('live customer screen UX', () => {
       metrics: vi.fn().mockResolvedValue([metric]),
       prepareExperiment,
     }));
-    render(<TooltipProvider><Experiments /></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
 
     fireEvent.click(await screen.findByRole('button', { name: /A\/B experiment/ }));
     fireEvent.change(screen.getByLabelText('Experiment name'), { target: { value: 'Shorter signup' } });
@@ -721,7 +721,7 @@ describe('live customer screen UX', () => {
       experimentReadiness: vi.fn().mockResolvedValue({ key: 'signup_test', env: 'prod', ready: true, checks }),
       launchExperiment,
     }));
-    render(<TooltipProvider><Experiments /></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Check readiness' }));
     expect(await screen.findByText('Ready to start measuring?')).toBeInTheDocument();
@@ -748,7 +748,7 @@ describe('live customer screen UX', () => {
       }]),
       metrics: vi.fn().mockResolvedValue([metric]),
     }));
-    render(<TooltipProvider><Experiments /></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Record decision' }));
     expect(await screen.findByText(/does not change rollout unless you explicitly select a variant/)).toBeInTheDocument();
@@ -781,7 +781,7 @@ describe('live customer screen UX', () => {
       }]),
       metrics: vi.fn().mockResolvedValue([metric]),
     }));
-    render(<TooltipProvider><Experiments /></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('Prod experiment')).toBeInTheDocument();
     expect(screen.queryByText('Dev experiment')).not.toBeInTheDocument();

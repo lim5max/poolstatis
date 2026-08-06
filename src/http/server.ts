@@ -9,6 +9,9 @@ import {
   completeHostedOnboarding, getAuthenticatedProfile, getBillingSummary, organizationHasProjects,
   requireOrganizationWriteReadiness, updateAuthenticatedProfile, type McpRunnerConfig,
 } from '../services/accounts.js';
+import { getProjectIntent, recordSetupTaskFeedback, upsertProjectIntent } from '../services/projectIntents.js';
+import { generateSetupTask } from '../services/setupTask.js';
+import type { SetupTaskProvider } from '../services/setupTaskProvider.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
   createApiKey, createProject, deleteProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
@@ -77,7 +80,7 @@ import {
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
-  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, updateProfileSchema, usagePeriodSchema,
+  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usagePeriodSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -102,6 +105,7 @@ export interface ServerOptions {
   artifactDir?: string;
   countryResolver?: CountryResolver;
   cursorSigningSecret?: string;
+  setupTaskProvider?: SetupTaskProvider;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -338,7 +342,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         : false;
       callback(null, {
         origin: configured || publicBrowserWrite,
-        methods: publicBrowserWrite ? ['POST'] : ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+        methods: publicBrowserWrite ? ['POST'] : ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
         credentials: false,
       });
@@ -523,7 +527,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
 
   registerIngestRoutes(app, ctx);
   registerAccountRoutes(app, ctx, publicUrl, mcpRunner);
-  registerPlatformRoutes(app, ctx);
+  registerPlatformRoutes(app, ctx, publicUrl, options.setupTaskProvider);
   return app;
 }
 
@@ -705,7 +709,12 @@ async function hostedAccountResponse(ctx: AppContext, auth: AuthContext) {
 
 // ===== Platform (/api/v1, sk_/pt_ keys) =====
 
-function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
+function registerPlatformRoutes(
+  app: FastifyInstance,
+  ctx: AppContext,
+  publicUrl: string,
+  setupTaskProvider?: SetupTaskProvider,
+): void {
   const platform = (req: FastifyRequest) => {
     requirePlatformAccess(req.auth);
   };
@@ -764,6 +773,53 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
       }
       throw err;
     }
+  });
+
+  app.get('/api/v1/projects/:slug/intent', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { intent: await getProjectIntent(ctx.pool, project.id) };
+  });
+
+  app.put('/api/v1/projects/:slug/intent', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const input = projectIntentInputSchema.parse(req.body);
+    return { intent: await upsertProjectIntent(ctx.pool, project.id, input) };
+  });
+
+  app.post('/api/v1/projects/:slug/setup-task', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const input = setupTaskInputSchema.parse(req.body);
+    const blocker = input.kind === 'fix'
+      ? (await getOnboardingStatus(
+          ctx.pool,
+          ctx.eventStore,
+          project.id,
+          input.env ?? req.auth.env,
+        )).next_blocker?.key ?? null
+      : null;
+    if (input.kind === 'fix' && blocker === null) {
+      throw new ApiError(409, 'setup_blocker_not_found', 'the selected project has no required setup blocker');
+    }
+    return generateSetupTask(ctx.pool, {
+      projectId: project.id,
+      projectSlug: project.slug,
+      publicUrl,
+      agentId: input.agent_id,
+      preferLlm: input.prefer_llm,
+      ...(blocker ? { blocker } : {}),
+      ...(setupTaskProvider ? { provider: setupTaskProvider } : {}),
+    });
+  });
+
+  app.post('/api/v1/projects/:slug/setup-task/feedback', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const input = setupTaskFeedbackSchema.parse(req.body);
+    const result = await recordSetupTaskFeedback(ctx.pool, project.id, input);
+    return reply.status(201).send(result);
   });
 
   app.delete('/api/v1/projects/:slug', async (req) => {
@@ -1584,9 +1640,10 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/api/v1/projects/:slug/decisions', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const { status, release_id } = req.query as { status?: string; release_id?: string };
+    const { env, status, release_id } = req.query as { env?: string; status?: string; release_id?: string };
     return {
       decisions: await listDecisions(ctx.pool, project.id, {
+        ...(env ? { env } : {}),
         ...(status ? { status } : {}),
         ...(release_id ? { releaseId: release_id } : {}),
       }),

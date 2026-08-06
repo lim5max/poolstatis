@@ -1,4 +1,4 @@
-const MUTATING_METHODS = new Set(['POST', 'PATCH', 'DELETE']);
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /**
  * POST is also used by a small number of read/analysis operations. These

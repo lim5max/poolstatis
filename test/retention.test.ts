@@ -249,22 +249,30 @@ describe('retention maintenance', () => {
   });
 
   it('never exceeds the total row budget', async () => {
-    const project = await projectId(short);
-    await short.pool.query('UPDATE projects SET retention_months = 1 WHERE id = $1', [project]);
-    for (const event of ['row-budget.one', 'row-budget.two', 'row-budget.three']) {
-      await insertEvent(short, project, event, '2025-01-01T00:00:00.000Z');
+    // Earlier cases deliberately leave a continuation backlog on the shared
+    // project. Use a fresh tenant so the row budget assertion measures only
+    // the three rows created by this case, independent of statement ordering.
+    const budget = await createTestEnv();
+    try {
+      const project = await projectId(budget);
+      await budget.pool.query('UPDATE projects SET retention_months = 1 WHERE id = $1', [project]);
+      for (const event of ['row-budget.one', 'row-budget.two', 'row-budget.three']) {
+        await insertEvent(budget, project, event, '2025-01-01T00:00:00.000Z');
+      }
+      const result = await runRetentionOnce(budget.pool, {
+        now: new Date('2026-07-16T12:00:00.000Z'),
+        projectId: project,
+        batchSize: 10,
+        maxBatchesPerRun: 40,
+        maxRowsPerRun: 2,
+        maxRunMs: 5_000,
+      });
+      expect(result.eventsDeleted).toBe(2);
+      expect(result.hasMore).toBe(true);
+      expect(await eventCount(budget, project, 'row-budget.%')).toBe(1);
+    } finally {
+      await budget.close();
     }
-    const result = await runRetentionOnce(short.pool, {
-      now: new Date('2026-07-16T12:00:00.000Z'),
-      projectId: project,
-      batchSize: 10,
-      maxBatchesPerRun: 40,
-      maxRowsPerRun: 2,
-      maxRunMs: 5_000,
-    });
-    expect(result.eventsDeleted).toBe(2);
-    expect(result.hasMore).toBe(true);
-    expect(await eventCount(short, project, 'row-budget.%')).toBe(1);
   });
 
 });

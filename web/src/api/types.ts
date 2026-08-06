@@ -83,7 +83,11 @@ export interface Experiment {
   status: ExperimentStatus;
   started_at: string | null;
   concluded_at: string | null;
-  decision: { outcome: 'ship' | 'iterate' | 'stop' | 'inconclusive'; rationale: string } | null;
+  decision: {
+    outcome: 'ship' | 'iterate' | 'stop' | 'inconclusive';
+    rationale: string;
+    ship_variant_key?: string;
+  } | null;
   created_at: string;
   updated_at: string;
 }
@@ -1066,6 +1070,7 @@ export interface OrganizationUsage {
 export interface HostedOnboardingResult {
   organization: { id: string; name: string };
   project: { slug: string; name: string; timezone: string };
+  intent: ProjectIntent | null;
   tokens: {
     personal: string;
     ingest_prod: string;
@@ -1080,4 +1085,66 @@ export interface HostedOnboardingResult {
       POOLSTATIS_TOKEN: string;
     };
   };
+}
+
+export type ProjectMode = 'website' | 'product' | 'both';
+export type ProjectGoalId =
+  | 'website_traffic'
+  | 'website_pages'
+  | 'website_conversion'
+  | 'campaigns_referrals'
+  | 'content_engagement'
+  | 'activation'
+  | 'feature_adoption'
+  | 'retention'
+  | 'release'
+  | 'reliability_performance'
+  | 'custom';
+export type SetupTaskAgent = 'codex' | 'claude-code' | 'cursor' | 'other';
+export type SetupTaskSource = 'deterministic' | 'llm' | 'fallback';
+
+export interface SetupTaskPlan {
+  schema_version: 1;
+  agent_id: SetupTaskAgent;
+  project_mode: ProjectMode;
+  goal_ids: ProjectGoalId[];
+  primary_goal_id: ProjectGoalId;
+  summary: string;
+  events: Array<{ name: string; purpose: string }>;
+  smoke_action: string;
+  release_manifest: {
+    sdk: '@poolstatis/sdk@0.3.0';
+    skills: ['poolstatis-instrument', 'poolstatis-analyze', 'poolstatis-maintain'];
+    skills_cli: 'skills@1.5.22';
+    skills_source: 'https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz';
+  };
+  security_rules: string[];
+}
+
+export interface ProjectIntentInput {
+  project_mode: ProjectMode;
+  website_domain: string | null;
+  goal_ids: ProjectGoalId[];
+  custom_goal: string | null;
+  primary_goal_id: ProjectGoalId;
+}
+
+export interface ProjectIntent extends ProjectIntentInput {
+  schema_version: 1;
+  generated_plan: SetupTaskPlan | null;
+  generated_plan_source: SetupTaskSource;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SetupTaskResponse {
+  task: string;
+  source: SetupTaskSource;
+  plan: SetupTaskPlan;
+  blocker: OnboardingGateKey | null;
+}
+
+export interface SetupTaskFeedbackInput {
+  outcome: 'completed' | 'fallback' | 'blocked' | 'abandoned';
+  blocker: string | null;
 }

@@ -57,6 +57,13 @@ export interface Config {
     packageStatus: 'published' | 'publish_pending';
     note: string;
   };
+  setupTaskComposer: {
+    apiKey: string | null;
+    apiUrl: string;
+    model: string;
+    timeoutMs: number;
+    maxOutputTokens: number;
+  };
   auth: {
     issuer: string;
     audience: string;
@@ -187,6 +194,20 @@ function parseCorsOrigins(raw: string | undefined, production: boolean): string[
     }
     return url.origin;
   }))];
+}
+
+function providerApiUrl(raw: string | undefined): string {
+  const value = raw?.trim() || 'https://openrouter.ai/api/v1/chat/completions';
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('OPENROUTER_API_URL must be an HTTPS URL');
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+    throw new Error('OPENROUTER_API_URL must be an HTTPS URL without credentials, query, or fragment');
+  }
+  return url.toString();
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -414,6 +435,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       note: packageStatus === 'published'
         ? `The configured MCP runner is pinned to ${MCP_PACKAGE_SPEC}.`
         : 'Registry install is disabled. Replace <path-to-poolstatis-core> with an exact local Core checkout path.',
+    },
+    setupTaskComposer: {
+      apiKey: env.OPENROUTER_API_KEY?.trim() || null,
+      apiUrl: providerApiUrl(env.OPENROUTER_API_URL),
+      model: requiredText(env.OPENROUTER_MODEL, 'openrouter/auto', 'OPENROUTER_MODEL'),
+      timeoutMs: positiveInt(env.OPENROUTER_TIMEOUT_MS, 8_000, 'OPENROUTER_TIMEOUT_MS', 60_000),
+      maxOutputTokens: positiveInt(env.OPENROUTER_MAX_TOKENS, 800, 'OPENROUTER_MAX_TOKENS', 4_096),
     },
     auth: issuer && audience && jwksUri ? {
       issuer,

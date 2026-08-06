@@ -139,6 +139,10 @@ GET    /api/v1/projects/{slug}/schema
 GET    /api/v1/projects/{slug}/onboarding/status?env=prod
 POST   /api/v1/projects/{slug}/onboarding/observe-agent
 POST   /api/v1/projects/{slug}/onboarding/acknowledgements
+GET    /api/v1/projects/{slug}/intent
+PUT    /api/v1/projects/{slug}/intent
+POST   /api/v1/projects/{slug}/setup-task
+POST   /api/v1/projects/{slug}/setup-task/feedback
 POST   /api/v1/projects/{slug}/identity-links
 GET    /api/v1/projects/{slug}/identity-links?env=prod
 POST   /api/v1/projects/{slug}/identity-links/{id}/revoke
@@ -228,6 +232,41 @@ GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+### Project intent and setup task
+
+`PUT .../intent` stores the user-selected `website`, `product`, or `both` mode
+and one to three goal identifiers. A `custom` goal requires bounded text, but
+that text is never copied into analytics feedback. Existing projects without an
+intent row remain valid and `GET .../intent` returns `{ "intent": null }`.
+
+`POST .../setup-task` accepts an agent id and optional provider preference:
+
+```json
+{ "agent_id": "codex", "prefer_llm": true }
+```
+
+For a repair task, send `"kind": "fix"` and the selected `env`. Core ignores
+client-provided blocker text, rereads onboarding status, and returns the current
+server-derived blocker code with server-owned repair instructions.
+
+The response contains a schema-validated plan and a secret-free task. Package
+versions and security rules are compiled by the server, not accepted from the
+model. When the server has no `OPENROUTER_API_KEY`, or the provider times out or
+returns invalid content, `source` is `fallback` and the deterministic task is
+returned. The provider receives only mode and bounded goals: never API tokens,
+source files, environment content, raw URLs, DOM/form text, or customer event
+payloads.
+
+`POST .../setup-task/feedback` stores only an outcome and optional normalized
+blocker code, for example:
+
+```json
+{ "outcome": "blocked", "blocker": "first_event_observed" }
+```
+
+It does not accept chat or copied-task content. The existing onboarding status
+endpoint remains the source of server-verified gate evidence.
 
 ### Historical backfill
 

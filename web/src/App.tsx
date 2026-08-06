@@ -30,7 +30,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
-import { NAVIGATION_ZONES, type NavigationItem } from './analysis/navigation';
+import { DisclosureSummary } from '@/components/disclosure';
+import { navigationForProject, type NavigationItem, type ProjectMode, type ProjectNavigation } from './analysis/navigation';
 import { Connect } from './screens/Connect';
 import { Projects } from './screens/Projects';
 import { Overview } from './screens/Overview';
@@ -53,6 +54,14 @@ import { Usage } from './screens/Usage';
 import { AuthPortal } from './screens/AuthPortal';
 
 export const NAV_ICONS: Record<string, PoolstatisIcon> = {
+  Home: LayoutGrid,
+  Product: ChartAnalysis,
+  Web: Globe,
+  People: UserGroup,
+  Ship: GitCommit,
+  Events: Database,
+  Definitions: Ruler,
+  Experience: Browser,
   Overview: LayoutGrid,
   'Product analytics': ChartAnalysis,
   'Web analytics': Globe,
@@ -69,25 +78,21 @@ export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Usage: DashboardSpeed,
   Profile: UserCircle,
 };
-const WORKSPACE_ITEMS: NavigationItem[] = [
-  { label: 'Usage', to: '/usage', availability: 'available' },
-  { label: 'Profile', to: '/profile', availability: 'available' },
-];
 const TITLES: Record<string, string> = {
-  '/': 'Overview',
+  '/': 'Home',
   '/projects': 'Projects',
-  '/analyze/product': 'Product analytics',
+  '/analyze/product': 'Product',
   '/usage': 'Usage',
   '/profile': 'Profile',
-  '/analyze/web': 'Web analytics',
-  '/analyze/users': 'Users',
+  '/analyze/web': 'Web',
+  '/analyze/users': 'People',
   '/registry': 'Registry',
-  '/measurement': 'Measurement',
-  '/data': 'Data',
+  '/measurement': 'Definitions',
+  '/data': 'Events',
   '/keys': 'Keys',
   '/experiments': 'Experiments',
-  '/experience': 'Browser experience',
-  '/changes': 'Changes',
+  '/experience': 'Experience',
+  '/changes': 'Ship',
   '/decisions': 'Decisions',
   '/setup': 'Setup',
   '/onboarding': 'Onboarding',
@@ -112,7 +117,8 @@ export function App() {
 }
 
 function AdminApp() {
-  const { client } = useStore();
+  const { client, project } = useStore();
+  const navigation = useProjectNavigation(client, project);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadSidebarState);
   const toggleSidebar = () => {
@@ -139,15 +145,15 @@ function AdminApp() {
       </a>
       <div className="min-h-screen bg-background md:flex md:h-screen">
         <MobileTopbar />
-        <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
-        <MobileNavDrawer onNavigate={() => setMobileNavOpen(false)} />
+        <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} navigation={navigation} />
+        <MobileNavDrawer navigation={navigation} onNavigate={() => setMobileNavOpen(false)} />
         <Main />
       </div>
     </Dialog>
   );
 }
 
-function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+function Sidebar({ collapsed, onToggle, navigation }: { collapsed: boolean; onToggle: () => void; navigation: ProjectNavigation }) {
   return (
     <aside
       className={cn(
@@ -175,7 +181,7 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
         </Button>
       </div>
       <nav className={cn('min-h-0 flex-1 overflow-y-auto', collapsed ? 'px-2' : 'px-3')} aria-label="Customer admin">
-        <NavGroups collapsed={collapsed} />
+        <NavGroups collapsed={collapsed} navigation={navigation} />
       </nav>
       <ConnectionFooter collapsed={collapsed} />
     </aside>
@@ -198,7 +204,7 @@ function MobileTopbar() {
   );
 }
 
-function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
+function MobileNavDrawer({ onNavigate, navigation }: { onNavigate: () => void; navigation: ProjectNavigation }) {
   return (
     <DialogContent
       showCloseButton={false}
@@ -221,7 +227,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
           </DialogClose>
         </div>
         <nav className="flex-1 px-3" aria-label="Customer admin">
-          <NavGroups onNavigate={onNavigate} />
+          <NavGroups navigation={navigation} onNavigate={onNavigate} />
         </nav>
         <ConnectionFooter onDisconnect={onNavigate} />
       </aside>
@@ -229,20 +235,47 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
   );
 }
 
-function NavGroups({ onNavigate, collapsed = false }: { onNavigate?: () => void; collapsed?: boolean }) {
+function NavGroups({ navigation, onNavigate, collapsed = false }: { navigation: ProjectNavigation; onNavigate?: () => void; collapsed?: boolean }) {
   return (
     <>
-      {[...NAVIGATION_ZONES, { label: 'Workspace', items: WORKSPACE_ITEMS }].map((g) => (
-        <div key={g.label} className="mb-1">
-          {collapsed
-            ? <div className="mx-2 my-2 border-t" aria-hidden="true" />
-            : <div className="px-3 pb-1.5 pt-3.5 text-xs font-medium text-muted-foreground">{g.label}</div>}
-          {g.items.map((item) => (
-            <NavigationRow key={item.label} item={item} collapsed={collapsed} onNavigate={onNavigate} />
-          ))}
-        </div>
-      ))}
+      <div className="mb-1">
+        {!collapsed && <div className="px-3 pb-1.5 pt-3.5 text-xs font-medium text-muted-foreground">Answers</div>}
+        {navigation.primary.map((item) => (
+          <NavigationRow key={item.label} item={item} collapsed={collapsed} onNavigate={onNavigate} />
+        ))}
+      </div>
+      <SecondaryNavigation navigation={navigation} collapsed={collapsed} onNavigate={onNavigate} />
     </>
+  );
+}
+
+function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
+  navigation: ProjectNavigation;
+  collapsed: boolean;
+  onNavigate?: () => void;
+}) {
+  const items = [
+    ...navigation.secondary,
+    { label: 'Usage', to: '/usage', availability: 'available' as const },
+    { label: 'Profile', to: '/profile', availability: 'available' as const },
+  ];
+  if (collapsed) {
+    return (
+      <div className="mt-2 border-t pt-2">
+        <NavigationRow item={{ label: 'Definitions', to: '/measurement', availability: 'available' }} collapsed onNavigate={onNavigate} />
+      </div>
+    );
+  }
+  return (
+    <details className="group/disclosure mt-2 border-t pt-2">
+      <DisclosureSummary className="flex min-h-11 cursor-pointer items-center gap-2.5 rounded-control px-3 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent/10 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring md:min-h-9">
+        <Catalogue className="size-4 shrink-0" />
+        Data &amp; settings
+      </DisclosureSummary>
+      <div className="mt-1 border-l pl-2">
+        {items.map((item) => <NavigationRow key={item.label} item={item} collapsed={false} onNavigate={onNavigate} />)}
+      </div>
+    </details>
   );
 }
 
@@ -280,7 +313,7 @@ function NavigationRow({ item, collapsed, onNavigate }: {
         collapsed ? 'justify-center px-2' : 'gap-2.5 px-3',
         isActive
           ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-          : 'text-muted-foreground hover:bg-sidebar-accent/10 hover:text-sidebar-accent',
+          : 'text-muted-foreground hover:bg-sidebar-accent/10 hover:text-sidebar-foreground',
       )}
     >
       <Icon className="size-4 shrink-0" />
@@ -367,7 +400,7 @@ function Main() {
           </div>
         </div>
       </div>
-      <motion.main id="main-content" tabIndex={-1} className="max-w-6xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
+      <motion.main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-7xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
         initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
         <Routes>
           <Route path="/" element={<Guarded><Overview /></Guarded>} />
@@ -394,6 +427,48 @@ function Main() {
       </motion.main>
     </div>
   );
+}
+
+interface IntentNavigationResponse {
+  intent: {
+    project_mode: ProjectMode;
+    goal_ids: string[];
+    primary_goal_id: string;
+  } | null;
+}
+
+interface IntentCapableClient {
+  projectIntent?: (slug: string) => Promise<IntentNavigationResponse>;
+}
+
+function useProjectNavigation(client: ReturnType<typeof useStore>['client'], project: string | null): ProjectNavigation {
+  const [context, setContext] = useState<{ project: string | null; mode: ProjectMode | null; goalIds: string[] }>({
+    project: null,
+    mode: null,
+    goalIds: [],
+  });
+
+  useEffect(() => {
+    let current = true;
+    setContext({ project, mode: null, goalIds: [] });
+    if (!client || !project) return () => { current = false; };
+    const intentClient = client as unknown as IntentCapableClient;
+    if (!intentClient.projectIntent) return () => { current = false; };
+    void intentClient.projectIntent(project)
+      .then(({ intent }) => {
+        if (current) setContext({ project, mode: intent?.project_mode ?? null, goalIds: intent?.goal_ids ?? [] });
+      })
+      .catch(() => {
+        // Legacy/unset and temporarily unavailable intent both keep broad access.
+        if (current) setContext({ project, mode: null, goalIds: [] });
+      });
+    return () => { current = false; };
+  }, [client, project]);
+
+  return navigationForProject({
+    mode: context.project === project ? context.mode : null,
+    goalIds: context.project === project ? context.goalIds : [],
+  });
 }
 
 function Guarded({ children }: { children: ReactNode }) {

@@ -8,6 +8,15 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DisclosureSummary } from '@/components/disclosure';
+import {
+  SHIP_STAGES,
+  SHIP_STAGE_LABELS,
+  ShipSectionNav,
+  ShipStageBadge,
+  deriveExperimentStage,
+  experimentOutcome,
+} from '../components/ship-lifecycle';
 import type {
   Experiment,
   ExperimentReadiness,
@@ -63,11 +72,12 @@ export function Experiments() {
   const visibleExperiments = experiments.filter((experiment) => experiment.env === env || experiment.env === null);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
+      <ShipSectionNav current="experiments" />
       <header className="max-w-2xl">
-        <h1 className="serif text-3xl text-balance">Ship a change safely</h1>
+        <h1 className="serif text-3xl text-balance">Experiments &amp; flags</h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Choose the job. Poolstatis keeps traffic changes explicit and measures outcomes only after a real exposure.
+          Prepare and run traffic changes, then record the outcome after real exposure evidence.
         </p>
       </header>
 
@@ -381,10 +391,12 @@ function ExperimentBoard({
   onChanged: () => void;
 }) {
   const groups = [
-    { key: 'draft', title: 'Needs action', items: experiments.filter((experiment) => experiment.status === 'draft') },
-    { key: 'running', title: 'Running', items: experiments.filter((experiment) => experiment.status === 'running') },
-    { key: 'concluded', title: 'Completed', items: experiments.filter((experiment) => experiment.status === 'concluded') },
-  ];
+    ...SHIP_STAGES.map((stage) => ({
+      key: stage,
+      title: SHIP_STAGE_LABELS[stage],
+      items: experiments.filter((experiment) => deriveExperimentStage(experiment) === stage),
+    })),
+  ].filter((group) => group.items.length > 0);
 
   if (experiments.length === 0) {
     return <Panel><EmptyState headline="No experiments" lead="choose A/B experiment above to prepare one safe draft" /></Panel>;
@@ -392,7 +404,7 @@ function ExperimentBoard({
 
   return (
     <div className="space-y-4">
-      {groups.filter((group) => group.items.length > 0).map((group) => (
+      {groups.map((group) => (
         <Panel key={group.key} title={<>{group.title} <span className="ml-1 font-sans text-sm font-normal text-muted-foreground">{group.items.length}</span></>}>
           <div className="divide-y rounded-md border">
             {group.items.map((experiment) => (
@@ -429,6 +441,8 @@ function ExperimentCard({
   const [result, setResult] = useState<ExperimentResult | null>(null);
   const [showDecision, setShowDecision] = useState(false);
   const legacyAllEnvironments = experiment.env === null;
+  const stage = deriveExperimentStage(experiment);
+  const outcome = experimentOutcome(experiment);
 
   const checkReadiness = async () => {
     setBusy(true); setError(null);
@@ -449,16 +463,13 @@ function ExperimentCard({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-medium">{experiment.name}</h3>
-            <ExperimentStatus status={experiment.status} />
-            <Badge variant="outline">{experiment.env ?? 'legacy · all envs'}</Badge>
+            <ShipStageBadge stage={stage} />
           </div>
           <p className="mt-2 break-words text-sm leading-relaxed text-muted-foreground">{experiment.hypothesis}</p>
-          <code className="mt-2 block break-all text-xs text-muted-foreground">{experiment.key}</code>
         </div>
-        <div className="min-w-0 text-xs text-muted-foreground">
-          <div>Success: <code>{experiment.primary_metric_key}</code></div>
-          <div className="mt-1">Delivery: <code>{experiment.flag_key}</code></div>
-          {experiment.control_variant_key && <div className="mt-1">Control: <code>{experiment.control_variant_key}</code></div>}
+        <div className="min-w-0">
+          <div className={outcome.available ? 'text-sm font-medium' : 'text-sm font-medium text-muted-foreground'}>{outcome.title}</div>
+          <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">{outcome.detail}</p>
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
           {busy && <Loader2 className="size-4 animate-spin" />}
@@ -469,9 +480,6 @@ function ExperimentCard({
       </div>
       {legacyAllEnvironments && (
         <p className="mt-3 text-xs text-muted-foreground">Legacy all-environment experiments are read only here. Review every environment before using the legacy conclude operation.</p>
-      )}
-      {flag && experiment.status === 'draft' && (
-        <p className="mt-3 text-xs text-muted-foreground">Flag is {flag.status} · {flag.variants.length} variants · {flag.variants.reduce((sum, variant) => sum + variant.rollout_percentage, 0)}% allocated.</p>
       )}
       {result && <ResultEvidence result={result} />}
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
@@ -491,6 +499,18 @@ function ExperimentCard({
           onApplied={() => { setShowDecision(false); onChanged(); }}
         />
       )}
+      <details className="mt-2 min-w-0">
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</DisclosureSummary>
+        <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
+          <span>Experiment <code className="break-all">{experiment.key}</code></span>
+          <span>Raw status <code>{experiment.status}</code></span>
+          <span>Environment <code>{experiment.env ?? 'legacy-all'}</code></span>
+          <span>Success metric <code>{experiment.primary_metric_key}</code></span>
+          <span>Delivery flag <code>{experiment.flag_key}</code></span>
+          {experiment.control_variant_key && <span>Control <code>{experiment.control_variant_key}</code></span>}
+          {flag && <span>Allocation {flag.variants.reduce((sum, variant) => sum + variant.rollout_percentage, 0)}% across {flag.variants.length} variants · flag {flag.status}</span>}
+        </div>
+      </details>
     </article>
   );
 }
@@ -661,7 +681,7 @@ function ResultEvidence({ result }: { result: ExperimentResult }) {
       )}
       {result.secondary_metrics.length > 0 && (
         <details className="mt-4 rounded-md border bg-background p-3">
-          <summary className="cursor-pointer text-sm font-medium">Guardrails and secondary metrics · {result.secondary_metrics.length}</summary>
+          <DisclosureSummary className="inline-flex cursor-pointer items-center text-sm font-medium">Guardrails and secondary metrics · {result.secondary_metrics.length}</DisclosureSummary>
           <div className="mt-3 space-y-3">
             {result.secondary_metrics.map((entry) => (
               <div key={entry.metric.key} className="text-xs text-muted-foreground">
@@ -700,7 +720,7 @@ function FlagsBoard({ flags, env, onChanged }: { flags: FeatureFlag[]; env: stri
       </div>
       {archived.length > 0 && (
         <details className="mt-4 rounded-md border p-3">
-          <summary className="cursor-pointer text-sm font-medium">Archived · {archived.length}</summary>
+          <DisclosureSummary className="inline-flex cursor-pointer items-center text-sm font-medium">Archived · {archived.length}</DisclosureSummary>
           <div className="mt-3 divide-y">{archived.map((flag) => <FlagCard key={flag.id} flag={flag} env={env} onChanged={onChanged} />)}</div>
         </details>
       )}
@@ -726,13 +746,16 @@ function FlagCard({ flag, env, onChanged }: { flag: FeatureFlag; env: string; on
     <article aria-label={flag.name} className="grid min-w-0 gap-4 p-4 md:grid-cols-2 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_minmax(12rem,0.8fr)_auto]">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{flag.name}</span><FlagStatus status={flag.status} /></div>
-        <code className="mt-1 block break-all text-xs text-muted-foreground">{flag.key}</code>
-        <div className="mt-1 text-xs text-muted-foreground">{flag.env ?? 'Legacy · all environments'}</div>
       </div>
-      <p className="min-w-0 break-words text-sm leading-relaxed">{flag.purpose}</p>
-      <div className="min-w-0">
-        <div className="text-xs text-muted-foreground">{allocation}% allocated</div>
-        <div className="mt-2 flex flex-wrap gap-1">{flag.variants.map((variant) => <Badge key={variant.key} variant="outline" className="font-mono text-xs">{variant.key} {variant.rollout_percentage}%</Badge>)}</div>
+      <div className="min-w-0 xl:col-span-2">
+        <p className="break-words text-sm leading-relaxed">{flag.purpose}</p>
+        <details className="mt-2 min-w-0">
+          <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Allocation &amp; technical details</DisclosureSummary>
+          <div className="min-w-0 border-l pl-3 text-xs text-muted-foreground">
+            <div>Flag <code className="break-all">{flag.key}</code> · environment <code>{flag.env ?? 'legacy-all'}</code> · {allocation}% allocated</div>
+            <div className="mt-2 flex flex-wrap gap-1">{flag.variants.map((variant) => <Badge key={variant.key} variant="outline" className="font-mono text-xs">{variant.key} {variant.rollout_percentage}%</Badge>)}</div>
+          </div>
+        </details>
       </div>
       <div className="flex items-start justify-end">
         {flag.env === null
@@ -756,10 +779,5 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function FlagStatus({ status }: { status: FeatureFlag['status'] }) {
   const variant = status === 'active' ? 'default' : status === 'archived' ? 'secondary' : 'outline';
-  return <Badge variant={variant}>{status}</Badge>;
-}
-
-function ExperimentStatus({ status }: { status: Experiment['status'] }) {
-  const variant = status === 'running' ? 'default' : status === 'concluded' ? 'secondary' : 'outline';
   return <Badge variant={variant}>{status}</Badge>;
 }

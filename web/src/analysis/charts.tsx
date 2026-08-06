@@ -17,6 +17,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { DisclosureSummary } from '@/components/disclosure';
 import { cn } from '@/lib/utils';
 import {
   resolveManualRenderer,
@@ -296,7 +297,7 @@ export function ManualVisualizationRenderer({ spec, result }: { spec: Visualizat
       <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3 sm:px-5">
         <Button asChild variant="outline" size="sm" className="h-11"><Link to="/registry">Open definition</Link></Button>
         <details className="group min-w-0 flex-1">
-          <summary className="flex min-h-11 cursor-pointer items-center justify-end text-xs font-medium text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Table fallback & reproducible query</summary>
+          <DisclosureSummary className="flex min-h-11 cursor-pointer items-center justify-end text-xs font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Table fallback &amp; reproducible query</DisclosureSummary>
           <div className="mt-3 space-y-4">
             <ResultTable result={result} />
             {'query' in spec.source && (

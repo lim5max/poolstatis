@@ -88,7 +88,7 @@ describe('hosted auth onboarding', () => {
       project_name: 'Agent Product',
     });
 
-    expect(res.status).toBe(201);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.organization.id).toBe(before.body.organization.id);
     expect(res.body.organization.name).toBe(before.body.organization.name);
     expect(res.body.project).toMatchObject({
@@ -101,10 +101,59 @@ describe('hosted auth onboarding', () => {
     expect(res.body.mcp.package_status).toBe('publish_pending');
     expect(res.body.mcp.env.POOLSTATIS_URL).not.toContain('127.0.0.1');
     expect(res.body.mcp.env.POOLSTATIS_URL).not.toContain('localhost');
+    expect(res.body.intent).toBeNull();
 
     const projects = await authApi('GET', '/api/v1/projects');
     expect(projects.status).toBe(200);
     expect(projects.body.projects.map((p: any) => p.slug)).toContain('agent-product');
+  });
+
+  it('validates incomplete intent before creating any hosted resources', async () => {
+    const isolatedToken = await authToken('auth0|invalid-intent', 'invalid@example.com', 'Invalid Intent');
+    expect((await authApiAs(isolatedToken, 'GET', '/api/v1/me')).status).toBe(200);
+    const res = await authApiAs(isolatedToken, 'POST', '/api/v1/onboarding', {
+      workspace_name: 'Invalid intent workspace',
+      project_slug: 'invalid-intent-project',
+      project_name: 'Invalid intent project',
+      project_mode: 'website',
+    });
+
+    expect(res.status).toBe(400);
+    const projects = await authApiAs(isolatedToken, 'GET', '/api/v1/projects');
+    expect(projects.body.projects).toEqual([]);
+  });
+
+  it('creates project, intent, and one-time keys in one hosted onboarding transaction', async () => {
+    const isolatedToken = await authToken('auth0|intent-user', 'intent@example.com', 'Intent User');
+    expect((await authApiAs(isolatedToken, 'GET', '/api/v1/me')).status).toBe(200);
+    const res = await authApiAs(isolatedToken, 'POST', '/api/v1/onboarding', {
+      workspace_name: 'Intent workspace',
+      project_slug: 'intent-product',
+      project_name: 'Intent Product',
+      project_mode: 'product',
+      website_domain: 'ignored.example.com',
+      goal_ids: ['activation', 'feature_adoption'],
+      custom_goal: null,
+      primary_goal_id: 'activation',
+    });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.intent).toMatchObject({
+      project_mode: 'product',
+      website_domain: null,
+      goal_ids: ['activation', 'feature_adoption'],
+      primary_goal_id: 'activation',
+      custom_goal: null,
+    });
+    expect(res.body.tokens.ingest_prod).toMatch(/^pk_/);
+
+    const intent = await authApiAs(
+      isolatedToken,
+      'GET',
+      '/api/v1/projects/intent-product/intent',
+    );
+    expect(intent.status).toBe(200);
+    expect(intent.body.intent).toMatchObject(res.body.intent);
   });
 
   it('blocks repeat hosted onboarding after the first project exists', async () => {

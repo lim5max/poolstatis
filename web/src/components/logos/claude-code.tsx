@@ -6,13 +6,13 @@ const COLORS = {
 export function ClaudeCodeLogo({
   className,
   variant = "icon",
-  mode = "dark",
+  mode = "auto",
 }: {
   className?: string;
   variant?: "icon" | "icon-color" | "wordmark";
-  mode?: "dark" | "light";
+  mode?: "auto" | "dark" | "light";
 }) {
-  const color = COLORS[mode];
+  const color = mode === "auto" ? "currentColor" : COLORS[mode];
 
   if (variant === "icon") {
     return (

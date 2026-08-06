@@ -6,7 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { EmptyState, ErrorNote, Loading, Panel, fmtNum } from '@/components/ui';
+import { EmptyState, ErrorNote, Loading, fmtNum } from '@/components/ui';
+import { AnswerCanvas } from '@/components/analytics';
+import { DisclosureSummary } from '@/components/disclosure';
 import {
   actorStatusLabel,
   rangeDateFrom,
@@ -63,12 +65,13 @@ export function Users() {
   return (
     <div className="space-y-5">
       <header>
-        <h1 className="serif text-3xl">Users</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Canonical actors resolved at query time from immutable events and active identity links.</p>
+        <h1 className="serif text-3xl sm:text-4xl">People</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Anonymous visitors and identified users, resolved from immutable events and active identity links.</p>
       </header>
 
-      <Panel title="Actor scope">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <AnswerCanvas>
+        <div className="border-b px-4 py-3 sm:px-5"><h2 className="text-sm font-semibold">Find people</h2></div>
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4 sm:p-5">
           <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
             Exact actor ID
             <form className="flex gap-2" onSubmit={applySearch}>
@@ -114,22 +117,23 @@ export function Users() {
               </SelectContent>
             </Select>
           </Control>
-        </div>
         {search && (
-          <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="col-span-full flex items-center gap-2 text-xs text-muted-foreground">
             Exact match: <code>{search}</code>
             <button className="text-primary hover:underline" onClick={() => { setSearch(''); setSearchInput(''); }}>Clear</button>
           </div>
         )}
-      </Panel>
+        </div>
+      </AnswerCanvas>
 
       {actors.loading && <Loading what="resolving canonical actors…" />}
       {actors.error && <ErrorNote>{actors.error}</ErrorNote>}
       {actors.data && (
-        <Panel
-          title="Canonical actors"
-          right={<span className="text-xs text-muted-foreground">Page {page + 1} · max {PAGE_LIMIT}</span>}
-        >
+        <AnswerCanvas>
+          <div className="flex items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
+            <h2 className="text-sm font-semibold">People</h2>
+            <span className="text-xs text-muted-foreground">Page {page + 1} · max {PAGE_LIMIT}</span>
+          </div>
           {actors.data.actors.length === 0 ? (
             <EmptyState
               headline="No actors"
@@ -137,17 +141,17 @@ export function Users() {
             />
           ) : (
             <>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto px-4 sm:px-5">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Canonical actor</TableHead>
+                      <TableHead>Person</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>First seen</TableHead>
                       <TableHead>Last seen</TableHead>
-                      <TableHead className="text-right">Events</TableHead>
-                      <TableHead className="text-right">Active days</TableHead>
                       <TableHead className="text-right">Sessions</TableHead>
-                      <TableHead>Top registered events</TableHead>
+                      <TableHead>Outcome</TableHead>
+                      <TableHead>Registered activity</TableHead>
                       <TableHead><span className="sr-only">Open</span></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -156,13 +160,13 @@ export function Users() {
                       <TableRow key={actor.distinct_id}>
                         <TableCell>
                           <div className="max-w-56 truncate font-mono text-xs" title={actor.distinct_id}>{actor.distinct_id}</div>
-                          {actor.raw_actor_count > 1 && <div className="mt-1 text-xs text-muted-foreground">{actor.raw_actor_count} linked raw IDs</div>}
+                          <div className="mt-1 text-xs text-muted-foreground">{fmtNum(actor.total_events)} events · {actor.active_days} active days</div>
                         </TableCell>
                         <TableCell><IdentityBadge status={actor.identity_status} /></TableCell>
+                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(actor.first_seen)}</TableCell>
                         <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(actor.last_seen)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{fmtNum(actor.total_events)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{actor.active_days}</TableCell>
                         <TableCell className="text-right tabular-nums">{actor.session_count ?? 'Unavailable'}</TableCell>
+                        <TableCell><Badge variant={activityMetric ? 'default' : 'outline'}>{activityMetric ? 'Observed' : 'Not assessed'}</Badge></TableCell>
                         <TableCell>
                           <div className="flex max-w-xs flex-wrap gap-1">
                             {actor.top_events.slice(0, 2).map((event) => (
@@ -185,7 +189,7 @@ export function Users() {
                   </TableBody>
                 </Table>
               </div>
-              <div className="mt-4 flex items-center justify-between border-t pt-4">
+              <div className="mt-4 flex items-center justify-between border-t px-4 py-4 sm:px-5">
                 <Button
                   variant="outline"
                   className="h-11 md:h-9"
@@ -208,10 +212,11 @@ export function Users() {
               </div>
             </>
           )}
-          <div className="mt-4 border-t pt-3 text-xs text-muted-foreground">
-            Property filters and pinned properties remain unavailable until a deterministic trusted canonical actor-property source exists.
-          </div>
-        </Panel>
+          <details className="group/disclosure border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
+            <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center py-3 font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">How people are resolved</DisclosureSummary>
+            Activity properties remain redacted. Property filters and pinned properties stay unavailable until a deterministic trusted canonical actor-property source exists.
+          </details>
+        </AnswerCanvas>
       )}
     </div>
   );

@@ -1,8 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import { MCP_CLIENTS, MCP_RUNNER, mcpClientById, mcpServerConfig, type McpClientId } from '../mcpClients';
-import { CopyButton, ProductConnectionGuide } from '../components/ProductConnectionGuide';
+import {
+  CopyButton,
+  ProductConnectionGuide,
+  type AgentId,
+  type SetupTaskResponse,
+} from '../components/ProductConnectionGuide';
 import { Panel, Loading, DangerConfirm, ErrorNote } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -10,10 +16,17 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import {
+  claimProductTelemetryOnce,
+  captureProductTelemetry,
+  telemetryEnvironment,
+  telemetryLatencyBucket,
+} from '../productTelemetry';
+import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 
-const SKILLS_SOURCE = 'https://github.com/lim5max/poolstatis';
+const SKILLS_CLI = 'skills@1.5.22';
+const SKILLS_SOURCE = 'https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz';
 const SKILLS = 'poolstatis-instrument poolstatis-analyze poolstatis-maintain';
 
 const TOOLS = [
@@ -24,12 +37,36 @@ const TOOLS = [
   ['Delivery', ['configure_webhook', 'verify_webhook']],
 ] as const;
 
+interface SetupIntent {
+  project_mode: 'website' | 'product' | 'both';
+  goal_ids: string[];
+  custom_goal: string | null;
+}
+
+interface SetupClient {
+  projectIntent(slug: string): Promise<{ intent: SetupIntent | null }>;
+  setupTask(slug: string, body: {
+    agent_id: AgentId;
+    prefer_llm?: boolean;
+    kind?: 'initial' | 'fix';
+    env?: string;
+  }): Promise<SetupTaskResponse>;
+  setupTaskFeedback(slug: string, body: { outcome: 'blocked'; blocker: string }): Promise<{ recorded: true }>;
+}
+
 export function Setup() {
-  const { client, baseUrl, token, tokenKind, projects, project, env } = useStore();
+  const { account, client, baseUrl, token, tokenKind, projects, project, env } = useStore();
+  const navigate = useNavigate();
   const [freshIngestKey, setFreshIngestKey] = useState<string | null>(null);
   const [creatingKey, setCreatingKey] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
+  const [connectionOpen, setConnectionOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(() => window.location.hash === '#agent-access');
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const uiScope = `${project ?? ''}\u0000${env}`;
+  const telemetryScope = `${project ?? 'none'}:${env}`;
+  const currentScope = useRef(uiScope);
+  currentScope.current = uiScope;
   const publicUrl =
     (import.meta.env.VITE_POOLSTATIS_PUBLIC_URL as string | undefined) ||
     (import.meta.env.VITE_POOLSTATIS_API_URL as string | undefined) ||
@@ -37,9 +74,29 @@ export function Setup() {
   const serverUrl = (baseUrl || publicUrl).replace(/\/$/, '');
   const selectedProject = projects.find((item) => item.slug === project);
   const projectName = selectedProject?.name ?? project ?? 'Product';
+  const setupClient = client as unknown as SetupClient | null;
 
   const proof = useAsync(
-    () => project ? client!.onboardingStatus(project, env) : Promise.resolve(null),
+    async () => {
+      try {
+        return {
+          scope: uiScope,
+          value: project ? await client!.onboardingStatus(project, env) : null,
+          error: null as string | null,
+        };
+      } catch (caught) {
+        return { scope: uiScope, value: null, error: (caught as Error).message };
+      }
+    },
+    [project, env],
+  );
+  const intent = useAsync(
+    async () => ({
+      scope: uiScope,
+      value: project && setupClient && typeof setupClient.projectIntent === 'function'
+        ? await setupClient.projectIntent(project)
+        : { intent: null },
+    }),
     [project, env],
   );
   const standard = useAsync(
@@ -47,11 +104,46 @@ export function Setup() {
     [advancedOpen],
   );
 
-  const sourceGate = proof.data?.gates.find((gate) => gate.key === 'data_source_connected');
-  const eventGate = proof.data?.gates.find((gate) => gate.key === 'first_event_observed');
-  const agentGate = proof.data?.gates.find((gate) => gate.key === 'agent_connected');
+  const proofData = proof.data?.scope === uiScope ? proof.data.value : null;
+  const proofError = proof.data?.scope === uiScope ? proof.data.error : null;
+  const intentData = intent.data?.scope === uiScope ? intent.data.value : null;
+  const sourceGate = proofData?.gates.find((gate) => gate.key === 'data_source_connected');
+  const eventGate = proofData?.gates.find((gate) => gate.key === 'first_event_observed');
+  const agentGate = proofData?.gates.find((gate) => gate.key === 'agent_connected');
   const eventSeen = eventGate?.complete ?? false;
-  const lastSeen = typeof eventGate?.evidence.last_seen === 'string' ? eventGate.evidence.last_seen : null;
+  const lastSeen = typeof eventGate?.evidence.received_at === 'string'
+    ? eventGate.evidence.received_at
+    : typeof eventGate?.evidence.last_seen === 'string'
+      ? eventGate.evidence.last_seen
+      : null;
+  const eventName = typeof eventGate?.evidence.event_name === 'string'
+    ? eventGate.evidence.event_name
+    : typeof eventGate?.evidence.event === 'string'
+      ? eventGate.evidence.event
+      : null;
+  const eventEnvironment = typeof eventGate?.evidence.environment === 'string'
+    ? eventGate.evidence.environment
+    : typeof eventGate?.evidence.env === 'string'
+      ? eventGate.evidence.env
+      : env;
+  const eventRegistered = typeof eventGate?.evidence.registered === 'boolean'
+    ? eventGate.evidence.registered
+    : eventGate?.evidence.unregistered === true
+      ? false
+      : null;
+  const preferLlm = Boolean(intentData?.intent?.custom_goal);
+  const serverBlocker = proofData?.next_blocker ?? null;
+  const blockerCode = serverBlocker ? normalizeBlockerKey(serverBlocker.key) : null;
+  const blockerEvidence = localEvidenceFingerprint(serverBlocker?.evidence ?? {});
+
+  useLayoutEffect(() => {
+    setFreshIngestKey(null);
+    setCreatingKey(false);
+    setKeyError(null);
+    setConnectionOpen(false);
+    setMcpOpen(window.location.hash === '#agent-access');
+    setAdvancedOpen(false);
+  }, [uiScope]);
 
   useEffect(() => {
     if (!project || eventSeen) return;
@@ -61,71 +153,178 @@ export function Setup() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventSeen, project]);
 
+  useEffect(() => {
+    if (!blockerCode || !claimProductTelemetryOnce(`setup:blocker:${telemetryScope}:${blockerCode}:${blockerEvidence}`)) return;
+    captureProductTelemetry('onboarding.blocked', { blocker: blockerCode }, { distinctId: account?.user?.id });
+  }, [account?.user?.id, blockerCode, blockerEvidence, telemetryScope]);
+
+  useEffect(() => {
+    if (!eventSeen || !agentGate?.complete || !claimProductTelemetryOnce(`setup:mcp_connected:${telemetryScope}`, 'local')) return;
+    captureProductTelemetry('mcp.connected', {}, { distinctId: account?.user?.id });
+  }, [account?.user?.id, agentGate?.complete, eventSeen, telemetryScope]);
+
   const createIngestKey = async () => {
     if (!client || !project) return;
+    const requestedScope = uiScope;
     setCreatingKey(true);
     setKeyError(null);
     try {
       const created = await client.issueKey(project, { kind: 'ingest', env, label: 'Setup guide' });
+      if (currentScope.current !== requestedScope) return;
       setFreshIngestKey(created.token);
       proof.reload();
     } catch (error) {
+      if (currentScope.current !== requestedScope) return;
       setKeyError((error as Error).message);
     } finally {
-      setCreatingKey(false);
+      if (currentScope.current === requestedScope) setCreatingKey(false);
     }
   };
+
+  const getSetupTask = useCallback(async (agentId: AgentId) => {
+    if (!setupClient || !project || typeof setupClient.setupTask !== 'function') {
+      throw new Error('Setup task generation is unavailable on this server.');
+    }
+    return setupClient.setupTask(project, { agent_id: agentId, prefer_llm: preferLlm, env });
+  }, [env, preferLlm, project, setupClient]);
 
   if (!project) {
     return <Panel title="Setup"><p className="text-sm text-muted-foreground">Select a project first.</p></Panel>;
   }
 
+  const sourceReady = sourceGate?.complete ?? false;
+  const projectMode = intentData?.intent?.project_mode;
+  const reviewBlocker = serverBlocker ? needsRegistryReview(serverBlocker.key) : false;
+  const blocker = proof.loading && !proofData
+    ? { kind: 'loading' as const, title: 'Checking connection', why: 'Reading the latest server proof for this project.' }
+    : proofError
+      ? { kind: 'error' as const, title: 'Connection status unavailable', why: proofError }
+      : serverBlocker
+        ? {
+            kind: 'server' as const,
+            title: blockerTitle(serverBlocker.key),
+            why: serverBlocker.blocker ?? serverBlocker.next_action ?? 'Complete the next server-verified setup gate.',
+          }
+        : null;
+
   return (
     <div className="mx-auto max-w-4xl space-y-5">
       <header>
         <div className="mb-1 text-xs text-muted-foreground">{projectName} · {env}</div>
-        <h1 className="serif text-3xl font-normal">Connect your product</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          The setup is complete when Poolstatis receives a real product event. A coding agent can install the SDK, but MCP is optional.
-        </p>
+        <h1 className="serif text-3xl font-normal">Setup</h1>
+        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">What is blocking this project from sending useful data?</p>
       </header>
 
-      <ProductConnectionGuide
-        ingestKey={freshIngestKey}
-        keyReady={sourceGate?.complete ?? false}
-        serverUrl={serverUrl}
-        projectName={projectName}
-        projectSlug={project}
-        eventSeen={eventSeen}
-        lastSeen={lastSeen}
-        checking={proof.loading}
-        creatingKey={creatingKey}
-        error={keyError ?? proof.error}
-        onCreateKey={() => void createIngestKey()}
-        onCheck={proof.reload}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3 border-y py-3">
+        <div className="text-sm font-medium">
+          {eventSeen ? <>Connected <span className="font-normal text-muted-foreground">· {lastSeen ? `last event ${relativeTime(lastSeen)} · ` : ''}{env}</span></> : <>1 step left <span className="font-normal text-muted-foreground">· Send your first event</span></>}
+        </div>
+        {!eventSeen && <Button size="sm" onClick={() => setConnectionOpen(true)}>Continue setup</Button>}
+      </div>
 
-      <OptionalMcp
-        serverUrl={serverUrl}
-        storedToken={tokenKind === 'personal' || tokenKind === 'secret' ? token : null}
-        canIssuePersonalToken={tokenKind === 'user'}
-        connected={agentGate?.complete ?? false}
-      />
-
-      <details
-        className="rounded-md border bg-card"
-        onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
-      >
-        <summary className="cursor-pointer list-none px-4 py-3.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
-          <div className="flex items-center justify-between gap-3">
+      {blocker && (
+        <section className="rounded-lg border bg-muted/10 p-4" aria-live="polite">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <div className="text-sm font-medium">Advanced setup and administration</div>
-              <p className="mt-1 text-xs text-muted-foreground">HTTP ingest, key types, webhooks, MCP tools, instrumentation standard, and data deletion.</p>
+              <h2 className="text-sm font-medium">{blocker.title}</h2>
+              <p className="mt-1 text-xs text-muted-foreground">{blocker.why}</p>
             </div>
-            <Badge variant="outline">Advanced</Badge>
+            {blocker.kind === 'error' && <Button size="sm" onClick={proof.reload}>Try again</Button>}
+            {blocker.kind === 'server' && reviewBlocker && (
+              <Button size="sm" onClick={() => navigate('/registry')}>Review proposed metrics</Button>
+            )}
+            {blocker.kind === 'server' && !reviewBlocker && intentData?.intent && blockerCode && setupClient && typeof setupClient.setupTaskFeedback === 'function' && (
+              <FixTaskAction
+                key={`${uiScope}:${blockerCode}`}
+                projectSlug={project}
+                env={env}
+                client={setupClient}
+                telemetryUserId={account?.user?.id}
+              />
+            )}
+            {blocker.kind === 'server' && !reviewBlocker && !intent.loading && !intentData?.intent && (
+              <Button size="sm" onClick={() => setConnectionOpen(true)}>Continue setup</Button>
+            )}
           </div>
-        </summary>
-        <div className="space-y-4 border-t p-4">
+        </section>
+      )}
+
+      <section className="overflow-hidden rounded-lg border bg-card" aria-label="Setup status">
+        <SetupRow
+          title="Product connection"
+          status={eventSeen ? 'Connected' : sourceReady ? 'Waiting for event' : 'Needs setup'}
+          description={eventSeen ? `Last server-verified event${lastSeen ? ` ${relativeTime(lastSeen)}` : ''}.` : 'Product key, SDK, and first server-verified event.'}
+          action={connectionOpen ? 'Hide' : eventSeen ? 'View' : 'Continue'}
+          onAction={() => setConnectionOpen((value) => !value)}
+        />
+        <SetupRow
+          title="Tracking plan"
+          status={intent.loading ? 'Checking' : intentData?.intent ? `${intentData.intent.goal_ids.length} goals` : 'Not set'}
+          description={intentData?.intent ? 'Selected outcomes shape the setup task and first answers.' : 'Existing projects keep working without choosing a mode.'}
+          action="Review"
+          onAction={() => navigate('/measurement')}
+        />
+        <SetupRow
+          title="Agent access"
+          status={agentGate?.complete ? 'Connected' : 'Optional'}
+          description="Let your agent read analytics and manage Poolstatis with MCP."
+          action={mcpOpen ? 'Hide' : agentGate?.complete ? 'View' : 'Connect'}
+          onAction={() => {
+            if (!mcpOpen && eventSeen) {
+              captureProductTelemetry('mcp.connect_started', {}, { distinctId: account?.user?.id });
+            }
+            setMcpOpen((value) => !value);
+          }}
+        />
+        <SetupRow
+          title="Destinations & advanced"
+          status="Optional"
+          description="Webhooks, raw examples, key types, standards, and project controls."
+          action={advancedOpen ? 'Hide' : 'Open'}
+          onAction={() => setAdvancedOpen((value) => !value)}
+          last
+        />
+      </section>
+
+      {connectionOpen && (
+        <ProductConnectionGuide
+          key={`${uiScope}:connection`}
+          ingestKey={freshIngestKey}
+          keyReady={sourceReady}
+          serverUrl={serverUrl}
+          projectName={projectName}
+          projectSlug={project}
+          projectMode={projectMode ?? 'product'}
+          eventSeen={eventSeen}
+          lastSeen={lastSeen}
+          eventName={eventName}
+          eventEnvironment={eventEnvironment}
+          eventRegistered={eventRegistered}
+          checking={proof.loading}
+          creatingKey={creatingKey}
+          error={keyError ?? proofError}
+          onCreateKey={() => void createIngestKey()}
+          getSetupTask={getSetupTask}
+          onCheck={proof.reload}
+          onOpenProject={() => navigate(projectMode === 'website' ? '/analyze/web' : projectMode === 'product' ? '/analyze/product' : '/')}
+          onReviewMetrics={() => navigate('/registry')}
+          telemetryUserId={account?.user?.id}
+          telemetryEnvironment={telemetryEnvironment(env)}
+        />
+      )}
+
+      {mcpOpen && (
+        <OptionalMcp
+          key={`${uiScope}:mcp`}
+          serverUrl={serverUrl}
+          storedToken={tokenKind === 'personal' || tokenKind === 'secret' ? token : null}
+          canIssuePersonalToken={tokenKind === 'user'}
+          connected={agentGate?.complete ?? false}
+        />
+      )}
+
+      {advancedOpen && (
+        <section key={`${uiScope}:advanced`} className="space-y-4 rounded-lg border bg-card p-4" aria-label="Advanced setup and administration">
           <KeyMap />
           <HttpExample serverUrl={serverUrl} />
           <WebhookSetup project={project} />
@@ -147,10 +346,195 @@ export function Setup() {
               : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border bg-background p-4 text-xs leading-relaxed">{standard.error ? `Could not load standard: ${standard.error}` : standard.data}</pre>}
           </Panel>
           <DangerZone slug={project} env={env} />
-        </div>
-      </details>
+        </section>
+      )}
     </div>
   );
+}
+
+function SetupRow({ title, status, description, action, onAction, last = false }: {
+  title: string;
+  status: string;
+  description: string;
+  action: string;
+  onAction: () => void;
+  last?: boolean;
+}) {
+  return (
+    <div className={cn('grid gap-2 px-4 py-3.5 sm:grid-cols-[10rem_8rem_1fr_auto] sm:items-center', !last && 'border-b')}>
+      <div className="text-sm font-medium">{title}</div>
+      <div><Badge variant={status === 'Connected' ? 'default' : 'outline'}>{status}</Badge></div>
+      <p className="text-xs text-muted-foreground">{description}</p>
+      <Button size="sm" variant="ghost" onClick={onAction}>{action}</Button>
+    </div>
+  );
+}
+
+function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
+  projectSlug: string;
+  env: string;
+  client: SetupClient;
+  telemetryUserId?: string | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [fallbackTask, setFallbackTask] = useState<{ task: string; blocker: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const copyTracked = useRef(false);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const recordFeedback = async (blocker: string) => {
+    await client.setupTaskFeedback(projectSlug, {
+      outcome: 'blocked',
+      blocker,
+    });
+  };
+
+  const copyFixTask = async () => {
+    setBusy(true);
+    setCopied(false);
+    setFallbackTask(null);
+    setError(null);
+    try {
+      const startedAt = Date.now();
+      const response = await client.setupTask(projectSlug, {
+        agent_id: 'codex',
+        prefer_llm: false,
+        kind: 'fix',
+        env,
+      });
+      if (!mounted.current) return;
+      const task = response.task.trim();
+      const responseBlocker = typeof response.blocker === 'string'
+        ? normalizeBlockerKey(response.blocker)
+        : null;
+      if (!task) throw new Error('The server returned an empty setup task.');
+      if (!responseBlocker) throw new Error('The server returned a fix task without a verified blocker.');
+      if (containsCredentialValue(task)) {
+        throw new Error('Task generation was blocked because it contained credential-like text.');
+      }
+      captureProductTelemetry('onboarding.task_generated', {
+        source: response.source,
+        latency_bucket: telemetryLatencyBucket(Date.now() - startedAt),
+      }, { distinctId: telemetryUserId });
+      try {
+        await navigator.clipboard.writeText(task);
+      } catch {
+        if (!mounted.current) return;
+        setFallbackTask({ task, blocker: responseBlocker });
+        return;
+      }
+      if (!mounted.current) return;
+      if (!copyTracked.current) {
+        copyTracked.current = true;
+        captureProductTelemetry('onboarding.task_copied', {
+          agent_id: 'codex',
+          method: 'clipboard',
+        }, { distinctId: telemetryUserId });
+      }
+      if (!mounted.current) return;
+      await recordFeedback(responseBlocker);
+      if (!mounted.current) return;
+      setCopied(true);
+    } catch (caught) {
+      if (mounted.current) setError(caught instanceof Error ? caught.message : 'Could not prepare the fix task.');
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const confirmManualCopy = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (!fallbackTask) return;
+      if (!copyTracked.current) {
+        copyTracked.current = true;
+        captureProductTelemetry('onboarding.task_copied', {
+          agent_id: 'codex',
+          method: 'manual',
+        }, { distinctId: telemetryUserId });
+      }
+      if (!mounted.current) return;
+      await recordFeedback(fallbackTask.blocker);
+      if (!mounted.current) return;
+      setFallbackTask(null);
+      setCopied(true);
+    } catch (caught) {
+      if (mounted.current) setError(caught instanceof Error ? caught.message : 'Could not record the copied task.');
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex max-w-xl flex-col items-start gap-2">
+      <Button size="sm" onClick={() => void copyFixTask()} disabled={busy || Boolean(fallbackTask)}>
+        {busy && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+        {busy ? 'Preparing task…' : copied ? 'Fix task copied' : 'Copy fix task'}
+      </Button>
+      {fallbackTask && (
+        <div className="space-y-2">
+          <p role="alert" className="text-xs text-destructive">Copy was blocked by the browser. Select the task below and copy it manually.</p>
+          <pre tabIndex={0} className="max-h-72 max-w-full overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 text-xs text-foreground">{fallbackTask.task}</pre>
+          <Button size="sm" variant="outline" onClick={() => void confirmManualCopy()} disabled={busy}>I copied it</Button>
+        </div>
+      )}
+      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+function containsCredentialValue(value: string): boolean {
+  return /\b(?:pk|sk|pt)_[a-z0-9][a-z0-9_-]{3,}/i.test(value);
+}
+
+function normalizeBlockerKey(value: string): string | null {
+  const normalized = value.trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 100)
+    .replace(/_+$/g, '');
+  return /^[a-z][a-z0-9_]*$/.test(normalized) ? normalized : null;
+}
+
+function localEvidenceFingerprint(value: unknown): string {
+  const serialized = typeof value === 'string'
+    ? value
+    : value && typeof value === 'object' && !Array.isArray(value)
+      ? JSON.stringify(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)))
+      : String(value);
+  let hash = 2166136261;
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash ^= serialized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function needsRegistryReview(key: string): boolean {
+  return key === 'metrics_activated' || key === 'data_quality_accepted';
+}
+
+function blockerTitle(key: string): string {
+  switch (key) {
+    case 'workspace_created': return 'Workspace setup is incomplete';
+    case 'data_source_connected': return 'Product connection is incomplete';
+    case 'first_event_observed': return 'No events yet';
+    case 'metrics_activated': return 'Metrics need review';
+    case 'data_quality_accepted': return 'Data quality needs review';
+    case 'first_query_produced': return 'No trusted answer yet';
+    case 'first_decision_saved': return 'No decision saved yet';
+    case 'agent_connected': return 'Agent access is not connected';
+    default: return 'Setup needs attention';
+  }
 }
 
 function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected }: {
@@ -160,7 +544,6 @@ function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected 
   connected: boolean;
 }) {
   const { client } = useStore();
-  const [open, setOpen] = useState(false);
   const [clientId, setClientId] = useState<McpClientId>('codex');
   const [freshToken, setFreshToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -174,7 +557,7 @@ function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected 
     mcpToken ?? '<create-agent-token-first>',
   );
   const skillTarget = clientId === 'codex' ? 'codex' : clientId === 'claude-code' ? 'claude-code' : "'*'";
-  const skillsCommand = `pnpm dlx skills add ${SKILLS_SOURCE} --skill ${SKILLS} --agent ${skillTarget} -y`;
+  const skillsCommand = `pnpm dlx ${SKILLS_CLI} add ${SKILLS_SOURCE} --skill ${SKILLS} --agent ${skillTarget} -y`;
 
   const issueToken = async () => {
     if (!client) return;
@@ -191,20 +574,13 @@ function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected 
   };
 
   return (
-    <section className="rounded-md border bg-card">
-      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-medium">Connect analytics tools to your agent</h2>
-            <Badge variant={connected ? 'default' : 'outline'}>{connected ? 'Connected' : 'Optional'}</Badge>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">MCP lets an agent query metrics and manage the registry. It is not needed to send product events.</p>
-        </div>
-        <Button variant="outline" onClick={() => setOpen((value) => !value)}>{open ? 'Hide MCP setup' : connected ? 'View MCP setup' : 'Set up MCP'}</Button>
+    <section className="rounded-lg border bg-card p-4" id="agent-access" aria-labelledby="agent-access-title">
+      <div className="flex items-center gap-2">
+        <h2 id="agent-access-title" className="text-sm font-medium">Let your agent answer questions</h2>
+        <Badge variant={connected ? 'default' : 'outline'}>{connected ? 'Connected' : 'Optional'}</Badge>
       </div>
-
-      {open && (
-        <div className="space-y-4 border-t p-4">
+      <p className="mt-1 text-xs text-muted-foreground">Connect MCP so your agent can read analytics and manage Poolstatis.</p>
+      <div className="mt-4 space-y-4 border-t pt-4">
           <div className="max-w-sm">
             <div className="mb-1.5 text-xs font-medium text-muted-foreground">Where does your agent run?</div>
             <Select value={clientId} onValueChange={(value) => setClientId(value as McpClientId)}>
@@ -258,10 +634,21 @@ function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected 
           </div>
           {MCP_RUNNER.packageStatus !== 'published' && <p className="text-xs text-amber-600">The configured MCP runner is not marked as published for this deploy.</p>}
           {error && <ErrorNote>{error}</ErrorNote>}
-        </div>
-      )}
+      </div>
     </section>
   );
+}
+
+function relativeTime(value: string): string {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return value;
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  return new Date(timestamp).toLocaleDateString();
 }
 
 function KeyMap() {

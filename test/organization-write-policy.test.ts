@@ -23,16 +23,16 @@ describe('organization write policy inventory', () => {
   it('classifies every mutating HTTP route and keeps only explicit analysis/self-service exemptions', async () => {
     const source = await readFile(resolve(repoDir, 'src/http/server.ts'), 'utf8');
     const allRoutes = Array.from(
-      source.matchAll(/app\.(get|post|patch|delete)\('([^']+)'/g),
+      source.matchAll(/app\.(get|post|put|patch|delete)\('([^']+)'/g),
       (match) => `${match[1]!.toUpperCase()} ${match[2]!}`,
     );
     const routes = Array.from(
-      source.matchAll(/app\.(post|patch|delete)\('([^']+)'/g),
+      source.matchAll(/app\.(post|put|patch|delete)\('([^']+)'/g),
       (match) => `${match[1]!.toUpperCase()} ${match[2]!}`,
     );
-    expect(allRoutes).toHaveLength(123);
+    expect(allRoutes).toHaveLength(127);
     expect(new Set(allRoutes).size).toBe(allRoutes.length);
-    expect(routes).toHaveLength(75);
+    expect(routes).toHaveLength(78);
     expect(routes.every((route) =>
       route.includes(' /api/v1/') || route.includes(' /i/v1/'))).toBe(true);
 
@@ -42,8 +42,8 @@ describe('organization write policy inventory', () => {
         return requiresOrganizationWriteReadiness(method, path);
       });
     const allowed = allRoutes.filter((route) => !blocked.includes(route));
-    expect(blocked).toHaveLength(64);
-    expect(allowed).toHaveLength(59);
+    expect(blocked).toHaveLength(67);
+    expect(allowed).toHaveLength(60);
 
     const exemptions = routes
       .filter((route) => {

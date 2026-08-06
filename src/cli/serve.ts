@@ -23,6 +23,7 @@ import {
   createLocalMmdbCountryResolver,
   createTrustedProxyCountryResolver,
 } from '../services/country.js';
+import { OpenRouterSetupTaskProvider } from '../services/setupTaskProvider.js';
 
 const config = loadConfig();
 const hostedPolicyRequired = config.auth?.requireOrganizationPolicy === true;
@@ -64,6 +65,17 @@ const app = buildServer(pool, {
   auth: config.auth,
   publicUrl: config.publicUrl,
   mcpRunner: config.mcpRunner,
+  ...(config.setupTaskComposer.apiKey
+    ? {
+        setupTaskProvider: new OpenRouterSetupTaskProvider({
+          apiKey: config.setupTaskComposer.apiKey,
+          apiUrl: config.setupTaskComposer.apiUrl,
+          model: config.setupTaskComposer.model,
+          timeoutMs: config.setupTaskComposer.timeoutMs,
+          maxOutputTokens: config.setupTaskComposer.maxOutputTokens,
+        }),
+      }
+    : {}),
   ingestBuffer: config.ingestBuffer,
   queryCache: config.queryCache,
   rateLimit: config.rateLimit,

@@ -1,5 +1,5 @@
 import type {
-  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, PreparedExperiment,
+  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, PreparedExperiment, ProjectIntent, ProjectIntentInput, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse,
   BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
@@ -77,7 +77,9 @@ export class PoolstatisClient {
     return this.req<OrganizationUsage>('GET', `/api/v1/me/usage?period=${encodeURIComponent(period)}`);
   }
 
-  completeOnboarding(body: { workspace_name: string; project_slug: string; project_name: string }) {
+  completeOnboarding(body: {
+    workspace_name: string; project_slug: string; project_name: string;
+  } & Partial<ProjectIntentInput>) {
     return this.req<HostedOnboardingResult>('POST', '/api/v1/onboarding', body);
   }
 
@@ -102,6 +104,35 @@ export class PoolstatisClient {
 
   onboardingStatus(slug: string, env = 'prod') {
     return this.req<DecisionLoopOnboardingStatus>('GET', `/api/v1/projects/${slug}/onboarding/status?env=${encodeURIComponent(env)}`);
+  }
+
+  projectIntent(slug: string) {
+    return this.req<{ intent: ProjectIntent | null }>(
+      'GET', `/api/v1/projects/${encodeURIComponent(slug)}/intent`,
+    );
+  }
+
+  updateProjectIntent(slug: string, body: ProjectIntentInput) {
+    return this.req<{ intent: ProjectIntent }>(
+      'PUT', `/api/v1/projects/${encodeURIComponent(slug)}/intent`, body,
+    );
+  }
+
+  setupTask(slug: string, body: {
+    agent_id: SetupTaskAgent;
+    prefer_llm?: boolean;
+    kind?: 'initial' | 'fix';
+    env?: string;
+  }) {
+    return this.req<SetupTaskResponse>(
+      'POST', `/api/v1/projects/${encodeURIComponent(slug)}/setup-task`, body,
+    );
+  }
+
+  setupTaskFeedback(slug: string, body: SetupTaskFeedbackInput) {
+    return this.req<{ recorded: true }>(
+      'POST', `/api/v1/projects/${encodeURIComponent(slug)}/setup-task/feedback`, body,
+    );
   }
 
   actorLinks(slug: string, env = 'prod') {
@@ -188,8 +219,9 @@ export class PoolstatisClient {
     );
   }
 
-  decisions(slug: string, filter: { status?: Decision['status']; release_id?: string } = {}) {
+  decisions(slug: string, filter: { env?: string; status?: Decision['status']; release_id?: string } = {}) {
     const qs = new URLSearchParams();
+    if (filter.env) qs.set('env', filter.env);
     if (filter.status) qs.set('status', filter.status);
     if (filter.release_id) qs.set('release_id', filter.release_id);
     return this.req<{ decisions: Decision[] }>('GET', `/api/v1/projects/${slug}/decisions${qs.size ? `?${qs}` : ''}`)

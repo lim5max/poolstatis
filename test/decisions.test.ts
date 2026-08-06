@@ -41,7 +41,8 @@ describe('release evidence and immutable decision revisions', () => {
       declaration, expected_revision: diff.body.expected_revision,
     });
     expect(applied.status).toBe(200);
-    await ingestWindowEvidence(env, anchor);
+    await ingestWindowEvidence(env, anchor, env.ingestToken, 'decision-evidence-prod');
+    await ingestWindowEvidence(env, anchor, env.ingestDevToken, 'decision-evidence-dev');
   });
 
   afterAll(async () => {
@@ -144,6 +145,40 @@ describe('release evidence and immutable decision revisions', () => {
     expect(edited.body.revisions.map((revision: { action: string }) => revision.action))
       .toEqual(['proposed', 'rejected', 'edited']);
     expect(edited.body.revisions[0].snapshot.proposed_rationale).toBe(evaluated.body.decision.proposed_rationale);
+  });
+
+  test('filters the decision list by joined release environment while preserving the unfiltered contract', async () => {
+    const prodRelease = await register(env, 'decision-env-prod', 'shorter_onboarding', anchor, 'prod');
+    const devRelease = await register(env, 'decision-env-dev', 'shorter_onboarding', anchor, 'dev');
+    const prodDecision = await api(env, env.secretToken, 'POST', path(env, `/releases/${prodRelease.id}/evaluate`), {});
+    const devDecision = await api(env, env.secretToken, 'POST', path(env, `/releases/${devRelease.id}/evaluate`), {});
+    expect(prodDecision.status).toBe(201);
+    expect(devDecision.status).toBe(201);
+
+    const unfiltered = await api(env, env.secretToken, 'GET', path(env, '/decisions'));
+    const unfilteredIds = unfiltered.body.decisions.map((item: { id: string }) => item.id);
+    expect(unfilteredIds).toEqual(expect.arrayContaining([prodDecision.body.decision.id, devDecision.body.decision.id]));
+
+    const prodOnly = await api(env, env.secretToken, 'GET', path(env, '/decisions?env=prod'));
+    const prodIds = prodOnly.body.decisions.map((item: { id: string }) => item.id);
+    expect(prodIds).toContain(prodDecision.body.decision.id);
+    expect(prodIds).not.toContain(devDecision.body.decision.id);
+
+    const devOnly = await api(env, env.secretToken, 'GET', path(env, '/decisions?env=dev&status=proposed'));
+    const devIds = devOnly.body.decisions.map((item: { id: string }) => item.id);
+    expect(devIds).toContain(devDecision.body.decision.id);
+    expect(devIds).not.toContain(prodDecision.body.decision.id);
+
+    const mismatchedRelease = await api(
+      env,
+      env.secretToken,
+      'GET',
+      path(env, `/decisions?env=prod&release_id=${devRelease.id}`),
+    );
+    expect(mismatchedRelease.body.decisions).toEqual([]);
+
+    const crossProject = await api(env, env.secretToken, 'GET', path(other, '/decisions?env=dev'));
+    expect(crossProject.status).toBe(404);
   });
 
   test('never turns insufficient sample or current property distrust into a directional decision', async () => {
@@ -300,7 +335,7 @@ function contract(key: string, minimumSampleSize: number) {
   };
 }
 
-async function ingestWindowEvidence(env: TestEnv, anchor: Date) {
+async function ingestWindowEvidence(env: TestEnv, anchor: Date, token: string, batchId: string) {
   const events: Array<Record<string, unknown>> = [];
   for (let index = 0; index < 10; index++) {
     events.push({
@@ -322,15 +357,15 @@ async function ingestWindowEvidence(env: TestEnv, anchor: Date) {
       timestamp: new Date(anchor.getTime() + DAY).toISOString(), properties: { plan: 'pro' },
     });
   }
-  const ingested = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
-    batch_id: 'decision-evidence', events,
+  const ingested = await api(env, token, 'POST', '/i/v1/events', {
+    batch_id: batchId, events,
   });
   expect(ingested.status).toBe(200);
 }
 
-async function register(env: TestEnv, key: string, contractKey: string, deployedAt: Date) {
+async function register(env: TestEnv, key: string, contractKey: string, deployedAt: Date, releaseEnv = 'prod') {
   const response = await api(env, env.secretToken, 'POST', path(env, '/releases'), {
-    idempotency_key: key, contract_key: contractKey, env: 'prod',
+    idempotency_key: key, contract_key: contractKey, env: releaseEnv,
     repository: 'acme/product', branch: 'main', commit_sha: key.padEnd(40, 'a').slice(0, 40).replace(/[^a-f0-9]/g, 'a'),
     deployed_at: deployedAt.toISOString(), status: 'deployed',
   });

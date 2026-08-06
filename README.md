@@ -141,16 +141,16 @@ agents to read the standard, project schema, and current documentation before
 they instrument, analyze, or maintain measurement:
 
 ```bash
-pnpm dlx skills add https://github.com/lim5max/poolstatis \
+pnpm dlx skills@1.5.22 add https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz \
   --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
   --agent '*' -y
-pnpm dlx skills list --json
+pnpm dlx skills@1.5.22 list --json
 ```
 
 Use `--agent codex` or `--agent claude-code` instead of `'*'` to target one
 runtime. An absolute local Core checkout path can replace the GitHub URL.
-The GitHub-source install resolves the repository state supported by the skills
-CLI; it is not a pinned-commit promise, so verify the installed names and source.
+The archive URL and CLI version pin the reviewed workflow release. Verify the
+installed names and resolved source before using a different release.
 See the public [quickstart](https://poolstatis.xyz/docs/quickstart),
 [instrumentation standard](https://poolstatis.xyz/docs/standard), and
 [MCP reference](https://poolstatis.xyz/docs/mcp-tools).

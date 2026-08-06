@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { DisclosureSummary } from '@/components/disclosure';
 import type {
   ExperienceRoute,
   InteractionMapResponse,
@@ -84,12 +85,12 @@ export function Experience() {
       <AggregateClickEvidence surfaces={data.surfaces} env={env} />
 
       <details className="group">
-        <summary className="cursor-pointer list-none rounded-md border bg-card px-5 py-4 text-sm font-medium outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring">
+        <DisclosureSummary className="cursor-pointer rounded-md border bg-card px-5 py-4 text-sm font-medium outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring">
           Capture configuration and session details
           <span className="ml-2 text-xs font-normal text-muted-foreground">
             {data.surfaces.length} surfaces · {data.routes.length} routes
           </span>
-        </summary>
+        </DisclosureSummary>
         <div className="mt-4 space-y-4">
           <SurfaceForm onCreated={reload} />
           <RouteForm surfaces={data.surfaces} onCreated={reload} />
@@ -470,7 +471,7 @@ function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode
           </div>
         </div>
         <details className="rounded-md border bg-background px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium">How to read this evidence</summary>
+          <DisclosureSummary className="inline-flex cursor-pointer items-center text-xs font-medium">How to read this evidence</DisclosureSummary>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{result.causality}</p>
         </details>
       </div>

@@ -263,7 +263,7 @@ describe('owner UI feedback regressions', () => {
         metrics: vi.fn().mockResolvedValue([]),
       },
     } as never);
-    render(<TooltipProvider><Experiments /></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
 
     fireEvent.click(await screen.findByRole('tab', { name: /Feature flags/ }));
     const card = await screen.findByRole('article', { name: 'Landing waitlist CTA copy' });

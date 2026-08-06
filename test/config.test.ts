@@ -7,6 +7,37 @@ const hostedTokenPolicy = {
 };
 
 describe('production protection config', () => {
+  it('keeps the optional setup composer secret server-side with bounded provider settings', () => {
+    const defaults = loadConfig({});
+    expect(defaults.setupTaskComposer).toEqual({
+      apiKey: null,
+      apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
+      model: 'openrouter/auto',
+      timeoutMs: 8_000,
+      maxOutputTokens: 800,
+    });
+    const configured = loadConfig({
+      OPENROUTER_API_KEY: 'server-only-provider-secret',
+      OPENROUTER_API_URL: 'https://provider.example/v1/chat/completions',
+      OPENROUTER_MODEL: 'provider/model',
+      OPENROUTER_TIMEOUT_MS: '1234',
+      OPENROUTER_MAX_TOKENS: '999',
+    });
+    expect(configured.setupTaskComposer).toEqual({
+      apiKey: 'server-only-provider-secret',
+      apiUrl: 'https://provider.example/v1/chat/completions',
+      model: 'provider/model',
+      timeoutMs: 1234,
+      maxOutputTokens: 999,
+    });
+    expect(() => loadConfig({ OPENROUTER_API_URL: 'http://provider.example/v1' }))
+      .toThrow('OPENROUTER_API_URL');
+    expect(() => loadConfig({ OPENROUTER_API_URL: 'https://user:pass@provider.example/v1' }))
+      .toThrow('OPENROUTER_API_URL');
+    expect(() => loadConfig({ OPENROUTER_TIMEOUT_MS: '0' })).toThrow('OPENROUTER_TIMEOUT_MS');
+    expect(() => loadConfig({ OPENROUTER_MAX_TOKENS: '4097' })).toThrow('OPENROUTER_MAX_TOKENS');
+  });
+
   it('supports mutually exclusive trusted-header and local-MMDB country modes', () => {
     expect(loadConfig({
       POOLSTATIS_COUNTRY_HEADER: 'cf-ipcountry',
