@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { ApiError } from '../errors.js';
 import {
+  setupTaskDraftSchema,
   setupTaskPlanSchema,
   type ProjectGoalId,
   type SetupTaskAgent,
@@ -11,6 +12,10 @@ import {
   saveGeneratedSetupPlan,
   type StoredProjectIntent,
 } from './projectIntents.js';
+import {
+  sanitizeSetupTaskProviderInput,
+  type SetupTaskProvider,
+} from './setupTaskProvider.js';
 
 export const SDK_RELEASE = '@poolstatis/sdk@0.3.0' as const;
 export const SKILL_RELEASE_MANIFEST = [
@@ -100,7 +105,7 @@ const AGENT_TARGET: Record<SetupTaskAgent, string> = {
 
 export interface SetupTaskResult {
   task: string;
-  source: 'deterministic';
+  source: 'deterministic' | 'llm' | 'fallback';
   plan: SetupTaskPlan;
 }
 
@@ -113,6 +118,20 @@ export async function generateDeterministicSetupTask(
     agentId: SetupTaskAgent;
   },
 ): Promise<SetupTaskResult> {
+  return generateSetupTask(pool, { ...input, preferLlm: false });
+}
+
+export async function generateSetupTask(
+  pool: pg.Pool,
+  input: {
+    projectId: string;
+    projectSlug: string;
+    publicUrl: string;
+    agentId: SetupTaskAgent;
+    preferLlm: boolean;
+    provider?: SetupTaskProvider;
+  },
+): Promise<SetupTaskResult> {
   const intent = await getProjectIntent(pool, input.projectId);
   if (!intent) {
     throw new ApiError(
@@ -121,10 +140,37 @@ export async function generateDeterministicSetupTask(
       'choose a project mode and at least one goal before generating a setup task',
     );
   }
-  const plan = compileDeterministicPlan(intent, input.agentId);
+  let plan = compileDeterministicPlan(intent, input.agentId);
+  let source: SetupTaskResult['source'] = 'deterministic';
+  if (input.preferLlm) {
+    source = 'fallback';
+    if (input.provider) {
+      try {
+        const draft = setupTaskDraftSchema.parse(await input.provider.generate(
+          sanitizeSetupTaskProviderInput({
+            project_mode: intent.project_mode,
+            goal_ids: intent.goal_ids,
+            primary_goal_id: intent.primary_goal_id,
+            custom_goal: intent.custom_goal,
+          }),
+        ));
+        assertProviderDraftSafe(draft);
+        plan = setupTaskPlanSchema.parse({
+          ...plan,
+          summary: draft.summary,
+          events: draft.events,
+          smoke_action: draft.smoke_action,
+        });
+        source = 'llm';
+      } catch {
+        plan = compileDeterministicPlan(intent, input.agentId);
+      }
+    }
+  }
   const task = compileTask(plan, input.projectSlug, input.publicUrl);
-  await saveGeneratedSetupPlan(pool, input.projectId, plan, 'deterministic');
-  return { task, source: 'deterministic', plan };
+  assertGeneratedArtifactSafe({ plan, task });
+  await saveGeneratedSetupPlan(pool, input.projectId, plan, source);
+  return { task, source, plan };
 }
 
 export function compileDeterministicPlan(
@@ -175,4 +221,21 @@ ${events}
 8. Report the exact files changed and ask me to perform this single smoke action: ${plan.smoke_action}
 
 MCP is optional. Do not block SDK installation or the first event on MCP configuration.`;
+}
+
+function assertProviderDraftSafe(draft: unknown): void {
+  const serialized = JSON.stringify(draft);
+  if (/(?:pk|sk|pt)_[a-z0-9_-]+/i.test(serialized)
+      || /@poolstatis\/sdk@(?!0\.3\.0\b)/i.test(serialized)
+      || /https?:\/\//i.test(serialized)
+      || /\.env\b/i.test(serialized)) {
+    throw new Error('setup task provider returned a forbidden artifact');
+  }
+}
+
+function assertGeneratedArtifactSafe(artifact: unknown): void {
+  const serialized = JSON.stringify(artifact);
+  if (/(?:pk|sk|pt)_[a-z0-9_-]+/i.test(serialized)) {
+    throw new Error('generated setup task contains a credential-like value');
+  }
 }

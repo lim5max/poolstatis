@@ -1136,3 +1136,8 @@ export interface SetupTaskResponse {
   source: SetupTaskSource;
   plan: SetupTaskPlan;
 }
+
+export interface SetupTaskFeedbackInput {
+  outcome: 'completed' | 'fallback' | 'blocked' | 'abandoned';
+  blocker: string | null;
+}

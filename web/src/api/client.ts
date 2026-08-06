@@ -1,5 +1,5 @@
 import type {
-  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, PreparedExperiment, ProjectIntent, ProjectIntentInput, SetupTaskAgent, SetupTaskResponse,
+  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, PreparedExperiment, ProjectIntent, ProjectIntentInput, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse,
   BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
@@ -121,6 +121,12 @@ export class PoolstatisClient {
   setupTask(slug: string, body: { agent_id: SetupTaskAgent; prefer_llm?: boolean }) {
     return this.req<SetupTaskResponse>(
       'POST', `/api/v1/projects/${encodeURIComponent(slug)}/setup-task`, body,
+    );
+  }
+
+  setupTaskFeedback(slug: string, body: SetupTaskFeedbackInput) {
+    return this.req<{ recorded: true }>(
+      'POST', `/api/v1/projects/${encodeURIComponent(slug)}/setup-task/feedback`, body,
     );
   }
 

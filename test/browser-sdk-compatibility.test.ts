@@ -37,7 +37,7 @@ beforeAll(async () => {
 afterAll(() => env.close());
 
 describe('published browser SDK compatibility on /i/v1/events', () => {
-  it('accepts SDK 0.1, 0.2 and 0.3 payloads without retaining legacy raw paths', async () => {
+  it('accepts published SDK 0.1 and 0.3 plus the vendored 0.2 transition fixture without retaining legacy raw paths', async () => {
     for (const fixture of browserSdkFixtures()) {
       const response = await api(env, env.ingestToken, 'POST', '/i/v1/events', fixture);
       expect(response.status, `${fixture.batch_id}: ${JSON.stringify(response.body)}`).toBe(200);

@@ -99,6 +99,27 @@ describe('deterministic setup task', () => {
     expect(invalid.status).toBe(400);
   });
 
+  it('falls back without blocking when LLM is preferred but no server secret/provider exists', async () => {
+    const response = await api(
+      alpha,
+      alpha.secretToken,
+      'POST',
+      `/api/v1/projects/${alpha.projectSlug}/setup-task`,
+      { agent_id: 'codex', prefer_llm: true },
+    );
+    expect(response.status).toBe(200);
+    expect(response.body.source).toBe('fallback');
+    expect(response.body.plan.release_manifest.sdk).toBe('@poolstatis/sdk@0.3.0');
+
+    const intent = await api(
+      alpha,
+      alpha.secretToken,
+      'GET',
+      `/api/v1/projects/${alpha.projectSlug}/intent`,
+    );
+    expect(intent.body.intent.generated_plan_source).toBe('fallback');
+  });
+
   it('keeps setup task generation tenant isolated', async () => {
     const response = await api(
       alpha,

@@ -163,6 +163,15 @@ export const setupTaskInputSchema = z.object({
   prefer_llm: z.boolean().optional().default(false),
 }).strict();
 
+export const setupTaskDraftSchema = z.object({
+  summary: z.string().trim().min(10).max(240),
+  events: z.array(z.object({
+    name: eventName,
+    purpose: z.string().trim().min(10).max(240),
+  }).strict()).min(1).max(3),
+  smoke_action: z.string().trim().min(5).max(240),
+}).strict();
+
 export const setupTaskPlanSchema = z.object({
   schema_version: z.literal(1),
   agent_id: setupTaskAgentSchema,
@@ -195,7 +204,24 @@ export const setupTaskPlanSchema = z.object({
 });
 
 export type SetupTaskAgent = z.infer<typeof setupTaskAgentSchema>;
+export type SetupTaskDraft = z.infer<typeof setupTaskDraftSchema>;
 export type SetupTaskPlan = z.infer<typeof setupTaskPlanSchema>;
+
+export const setupTaskFeedbackSchema = z.object({
+  outcome: z.enum(['completed', 'fallback', 'blocked', 'abandoned']),
+  blocker: z.string().trim().min(1).max(100)
+    .regex(/^[a-z][a-z0-9_]*$/, 'blocker must be a normalized snake_case code')
+    .nullable()
+    .default(null),
+}).strict().superRefine((feedback, ctx) => {
+  if ((feedback.outcome === 'blocked') !== (feedback.blocker !== null)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['blocker'],
+      message: 'blocker is required only for blocked outcome',
+    });
+  }
+});
 
 // ===== Product decision loop trust foundation =====
 
