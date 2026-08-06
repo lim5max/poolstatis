@@ -42,11 +42,14 @@ interface AnalysisRun {
 
 const OPTION_TARGET = 'min-h-11 md:min-h-8';
 
-export function ProductAnalytics() {
+export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' | 'funnels' } = {}) {
   const { client, project, env } = useStore();
   const [params] = useSearchParams();
-  const initialTemplate = ANALYSIS_TEMPLATES.find((template) => template.key === params.get('template') && resolveTemplateCapability(template.key, CORE_ANALYZE_CAPABILITIES).status === 'available')
-    ?? ANALYSIS_TEMPLATES[0]!;
+  const funnelSurface = surface === 'funnels';
+  const initialTemplate = funnelSurface
+    ? ANALYSIS_TEMPLATES.find((template) => template.key === 'activation-funnel')!
+    : ANALYSIS_TEMPLATES.find((template) => template.key === params.get('template') && resolveTemplateCapability(template.key, CORE_ANALYZE_CAPABILITIES).status === 'available')
+      ?? ANALYSIS_TEMPLATES[0]!;
   const [templateKey, setTemplateKey] = useState(initialTemplate.key);
   const template = ANALYSIS_TEMPLATES.find((candidate) => candidate.key === templateKey) ?? ANALYSIS_TEMPLATES[0]!;
   const capability = resolveTemplateCapability(template.key, CORE_ANALYZE_CAPABILITIES);
@@ -191,20 +194,24 @@ export function ProductAnalytics() {
   return (
     <div className="space-y-5">
       <header className="max-w-3xl">
-        <h1 className="serif text-3xl sm:text-4xl">Product</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Start with a registered outcome. Open query controls only when the answer needs a closer look.</p>
+        <h1 className="serif text-3xl sm:text-4xl">{funnelSurface ? 'Funnels' : 'Product'}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {funnelSurface
+            ? 'See where people stop before reaching a meaningful outcome.'
+            : 'Start with a registered outcome. Open query controls only when the answer needs a closer look.'}
+        </p>
       </header>
 
-      <section aria-labelledby="product-templates-title">
+      {!funnelSurface && <section aria-labelledby="product-templates-title">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 id="product-templates-title" className="text-sm font-semibold">Answer templates</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Each template stays inside the typed Query DSL.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Each answer stays inside the typed Query DSL.</p>
           </div>
           <Badge variant="outline">schema v1</Badge>
         </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-          {ANALYSIS_TEMPLATES.filter((candidate) => ['product-health', 'activation-funnel', 'feature-adoption', 'retention', 'release-impact'].includes(candidate.key)).map((candidate) => {
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {ANALYSIS_TEMPLATES.filter((candidate) => ['product-health', 'feature-adoption', 'retention', 'release-impact'].includes(candidate.key)).map((candidate) => {
             const available = resolveTemplateCapability(candidate.key, CORE_ANALYZE_CAPABILITIES).status === 'available';
             const selected = candidate.key === template.key;
             return (
@@ -214,20 +221,20 @@ export function ProductAnalytics() {
                 disabled={!available}
                 aria-pressed={selected}
                 onClick={() => selectTemplate(candidate)}
-                className={`min-h-24 rounded-panel border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-foreground/25 bg-card shadow-sm' : available ? 'bg-card/55 hover:bg-card' : 'cursor-not-allowed border-dashed bg-muted/25 text-muted-foreground'}`}
+                className={`min-h-24 rounded-panel border p-3 text-left text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-primary bg-primary/10' : available ? 'bg-card/55 hover:border-primary/60 hover:bg-primary/5' : 'cursor-not-allowed border-dashed bg-muted/25 text-muted-foreground'}`}
               >
                 <span className="text-sm font-semibold">{candidate.title}</span>
-                <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{available ? candidate.question : 'Not supported by the current server contract.'}</span>
+                <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">{available ? candidate.question : 'Not supported by the current server contract.'}</span>
               </button>
             );
           })}
         </div>
-      </section>
+      </section>}
 
       <AnswerCanvas>
         <div className="flex flex-col gap-4 border-b px-4 py-4 sm:flex-row sm:items-end sm:justify-between sm:px-5">
           <div className="min-w-0">
-            <div className="text-xs font-medium text-muted-foreground">Current answer</div>
+            <div className="text-sm font-medium text-muted-foreground">{funnelSurface ? 'Funnel answer' : 'Current answer'}</div>
             <h2 className="mt-1 text-xl font-semibold">{template.title}</h2>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{template.question}</p>
           </div>
@@ -270,11 +277,13 @@ export function ProductAnalytics() {
 
       <details className="group rounded-panel border bg-card">
         <DisclosureSummary className="flex min-h-14 cursor-pointer items-center gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
-          Edit analysis
-          <span className="ml-auto text-xs font-normal text-muted-foreground group-open:hidden">Range, metric, view and breakdown</span>
+          {funnelSurface ? 'Edit funnel analysis' : 'Edit analysis'}
+          <span className="ml-auto text-sm font-normal text-muted-foreground group-open:hidden">
+            {funnelSurface ? 'Saved funnel and exact range' : 'Range, metric, view and breakdown'}
+          </span>
         </DisclosureSummary>
         <div className="border-t p-4 sm:p-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
+        {!funnelSurface && <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
           <div className="w-full lg:max-w-sm">
             <Control label="Scenario">
               <Select
@@ -297,7 +306,7 @@ export function ProductAnalytics() {
                     >
                       <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
                         <span className="truncate">{option.label}</span>
-                        {option.reason && <span className="shrink-0 text-xs text-muted-foreground">{option.reason}</span>}
+                        {option.reason && <span className="shrink-0 text-sm text-muted-foreground">{option.reason}</span>}
                       </span>
                     </SelectItem>
                   ))}
@@ -309,7 +318,7 @@ export function ProductAnalytics() {
             <div className="text-sm font-medium">{template.question}</div>
             <p className="mt-1 text-sm text-muted-foreground">{template.purpose}</p>
           </div>
-        </div>
+        </div>}
         {capability.status === 'unavailable' ? (
           <div className="mt-5 rounded-panel border border-dashed p-4 text-sm text-muted-foreground">
             Unavailable · {capability.missing.map(friendlyCapability).join(', ')}
@@ -410,7 +419,7 @@ function visualizationEvidenceTrust(status: VisualizationSpec['trust']['status']
 }
 
 function Control({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">{label}{children}</label>;
+  return <label className="grid min-w-0 gap-1.5 text-sm font-medium text-muted-foreground">{label}{children}</label>;
 }
 
 function createVisualizationSpec(input: {

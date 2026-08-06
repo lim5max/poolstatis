@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DisclosureSummary } from '@/components/disclosure';
+import { cn } from '@/lib/utils';
 import {
   SHIP_STAGES,
   SHIP_STAGE_LABELS,
@@ -87,14 +88,19 @@ export function Experiments() {
             <button
               key={option.id}
               type="button"
-              className="rounded-lg border bg-background p-4 text-left outline-none transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:ring-2 focus-visible:ring-ring/50"
+              className={cn(
+                'rounded-lg border p-4 text-left text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50',
+                intent === option.id
+                  ? 'border-primary bg-primary/10'
+                  : 'bg-background hover:border-primary/60 hover:bg-primary/5',
+              )}
               aria-pressed={intent === option.id}
               onClick={() => setIntent((current) => current === option.id ? null : option.id)}
             >
               <span className="text-sm font-medium">{option.title}</span>
-              <span className="mt-2 block text-xs leading-relaxed text-muted-foreground">{option.body}</span>
-              <span className="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-primary">
-                <Add className="size-3.5" />{option.action}
+              <span className="mt-2 block text-sm leading-relaxed text-muted-foreground">{option.body}</span>
+              <span className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <Add className="size-4 text-primary" />{option.action}
               </span>
             </button>
           ))}
@@ -243,10 +249,10 @@ function PrepareExperimentForm({
             </Select>
           </Field>
           {eligibleMetrics.length === 0 && <ErrorNote>Activate a count or unique-actor metric in Registry first.</ErrorNote>}
-          <div className="rounded-md border bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">
+          <div className="rounded-md border bg-muted/20 p-3 text-sm leading-relaxed text-muted-foreground">
             Poolstatis creates one dedicated draft flag with 50/50 control and treatment. No traffic changes until readiness passes and you launch it.
           </div>
-          <button type="button" className="text-xs text-primary hover:underline" onClick={() => setAdvanced((value) => !value)}>
+          <button type="button" className="text-sm text-foreground hover:underline" onClick={() => setAdvanced((value) => !value)}>
             {advanced ? 'Hide keys and payloads' : 'Add payloads or edit keys'}
           </button>
         </div>
@@ -255,12 +261,12 @@ function PrepareExperimentForm({
         <div className="mt-4 grid gap-3 rounded-md border p-4 md:grid-cols-2">
           <Field label="Experiment key"><Input aria-label="Experiment key" value={key} onChange={(event) => setKey(slugify(event.target.value))} /></Field>
           <Field label="Flag key"><Input aria-label="Experiment flag key" value={flagKey} readOnly /></Field>
-          <Field label="Control payload JSON"><Input aria-label="Control payload JSON" className="font-mono text-xs" value={controlPayload} onChange={(event) => setControlPayload(event.target.value)} placeholder='{"label":"Current"}' /></Field>
-          <Field label="Treatment payload JSON"><Input aria-label="Treatment payload JSON" className="font-mono text-xs" value={treatmentPayload} onChange={(event) => setTreatmentPayload(event.target.value)} placeholder='{"label":"New"}' /></Field>
+          <Field label="Control payload JSON"><Input aria-label="Control payload JSON" className="font-mono text-sm" value={controlPayload} onChange={(event) => setControlPayload(event.target.value)} placeholder='{"label":"Current"}' /></Field>
+          <Field label="Treatment payload JSON"><Input aria-label="Treatment payload JSON" className="font-mono text-sm" value={treatmentPayload} onChange={(event) => setTreatmentPayload(event.target.value)} placeholder='{"label":"New"}' /></Field>
         </div>
       )}
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-        <span className="text-xs text-muted-foreground">Creates drafts only · selected environment: <code>{env}</code></span>
+        <span className="text-sm text-muted-foreground">Creates drafts only · selected environment: <code>{env}</code></span>
         <div className="flex gap-2">
           <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
           <Button onClick={submit} disabled={!valid || busy || eligibleMetrics.length === 0}>
@@ -344,24 +350,24 @@ function FlagForm({
           <Input aria-label="Flag purpose" value={purpose} onChange={(event) => setPurpose(event.target.value)} placeholder="Roll out the new checkout without risking all traffic." />
         </Field>
       </div>
-      <div className="mt-4 rounded-md border bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">
+      <div className="mt-4 rounded-md border bg-muted/20 p-3 text-sm leading-relaxed text-muted-foreground">
         This saves a draft in <code>{env}</code>. Drafts do not change product traffic.
       </div>
-      <button type="button" className="mt-3 text-xs text-primary hover:underline" onClick={() => setAdvanced((value) => !value)}>
+      <button type="button" className="mt-3 text-sm text-foreground hover:underline" onClick={() => setAdvanced((value) => !value)}>
         {advanced ? 'Hide allocation and payloads' : 'Review allocation and payloads'}
       </button>
       {advanced && (
         <div className="mt-3 space-y-2 rounded-md border p-4">
           <Field label="Flag key"><Input aria-label="Flag key" value={key} onChange={(event) => setKey(slugify(event.target.value))} /></Field>
           <div className="flex items-center justify-between gap-3">
-            <Label className="text-xs text-muted-foreground">Variants · {allocation.toFixed(2)}%</Label>
+            <Label className="text-sm text-muted-foreground">Variants · {allocation.toFixed(2)}%</Label>
             <Button type="button" variant="outline" size="sm" onClick={() => setVariants((current) => [...current, { id: Date.now(), key: '', rollout: '0', payload: '' }])}><Add className="size-3.5" />Add</Button>
           </div>
           {variants.map((variant, index) => (
             <div key={variant.id} className="grid gap-2 rounded-md border p-3 md:grid-cols-[1fr_7rem_1fr_auto]">
               <Input aria-label={`Variant ${index + 1} key`} value={variant.key} onChange={(event) => setVariants((current) => current.map((item) => item.id === variant.id ? { ...item, key: slugify(event.target.value) } : item))} />
               <Input aria-label={`Variant ${index + 1} rollout percentage`} type="number" min="0" max="100" value={variant.rollout} onChange={(event) => setVariants((current) => current.map((item) => item.id === variant.id ? { ...item, rollout: event.target.value } : item))} />
-              <Input aria-label={`Variant ${index + 1} JSON payload`} className="font-mono text-xs" value={variant.payload} onChange={(event) => setVariants((current) => current.map((item) => item.id === variant.id ? { ...item, payload: event.target.value } : item))} placeholder="payload JSON" />
+              <Input aria-label={`Variant ${index + 1} JSON payload`} className="font-mono text-sm" value={variant.payload} onChange={(event) => setVariants((current) => current.map((item) => item.id === variant.id ? { ...item, payload: event.target.value } : item))} placeholder="payload JSON" />
               <Button type="button" variant="ghost" size="sm" disabled={variants.length === 1} onClick={() => setVariants((current) => current.filter((item) => item.id !== variant.id))}>Remove</Button>
             </div>
           ))}
@@ -469,7 +475,7 @@ function ExperimentCard({
         </div>
         <div className="min-w-0">
           <div className={outcome.available ? 'text-sm font-medium' : 'text-sm font-medium text-muted-foreground'}>{outcome.title}</div>
-          <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">{outcome.detail}</p>
+          <p className="mt-1 break-words text-sm leading-relaxed text-muted-foreground">{outcome.detail}</p>
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
           {busy && <Loader2 className="size-4 animate-spin" />}
@@ -479,7 +485,7 @@ function ExperimentCard({
         </div>
       </div>
       {legacyAllEnvironments && (
-        <p className="mt-3 text-xs text-muted-foreground">Legacy all-environment experiments are read only here. Review every environment before using the legacy conclude operation.</p>
+        <p className="mt-3 text-sm text-muted-foreground">Legacy all-environment experiments are read only here. Review every environment before using the legacy conclude operation.</p>
       )}
       {result && <ResultEvidence result={result} />}
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
@@ -500,8 +506,8 @@ function ExperimentCard({
         />
       )}
       <details className="mt-2 min-w-0">
-        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</DisclosureSummary>
-        <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</DisclosureSummary>
+        <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-sm text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
           <span>Experiment <code className="break-all">{experiment.key}</code></span>
           <span>Raw status <code>{experiment.status}</code></span>
           <span>Environment <code>{experiment.env ?? 'legacy-all'}</code></span>
@@ -633,7 +639,7 @@ function DecisionDialog({
             <textarea aria-label="Experiment rationale" value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="State what the evidence supports and what remains uncertain." className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50" />
           </Field>
           {outcome === 'ship' && shipVariant !== 'none' && (
-            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-950 dark:text-amber-100">
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
               This atomically concludes the experiment and moves <code>{shipVariant}</code> to 100% allocation.
             </div>
           )}
@@ -656,7 +662,7 @@ function ResultEvidence({ result }: { result: ExperimentResult }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-sm font-medium">{state}</div>
-          <p className="mt-1 text-xs text-muted-foreground">{result.primary_metric.purpose}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{result.primary_metric.purpose}</p>
         </div>
         <Badge variant="outline">{result.snapshot_integrity.replaceAll('_', ' ')}</Badge>
       </div>
@@ -666,8 +672,8 @@ function ResultEvidence({ result }: { result: ExperimentResult }) {
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           {result.variants.map((variant) => (
             <div key={variant.key} className="rounded-md border bg-background p-3">
-              <div className="flex items-center justify-between gap-2"><code className="text-xs">{variant.key}</code>{variant.key === result.control_variant_key && <Badge variant="outline">control</Badge>}</div>
-              <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+              <div className="flex items-center justify-between gap-2"><code className="text-sm">{variant.key}</code>{variant.key === result.control_variant_key && <Badge variant="outline">control</Badge>}</div>
+              <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                 <EvidenceValue label="Exposed" value={fmtNum(variant.exposed)} />
                 <EvidenceValue label="Converted" value={fmtNum(variant.converted)} />
                 <EvidenceValue label="Rate" value={fmtPct(variant.conversion_rate)} />
@@ -684,7 +690,7 @@ function ResultEvidence({ result }: { result: ExperimentResult }) {
           <DisclosureSummary className="inline-flex cursor-pointer items-center text-sm font-medium">Guardrails and secondary metrics · {result.secondary_metrics.length}</DisclosureSummary>
           <div className="mt-3 space-y-3">
             {result.secondary_metrics.map((entry) => (
-              <div key={entry.metric.key} className="text-xs text-muted-foreground">
+              <div key={entry.metric.key} className="text-sm text-muted-foreground">
                 <div className="font-medium text-foreground">{entry.metric.name}</div>
                 <div className="mt-1">{entry.variants.map((variant) => `${variant.key}: ${fmtPct(variant.conversion_rate)}`).join(' · ')}</div>
               </div>
@@ -750,23 +756,23 @@ function FlagCard({ flag, env, onChanged }: { flag: FeatureFlag; env: string; on
       <div className="min-w-0 xl:col-span-2">
         <p className="break-words text-sm leading-relaxed">{flag.purpose}</p>
         <details className="mt-2 min-w-0">
-          <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Allocation &amp; technical details</DisclosureSummary>
-          <div className="min-w-0 border-l pl-3 text-xs text-muted-foreground">
+          <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Allocation &amp; technical details</DisclosureSummary>
+          <div className="min-w-0 border-l pl-3 text-sm text-muted-foreground">
             <div>Flag <code className="break-all">{flag.key}</code> · environment <code>{flag.env ?? 'legacy-all'}</code> · {allocation}% allocated</div>
-            <div className="mt-2 flex flex-wrap gap-1">{flag.variants.map((variant) => <Badge key={variant.key} variant="outline" className="font-mono text-xs">{variant.key} {variant.rollout_percentage}%</Badge>)}</div>
+            <div className="mt-2 flex flex-wrap gap-1">{flag.variants.map((variant) => <Badge key={variant.key} variant="outline" className="font-mono text-sm">{variant.key} {variant.rollout_percentage}%</Badge>)}</div>
           </div>
         </details>
       </div>
       <div className="flex items-start justify-end">
         {flag.env === null
-          ? <span className="text-xs text-muted-foreground">Read only · all envs</span>
+          ? <span className="text-sm text-muted-foreground">Read only · all envs</span>
           : flag.env !== env
-            ? <span className="text-xs text-muted-foreground">Read only · {flag.env}</span>
+            ? <span className="text-sm text-muted-foreground">Read only · {flag.env}</span>
             : busy ? <Loader2 className="size-4 animate-spin" /> : flag.status === 'draft'
           ? <Button size="sm" onClick={() => change('activate')}>Activate</Button>
           : flag.status === 'active'
             ? <Button variant="outline" size="sm" onClick={() => change('archive')}>Archive</Button>
-            : <span className="text-xs text-muted-foreground">Read only</span>}
+            : <span className="text-sm text-muted-foreground">Read only</span>}
       </div>
       {error && <div className="md:col-span-2 xl:col-span-4"><ErrorNote>{error}</ErrorNote></div>}
     </article>
@@ -774,7 +780,7 @@ function FlagCard({ flag, env, onChanged }: { flag: FeatureFlag; env: string; on
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <div className="space-y-1.5"><Label className="text-xs font-medium text-muted-foreground">{label}</Label>{children}</div>;
+  return <div className="space-y-1.5"><Label className="text-sm font-medium text-muted-foreground">{label}</Label>{children}</div>;
 }
 
 function FlagStatus({ status }: { status: FeatureFlag['status'] }) {

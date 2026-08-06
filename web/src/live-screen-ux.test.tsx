@@ -642,6 +642,13 @@ describe('live customer screen UX', () => {
     expect(screen.getByRole('button', { name: /Remote config/ })).toBeInTheDocument();
     expect(screen.queryByLabelText('Flag key')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Experiment hypothesis')).not.toBeInTheDocument();
+    const remoteConfig = screen.getByRole('button', { name: /Remote config/ });
+    fireEvent.click(remoteConfig);
+    expect(remoteConfig).toHaveAttribute('aria-pressed', 'true');
+    expect(remoteConfig).toHaveClass('border-primary', 'bg-primary/10', 'text-foreground');
+    expect(within(remoteConfig).getByText('Create config')).toHaveClass('text-foreground');
+    expect(within(remoteConfig).getByText('Create config')).not.toHaveClass('text-primary');
+    fireEvent.click(remoteConfig);
     fireEvent.click(screen.getByRole('button', { name: /A\/B experiment/ }));
     expect(screen.getByLabelText('Experiment hypothesis')).toBeInTheDocument();
     expect(screen.getByText(/No traffic changes until readiness passes/)).toBeInTheDocument();

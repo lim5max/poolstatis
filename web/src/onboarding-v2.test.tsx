@@ -72,7 +72,7 @@ describe('Product Experience V2 onboarding', () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
-  it('uses native keyboard/screen-reader controls and validates bounded multi-select goals', () => {
+  it('uses native multi-select surfaces and validates bounded multi-select goals', () => {
     mockedStore.mockReturnValue({
       account: { organization: { name: 'Acme' }, user: { id: 'user-1' } },
       client: {},
@@ -83,16 +83,20 @@ describe('Product Experience V2 onboarding', () => {
 
     render(<MemoryRouter><Onboarding /></MemoryRouter>);
 
-    const productMode = screen.getByRole('radio', { name: /^A product/ });
-    productMode.focus();
-    expect(productMode).toHaveFocus();
-    expect(productMode).toHaveAttribute('type', 'radio');
-    fireEvent.click(productMode);
-    expect(productMode).toBeChecked();
+    const websiteSurface = screen.getByRole('checkbox', { name: /^A website/ });
+    const productSurface = screen.getByRole('checkbox', { name: /^A product/ });
+    websiteSurface.focus();
+    expect(websiteSurface).toHaveFocus();
+    expect(websiteSurface).toHaveAttribute('type', 'checkbox');
+    fireEvent.click(websiteSurface);
+    fireEvent.click(productSurface);
+    expect(websiteSurface).toBeChecked();
+    expect(productSurface).toBeChecked();
     expect(telemetryEvents('onboarding.mode_selected')).toEqual([
-      ['onboarding.mode_selected', { mode: 'product' }, { distinctId: 'user-1' }],
+      ['onboarding.mode_selected', { mode: 'website' }, { distinctId: 'user-1' }],
+      ['onboarding.mode_selected', { mode: 'both' }, { distinctId: 'user-1' }],
     ]);
-    expect(screen.queryByLabelText(/Domain/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Domain/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
     const custom = screen.getByRole('checkbox', { name: 'Something else' });
@@ -113,6 +117,48 @@ describe('Product Experience V2 onboarding', () => {
     expect(telemetryEvents('onboarding.goals_selected').at(-1)?.[1]).toEqual({
       goal_ids: ['custom', 'activation', 'feature_adoption'],
     });
+  });
+
+  it('derives the backwards-compatible both mode from two checked surfaces', async () => {
+    const completeOnboarding = vi.fn().mockResolvedValue({
+      organization: { id: 'org-1', name: 'Acme' },
+      project: { slug: 'combined', name: 'Combined', timezone: 'UTC' },
+      tokens: { personal: null, ingest_prod: 'pk_combined_private' },
+      mcp: { command: 'pnpm', args: [], package_status: 'published', note: '', env: {} },
+    });
+    mockedStore.mockReturnValue({
+      account: { organization: { name: 'Acme' }, user: { id: 'user-both' } },
+      client: {
+        completeOnboarding,
+        onboardingStatus: vi.fn().mockResolvedValue(pendingProof),
+        setupTask: vi.fn().mockResolvedValue(setupTask()),
+      },
+      baseUrl: 'https://api.poolstatis.test',
+      refreshProjects: vi.fn().mockResolvedValue(undefined),
+      setProject: vi.fn(),
+    } as never);
+
+    render(<MemoryRouter><Onboarding /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('checkbox', { name: /^A website/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /^A product/ }));
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Combined' } });
+    fireEvent.change(screen.getByLabelText(/Domain/), { target: { value: 'combined.example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Understand website traffic' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Find where users get stuck' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+
+    await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith({
+      workspace_name: 'Acme',
+      project_name: 'Combined',
+      project_slug: 'combined',
+      issue_personal_token: false,
+      project_mode: 'both',
+      goal_ids: ['website_traffic', 'activation'],
+      custom_goal: null,
+      primary_goal_id: 'website_traffic',
+      website_domain: 'combined.example',
+    }));
   });
 
   it('creates website intent atomically, separates the key from the server task, and routes on server proof', async () => {
@@ -147,7 +193,7 @@ describe('Product Experience V2 onboarding', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole('radio', { name: /^A website/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /^A website/ }));
     fireEvent.change(screen.getByLabelText(/Domain/), { target: { value: 'Docs.Example.com' } });
     fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Docs' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
@@ -223,7 +269,7 @@ describe('Product Experience V2 onboarding', () => {
     } as never);
 
     render(<MemoryRouter><Onboarding /></MemoryRouter>);
-    fireEvent.click(screen.getByRole('radio', { name: /^A product/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /^A product/ }));
     fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Custom project' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Something else' }));

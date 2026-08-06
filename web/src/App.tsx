@@ -10,6 +10,7 @@ import {
   ChevronsUpDown,
   DashboardSpeed,
   Database,
+  Funnel,
   GitCommit,
   Globe,
   KeyRound,
@@ -56,6 +57,7 @@ import { AuthPortal } from './screens/AuthPortal';
 export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Home: LayoutGrid,
   Product: ChartAnalysis,
+  Funnels: Funnel,
   Web: Globe,
   People: UserGroup,
   Ship: GitCommit,
@@ -82,6 +84,7 @@ const TITLES: Record<string, string> = {
   '/': 'Home',
   '/projects': 'Projects',
   '/analyze/product': 'Product',
+  '/analyze/funnels': 'Funnels',
   '/usage': 'Usage',
   '/profile': 'Profile',
   '/analyze/web': 'Web',
@@ -409,6 +412,7 @@ function Main() {
           <Route path="/profile" element={<Profile />} />
           <Route path="/usage" element={<Usage />} />
           <Route path="/analyze/product" element={<Guarded><ProductAnalytics /></Guarded>} />
+          <Route path="/analyze/funnels" element={<Guarded><ProductAnalytics surface="funnels" /></Guarded>} />
           <Route path="/analyze/web" element={<Guarded><WebAnalytics /></Guarded>} />
           <Route path="/analyze/users" element={<Guarded><Users /></Guarded>} />
           <Route path="/analyze/users/:distinctId" element={<Guarded><Person /></Guarded>} />

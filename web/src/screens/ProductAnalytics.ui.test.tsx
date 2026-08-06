@@ -21,33 +21,37 @@ const metric = {
   owner: null, deprecation_reason: null, deprecated_at: null,
 } as const;
 
+function productStore(funnels: unknown[] = []) {
+  return {
+    project: 'alpha',
+    env: 'prod',
+    client: {
+      metrics: vi.fn().mockResolvedValue([metric]),
+      funnels: vi.fn().mockResolvedValue(funnels),
+      properties: vi.fn().mockResolvedValue([]),
+      query: vi.fn().mockResolvedValue({
+        kind: 'trend',
+        series: [{ bucket: '2026-08-05T00:00:00Z', value: 8 }],
+        meta: {
+          computed_at: '2026-08-06T00:00:00Z',
+          date_range: { from: '2026-07-07T00:00:00Z', to: '2026-08-06T00:00:00Z' },
+          sampling: null,
+          source: 'native',
+        },
+      }),
+      measurementTrust: vi.fn().mockResolvedValue({
+        status: 'trusted',
+        primary_metric: { key: metric.key, purpose: metric.purpose, category: 'activation', observed_events: 34, observed_actors: 8, registered_coverage: 1 },
+        identity: { distinct_id_coverage: 1, raw_actors: 8, resolved_actors: 8 }, properties: [], blockers: [], warnings: [],
+      }),
+    },
+  } as never;
+}
+
 describe('Product answer-first surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedStore.mockReturnValue({
-      project: 'alpha',
-      env: 'prod',
-      client: {
-        metrics: vi.fn().mockResolvedValue([metric]),
-        funnels: vi.fn().mockResolvedValue([]),
-        properties: vi.fn().mockResolvedValue([]),
-        query: vi.fn().mockResolvedValue({
-          kind: 'trend',
-          series: [{ bucket: '2026-08-05T00:00:00Z', value: 8 }],
-          meta: {
-            computed_at: '2026-08-06T00:00:00Z',
-            date_range: { from: '2026-07-07T00:00:00Z', to: '2026-08-06T00:00:00Z' },
-            sampling: null,
-            source: 'native',
-          },
-        }),
-        measurementTrust: vi.fn().mockResolvedValue({
-          status: 'trusted',
-          primary_metric: { key: metric.key, purpose: metric.purpose, category: 'activation', observed_events: 34, observed_actors: 8, registered_coverage: 1 },
-          identity: { distinct_id_coverage: 1, raw_actors: 8, resolved_actors: 8 }, properties: [], blockers: [], warnings: [],
-        }),
-      },
-    } as never);
+    mockedStore.mockReturnValue(productStore());
   });
 
   it('puts templates and a real answer before advanced query controls', async () => {
@@ -61,5 +65,23 @@ describe('Product answer-first surface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
     await waitFor(() => expect(screen.getByText(/Observed · Trusted · 34 events ·/)).toBeInTheDocument());
     expect(screen.getByRole('img', { name: 'Product answer chart' })).toHaveTextContent('table fallback');
+  });
+
+  it('gives funnels a focused answer surface without the product template grid', async () => {
+    mockedStore.mockReturnValue(productStore([{
+      id: 'f1', key: 'signup', name: 'Signup', goal: 'Find signup drop-off.',
+      steps: [
+        { order: 1, metric: 'signup_started', label: 'Started' },
+        { order: 2, metric: 'signup_completed', label: 'Completed' },
+      ],
+      window_seconds: 604800,
+    }]));
+
+    render(<MemoryRouter><ProductAnalytics surface="funnels" /></MemoryRouter>);
+
+    expect(await screen.findByRole('heading', { name: 'Funnels' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Answer templates' })).not.toBeInTheDocument();
+    expect(screen.getByText('Activation funnel')).toBeInTheDocument();
+    expect(screen.getByText('Edit funnel analysis')).toBeInTheDocument();
   });
 });
