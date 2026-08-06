@@ -602,7 +602,7 @@ describe('privacy-safe browser ingest and Web analytics', () => {
     const result = await api(env, env.secretToken, 'POST', `${project()}/query`, {
       kind: 'web_analytics',
       metric: 'web_page_views',
-      date_from: '-7d',
+      date_from: '-30d',
       dimensions: ['route', 'device'],
     });
     expect(result.status).toBe(200);
@@ -615,7 +615,7 @@ describe('privacy-safe browser ingest and Web analytics', () => {
     const sessions = await api(env, env.secretToken, 'POST', `${project()}/query`, {
       kind: 'web_sessions',
       metric: 'web_page_views',
-      date_from: '-7d',
+      date_from: '-30d',
       limit: 10,
     });
     expect(sessions.status).toBe(200);
@@ -624,7 +624,7 @@ describe('privacy-safe browser ingest and Web analytics', () => {
     const detail = await api(env, env.secretToken, 'POST', `${project()}/query`, {
       kind: 'web_session',
       metric: 'web_page_views',
-      date_from: '-7d',
+      date_from: '-30d',
       actor_id: session.actor_id,
       session_id: session.session_id,
       page_limit: 10,
@@ -634,7 +634,7 @@ describe('privacy-safe browser ingest and Web analytics', () => {
     const filtered = await api(env, env.secretToken, 'POST', `${project()}/query`, {
       kind: 'web_analytics',
       metric: 'web_page_views',
-      date_from: '-7d',
+      date_from: '-30d',
       dimensions: ['device'],
       filters: [{ property: '$route_key', op: 'eq', value: 'home' }],
     });
