@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { AnswerCanvas } from '@/components/analytics';
 import { isRedundantKey } from '@/lib/utils';
 import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
 
@@ -84,20 +85,23 @@ export function Measurement() {
     finally { setProposingAttribution(false); }
   };
 
-  return <div className="space-y-4">
-    <Panel title="Measurement" right={<span className="text-xs text-muted-foreground">server evidence · {env}</span>}>
-      <p className="max-w-3xl text-sm text-muted-foreground">Review what is decision-ready, then open only the metric that needs action.</p>
-    </Panel>
+  const trusted = trust.filter((row) => row.trust?.status === 'trusted').length;
+  const activeLinks = identity.links.filter((link) => link.status === 'active').length;
 
-    <TrustOverview rows={trust} properties={properties.length} activeLinks={identity.links.filter((link) => link.status === 'active').length} onRefresh={audit.reload} />
+  return <div className="space-y-5">
+    <header className="max-w-3xl">
+      <h1 className="serif text-3xl sm:text-4xl">Definitions</h1>
+      <p className="mt-1 text-sm text-muted-foreground">Four groups define what this project measures and how much of it can be trusted.</p>
+    </header>
 
-    <WebAnalyticsPanel metrics={trust.map((row) => row.metric)} env={env} onSetup={audit.reload} />
+    <AnswerCanvas>
+      <DefinitionGroup title="Tracking plan" summary={`${trust.length} active · ${trusted} trusted`} action="Review">
+        <TrustOverview rows={trust} properties={properties.length} activeLinks={activeLinks} onRefresh={audit.reload} />
+        <div className="mt-4"><ContractsPanel contracts={contracts} /></div>
+      </DefinitionGroup>
 
-    <AcquisitionPanel metrics={trust.map((row) => row.metric)} env={env} />
-
-    <ContractsPanel contracts={contracts} />
-
-    <Panel title={<>Property meanings <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{properties.length}</span></>} right={<Button variant="outline" size="sm" onClick={proposeAttribution} disabled={proposingAttribution}>{proposingAttribution ? 'Proposing…' : 'Propose acquisition UTM properties'}</Button>}>
+      <DefinitionGroup title="Properties" summary={`${properties.length} defined`} action="Open">
+        <Panel title={<>Property meanings <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{properties.length}</span></>} right={<Button variant="outline" size="sm" onClick={proposeAttribution} disabled={proposingAttribution}>{proposingAttribution ? 'Proposing…' : 'Propose acquisition UTM properties'}</Button>}>
       <p className="mb-4 max-w-3xl text-sm text-muted-foreground">Browser acquisition setup adds only the five canonical UTM definitions as proposed. Session landing attribution is an association, not causal campaign credit.</p>
       {attributionError && <div className="mb-4"><ErrorNote>{attributionError}</ErrorNote></div>}
       {properties.length === 0 ? <p className="text-sm text-muted-foreground">No decision properties are registered yet.</p> : <div className="overflow-x-auto">
@@ -112,9 +116,11 @@ export function Measurement() {
           </TableRow>)}</TableBody>
         </Table>
       </div>}
-    </Panel>
+        </Panel>
+      </DefinitionGroup>
 
-    <Panel title="Identity links" right={<span className="text-xs text-muted-foreground">reversible · append-only audit</span>}>
+      <DefinitionGroup title="Identity" summary={activeLinks > 0 ? `${activeLinks} active links` : 'Not linked'} action="View">
+        <Panel title="Identity links" right={<span className="text-xs text-muted-foreground">reversible · append-only audit</span>}>
       {identity.links.length === 0 ? <p className="text-sm text-muted-foreground">No anonymous-to-identified links have been recorded for <code>{env}</code>.</p> : <div className="overflow-x-auto">
         <Table><TableHeader><TableRow><TableHead>Source actor</TableHead><TableHead>Stable actor</TableHead><TableHead>Status</TableHead><TableHead>Created by</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
           <TableBody>{identity.links.map((link) => <TableRow key={link.id}>
@@ -127,9 +133,11 @@ export function Measurement() {
         </Table>
       </div>}
       <div className="mt-4 border-t pt-4 text-xs text-muted-foreground">{identity.audit.length} audit {identity.audit.length === 1 ? 'entry' : 'entries'} preserved in this environment.</div>
-    </Panel>
+        </Panel>
+      </DefinitionGroup>
 
-    <Panel title="Data sources" right={<span className="text-xs text-muted-foreground">bounded read-only capabilities</span>}>
+      <DefinitionGroup title="Data sources" summary={sources.length > 0 ? `${sources.length} connected` : 'Native ingest'} action="Manage">
+        <Panel title="Data sources" right={<span className="text-xs text-muted-foreground">bounded read-only capabilities</span>}>
       {sources.length === 0 ? <p className="text-sm text-muted-foreground">Native ingest is the current data path. Configure PostHog through MCP or the Platform API when raw data should remain external.</p> : <div className="space-y-3">
         {sources.map((source) => <div key={source.id} className="rounded-panel border bg-muted/20 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{source.name}</div><div className="mt-1 text-xs text-muted-foreground"><code>{source.provider}</code> · project {source.external_project_id} · {source.host}</div></div><SourceBadge status={source.status} /></div>
@@ -137,8 +145,39 @@ export function Measurement() {
           {source.last_error && <div className="mt-3 text-xs text-destructive">{source.last_error}</div>}
         </div>)}
       </div>}
-    </Panel>
+        </Panel>
+      </DefinitionGroup>
+    </AnswerCanvas>
+
+    <details className="group rounded-panel border bg-card">
+      <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5 [&::-webkit-details-marker]:hidden">
+        Advanced web reporting
+        <span className="text-xs font-normal text-muted-foreground group-open:hidden">Traffic definitions and acquisition breakdowns</span>
+      </summary>
+      <div className="space-y-4 border-t p-4 sm:p-5 [&_[data-slot=card]]:rounded-none [&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-none">
+        <WebAnalyticsPanel metrics={trust.map((row) => row.metric)} env={env} onSetup={audit.reload} />
+        <AcquisitionPanel metrics={trust.map((row) => row.metric)} env={env} />
+      </div>
+    </details>
   </div>;
+}
+
+function DefinitionGroup({ title, summary, action, children }: {
+  title: string;
+  summary: string;
+  action: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="group border-b last:border-b-0">
+      <summary className="grid min-h-16 cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[minmax(11rem,1fr)_minmax(10rem,1fr)_auto] sm:px-5 [&::-webkit-details-marker]:hidden">
+        <span className="text-sm font-semibold">{title}</span>
+        <span className="text-right text-xs text-muted-foreground sm:text-left sm:text-sm">{summary}</span>
+        <span className="col-span-2 text-right text-xs font-medium text-foreground group-open:hidden sm:col-span-1">{action}</span>
+      </summary>
+      <div className="border-t bg-background/35 p-4 sm:p-5 [&_[data-slot=card]]:rounded-none [&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-none">{children}</div>
+    </details>
+  );
 }
 
 const webDimensions: WebAnalyticsDimension[] = [

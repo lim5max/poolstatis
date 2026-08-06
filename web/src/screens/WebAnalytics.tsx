@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { EmptyState, ErrorNote, Loading, Panel, Stat, fmtNum } from '@/components/ui';
+import { EmptyState, ErrorNote, Loading, Panel, fmtNum } from '@/components/ui';
+import { AnswerCanvas, EvidenceLine, KpiStrip, type EvidenceTrust } from '@/components/analytics';
 import { ManualVisualizationRenderer } from '../analysis/charts';
 import {
   WEB_PAGE_VIEW_METRIC,
@@ -24,6 +25,7 @@ import {
   type WebWorkspaceResult,
 } from '../analysis/operations';
 import type { VisualizationSpec } from '../analysis/visualization';
+import type { MeasurementTrust } from '../api/types';
 import { useAsync, useStore } from '../store';
 
 const RANGE_OPTIONS: Array<{ value: AnalyticsRange; label: string }> = [
@@ -31,22 +33,22 @@ const RANGE_OPTIONS: Array<{ value: AnalyticsRange; label: string }> = [
   { value: '30d', label: 'Last 30 days' },
   { value: '90d', label: 'Last 90 days' },
 ];
-const DIMENSIONS: Array<{ value: WebDimension; label: string }> = [
+type BreakdownView = WebDimension | 'conversion';
+const DIMENSIONS: Array<{ value: BreakdownView; label: string }> = [
   { value: 'source', label: 'Sources' },
+  { value: 'route', label: 'Pages' },
   { value: 'campaign', label: 'Campaigns' },
-  { value: 'medium', label: 'Mediums' },
-  { value: 'route', label: 'Routes' },
-  { value: 'device', label: 'Devices' },
-  { value: 'browser', label: 'Browsers' },
+  { value: 'conversion', label: 'Conversions' },
   { value: 'country', label: 'Countries' },
+  { value: 'device', label: 'Devices' },
 ];
 
 export function WebAnalytics() {
   const { client, project, env } = useStore();
   const [range, setRange] = useState<AnalyticsRange>('30d');
-  const [dimension, setDimension] = useState<WebDimension>('source');
+  const [dimension, setDimension] = useState<BreakdownView>('source');
   const [selectedSession, setSelectedSession] = useState<WebSessionSummary | null>(null);
-  const workspace = useAsync<WebWorkspaceResult | null>(async () => {
+  const workspace = useAsync<(WebWorkspaceResult & { trust: WebTrustRead }) | null>(async () => {
     const metrics = await client!.metrics(project!, { status: 'active' });
     const metric = webPageMetric(metrics);
     if (!metric) return null;
@@ -56,7 +58,7 @@ export function WebAnalytics() {
       filters: [],
       env,
     };
-    const [overview, sessions, trend] = await Promise.all([
+    const [overview, sessions, trend, trust] = await Promise.all([
       client!.operationalQuery<WebAnalyticsResult>(project!, {
         kind: 'web_analytics',
         ...base,
@@ -79,8 +81,9 @@ export function WebAnalytics() {
         if (result.kind !== 'trend') throw new Error('Trend query returned an unexpected result kind');
         return result;
       }),
+      readWebTrust(client!, project!, env, metric.key),
     ]);
-    return { metric, overview, sessions, trend };
+    return { metric, overview, sessions, trend, trust };
   }, [project, env, range]);
 
   if (workspace.loading) return <WebAnalyticsSkeleton />;
@@ -100,27 +103,31 @@ export function WebAnalytics() {
     );
   }
 
-  const { metric, overview, sessions, trend } = workspace.data;
-  const spec = webTrendSpec(project!, env, metric.name, metric.purpose, overview, trend);
-  const breakdown = overview.breakdowns[dimension] ?? [];
+  const { metric, overview, sessions, trend, trust } = workspace.data;
+  const spec = webTrendSpec(project!, env, metric.name, metric.purpose, overview, trend, trust);
+  const breakdown = dimension === 'conversion' ? [] : overview.breakdowns[dimension] ?? [];
   const unavailableDimensions = overview.meta.unavailable_dimensions ?? {};
-  const unavailable = unavailableDimensions[dimension];
+  const unavailable = dimension === 'conversion' ? null : unavailableDimensions[dimension];
   const routeAvailable = !unavailableDimensions.route;
 
   return (
     <div className="space-y-5">
       <ScreenHeader range={range} onRange={(value) => { setRange(value); setSelectedSession(null); }} />
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Stat label="Visitors" value={fmtNum(overview.summary.visitors)} sub="resolved actors" />
-        <Stat label="Sessions" value={fmtNum(overview.summary.sessions)} sub="actor + session ID" />
-        <Stat label="Page views" value={fmtNum(overview.summary.page_views)} sub="accepted canonical views" />
-        <Stat
-          label="Average duration"
-          value={formatDurationMs(overview.summary.average_session_duration_ms)}
-          sub="complete sessions only"
-        />
-      </div>
+      <KpiStrip items={[
+        { label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved actors' },
+        { label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'actor + session ID' },
+        { label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted canonical views' },
+        { label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? null : formatDurationMs(overview.summary.average_session_duration_ms), note: 'complete sessions only' },
+      ]} />
+
+      <EvidenceLine
+        trust={webEvidenceTrust(trust)}
+        eventCount={trust.result?.primary_metric.observed_events ?? overview.summary.page_views}
+        env={env}
+      >
+        The active <code>{metric.key}</code> definition counts accepted canonical page views. Visitors and sessions use the server's actor-safe web response for this exact period.
+      </EvidenceLine>
 
       <div className="grid gap-3 border-y bg-card/45 px-4 py-3 text-sm sm:grid-cols-3">
         <Rate label="Measured coverage" value={overview.engagement.measured_session_coverage} />
@@ -130,22 +137,30 @@ export function WebAnalytics() {
 
       <ManualVisualizationRenderer spec={spec} result={trend} />
 
-      <Panel
-        title="Breakdowns"
-        right={overview.meta.truncated_dimensions.length > 0
-          ? <Badge variant="outline">Top values · truncated</Badge>
-          : Object.keys(unavailableDimensions).length > 0
-            ? <Badge variant="outline">{Object.keys(unavailableDimensions).length} unavailable</Badge>
-          : <Badge variant="outline">Complete result</Badge>}
-      >
+      <AnswerCanvas>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
+          <h2 className="text-sm font-semibold">Traffic breakdown</h2>
+          {overview.meta.truncated_dimensions.length > 0
+            ? <Badge variant="outline">Top values · truncated</Badge>
+            : Object.keys(unavailableDimensions).length > 0
+              ? <Badge variant="outline">Partial response</Badge>
+              : <Badge variant="outline">Complete response</Badge>}
+        </div>
+        <div className="p-4 sm:p-5">
         <div className="mb-4 max-w-full overflow-x-auto">
-          <Tabs value={dimension} onValueChange={(value) => setDimension(value as WebDimension)}>
+          <Tabs value={dimension} onValueChange={(value) => setDimension(value as BreakdownView)}>
             <TabsList className="w-max">
               {DIMENSIONS.map((item) => <TabsTrigger key={item.value} value={item.value}>{item.label}</TabsTrigger>)}
             </TabsList>
           </Tabs>
         </div>
-        {unavailable ? (
+        {dimension === 'conversion' ? (
+          <div className="border-y border-dashed px-4 py-7 text-center">
+            <div className="text-lg font-semibold">Choose a conversion to measure</div>
+            <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">The current canonical web response does not include a conversion outcome, so Poolstatis will not display a zero.</p>
+            <Button asChild variant="outline" className="mt-4 h-11"><Link to="/measurement">Open Definitions</Link></Button>
+          </div>
+        ) : unavailable ? (
           <UnavailableDimension label={DIMENSIONS.find((item) => item.value === dimension)?.label ?? dimension} unavailable={unavailable} />
         ) : breakdown.length === 0 ? (
           <EmptyState headline="No breakdown values" lead="No canonical page views matched this period." />
@@ -177,7 +192,8 @@ export function WebAnalytics() {
             </Table>
           </div>
         )}
-      </Panel>
+        </div>
+      </AnswerCanvas>
 
       <Panel
         title="Recent sessions"
@@ -257,8 +273,8 @@ function ScreenHeader({ range, onRange }: { range: AnalyticsRange; onRange: (ran
   return (
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="serif text-3xl">Web analytics</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Traffic, engagement and actor-safe sessions from canonical browser events.</p>
+        <h1 className="serif text-3xl sm:text-4xl">Web</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Traffic, pages, sources and supported conversions from canonical browser events.</p>
       </div>
       <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
         Period
@@ -384,6 +400,7 @@ function webTrendSpec(
   purpose: string,
   overview: WebAnalyticsResult,
   trend: WebWorkspaceResult['trend'],
+  trust: WebTrustRead,
 ): VisualizationSpec {
   const query = {
     kind: 'trend' as const,
@@ -406,9 +423,13 @@ function webTrendSpec(
     range: { ...overview.meta.date_range, timezone: 'UTC' },
     source: { kind: 'metric', key: WEB_PAGE_VIEW_METRIC, query },
     trust: {
-      status: 'trusted',
-      reason: 'The server accepted an active canonical browser metric for this exact project and environment.',
-      blockers: [],
+      status: trust.unavailable ? 'unavailable' : trust.result?.status === 'trusted' ? 'trusted' : 'partial',
+      reason: trust.unavailable
+        ? 'Measurement trust is unavailable for this exact project and environment.'
+        : trust.result?.status === 'trusted'
+          ? 'The server trust check passed for the canonical browser metric.'
+          : trust.result?.blockers[0]?.message ?? 'The canonical browser metric has partial trust evidence.',
+      blockers: trust.result?.blockers.map((blocker) => ({ code: blocker.code, message: blocker.message, nextAction: blocker.next_action })) ?? [],
     },
     evidence: {
       aggregation: 'count by day',
@@ -429,6 +450,30 @@ function webTrendSpec(
     },
     actions: [{ kind: 'open_metric', key: WEB_PAGE_VIEW_METRIC }, { kind: 'open_query', query }],
   };
+}
+
+interface WebTrustRead {
+  result: MeasurementTrust | null;
+  unavailable: boolean;
+}
+
+async function readWebTrust(
+  client: NonNullable<ReturnType<typeof useStore>['client']>,
+  project: string,
+  env: string,
+  metric: string,
+): Promise<WebTrustRead> {
+  if (typeof client.measurementTrust !== 'function') return { result: null, unavailable: true };
+  try {
+    return { result: await client.measurementTrust(project, { metric_key: metric, env, since_days: 30, target_filters: [] }), unavailable: false };
+  } catch {
+    return { result: null, unavailable: true };
+  }
+}
+
+function webEvidenceTrust(trust: WebTrustRead): EvidenceTrust {
+  if (trust.unavailable || !trust.result) return 'unavailable';
+  return trust.result.status === 'trusted' ? 'trusted' : 'partial';
 }
 
 function formatDateTime(value: string): string {

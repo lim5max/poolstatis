@@ -1,229 +1,365 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { EmptyState, ErrorNote, Loading, Panel } from '@/components/ui';
-import { ANALYSIS_TEMPLATES, CORE_ANALYZE_CAPABILITIES, resolveTemplateCapability } from '../analysis/templates';
-import type { MeasurementTrust, Metric } from '../api/types';
+import { EmptyState, ErrorNote, Loading, fmtNum } from '@/components/ui';
+import { AnswerCanvas, EvidenceLine, KpiStrip, RankedRows, type EvidenceTrust } from '@/components/analytics';
+import { TrendChart } from '../analysis/charts';
+import { formatDurationMs, webPageMetric, type WebAnalyticsResult } from '../analysis/operations';
+import type { Funnel, MeasurementTrust, Metric, ProjectSchema } from '../api/types';
+import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
+import type { ProjectMode } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
 
-interface TrustRow {
-  metric: Metric;
+interface ProjectIntentSummary {
+  project_mode: ProjectMode;
+  goal_ids: string[];
+  primary_goal_id: string;
+}
+
+interface IntentCapableClient {
+  projectIntent?: (slug: string) => Promise<{ intent: ProjectIntentSummary | null }>;
+}
+
+interface ProductAnswer {
+  metric: Metric | null;
+  trend: TrendQueryResult | null;
   trust: MeasurementTrust | null;
-  error: string | null;
+  trustUnavailable: boolean;
+  funnel: Funnel | null;
+  funnelResult: FunnelQueryResult | null;
+}
+
+interface WebsiteAnswer {
+  metric: Metric | null;
+  overview: WebAnalyticsResult | null;
+  trend: TrendQueryResult | null;
+  trust: MeasurementTrust | null;
+  trustUnavailable: boolean;
 }
 
 export function Overview() {
-  const { client, project, env, projects } = useStore();
-  const commandCenter = useAsync(async () => {
-    const [metrics, funnels, releases, inbox, quality] = await Promise.all([
+  const { client, project, env } = useStore();
+  const home = useAsync(async () => {
+    const [intent, metrics, funnels, schema] = await Promise.all([
+      readProjectIntent(client as unknown as IntentCapableClient, project!),
       client!.metrics(project!, { status: 'active' }),
       client!.funnels(project!),
-      client!.releases(project!, { env }),
-      client!.decisionInbox(project!),
-      client!.dataQuality(project!, { env, limit: 20, sinceDays: 30 }),
+      client!.schema(project!, env).catch(() => null),
     ]);
-    const trust: TrustRow[] = await Promise.all(metrics.slice(0, 8).map(async (metric) => {
-      try {
-        return {
-          metric,
-          trust: await client!.measurementTrust(project!, {
-            metric_key: metric.key,
-            env,
-            since_days: 30,
-            target_filters: [],
-          }),
-          error: null,
-        };
-      } catch (caught) {
-        return {
-          metric,
-          trust: null,
-          error: caught instanceof Error ? caught.message : 'Trust evidence unavailable.',
-        };
-      }
-    }));
-    const actorMetric = metrics.find((metric) => metric.type === 'unique_actors');
-    const actorOutcome = actorMetric ? await client!.query(project!, {
-      kind: 'trend',
-      metric: actorMetric.key,
-      date_from: monthStartUtc(),
-      date_to: new Date().toISOString(),
-      interval: 'month',
-      filters: [],
-      env,
-    }).catch(() => null) : null;
-    return { metrics, funnels, releases, inbox, quality, trust, actorMetric, actorOutcome };
+    const primaryMetric = pickPrimaryMetric(metrics, intent?.primary_goal_id ?? null);
+    const pageMetric = webPageMetric(metrics);
+    const [product, website] = await Promise.all([
+      readProductAnswer(client!, project!, env, primaryMetric, funnels[0] ?? null),
+      readWebsiteAnswer(client!, project!, env, pageMetric),
+    ]);
+    return { intent, product, website, schema };
   }, [project, env]);
 
-  if (commandCenter.loading) return <Loading what="assembling command evidence…" />;
-  if (commandCenter.error) return <ErrorNote>{commandCenter.error}</ErrorNote>;
-  if (!commandCenter.data) return null;
+  if (home.loading) return <Loading what="reading current answers…" />;
+  if (home.error) return <ErrorNote>{home.error}</ErrorNote>;
+  if (!home.data) return null;
 
-  const data = commandCenter.data;
-  const selectedProject = projects.find((candidate) => candidate.slug === project);
-  const trusted = data.trust.filter((row) => row.trust?.status === 'trusted').length;
-  const blocked = data.trust.filter((row) => row.trust?.status === 'untrusted').length;
-  const unavailableTrust = data.trust.filter((row) => row.error).length;
-  const observing = data.releases.filter((release) => release.status === 'deployed' || release.status === 'observing');
-  const needsAttention = data.inbox.filter((item) => item.state === 'needs_attention');
-  const actorValue = data.actorOutcome?.kind === 'trend'
-    ? data.actorOutcome.series.reduce((sum, point) => sum + point.value, 0)
-    : null;
+  const { intent, product, website, schema } = home.data;
+  const mode = intent?.project_mode ?? null;
+  if (mode === 'website') return <WebsiteHome answer={website} env={env} />;
+  if (mode === 'product') return <ProductHome answer={product} env={env} />;
+  if (mode === 'both' && intent) {
+    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} />;
+  }
 
+  // A missing intent row is legacy/unset. Keep the project useful and never
+  // redirect it into onboarding or silently assign a mode.
   return (
     <div className="space-y-5">
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div className="max-w-3xl">
-          <h1 className="serif text-3xl">Overview</h1>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            What needs attention in <code>{project}</code> · <code>{env}</code>, based only on current registry, trust, release, and decision evidence.
-          </p>
-        </div>
-        <Button asChild className="h-11"><Link to="/analyze/product">Open product analytics <ArrowRight className="size-4" /></Link></Button>
-      </header>
-
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" aria-label="Command center evidence">
-        <CommandBlock
-          title={data.actorMetric?.name ?? 'Actor outcome'}
-          value={actorValue === null ? 'Unavailable' : actorValue.toLocaleString()}
-          context={data.actorMetric
-            ? `${data.actorMetric.purpose} · month to date · unique actors · ${data.actorOutcome?.meta.source ?? 'source unavailable'}`
-            : 'No active unique_actors metric is registered, so Overview will not invent an active-user number.'}
-          tone={actorValue === null ? 'muted' : 'default'}
-          action={<Button asChild variant="link" size="sm" className="h-11 px-0"><Link to={data.actorMetric ? '/analyze/product?template=product-health' : '/registry'}>{data.actorMetric ? 'Analyze metric' : 'Review registry'}</Link></Button>}
-        />
-        <CommandBlock
-          title="Measurement trust"
-          value={data.trust.length === 0 ? 'Unavailable' : `${trusted} trusted`}
-          context={data.trust.length === 0
-            ? 'No active metric can be assessed.'
-            : `${blocked} blocked · ${unavailableTrust} unavailable · up to 8 active metrics · last 30 days`}
-          tone={blocked > 0 || unavailableTrust > 0 ? 'warning' : 'default'}
-          action={<Button asChild variant="link" size="sm" className="h-11 px-0"><Link to="/measurement">Inspect trust blockers</Link></Button>}
-        />
-        <CommandBlock
-          title="Release evidence"
-          value={`${observing.length} in window`}
-          context={`${data.releases.length} registered releases · environment ${env} · server release state`}
-          tone={observing.length > 0 ? 'warning' : 'muted'}
-          action={<Button asChild variant="link" size="sm" className="h-11 px-0"><Link to="/changes">Review release evidence</Link></Button>}
-        />
-        <CommandBlock
-          title="Decision attention"
-          value={`${needsAttention.length} to review`}
-          context={`${data.inbox.length} decision inbox records · human approval remains required`}
-          tone={needsAttention.length > 0 ? 'warning' : 'default'}
-          action={<Button asChild variant="link" size="sm" className="h-11 px-0"><Link to="/decisions">Review decisions</Link></Button>}
-        />
-      </section>
-
-      <div className="grid gap-5 xl:grid-cols-3">
-        <div className="min-w-0 xl:col-span-2">
-          <Panel title="Attention queue" right={<span className="text-xs text-muted-foreground">real server state</span>}>
-            <div className="divide-y">
-              {needsAttention.map((item) => (
-                <article key={item.decision_id} className="flex flex-wrap items-start justify-between gap-3 py-4 first:pt-0 last:pb-0">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2"><Badge variant="destructive">decision</Badge><code className="text-xs">{item.impact.metric_key}</code></div>
-                    <p className="mt-2 text-sm">{item.impact.metric_purpose}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{item.requested_choice ?? 'Review the evidence and record an explicit outcome.'}</p>
-                  </div>
-                  <Button asChild variant="outline" size="sm" className="h-11"><Link to="/decisions">Review</Link></Button>
-                </article>
-              ))}
-              {data.trust.filter((row) => row.trust?.status === 'untrusted' || row.error).slice(0, 4).map((row) => {
-                const blocker = row.trust?.blockers[0] ?? row.trust?.warnings[0];
-                return (
-                  <article key={row.metric.key} className="flex flex-wrap items-start justify-between gap-3 py-4 first:pt-0 last:pb-0">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">measurement</Badge><code className="text-xs">{row.metric.key}</code></div>
-                      <p className="mt-2 text-sm">{blocker?.message ?? row.error ?? 'Trust evidence is unavailable.'}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">{blocker ? `Next: ${blocker.next_action}` : row.metric.purpose}</p>
-                    </div>
-                    <Button asChild variant="outline" size="sm" className="h-11"><Link to="/measurement">Inspect</Link></Button>
-                  </article>
-                );
-              })}
-              {needsAttention.length === 0 && blocked === 0 && unavailableTrust === 0 && (
-                <EmptyState headline="No current blockers" lead="No decision or sampled measurement evidence needs attention in this environment." />
-              )}
-            </div>
-          </Panel>
-        </div>
-
-        <Panel title="Registry and data readiness">
-          <dl className="divide-y">
-            <Fact label="Active metrics" value={data.metrics.length} note={`Registry source · project ${project}`} />
-            <Fact label="Goal-bearing funnels" value={data.funnels.length} note="Saved funnel definitions only" />
-            <Fact label="Data quality findings" value={data.quality.issues.length} note={`${data.quality.checked.evidence_rows} evidence rows checked · last 30 days`} />
-            <Fact label="Events observed" value={selectedProject?.events_30d ?? 'Unavailable'} note="Project API · 30-day scope" />
-          </dl>
-        </Panel>
+      <PageHeader
+        title="Home"
+        answer="Project mode is not set. Your existing answers and data remain available."
+        action={<Button asChild className="h-11"><Link to={website.overview ? '/analyze/web' : '/analyze/product'}>Open current answer <ArrowRight className="size-4" /></Link></Button>}
+      />
+      <div className="rounded-panel border border-dashed bg-card px-4 py-3 text-sm text-muted-foreground">
+        Legacy project · choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
       </div>
-
-      <Panel
-        title="Curated questions"
-        right={<Button asChild variant="outline" size="sm" className="h-11"><Link to="/analyze/product">Open analysis</Link></Button>}
-      >
-        <div className="flex flex-wrap gap-2">
-          {ANALYSIS_TEMPLATES.map((template) => {
-            const available = resolveTemplateCapability(template.key, CORE_ANALYZE_CAPABILITIES).status === 'available';
-            return available ? (
-              <Link
-                key={template.key}
-                to={`/analyze/product?template=${template.key}`}
-                className="flex min-h-11 items-center rounded-control border bg-card px-3 text-sm font-medium transition-colors hover:border-ring/45 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {template.title}
-              </Link>
-            ) : (
-              <span
-                key={template.key}
-                aria-disabled="true"
-                title={`${template.title} is not available yet`}
-                className="flex min-h-11 items-center gap-2 rounded-control border bg-muted/30 px-3 text-sm text-muted-foreground"
-              >
-                {template.title} <span className="text-xs">Later</span>
-              </span>
-            );
-          })}
-        </div>
-      </Panel>
+      {website.overview
+        ? <WebsiteAnswerCanvas answer={website} env={env} />
+        : <ProductAnswerCanvas answer={product} env={env} />}
     </div>
   );
 }
 
-function CommandBlock({ title, value, context, tone, action }: {
-  title: string;
-  value: string;
-  context: string;
-  tone: 'default' | 'warning' | 'muted';
-  action: React.ReactNode;
+function WebsiteHome({ answer, env }: { answer: WebsiteAnswer; env: string }) {
+  const lead = websiteLead(answer);
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Website performance"
+        answer={lead}
+        action={<Button asChild className="h-11"><Link to="/analyze/web">Open Web <ArrowRight className="size-4" /></Link></Button>}
+      />
+      <WebsiteAnswerCanvas answer={answer} env={env} />
+    </div>
+  );
+}
+
+function ProductHome({ answer, env }: { answer: ProductAnswer; env: string }) {
+  const lead = answer.metric
+    ? `${answer.metric.name} is the clearest active outcome available for this project.`
+    : 'Events may be arriving, but no active outcome is defined yet.';
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Product performance"
+        answer={lead}
+        action={<Button asChild className="h-11"><Link to={answer.metric ? '/analyze/product' : '/registry'}>{answer.metric ? 'Explore Product' : 'Review outcomes'} <ArrowRight className="size-4" /></Link></Button>}
+      />
+      <ProductAnswerCanvas answer={answer} env={env} />
+    </div>
+  );
+}
+
+function BothHome({
+  answer,
+  websiteFirst,
+  schema,
+  env,
+}: {
+  answer: WebsiteAnswer | ProductAnswer;
+  websiteFirst: boolean;
+  schema: ProjectSchema | null;
+  env: string;
 }) {
+  const identityState = schema === null
+    ? 'unavailable'
+    : schema.identity.active_links > 0
+      ? 'linked'
+      : 'unlinked';
+  const identityLinked = identityState === 'linked';
   return (
-    <article className={`flex min-h-52 flex-col rounded-dialog border p-4 sm:p-5 ${tone === 'warning' ? 'border-warning/45 bg-warning/5' : tone === 'muted' ? 'bg-muted/25' : 'bg-card'}`}>
-      <div className="text-xs font-medium text-muted-foreground">{title}</div>
-      <div className="serif mt-3 text-3xl tabular-nums">{value}</div>
-      <p className="mt-3 flex-1 text-xs leading-relaxed text-muted-foreground">{context}</p>
-      <div className="mt-3">{action}</div>
-    </article>
-  );
-}
-
-function Fact({ label, value, note }: { label: string; value: string | number; note: string }) {
-  return (
-    <div className="flex items-start justify-between gap-4 py-4 first:pt-0 last:pb-0">
-      <div className="min-w-0">
-        <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
-        <div className="mt-1 text-xs text-muted-foreground">{note}</div>
+    <div className="space-y-5">
+      <PageHeader
+        title="Website and product"
+        answer={identityState === 'unavailable'
+          ? 'Identity evidence is unavailable right now, so Poolstatis will not claim a cross-surface path.'
+          : identityLinked
+            ? 'Identity evidence exists. Poolstatis still requires a registered cross-surface funnel before claiming an acquisition-to-activation path.'
+            : 'Website and product activity are not linked yet.'}
+        action={<Button asChild className="h-11"><Link to={identityLinked ? (websiteFirst ? '/analyze/web' : '/analyze/product') : '/measurement'}>{identityLinked ? 'Open primary answer' : 'Review identity'} <ArrowRight className="size-4" /></Link></Button>}
+      />
+      <div className="flex max-w-full gap-1 overflow-x-auto rounded-control border bg-card p-1" aria-label="Both mode surfaces">
+        <span className="flex min-h-11 items-center rounded-control bg-secondary px-4 text-sm font-medium">All</span>
+        <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to="/analyze/web">Website</Link>
+        <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to="/analyze/product">Product</Link>
       </div>
-      <dd className="text-xl font-medium tabular-nums">{value}</dd>
+      <div className="rounded-panel border border-warning/35 bg-warning/5 px-4 py-3 text-sm text-muted-foreground">
+        {identityState === 'unavailable'
+          ? 'No combined KPI is shown while the identity check is unavailable.'
+          : identityLinked
+            ? 'No combined KPI is shown until a goal-bearing funnel proves the exact linked path.'
+            : 'Add stable identity evidence before comparing acquisition with product outcomes.'}
+      </div>
+      {websiteFirst
+        ? <WebsiteAnswerCanvas answer={answer as WebsiteAnswer} env={env} />
+        : <ProductAnswerCanvas answer={answer as ProductAnswer} env={env} />}
     </div>
   );
 }
 
-function monthStartUtc() {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+function WebsiteAnswerCanvas({ answer, env }: { answer: WebsiteAnswer; env: string }) {
+  if (!answer.metric || !answer.overview) {
+    return (
+      <AnswerCanvas>
+        <EmptyState
+          headline="Website traffic is not configured"
+          lead="Activate the canonical web page-view definition, then open one real page."
+          action={<Button asChild><Link to="/measurement">Open Definitions</Link></Button>}
+        />
+      </AnswerCanvas>
+    );
+  }
+  const { overview, trend } = answer;
+  const sources = overview.breakdowns.source ?? [];
+  const pages = overview.breakdowns.route ?? [];
+  return (
+    <>
+      <KpiStrip items={[
+        { label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved people' },
+        { label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'canonical sessions' },
+        { label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted views' },
+        { label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? null : formatDurationMs(overview.summary.average_session_duration_ms), note: 'complete sessions' },
+      ]} />
+      <EvidenceLine
+        className="mt-3"
+        trust={evidenceTrust(answer.trust, answer.trustUnavailable)}
+        eventCount={answer.trust?.primary_metric.observed_events ?? overview.summary.page_views}
+        env={env}
+      >
+        Canonical page views are counted from the active <code>{answer.metric.key}</code> definition for the current 30-day window. Visitor and session rules come from the server response.
+      </EvidenceLine>
+      <AnswerCanvas className="mt-5">
+        <div className="grid min-w-0 gap-5 p-4 sm:p-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(17rem,1fr)]">
+          <section className="min-w-0" aria-labelledby="website-trend-title">
+            <h2 id="website-trend-title" className="text-sm font-semibold">Traffic trend</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Page views · last 30 days · {env}</p>
+            <div className="mt-3">
+              {trend && trend.series.length > 0
+                ? <TrendChart result={trend} label="Page views" />
+                : <EmptyState headline="No traffic in this period" lead="Open a real page after tracking is installed." />}
+            </div>
+          </section>
+          <div className="grid content-start gap-5 border-t pt-5 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+            <RankedRows title="Top sources" rows={sources.slice(0, 5).map((row) => ({ key: row.value, label: row.value, value: fmtNum(row.visitors) }))} empty="No source values are available for this period." />
+            <RankedRows title="Top pages" rows={pages.slice(0, 5).map((row) => ({ key: row.value, label: row.value, value: fmtNum(row.page_views) }))} empty="No page values are available for this period." />
+          </div>
+        </div>
+      </AnswerCanvas>
+    </>
+  );
+}
+
+function ProductAnswerCanvas({ answer, env }: { answer: ProductAnswer; env: string }) {
+  if (!answer.metric) {
+    return (
+      <AnswerCanvas>
+        <EmptyState
+          headline="No active product outcome"
+          lead="Approve an outcome with a clear purpose before Poolstatis shows a product answer."
+          action={<Button asChild><Link to="/registry">Review outcomes</Link></Button>}
+        />
+      </AnswerCanvas>
+    );
+  }
+  const metricValue = metricAnswerValue(answer.metric, answer.trend, answer.trust);
+  const finalStep = answer.funnelResult?.steps.at(-1) ?? null;
+  return (
+    <>
+      <KpiStrip items={[
+        { label: answer.metric.name, value: metricValue, note: 'current 30-day outcome' },
+        { label: 'Observed people', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_actors) : null, note: 'resolved actors' },
+        { label: 'Activation', value: finalStep?.conversion_from_start === null || finalStep?.conversion_from_start === undefined ? null : `${Math.round(finalStep.conversion_from_start * 100)}%`, note: answer.funnel?.name ?? 'saved funnel required' },
+        { label: 'Retention', value: null, note: 'choose a return outcome' },
+      ]} />
+      <EvidenceLine
+        className="mt-3"
+        trust={evidenceTrust(answer.trust, answer.trustUnavailable)}
+        eventCount={answer.trust?.primary_metric.observed_events ?? null}
+        env={env}
+      >
+        <code>{answer.metric.key}</code> is an active registry metric. Its purpose is “{answer.metric.purpose}”. Trust and event count come from the server measurement check.
+      </EvidenceLine>
+      <AnswerCanvas className="mt-5">
+        <div className="grid min-w-0 gap-5 p-4 sm:p-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(17rem,1fr)]">
+          <section className="min-w-0" aria-labelledby="product-trend-title">
+            <h2 id="product-trend-title" className="text-sm font-semibold">{answer.metric.name} trend</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Last 30 days · {env}</p>
+            <div className="mt-3">
+              {answer.trend && answer.trend.series.length > 0
+                ? <TrendChart result={answer.trend} label={answer.metric.name} />
+                : <EmptyState headline="No observations in this period" lead="Perform the registered outcome or review its definition." />}
+            </div>
+          </section>
+          <div className="border-t pt-5 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+            <RankedRows
+              title={answer.funnel?.name ?? 'Activation funnel'}
+              rows={(answer.funnelResult?.steps ?? []).map((step) => ({
+                key: step.metric_key,
+                label: step.label,
+                value: fmtNum(step.actors),
+                note: step.conversion_from_start === null ? 'Starting step' : `${Math.round(step.conversion_from_start * 100)}% from start`,
+              }))}
+              empty="No saved goal-bearing funnel is available."
+            />
+          </div>
+        </div>
+      </AnswerCanvas>
+    </>
+  );
+}
+
+function PageHeader({ title, answer, action }: { title: string; answer: string; action: React.ReactNode }) {
+  return (
+    <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div className="max-w-3xl">
+        <h1 className="serif text-3xl sm:text-4xl">{title}</h1>
+        <p className="mt-2 text-base leading-relaxed text-muted-foreground">{answer}</p>
+      </div>
+      <div className="shrink-0">{action}</div>
+    </header>
+  );
+}
+
+async function readProjectIntent(client: IntentCapableClient, project: string): Promise<ProjectIntentSummary | null> {
+  if (!client.projectIntent) return null;
+  try { return (await client.projectIntent(project)).intent; } catch { return null; }
+}
+
+async function readWebsiteAnswer(
+  client: NonNullable<ReturnType<typeof useStore>['client']>,
+  project: string,
+  env: string,
+  metric: Metric | null,
+): Promise<WebsiteAnswer> {
+  if (!metric) return { metric: null, overview: null, trend: null, trust: null, trustUnavailable: false };
+  const base = { metric: metric.key, date_from: '-30d', filters: [], env };
+  const [overview, trend, trustResult] = await Promise.all([
+    client.operationalQuery<WebAnalyticsResult>(project, { kind: 'web_analytics', ...base, dimensions: ['source', 'route', 'campaign'] }).catch(() => null),
+    client.query(project, { kind: 'trend', ...base, date_to: null, interval: 'day' }).then((result) => result.kind === 'trend' ? result : null).catch(() => null),
+    client.measurementTrust(project, { metric_key: metric.key, env, since_days: 30, target_filters: [] })
+      .then((trust) => ({ trust, unavailable: false }))
+      .catch(() => ({ trust: null, unavailable: true })),
+  ]);
+  return { metric, overview, trend, trust: trustResult.trust, trustUnavailable: trustResult.unavailable };
+}
+
+async function readProductAnswer(
+  client: NonNullable<ReturnType<typeof useStore>['client']>,
+  project: string,
+  env: string,
+  metric: Metric | null,
+  funnel: Funnel | null,
+): Promise<ProductAnswer> {
+  const [trend, trustResult, funnelResult] = await Promise.all([
+    metric
+      ? client.query(project, { kind: 'trend', metric: metric.key, date_from: '-30d', date_to: null, interval: 'day', filters: [], env })
+        .then((result) => result.kind === 'trend' ? result : null).catch(() => null)
+      : Promise.resolve(null),
+    metric
+      ? client.measurementTrust(project, { metric_key: metric.key, env, since_days: 30, target_filters: [] })
+        .then((trust) => ({ trust, unavailable: false }))
+        .catch(() => ({ trust: null, unavailable: true }))
+      : Promise.resolve({ trust: null, unavailable: false }),
+    funnel
+      ? client.query(project, { kind: 'funnel', funnel: funnel.key, date_from: '-30d', date_to: null, env })
+        .then((result) => result.kind === 'funnel' ? result : null).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  return { metric, trend, trust: trustResult.trust, trustUnavailable: trustResult.unavailable, funnel, funnelResult };
+}
+
+function pickPrimaryMetric(metrics: Metric[], primaryGoal: string | null): Metric | null {
+  if (!primaryGoal) return metrics.find((metric) => metric.type === 'unique_actors') ?? metrics[0] ?? null;
+  const tokens = primaryGoal.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 3);
+  return metrics.find((metric) => {
+    const haystack = `${metric.key} ${metric.name} ${metric.purpose} ${metric.category ?? ''}`.toLowerCase();
+    return tokens.some((token) => haystack.includes(token));
+  }) ?? metrics.find((metric) => metric.type === 'unique_actors') ?? metrics[0] ?? null;
+}
+
+function prefersWebsite(primaryGoal: string) {
+  return /(website|traffic|page|campaign|referral|content|conversion)/i.test(primaryGoal);
+}
+
+function metricAnswerValue(metric: Metric, trend: TrendQueryResult | null, trust: MeasurementTrust | null) {
+  if (metric.type === 'unique_actors') return trust ? fmtNum(trust.primary_metric.observed_actors) : null;
+  if (!trend) return null;
+  return fmtNum(trend.series.reduce((sum, point) => sum + point.value, 0));
+}
+
+function evidenceTrust(trust: MeasurementTrust | null, unavailable: boolean): EvidenceTrust {
+  if (unavailable || !trust) return 'unavailable';
+  return trust.status === 'trusted' ? 'trusted' : 'partial';
+}
+
+function websiteLead(answer: WebsiteAnswer) {
+  if (!answer.overview) return 'Traffic needs one canonical page-view definition before Poolstatis can answer.';
+  const source = answer.overview.breakdowns.source?.[0];
+  return `${fmtNum(answer.overview.summary.visitors)} people visited.${source ? ` ${source.value} brought the most measured traffic.` : ''}`;
 }

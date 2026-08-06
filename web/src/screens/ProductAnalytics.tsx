@@ -4,7 +4,8 @@ import { ArrowRight, Loader2 } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ErrorNote, Loading, Panel } from '@/components/ui';
+import { ErrorNote, Loading } from '@/components/ui';
+import { AnswerCanvas, EvidenceLine, type EvidenceTrust } from '@/components/analytics';
 import type { Funnel, MeasurementTrust, Metric } from '../api/types';
 import { useAsync, useStore } from '../store';
 import {
@@ -35,6 +36,7 @@ import {
 interface AnalysisRun {
   spec: VisualizationSpec;
   result: AnalysisQueryResult;
+  eventCount: number | null;
 }
 
 const OPTION_TARGET = 'min-h-11 md:min-h-8';
@@ -149,7 +151,13 @@ export function ProductAnalytics() {
         funnel: selectedFunnel,
         trust,
       });
-      setRun({ spec, result });
+      setRun({
+        spec,
+        result,
+        eventCount: trust.results.length === 0
+          ? null
+          : trust.results.reduce((sum, item) => sum + item.primary_metric.observed_events, 0),
+      });
     } catch (caught) {
       if (generation === runGeneration.current && scopeRef.current === runScope) {
         setRunError({ scope: runScope, message: safeQueryError(caught) });
@@ -182,10 +190,89 @@ export function ProductAnalytics() {
   return (
     <div className="space-y-5">
       <header className="max-w-3xl">
-        <h1 className="serif text-3xl">Product analytics</h1>
+        <h1 className="serif text-3xl sm:text-4xl">Product</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Start with a registered outcome. Open query controls only when the answer needs a closer look.</p>
       </header>
 
-      <Panel title="Analysis setup" right={<Badge variant="outline">schema v1</Badge>}>
+      <section aria-labelledby="product-templates-title">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 id="product-templates-title" className="text-sm font-semibold">Answer templates</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Each template stays inside the typed Query DSL.</p>
+          </div>
+          <Badge variant="outline">schema v1</Badge>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+          {ANALYSIS_TEMPLATES.filter((candidate) => ['product-health', 'activation-funnel', 'feature-adoption', 'retention', 'release-impact'].includes(candidate.key)).map((candidate) => {
+            const available = resolveTemplateCapability(candidate.key, CORE_ANALYZE_CAPABILITIES).status === 'available';
+            const selected = candidate.key === template.key;
+            return (
+              <button
+                key={candidate.key}
+                type="button"
+                disabled={!available}
+                aria-pressed={selected}
+                onClick={() => selectTemplate(candidate)}
+                className={`min-h-24 rounded-panel border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-foreground/25 bg-card shadow-sm' : available ? 'bg-card/55 hover:bg-card' : 'cursor-not-allowed border-dashed bg-muted/25 text-muted-foreground'}`}
+              >
+                <span className="text-sm font-semibold">{candidate.title}</span>
+                <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{available ? candidate.question : 'Not supported by the current server contract.'}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <AnswerCanvas>
+        <div className="flex flex-col gap-4 border-b px-4 py-4 sm:flex-row sm:items-end sm:justify-between sm:px-5">
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-muted-foreground">Current answer</div>
+            <h2 className="mt-1 text-xl font-semibold">{template.title}</h2>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{template.question}</p>
+          </div>
+          <Button className="h-11 shrink-0" onClick={execute} disabled={running || !selectedKey || capability.status !== 'available'}>
+            {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
+            {currentRun ? 'Refresh answer' : 'Run answer'}
+          </Button>
+        </div>
+        {!selectedKey || capability.status === 'unavailable' ? (
+          <div className="px-4 py-8 text-center sm:px-5">
+            <div className="text-lg font-semibold">{capability.status === 'unavailable' ? 'This answer is not available yet' : 'Choose a registered outcome'}</div>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
+              {capability.status === 'unavailable'
+                ? capability.missing.map(friendlyCapability).join(', ')
+                : isFunnel ? 'Save a funnel with a goal and active metric steps.' : 'Activate a metric with a concrete purpose.'}
+            </p>
+          </div>
+        ) : !currentRun && !currentRunError && !running ? (
+          <div className="px-4 py-8 text-center sm:px-5">
+            <div className="text-lg font-semibold">Ready to read real data</div>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">Run the prebuilt answer for <code>{selectedKey}</code>. Poolstatis will not substitute demo values.</p>
+          </div>
+        ) : null}
+        {currentRunError && <div className="p-4 sm:p-5"><ErrorNote>{currentRunError}</ErrorNote></div>}
+        {renderState === 'loading' && <Loading what="executing server query…" />}
+        {renderState === 'empty' && currentRun && (
+          <div className="px-4 py-8 text-center sm:px-5">
+            <div className="text-lg font-semibold">No observations in this exact period</div>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">Change the range or inspect the outcome definition.</p>
+          </div>
+        )}
+      </AnswerCanvas>
+
+      {currentRun && (
+        <EvidenceLine trust={visualizationEvidenceTrust(currentRun.spec.trust.status)} eventCount={currentRun.eventCount} env={env}>
+          {currentRun.spec.purpose} Aggregation: {currentRun.spec.evidence.aggregation}. Exact range and source remain attached to the reproducible query below.
+        </EvidenceLine>
+      )}
+      {renderState === 'ready' && currentRun && <ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
+
+      <details className="group rounded-panel border bg-card">
+        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5 [&::-webkit-details-marker]:hidden">
+          Edit analysis
+          <span className="text-xs font-normal text-muted-foreground group-open:hidden">Range, metric, view and breakdown</span>
+        </summary>
+        <div className="border-t p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
           <div className="w-full lg:max-w-sm">
             <Control label="Scenario">
@@ -311,21 +398,14 @@ export function ProductAnalytics() {
             </Button>
           </div>
         )}
-      </Panel>
-
-      {currentRunError && <ErrorNote>{currentRunError}</ErrorNote>}
-      {renderState === 'loading' && <Panel><Loading what="executing server query…" /></Panel>}
-      {renderState === 'empty' && currentRun && (
-        <Panel>
-          <div className="py-8 text-center">
-            <div className="serif text-xl">No observations in this exact period</div>
-            <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">Next: change the range or inspect the metric definition.</p>
-          </div>
-        </Panel>
-      )}
-      {renderState === 'ready' && currentRun && <ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
+        </div>
+      </details>
     </div>
   );
+}
+
+function visualizationEvidenceTrust(status: VisualizationSpec['trust']['status']): EvidenceTrust {
+  return status === 'trusted' ? 'trusted' : status === 'unavailable' ? 'unavailable' : 'partial';
 }
 
 function Control({ label, children }: { label: string; children: React.ReactNode }) {

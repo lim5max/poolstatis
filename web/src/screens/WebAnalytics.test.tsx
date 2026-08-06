@@ -180,13 +180,19 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('telegram')).toBeInTheDocument();
     expect(screen.getByText('Route setup required')).toBeInTheDocument();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Routes' }), { key: 'Enter' });
+    expect(screen.getByText(/Observed · Partial · 20 events ·/)).toBeInTheDocument();
 
-    expect(screen.getByText('Routes unavailable')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Pages' }), { key: 'Enter' });
+
+    expect(screen.getByText('Pages unavailable')).toBeInTheDocument();
     expect(screen.getAllByText('Visitors').length).toBeGreaterThan(0);
     expect(screen.queryByText('telegram')).not.toBeInTheDocument();
 
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Countries' }), { key: 'Enter' });
     expect(screen.getByText('Countries unavailable')).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Conversions' }), { key: 'Enter' });
+    expect(screen.getByText('Choose a conversion to measure')).toBeInTheDocument();
+    expect(screen.getByText(/will not display a zero/)).toBeInTheDocument();
   });
 });

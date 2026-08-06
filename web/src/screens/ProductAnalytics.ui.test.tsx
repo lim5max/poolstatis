@@ -1,0 +1,65 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useStore } from '../store';
+import { ProductAnalytics } from './ProductAnalytics';
+
+vi.mock('../store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../store')>()),
+  useStore: vi.fn(),
+}));
+
+vi.mock('../analysis/charts', () => ({
+  ManualVisualizationRenderer: () => <div role="img" aria-label="Product answer chart">Chart with table fallback</div>,
+}));
+
+const mockedStore = vi.mocked(useStore);
+const metric = {
+  id: 'm1', key: 'weekly_active_users', name: 'Weekly active users',
+  purpose: 'Count people who reach a meaningful product outcome.',
+  category: 'activation', tags: [], type: 'unique_actors', source: { event: 'product.used' }, status: 'active',
+  owner: null, deprecation_reason: null, deprecated_at: null,
+} as const;
+
+describe('Product answer-first surface', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedStore.mockReturnValue({
+      project: 'alpha',
+      env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric]),
+        funnels: vi.fn().mockResolvedValue([]),
+        properties: vi.fn().mockResolvedValue([]),
+        query: vi.fn().mockResolvedValue({
+          kind: 'trend',
+          series: [{ bucket: '2026-08-05T00:00:00Z', value: 8 }],
+          meta: {
+            computed_at: '2026-08-06T00:00:00Z',
+            date_range: { from: '2026-07-07T00:00:00Z', to: '2026-08-06T00:00:00Z' },
+            sampling: null,
+            source: 'native',
+          },
+        }),
+        measurementTrust: vi.fn().mockResolvedValue({
+          status: 'trusted',
+          primary_metric: { key: metric.key, purpose: metric.purpose, category: 'activation', observed_events: 34, observed_actors: 8, registered_coverage: 1 },
+          identity: { distinct_id_coverage: 1, raw_actors: 8, resolved_actors: 8 }, properties: [], blockers: [], warnings: [],
+        }),
+      },
+    } as never);
+  });
+
+  it('puts templates and a real answer before advanced query controls', async () => {
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    expect(await screen.findByRole('heading', { name: 'Product' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Answer templates' })).toBeInTheDocument();
+    expect(screen.getByText('Current answer')).toBeInTheDocument();
+    expect(screen.getByText('Edit analysis').closest('details')).not.toHaveAttribute('open');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
+    await waitFor(() => expect(screen.getByText(/Observed · Trusted · 34 events ·/)).toBeInTheDocument());
+    expect(screen.getByRole('img', { name: 'Product answer chart' })).toHaveTextContent('table fallback');
+  });
+});
