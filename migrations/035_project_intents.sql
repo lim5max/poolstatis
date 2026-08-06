@@ -76,3 +76,34 @@ CREATE TABLE setup_task_feedback (
 
 CREATE INDEX setup_task_feedback_project_created_idx
   ON setup_task_feedback (project_id, created_at DESC);
+
+-- Hosted Core runs through a curated NOLOGIN role. Keep ordinary self-host
+-- migration schema-only; prepare-hosted explicitly invokes this grant after
+-- the stable role has been bootstrapped.
+CREATE FUNCTION poolstatis_prepare_project_intent_role_grants()
+RETURNS void AS $project_intent_grants$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_roles
+    WHERE rolname = 'poolstatis_core_runtime'
+      AND NOT rolcanlogin
+      AND NOT rolinherit
+  ) THEN
+    RAISE EXCEPTION
+      'hosted policy role poolstatis_core_runtime is missing or not NOLOGIN NOINHERIT; run the privileged role bootstrap'
+      USING ERRCODE = '55000';
+  END IF;
+  EXECUTE $grant$
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+      public.project_intents,
+      public.setup_task_feedback
+    TO poolstatis_core_runtime
+  $grant$;
+END
+$project_intent_grants$
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog, public;
+
+REVOKE ALL ON FUNCTION poolstatis_prepare_project_intent_role_grants()
+  FROM PUBLIC;

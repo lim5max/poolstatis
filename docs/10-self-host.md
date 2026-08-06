@@ -97,6 +97,13 @@ openssl rand -base64 48
 The example leaves this value empty intentionally; Compose fails closed until
 you set it.
 
+Tailored setup tasks are optional. By default, Poolstatis uses the bounded
+deterministic compiler and needs no model provider. To enable the
+OpenRouter-compatible composer, set `OPENROUTER_API_KEY` only in the server
+environment or production secret store. Never use a `VITE_*` variable or place
+the provider secret in a generated task. `OPENROUTER_API_URL` must be HTTPS;
+timeout, invalid output, or a missing key falls back to the deterministic plan.
+
 Protection defaults are enabled without extra setup: per-key/project token
 buckets and a retention sweep every 15 minutes. Tune `RATE_LIMIT_*` only from
 measured traffic; tune `RETENTION_BATCH_SIZE` and

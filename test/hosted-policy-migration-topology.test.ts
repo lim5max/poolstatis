@@ -191,6 +191,12 @@ describe('hosted policy migration role topology', () => {
         'SELECT poolstatis_prepare_metric_taxonomy_role_grants()',
       );
       await deploy.query(
+        'SELECT poolstatis_prepare_event_management_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_project_intent_role_grants()',
+      );
+      await deploy.query(
         'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
       );
       await ensureRollingEventPartitions(deploy, new Date(), 12);
@@ -277,6 +283,12 @@ describe('hosted policy migration role topology', () => {
       await expect(coreRuntime.query(
         'SELECT count(*)::int AS count FROM metric_categories',
       )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+      await expect(coreRuntime.query(
+        'SELECT count(*)::int AS count FROM project_intents',
+      )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+      await expect(coreRuntime.query(
+        'SELECT count(*)::int AS count FROM setup_task_feedback',
+      )).resolves.toMatchObject({ rows: [{ count: 0 }] });
 
       const pair = await generateKeyPair('RS256');
       const publicJwk = await exportJWK(pair.publicKey);
@@ -309,7 +321,7 @@ describe('hosted policy migration role topology', () => {
       });
       const api = async (
         bearer: string,
-        method: 'GET' | 'POST',
+        method: 'GET' | 'POST' | 'PUT',
         url: string,
         payload?: unknown,
       ) => {
@@ -349,6 +361,30 @@ describe('hosted policy migration role topology', () => {
         name: 'Isolated project',
       });
       expect(project.status).toBe(201);
+      const intent = await api(token, 'PUT', '/api/v1/projects/isolated-project/intent', {
+        project_mode: 'product',
+        website_domain: null,
+        goal_ids: ['activation'],
+        custom_goal: null,
+        primary_goal_id: 'activation',
+      });
+      expect(intent.status).toBe(200);
+      const setupTask = await api(
+        token,
+        'POST',
+        '/api/v1/projects/isolated-project/setup-task',
+        { agent_id: 'codex', prefer_llm: false },
+      );
+      expect(setupTask.status).toBe(200);
+      expect(setupTask.body.source).toBe('deterministic');
+      const feedback = await api(
+        token,
+        'POST',
+        '/api/v1/projects/isolated-project/setup-task/feedback',
+        { outcome: 'blocked', blocker: 'first_event_observed' },
+      );
+      expect(feedback.status).toBe(201);
+      expect(feedback.body).toEqual({ recorded: true });
       const ingestKey = await api(
         token,
         'POST',
@@ -527,6 +563,8 @@ describe('hosted policy migration role topology', () => {
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await selfHost.query('SELECT poolstatis_prepare_visual_experience_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_metric_taxonomy_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_event_management_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_project_intent_role_grants()');
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(selfHost, new Date(), 12);
       await ensureRetentionIndexes(selfHost);
