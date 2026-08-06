@@ -33,6 +33,24 @@ afterAll(async () => {
 });
 
 describe('browser ingest CORS', () => {
+  it('allows the configured hosted app to preflight project intent PUT', async () => {
+    const response = await env.app.inject({
+      method: 'OPTIONS',
+      url: `/api/v1/projects/${env.projectSlug}/intent`,
+      headers: {
+        origin: APP_ORIGIN,
+        'access-control-request-method': 'PUT',
+        'access-control-request-headers': 'authorization,content-type',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expectAllowedOrigin(response, APP_ORIGIN);
+    expect(response.headers['access-control-allow-methods']).toContain('PUT');
+    expect(response.headers['access-control-allow-headers']).toContain('authorization');
+    expect(response.headers['access-control-allow-headers']).toContain('content-type');
+  });
+
   it.each([LANDING_ORIGIN, APP_ORIGIN])(
     'answers the %s ingest preflight with the exact CORS contract',
     async (origin) => {

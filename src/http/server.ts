@@ -340,7 +340,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         : false;
       callback(null, {
         origin: configured || publicBrowserWrite,
-        methods: publicBrowserWrite ? ['POST'] : ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+        methods: publicBrowserWrite ? ['POST'] : ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
         credentials: false,
       });
