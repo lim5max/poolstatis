@@ -59,6 +59,51 @@
 }
 
 :root {
+  color-scheme: light;
+  --brand-lime: #b9f542;
+  --brand-foreground: #172019;
+  --background: #f6f8f5;
+  --foreground: #172019;
+  --card: #ffffff;
+  --card-foreground: #172019;
+  --popover: #ffffff;
+  --popover-foreground: #172019;
+  --primary: var(--brand-lime);
+  --primary-foreground: var(--brand-foreground);
+  --secondary: #eef2ed;
+  --secondary-foreground: #263029;
+  --muted: #edf1ec;
+  --muted-foreground: #687169;
+  --accent: #e8f3d4;
+  --accent-foreground: #26351c;
+  --destructive: #b95443;
+  --destructive-foreground: #ffffff;
+  --success: #2e6a42;
+  --success-foreground: #ffffff;
+  --warning: #b97a2f;
+  --warning-foreground: #ffffff;
+  --info: #5b78d6;
+  --info-foreground: #ffffff;
+  --border: #dde3dc;
+  --input: #ccd5cb;
+  --ring: var(--brand-lime);
+  --chart-1: var(--brand-lime);
+  --chart-1-stroke: #6f971e;
+  --chart-2: #2e6a42;
+  --chart-3: #5b78d6;
+  --chart-4: #b97a2f;
+  --chart-5: #765b9e;
+  --sidebar: #f0f3ef;
+  --sidebar-foreground: #172019;
+  --sidebar-primary: var(--brand-lime);
+  --sidebar-primary-foreground: var(--brand-foreground);
+  --sidebar-accent: var(--brand-lime);
+  --sidebar-accent-foreground: var(--brand-foreground);
+  --sidebar-border: #dde3dc;
+  --sidebar-ring: var(--brand-lime);
+}
+
+.dark {
   color-scheme: dark;
   --brand-lime: #cdfa4f;
   --brand-foreground: #10130b;
@@ -68,8 +113,6 @@
   --card-foreground: #f5f6f2;
   --popover: #1a1c20;
   --popover-foreground: #f5f6f2;
-  --primary: var(--brand-lime);
-  --primary-foreground: var(--brand-foreground);
   --secondary: #23262b;
   --secondary-foreground: #f0f2ed;
   --muted: #1c1f23;
@@ -86,7 +129,6 @@
   --info-foreground: #07101a;
   --border: rgb(255 255 255 / 12%);
   --input: rgb(255 255 255 / 18%);
-  --ring: var(--brand-lime);
   --chart-1: var(--brand-lime);
   --chart-1-stroke: #a8d233;
   --chart-2: #75c77b;
@@ -95,12 +137,7 @@
   --chart-5: #b58add;
   --sidebar: #101113;
   --sidebar-foreground: #eef0eb;
-  --sidebar-primary: var(--brand-lime);
-  --sidebar-primary-foreground: var(--brand-foreground);
-  --sidebar-accent: var(--brand-lime);
-  --sidebar-accent-foreground: var(--brand-foreground);
   --sidebar-border: rgb(255 255 255 / 12%);
-  --sidebar-ring: var(--brand-lime);
 }
 
 /* Metric-category accent tokens (the neutral preset has no category hues, so

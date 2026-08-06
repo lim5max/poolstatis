@@ -1,39 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { NAVIGATION_ZONES, PROJECT_MENU_ITEMS, activeNavigationItem } from './navigation';
+import { PROJECT_MENU_ITEMS, activeNavigationItem, navigationForProject } from './navigation';
 
-describe('task-oriented navigation contract', () => {
-  it('exposes exactly the four approved zones without Projects as a primary item', () => {
-    expect(NAVIGATION_ZONES.map((zone) => zone.label)).toEqual([
-      'Overview',
-      'Analyze',
-      'Ship & decide',
-      'Manage data',
+describe('mode-aware navigation contract', () => {
+  it('shows no more than six primary jobs for each explicit mode', () => {
+    expect(navigationForProject({ mode: 'website' }).primary.map((item) => item.label)).toEqual([
+      'Home', 'Web', 'People', 'Ship', 'Setup',
     ]);
-    expect(NAVIGATION_ZONES.flatMap((zone) => zone.items).some((item) => item.label === 'Projects')).toBe(false);
+    expect(navigationForProject({ mode: 'product' }).primary.map((item) => item.label)).toEqual([
+      'Home', 'Product', 'People', 'Ship', 'Setup',
+    ]);
+    expect(navigationForProject({ mode: 'both' }).primary.map((item) => item.label)).toEqual([
+      'Home', 'Web', 'Product', 'People', 'Ship', 'Setup',
+    ]);
+  });
+
+  it('keeps a legacy project usable without fabricating a mode', () => {
+    const legacy = navigationForProject({ mode: null });
+    expect(legacy.primary).toHaveLength(6);
+    expect(legacy.primary.map((item) => item.label)).toEqual(['Home', 'Web', 'Product', 'People', 'Ship', 'Setup']);
+    expect(legacy.secondary.map((item) => item.label)).toContain('Definitions');
     expect(PROJECT_MENU_ITEMS).toContainEqual(expect.objectContaining({ label: 'Manage projects', to: '/projects' }));
   });
 
-  it('keeps the shipped Analyze routes navigable', () => {
-    const analyze = NAVIGATION_ZONES.find((zone) => zone.label === 'Analyze');
-    expect(analyze?.items.find((item) => item.label === 'Product analytics')).toMatchObject({
-      to: '/analyze/product',
-      availability: 'available',
-    });
-    expect(analyze?.items.find((item) => item.label === 'Web analytics')).toMatchObject({
-      to: '/analyze/web',
-      availability: 'available',
-    });
-    expect(analyze?.items.find((item) => item.label === 'Users')).toMatchObject({
-      to: '/analyze/users',
-      availability: 'available',
-    });
-    expect(analyze?.items.some((item) => item.label === 'Saved views')).toBe(false);
-  });
-
-  it('resolves active state for nested Analyze and legacy data routes', () => {
+  it('resolves nested answer and control routes', () => {
     expect(activeNavigationItem('/analyze/product')).toBe('/analyze/product');
     expect(activeNavigationItem('/data/person/actor-1')).toBe('/data');
     expect(activeNavigationItem('/analyze/web')).toBe('/analyze/web');
     expect(activeNavigationItem('/analyze/users/actor-1')).toBe('/analyze/users');
+    expect(activeNavigationItem('/measurement')).toBe('/measurement');
   });
 });

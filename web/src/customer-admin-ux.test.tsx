@@ -81,36 +81,49 @@ describe('customer admin shell', () => {
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeInTheDocument();
   });
 
-  it('groups navigation around overview, analysis, decisions, data management, and account tasks', () => {
+  it('keeps answer jobs primary and control surfaces behind Data & settings', () => {
     render(<MemoryRouter><App /></MemoryRouter>);
-    expect(screen.getAllByText('Overview').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('Analyze')).toBeInTheDocument();
-    expect(screen.getByText('Ship & decide')).toBeInTheDocument();
-    expect(screen.getByText('Manage data')).toBeInTheDocument();
-    expect(screen.getByText('Workspace')).toBeInTheDocument();
+    expect(screen.getAllByText('Home').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Answers')).toBeInTheDocument();
+    expect(screen.getByText('Data & settings')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: /^(Home|Web|Product|People|Ship|Setup)$/ })).toHaveLength(6);
+  });
+
+  it('adapts primary navigation to the persisted project mode', async () => {
+    const current = baseStore() as any;
+    current.client.projectIntent = vi.fn().mockResolvedValue({
+      intent: { project_mode: 'website', goal_ids: ['website_traffic'], primary_goal_id: 'website_traffic' },
+    });
+    mockedStore.mockReturnValue(current);
+
+    render(<MemoryRouter><App /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Product' })).not.toBeInTheDocument());
+    expect(screen.getByRole('link', { name: 'Web' })).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: /^(Home|Web|People|Ship|Setup)$/ })).toHaveLength(5);
   });
 
   it('uses semantic Hugeicons and a restrained lime hover state', () => {
     render(<MemoryRouter initialEntries={['/analyze/web']}><App /></MemoryRouter>);
 
-    expect(NAV_ICONS['Product analytics']).toBe(ChartAnalysis);
-    expect(NAV_ICONS['Web analytics']).toBe(Globe);
-    expect(NAV_ICONS.Users).toBe(UserGroup);
-    expect(NAV_ICONS.Changes).toBe(GitCommit);
+    expect(NAV_ICONS.Product).toBe(ChartAnalysis);
+    expect(NAV_ICONS.Web).toBe(Globe);
+    expect(NAV_ICONS.People).toBe(UserGroup);
+    expect(NAV_ICONS.Ship).toBe(GitCommit);
     expect(NAV_ICONS.Experiments).toBe(TestTube);
     expect(NAV_ICONS.Decisions).toBe(TaskDone);
     expect(NAV_ICONS.Registry).toBe(Catalogue);
-    expect(NAV_ICONS.Measurement).toBe(Ruler);
-    expect(NAV_ICONS['Browser experience']).toBe(Browser);
+    expect(NAV_ICONS.Definitions).toBe(Ruler);
+    expect(NAV_ICONS.Experience).toBe(Browser);
     expect(NAV_ICONS.Setup).toBe(Plug);
     expect(NAV_ICONS.Usage).toBe(DashboardSpeed);
     expect(NAV_ICONS.Profile).toBe(UserCircle);
 
-    const product = screen.getAllByRole('link', { name: 'Product analytics' })[0];
+    const product = screen.getAllByRole('link', { name: 'Product' })[0];
     expect(product).toHaveClass('hover:bg-sidebar-accent/10', 'hover:text-sidebar-accent');
     expect(product).not.toHaveClass('hover:text-foreground');
 
-    const web = screen.getAllByRole('link', { name: 'Web analytics' })[0];
+    const web = screen.getAllByRole('link', { name: 'Web' })[0];
     expect(web).toHaveClass('bg-sidebar-accent', 'text-sidebar-accent-foreground');
   });
 
