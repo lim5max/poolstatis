@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 export type EvidenceTrust = 'trusted' | 'partial' | 'unavailable';
 
 function evidenceTrustLabel(trust: EvidenceTrust) {
-  return trust === 'trusted' ? 'Trusted' : trust === 'partial' ? 'Partial' : 'Partial';
+  return trust === 'trusted' ? 'Trusted' : trust === 'partial' ? 'Partial' : 'Unavailable';
 }
 
 export function EvidenceLine({

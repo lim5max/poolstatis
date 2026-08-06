@@ -180,7 +180,7 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('telegram')).toBeInTheDocument();
     expect(screen.getByText('Route setup required')).toBeInTheDocument();
 
-    expect(screen.getByText(/Observed · Partial · 20 events ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Observed · Unavailable · 20 events ·/)).toBeInTheDocument();
 
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Pages' }), { key: 'Enter' });
 

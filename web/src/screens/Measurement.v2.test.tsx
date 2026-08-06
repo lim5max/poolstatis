@@ -34,6 +34,7 @@ describe('Definitions surface', () => {
     for (const label of ['Tracking plan', 'Properties', 'Identity', 'Data sources']) {
       expect(screen.getByText(label, { selector: 'span' }).closest('details')).not.toHaveAttribute('open');
     }
+    expect(screen.getByText('No external sources')).toBeInTheDocument();
     expect(screen.getByText('Advanced web reporting').closest('details')).not.toHaveAttribute('open');
   });
 });

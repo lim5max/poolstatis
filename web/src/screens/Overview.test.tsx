@@ -104,7 +104,7 @@ describe('goal-aware Home', () => {
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Product performance' })).toBeInTheDocument();
-    expect(screen.getByText(/Observed · Partial · event count unavailable ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Observed · Unavailable · event count unavailable ·/)).toBeInTheDocument();
     expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0);
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
