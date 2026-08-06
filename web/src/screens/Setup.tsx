@@ -38,7 +38,12 @@ interface SetupIntent {
 
 interface SetupClient {
   projectIntent(slug: string): Promise<{ intent: SetupIntent | null }>;
-  setupTask(slug: string, body: { agent_id: AgentId; prefer_llm?: boolean }): Promise<SetupTaskResponse>;
+  setupTask(slug: string, body: {
+    agent_id: AgentId;
+    prefer_llm?: boolean;
+    kind?: 'initial' | 'fix';
+    env?: string;
+  }): Promise<SetupTaskResponse>;
   setupTaskFeedback(slug: string, body: { outcome: 'blocked'; blocker: string }): Promise<{ recorded: true }>;
 }
 
@@ -178,7 +183,7 @@ export function Setup() {
               <FixTaskAction
                 key={blockerCode}
                 projectSlug={project}
-                blockerCode={blockerCode}
+                env={env}
                 preferLlm={preferLlm}
                 client={setupClient}
               />
@@ -302,21 +307,21 @@ function SetupRow({ title, status, description, action, onAction, last = false }
   );
 }
 
-function FixTaskAction({ projectSlug, blockerCode, preferLlm, client }: {
+function FixTaskAction({ projectSlug, env, preferLlm, client }: {
   projectSlug: string;
-  blockerCode: string;
+  env: string;
   preferLlm: boolean;
   client: SetupClient;
 }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [fallbackTask, setFallbackTask] = useState<string | null>(null);
+  const [fallbackTask, setFallbackTask] = useState<{ task: string; blocker: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const recordFeedback = async () => {
+  const recordFeedback = async (blocker: string) => {
     await client.setupTaskFeedback(projectSlug, {
       outcome: 'blocked',
-      blocker: blockerCode,
+      blocker,
     });
   };
 
@@ -329,19 +334,25 @@ function FixTaskAction({ projectSlug, blockerCode, preferLlm, client }: {
       const response = await client.setupTask(projectSlug, {
         agent_id: 'codex',
         prefer_llm: preferLlm,
+        kind: 'fix',
+        env,
       });
       const task = response.task.trim();
+      const responseBlocker = typeof response.blocker === 'string'
+        ? normalizeBlockerKey(response.blocker)
+        : null;
       if (!task) throw new Error('The server returned an empty setup task.');
+      if (!responseBlocker) throw new Error('The server returned a fix task without a verified blocker.');
       if (containsCredentialValue(task)) {
         throw new Error('Task generation was blocked because it contained credential-like text.');
       }
       try {
         await navigator.clipboard.writeText(task);
       } catch {
-        setFallbackTask(task);
+        setFallbackTask({ task, blocker: responseBlocker });
         return;
       }
-      await recordFeedback();
+      await recordFeedback(responseBlocker);
       setCopied(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not prepare the fix task.');
@@ -354,7 +365,8 @@ function FixTaskAction({ projectSlug, blockerCode, preferLlm, client }: {
     setBusy(true);
     setError(null);
     try {
-      await recordFeedback();
+      if (!fallbackTask) return;
+      await recordFeedback(fallbackTask.blocker);
       setFallbackTask(null);
       setCopied(true);
     } catch (caught) {
@@ -373,7 +385,7 @@ function FixTaskAction({ projectSlug, blockerCode, preferLlm, client }: {
       {fallbackTask && (
         <div className="space-y-2">
           <p role="alert" className="text-xs text-destructive">Copy was blocked by the browser. Select the task below and copy it manually.</p>
-          <pre tabIndex={0} className="max-h-72 max-w-full overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 text-xs text-foreground">{fallbackTask}</pre>
+          <pre tabIndex={0} className="max-h-72 max-w-full overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 text-xs text-foreground">{fallbackTask.task}</pre>
           <Button size="sm" variant="outline" onClick={() => void confirmManualCopy()} disabled={busy}>I copied it</Button>
         </div>
       )}

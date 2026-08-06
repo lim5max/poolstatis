@@ -14,6 +14,7 @@ type ManualRuntime = 'browser' | 'server';
 export interface SetupTaskResponse {
   task: string;
   source: 'deterministic' | 'llm' | 'fallback';
+  blocker?: string | null;
   plan?: {
     release_manifest?: { sdk?: string };
     smoke_action?: string;

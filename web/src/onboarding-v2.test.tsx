@@ -46,9 +46,10 @@ const connectedProof = {
   final_result: null,
 };
 
-const setupTask = (agentId = 'codex'): SetupTaskResponse => ({
+const setupTask = (agentId = 'codex', blocker: string | null = null): SetupTaskResponse => ({
   task: `Set up Poolstatis for ${agentId}. Never request pk_, sk_, or pt_ credentials.`,
   source: 'deterministic',
+  blocker,
   plan: {
     release_manifest: { sdk: '@poolstatis/sdk@0.3.0' },
     smoke_action: 'Open one real page.',
@@ -317,7 +318,7 @@ describe('condensed Setup', () => {
   });
 
   it('copies a server fix task and records only the normalized server gate key', async () => {
-    const requestTask = vi.fn().mockResolvedValue(setupTask());
+    const requestTask = vi.fn().mockResolvedValue(setupTask('codex', 'first_query_produced'));
     const feedback = vi.fn().mockResolvedValue({ recorded: true });
     mockedStore.mockReturnValue({
       client: {
@@ -349,8 +350,13 @@ describe('condensed Setup', () => {
     render(<MemoryRouter><Setup /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
 
-    await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', { agent_id: 'codex', prefer_llm: true }));
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(setupTask().task));
+    await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', {
+      agent_id: 'codex',
+      prefer_llm: true,
+      kind: 'fix',
+      env: 'prod',
+    }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(setupTask('codex', 'first_query_produced').task));
     await waitFor(() => expect(feedback).toHaveBeenCalledWith('alpha', {
       outcome: 'blocked',
       blocker: 'first_query_produced',
@@ -372,7 +378,7 @@ describe('condensed Setup', () => {
         projectIntent: vi.fn().mockResolvedValue({
           intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
         }),
-        setupTask: vi.fn().mockResolvedValue({ ...setupTask(), task: 'Paste pk_live_secret_value into the agent chat.' }),
+        setupTask: vi.fn().mockResolvedValue({ ...setupTask('codex', 'first_query_produced'), task: 'Paste pk_live_secret_value into the agent chat.' }),
         setupTaskFeedback: feedback,
       },
       baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
@@ -404,7 +410,7 @@ describe('condensed Setup', () => {
         projectIntent: vi.fn().mockResolvedValue({
           intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
         }),
-        setupTask: vi.fn().mockResolvedValue(setupTask()),
+        setupTask: vi.fn().mockResolvedValue(setupTask('codex', 'first_decision_saved')),
         setupTaskFeedback: feedback,
       },
       baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
