@@ -83,7 +83,11 @@ export interface Experiment {
   status: ExperimentStatus;
   started_at: string | null;
   concluded_at: string | null;
-  decision: { outcome: 'ship' | 'iterate' | 'stop' | 'inconclusive'; rationale: string } | null;
+  decision: {
+    outcome: 'ship' | 'iterate' | 'stop' | 'inconclusive';
+    rationale: string;
+    ship_variant_key?: string;
+  } | null;
   created_at: string;
   updated_at: string;
 }

@@ -28,7 +28,7 @@ export function Changes() {
   const audit = useAsync(async () => {
     const [releases, listedDecisions, experiments] = await Promise.all([
       client!.releases(project!, { env }),
-      client!.decisions(project!),
+      client!.decisions(project!, { env }),
       client!.experiments(project!),
     ]);
     const latestByRelease = new Map<string, Decision>();

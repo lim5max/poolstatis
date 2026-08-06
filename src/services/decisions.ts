@@ -28,19 +28,26 @@ export interface DecisionDetail {
 export async function listDecisions(
   pool: Queryable,
   projectId: string,
-  filter: { status?: string; releaseId?: string } = {},
+  filter: { status?: string; releaseId?: string; env?: string } = {},
 ): Promise<ProposedDecision[]> {
   const params: unknown[] = [projectId];
-  let sql = 'SELECT * FROM decisions WHERE project_id = $1';
+  let sql = `SELECT d.*
+    FROM decisions d
+    INNER JOIN releases r ON r.project_id = d.project_id AND r.id = d.release_id
+    WHERE d.project_id = $1`;
   if (filter.status) {
     params.push(filter.status);
-    sql += ` AND status = $${params.length}`;
+    sql += ` AND d.status = $${params.length}`;
   }
   if (filter.releaseId) {
     params.push(filter.releaseId);
-    sql += ` AND release_id = $${params.length}`;
+    sql += ` AND d.release_id = $${params.length}`;
   }
-  const { rows } = await pool.query(`${sql} ORDER BY created_at DESC, id`, params);
+  if (filter.env) {
+    params.push(filter.env);
+    sql += ` AND r.env = $${params.length}`;
+  }
+  const { rows } = await pool.query(`${sql} ORDER BY d.created_at DESC, d.id`, params);
   return rows.map(rowToDecision);
 }
 

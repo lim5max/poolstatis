@@ -1640,9 +1640,10 @@ function registerPlatformRoutes(
   app.get('/api/v1/projects/:slug/decisions', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const { status, release_id } = req.query as { status?: string; release_id?: string };
+    const { env, status, release_id } = req.query as { env?: string; status?: string; release_id?: string };
     return {
       decisions: await listDecisions(ctx.pool, project.id, {
+        ...(env ? { env } : {}),
         ...(status ? { status } : {}),
         ...(release_id ? { releaseId: release_id } : {}),
       }),

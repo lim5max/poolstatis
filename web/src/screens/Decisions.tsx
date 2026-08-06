@@ -10,8 +10,8 @@ import { ShipSectionNav, ShipStageBadge, deriveDecisionStage } from '../componen
 import type { Decision, DecisionAction, DecisionActionType, DecisionDetail, DecisionOutcome } from '../api/types';
 
 export function Decisions() {
-  const { client, project } = useStore();
-  const list = useAsync(() => client!.decisions(project!), [project]);
+  const { client, project, env } = useStore();
+  const list = useAsync(() => client!.decisions(project!, { env }), [project, env]);
   const loop = useAsync(async () => {
     const [inbox, history, deliveries] = await Promise.all([
       client!.decisionInbox(project!), client!.decisionHistory(project!, { limit: 20 }), client!.webhookDeliveries(project!),
@@ -30,18 +30,18 @@ export function Decisions() {
   return <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
     <ShipSectionNav current="decisions" />
     <header className="max-w-3xl">
-      <h1 className="serif text-3xl text-balance">Decision review</h1>
+      <div className="flex flex-wrap items-center gap-3"><h1 className="serif text-3xl text-balance">Decision review</h1><Badge variant="outline" aria-label={`Current environment ${env}`}>Environment <code>{env}</code></Badge></div>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Approve, correct, or reject an agent proposal against immutable evidence.</p>
     </header>
     {list.data.length === 0 ? <Panel><EmptyState headline="No proposed decisions" lead="evaluate an eligible release to create evidence" /></Panel> : <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
       <Panel title={<>Queue <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{list.data.length}</span></>}><div className="-m-2 space-y-1">{list.data.map((decision) => <button key={decision.id} type="button" onClick={() => setSelectedId(decision.id)} aria-pressed={selectedId === decision.id} className={`w-full rounded-control p-3 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 ${selectedId === decision.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'}`}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{decisionQueueTitle(decision)}</span><ShipStageBadge stage={deriveDecisionStage(decision)} /></div><div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{decision.accepted_rationale ?? decision.proposed_rationale}</div></button>)}</div></Panel>
-      {detail.loading ? <Panel><Loading what="reproducing evidence…" /></Panel> : detail.error ? <ErrorNote>{detail.error}</ErrorNote> : detail.data ? <DecisionReview detail={detail.data} onChanged={() => { list.reload(); detail.reload(); loop.reload(); }} /> : null}
+      {detail.loading ? <Panel><Loading what="reproducing evidence…" /></Panel> : detail.error ? <ErrorNote>{detail.error}</ErrorNote> : detail.data ? <DecisionReview detail={detail.data} env={env} onChanged={() => { list.reload(); detail.reload(); loop.reload(); }} /> : null}
     </div>}
     {loop.error ? <ErrorNote>{loop.error}</ErrorNote> : loop.data && <ContinuousLoopSummary {...loop.data} />}
   </div>;
 }
 
-function DecisionReview({ detail, onChanged }: { detail: DecisionDetail; onChanged: () => void }) {
+function DecisionReview({ detail, env, onChanged }: { detail: DecisionDetail; env: string; onChanged: () => void }) {
   const { client, project } = useStore();
   const [rationale, setRationale] = useState(detail.decision.accepted_rationale ?? '');
   const [outcome, setOutcome] = useState<DecisionOutcome>(detail.decision.proposed_outcome);
@@ -60,6 +60,7 @@ function DecisionReview({ detail, onChanged }: { detail: DecisionDetail; onChang
   };
   const evidence = detail.evidence;
   const primary = evidence.primary_evidence;
+  const environmentMatches = detail.release.env === env;
   return <div className="space-y-4">
     <Panel title={detail.contract.name} right={<ShipStageBadge stage={deriveDecisionStage(detail.decision)} />}>
       <div className="flex flex-wrap items-center gap-2">{detail.decision.status === 'rejected' ? <Badge variant="destructive">proposal rejected</Badge> : <OutcomeBadge outcome={detail.decision.accepted_outcome ?? detail.decision.proposed_outcome} />}<span className="text-sm font-medium">{decisionQueueTitle(detail.decision)}</span></div>
@@ -76,12 +77,13 @@ function DecisionReview({ detail, onChanged }: { detail: DecisionDetail; onChang
       {evidence.blockers.length > 0 && <div className="mt-4 space-y-2 border-t pt-4">{evidence.blockers.map((blocker, index) => <div key={`${blocker.code}-${index}`} className="rounded-panel border border-destructive/30 bg-destructive/5 p-3 text-xs"><div className="font-medium">{blocker.message}</div><div className="mt-1 text-muted-foreground">Next: {blocker.next_action}</div></div>)}</div>}
     </Panel>
     <Panel title="Agent proposal"><div className="flex flex-wrap items-center gap-2"><OutcomeBadge outcome={detail.decision.proposed_outcome} /><span className="text-sm">{detail.decision.proposed_rationale}</span></div></Panel>
-    <Panel title="Human decision" right={<span className="text-xs text-muted-foreground">no delivery action is executed here</span>}>
+    <Panel title="Human decision" right={<span className="text-xs text-muted-foreground">Environment <code>{env}</code> · no delivery action is executed here</span>}>
       <div className="grid gap-3 sm:grid-cols-[12rem_1fr]"><Select value={outcome} onValueChange={(value) => setOutcome(value as DecisionOutcome)}><SelectTrigger aria-label="Accepted decision outcome"><SelectValue /></SelectTrigger><SelectContent>{(['keep', 'fix', 'rollback', 'inconclusive'] as const).map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select><Textarea aria-label="Decision rationale" value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="Explain why this evidence supports the accepted decision." className="min-h-24" /></div>
-      <div className="mt-3 flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={() => decide('reject')} disabled={detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'reject' && <Loader2 className="size-4 animate-spin" />}Reject</Button><Button variant="outline" onClick={() => decide('edit')} disabled={detail.decision.status === 'approved' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'edit' && <Loader2 className="size-4 animate-spin" />}Save correction</Button><Button onClick={() => decide('approve')} disabled={detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'approve' && <Loader2 className="size-4 animate-spin" />}Approve proposal</Button></div>
+      {!environmentMatches && <div className="mt-3"><ErrorNote>This decision belongs to <code>{detail.release.env}</code>. Switch back to that environment before reviewing it.</ErrorNote></div>}
+      <div className="mt-3 flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={() => decide('reject')} disabled={!environmentMatches || detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'reject' && <Loader2 className="size-4 animate-spin" />}Reject</Button><Button variant="outline" onClick={() => decide('edit')} disabled={!environmentMatches || detail.decision.status === 'approved' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'edit' && <Loader2 className="size-4 animate-spin" />}Save correction</Button><Button onClick={() => decide('approve')} disabled={!environmentMatches || detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'approve' && <Loader2 className="size-4 animate-spin" />}Approve proposal</Button></div>
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     </Panel>
-    <DecisionAutomation detail={detail} onChanged={onChanged} />
+    <DecisionAutomation detail={detail} mutationsEnabled={environmentMatches} onChanged={onChanged} />
     <TechnicalDecisionRecord detail={detail} />
   </div>;
 }
@@ -132,7 +134,7 @@ function TechnicalDecisionRecord({ detail }: { detail: DecisionDetail }) {
   </details>;
 }
 
-function DecisionAutomation({ detail, onChanged }: { detail: DecisionDetail; onChanged: () => void }) {
+function DecisionAutomation({ detail, mutationsEnabled, onChanged }: { detail: DecisionDetail; mutationsEnabled: boolean; onChanged: () => void }) {
   const { client, project } = useStore();
   const automation = useAsync(async () => {
     const [explanations, actions] = await Promise.all([
@@ -175,12 +177,12 @@ function DecisionAutomation({ detail, onChanged }: { detail: DecisionDetail; onC
   if (automation.error) return <ErrorNote>{automation.error}</ErrorNote>;
   const data = automation.data ?? { explanations: [], actions: [] };
   return <>
-    <Panel title="Correlation hypotheses" right={<Button size="sm" variant="outline" onClick={explain} disabled={Boolean(busy)}>{busy === 'explain' && <Loader2 className="size-4 animate-spin" />}Explain outcome</Button>}>
+    <Panel title="Correlation hypotheses" right={<Button size="sm" variant="outline" onClick={explain} disabled={!mutationsEnabled || Boolean(busy)}>{busy === 'explain' && <Loader2 className="size-4 animate-spin" />}Explain outcome</Button>}>
       {data.explanations.length === 0 ? <p className="text-sm text-muted-foreground">No bounded explanation snapshot yet. Explain reads registered metrics and trusted properties only; every result is correlation, not causality.</p> : <div className="space-y-2">{data.explanations[0]!.candidates.map((candidate) => <div key={`${candidate.kind}:${candidate.key}`} className="rounded-panel border p-3 text-xs"><div className="flex flex-wrap items-center justify-between gap-2"><div><Badge variant="outline">hypothesis</Badge> <code className="ml-1">{candidate.kind}.{candidate.key}</code></div><span>{candidate.strength} · score {candidate.score}</span></div><div className="mt-2 text-sm">{candidate.purpose}</div><div className="mt-1 text-muted-foreground">{candidate.why_considered}</div></div>)}</div>}
     </Panel>
     <Panel title="Approval-gated actions" right={<span className="text-xs text-muted-foreground">prepare → fingerprint → approve → execute</span>}>
-      <div className="grid gap-3 sm:grid-cols-[14rem_1fr_auto]"><Select value={actionType} onValueChange={(value) => setActionType(value as DecisionActionType)}><SelectTrigger aria-label="Prepared action type"><SelectValue /></SelectTrigger><SelectContent>{(['draft_implementation_prompt', 'schedule_observation', 'request_more_data', 'generic_webhook'] as const).map((type) => <SelectItem key={type} value={type}>{type.replaceAll('_', ' ')}</SelectItem>)}</SelectContent></Select><Textarea aria-label="Expected action effect" value={actionText} onChange={(event) => setActionText(event.target.value)} /><Button onClick={prepare} disabled={Boolean(busy) || actionText.trim().length < 10}>{busy === 'prepare' && <Loader2 className="size-4 animate-spin" />}Prepare</Button></div>
-      <div className="mt-4 space-y-2">{data.actions.map((action) => <div key={action.id} className="rounded-panel border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="text-sm font-medium">{action.action_type.replaceAll('_', ' ')}</span><div className="mt-1 text-xs text-muted-foreground">Undo: {String(action.undo.action)} · fingerprint <code>{action.confirmation_fingerprint.slice(0, 10)}</code></div></div><Badge variant={action.status === 'executed' ? 'default' : action.status === 'failed' ? 'destructive' : 'outline'}>{action.status}</Badge></div><div className="mt-2 text-xs">{action.expected_effect}</div>{action.error_message && <div className="mt-2 text-xs text-destructive">{action.error_message}</div>}<div className="mt-3 flex justify-end gap-2">{action.status === 'prepared' && <><Button size="sm" variant="outline" onClick={() => reviewAction(action, 'reject')} disabled={busy === action.id}>Reject</Button><Button size="sm" onClick={() => reviewAction(action, 'approve')} disabled={busy === action.id}>Approve exact payload</Button></>}{action.status === 'failed' && <Button size="sm" variant="outline" onClick={() => reviewAction(action, 'retry')} disabled={busy === action.id}>Retry</Button>}</div></div>)}</div>
+      <div className="grid gap-3 sm:grid-cols-[14rem_1fr_auto]"><Select value={actionType} onValueChange={(value) => setActionType(value as DecisionActionType)}><SelectTrigger aria-label="Prepared action type"><SelectValue /></SelectTrigger><SelectContent>{(['draft_implementation_prompt', 'schedule_observation', 'request_more_data', 'generic_webhook'] as const).map((type) => <SelectItem key={type} value={type}>{type.replaceAll('_', ' ')}</SelectItem>)}</SelectContent></Select><Textarea aria-label="Expected action effect" value={actionText} onChange={(event) => setActionText(event.target.value)} /><Button onClick={prepare} disabled={!mutationsEnabled || Boolean(busy) || actionText.trim().length < 10}>{busy === 'prepare' && <Loader2 className="size-4 animate-spin" />}Prepare</Button></div>
+      <div className="mt-4 space-y-2">{data.actions.map((action) => <div key={action.id} className="rounded-panel border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="text-sm font-medium">{action.action_type.replaceAll('_', ' ')}</span><div className="mt-1 text-xs text-muted-foreground">Undo: {String(action.undo.action)} · fingerprint <code>{action.confirmation_fingerprint.slice(0, 10)}</code></div></div><Badge variant={action.status === 'executed' ? 'default' : action.status === 'failed' ? 'destructive' : 'outline'}>{action.status}</Badge></div><div className="mt-2 text-xs">{action.expected_effect}</div>{action.error_message && <div className="mt-2 text-xs text-destructive">{action.error_message}</div>}<div className="mt-3 flex justify-end gap-2">{action.status === 'prepared' && <><Button size="sm" variant="outline" onClick={() => reviewAction(action, 'reject')} disabled={!mutationsEnabled || busy === action.id}>Reject</Button><Button size="sm" onClick={() => reviewAction(action, 'approve')} disabled={!mutationsEnabled || busy === action.id}>Approve exact payload</Button></>}{action.status === 'failed' && <Button size="sm" variant="outline" onClick={() => reviewAction(action, 'retry')} disabled={!mutationsEnabled || busy === action.id}>Retry</Button>}</div></div>)}</div>
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     </Panel>
   </>;

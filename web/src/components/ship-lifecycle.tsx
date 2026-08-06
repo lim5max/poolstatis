@@ -30,7 +30,7 @@ export function deriveReleaseStage(release: Release, decision?: Decision): ShipS
 }
 
 export function deriveExperimentStage(experiment: Experiment): ShipStage {
-  if (experiment.status === 'concluded') return 'decided';
+  if (experiment.status === 'concluded') return experiment.decision ? 'decided' : 'ready_to_decide';
   if (experiment.status === 'running') return 'running';
   return 'preparing';
 }
@@ -92,24 +92,27 @@ export function releaseOutcome(release: Release, detail?: DecisionDetail): ShipO
 }
 
 const experimentOutcomeLabel: Record<NonNullable<Experiment['decision']>['outcome'], string> = {
-  ship: 'Ship the winner',
-  iterate: 'Iterate on the change',
-  stop: 'Stop the change',
-  inconclusive: 'Inconclusive',
+  ship: 'Decision: Ship',
+  iterate: 'Decision: Iterate',
+  stop: 'Decision: Stop',
+  inconclusive: 'Decision: Inconclusive',
 };
 
 export function experimentOutcome(experiment: Experiment): ShipOutcome {
   if (experiment.decision) {
+    const delivery = experiment.decision.ship_variant_key
+      ? `${experiment.decision.ship_variant_key} moved to 100%`
+      : 'Decision recorded · rollout unchanged';
     return {
-      title: experimentOutcomeLabel[experiment.decision.outcome],
-      detail: experiment.decision.rationale,
+      title: delivery,
+      detail: `${experimentOutcomeLabel[experiment.decision.outcome]}. ${experiment.decision.rationale}`,
       available: true,
     };
   }
   if (experiment.status === 'concluded') {
     return {
-      title: 'Outcome unavailable',
-      detail: 'This experiment concluded without a recorded decision.',
+      title: 'Concluded without decision',
+      detail: 'The measurement window is closed and no rollout decision was recorded.',
       available: false,
     };
   }

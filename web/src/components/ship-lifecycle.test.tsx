@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Decision, Experiment, Release } from '../api/types';
@@ -97,6 +97,40 @@ const decision = (status: Decision['status']): Decision => ({
   updated_at: '2026-08-05T10:00:00.000Z',
 });
 
+function decisionDetail(item: Decision, releaseEnv = 'prod') {
+  const itemRelease = {
+    ...release(item.status === 'proposed' ? 'observing' : 'decided'),
+    id: item.release_id,
+    env: releaseEnv,
+  };
+  return {
+    decision: item,
+    release: itemRelease,
+    contract: { ...itemRelease.contract_snapshot, revision: itemRelease.contract_revision },
+    evidence: {
+      ready: true,
+      source: 'native',
+      baseline_window: { from: '2026-07-28T00:00:00.000Z', to: '2026-08-03T23:59:59.000Z' },
+      observed_window: { from: '2026-08-04T00:00:00.000Z', to: '2026-08-05T23:59:59.000Z' },
+      primary_evidence: {
+        source: 'native',
+        metric: { key: 'activation_completed', name: 'Activation completed', purpose: 'Measure completed activation.', category: 'activation', type: 'count' },
+        baseline: { value: 20, actors: 40 },
+        observed: { value: 30, actors: 45 },
+        change: { relative: 0.5 },
+      },
+      guardrail_evidence: [],
+      trust: { status: 'trusted', distinct_id_coverage: 1 },
+      blockers: [],
+      query_specs: { kind: 'trend', metric: 'activation_completed' },
+    },
+    revisions: [{
+      id: 'revision-1', revision: 1, action: item.status, actor: 'owner',
+      rationale: item.accepted_rationale ?? item.proposed_rationale, created_at: '2026-08-05T12:00:00.000Z',
+    }],
+  };
+}
+
 describe('Ship lifecycle', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -108,7 +142,10 @@ describe('Ship lifecycle', () => {
     expect(deriveReleaseStage(release('decided'), decision('approved'))).toBe('decided');
     expect(deriveExperimentStage(experiment('draft'))).toBe('preparing');
     expect(deriveExperimentStage(experiment('running'))).toBe('running');
-    expect(deriveExperimentStage(experiment('concluded'))).toBe('decided');
+    expect(deriveExperimentStage(experiment('concluded'))).toBe('ready_to_decide');
+    expect(deriveExperimentStage(experiment('concluded', {
+      outcome: 'inconclusive', rationale: 'The evidence did not support a directional decision.',
+    }))).toBe('decided');
     expect(deriveDecisionStage(decision('proposed'))).toBe('ready_to_decide');
     expect(deriveDecisionStage(decision('rejected'))).toBe('decided');
   });
@@ -120,9 +157,26 @@ describe('Ship lifecycle', () => {
       available: false,
     });
     expect(experimentOutcome(experiment('concluded'))).toEqual({
-      title: 'Outcome unavailable',
-      detail: 'This experiment concluded without a recorded decision.',
+      title: 'Concluded without decision',
+      detail: 'The measurement window is closed and no rollout decision was recorded.',
       available: false,
+    });
+  });
+
+  it('distinguishes a recorded experiment decision from an explicit rollout change', () => {
+    expect(experimentOutcome(experiment('concluded', {
+      outcome: 'ship', rationale: 'The treatment produced the strongest trusted result.',
+    }))).toEqual({
+      title: 'Decision recorded · rollout unchanged',
+      detail: 'Decision: Ship. The treatment produced the strongest trusted result.',
+      available: true,
+    });
+    expect(experimentOutcome(experiment('concluded', {
+      outcome: 'ship', rationale: 'The treatment produced the strongest trusted result.', ship_variant_key: 'treatment',
+    }))).toEqual({
+      title: 'treatment moved to 100%',
+      detail: 'Decision: Ship. The treatment produced the strongest trusted result.',
+      available: true,
     });
   });
 
@@ -162,7 +216,7 @@ describe('Ship lifecycle', () => {
 
     expect(await screen.findByRole('heading', { name: 'Ship' })).toBeInTheDocument();
     expect(releases).toHaveBeenCalledWith('alpha', { env: 'prod' });
-    expect(decisions).toHaveBeenCalledWith('alpha');
+    expect(decisions).toHaveBeenCalledWith('alpha', { env: 'prod' });
     expect(experiments).toHaveBeenCalledWith('alpha');
     expect(screen.getByRole('article', { name: 'Shorter activation' })).toHaveTextContent('Waiting for evidence');
     expect(screen.getByRole('article', { name: 'Activation experiment' })).toHaveTextContent('Running');
@@ -170,37 +224,41 @@ describe('Ship lifecycle', () => {
     screen.getAllByText('Technical details').forEach((summary) => expect(summary.closest('details')).not.toHaveAttribute('open'));
   });
 
-  it('leads decision review with the human outcome and keeps audit detail collapsed', async () => {
-    const approved = decision('approved');
-    const decidedRelease = release('decided');
-    const detail = {
-      decision: approved,
-      release: decidedRelease,
-      contract: { ...decidedRelease.contract_snapshot, revision: decidedRelease.contract_revision },
-      evidence: {
-        ready: true,
-        source: 'native',
-        baseline_window: { from: '2026-07-28T00:00:00.000Z', to: '2026-08-03T23:59:59.000Z' },
-        observed_window: { from: '2026-08-04T00:00:00.000Z', to: '2026-08-05T23:59:59.000Z' },
-        primary_evidence: {
-          source: 'native',
-          metric: { key: 'activation_completed', name: 'Activation completed', purpose: 'Measure completed activation.', category: 'activation', type: 'count' },
-          baseline: { value: 20, actors: 40 },
-          observed: { value: 30, actors: 45 },
-          change: { relative: 0.5 },
-        },
-        guardrail_evidence: [],
-        trust: { status: 'trusted', distinct_id_coverage: 1 },
-        blockers: [],
-        query_specs: { kind: 'trend', metric: 'activation_completed' },
-      },
-      revisions: [{
-        id: 'revision-1', revision: 1, action: 'approved', actor: 'owner', rationale: 'Ship the measured improvement.', created_at: '2026-08-05T12:00:00.000Z',
-      }],
+  it('renders concluded experiment rows without inventing a decision or rollout change', async () => {
+    const closed = { ...experiment('concluded'), id: 'closed', name: 'Closed legacy test' };
+    const recorded = {
+      ...experiment('concluded', { outcome: 'ship', rationale: 'Record the result but preserve the current allocation.' }),
+      id: 'recorded', name: 'Recorded outcome',
+    };
+    const delivered = {
+      ...experiment('concluded', { outcome: 'ship', rationale: 'Move the trusted winner to all traffic.', ship_variant_key: 'treatment' }),
+      id: 'delivered', name: 'Delivered winner',
     };
     mockedStore.mockReturnValue({
       client: {
-        decisions: vi.fn().mockResolvedValue([approved]),
+        releases: vi.fn().mockResolvedValue([]),
+        decisions: vi.fn().mockResolvedValue([]),
+        experiments: vi.fn().mockResolvedValue([closed, recorded, delivered]),
+      },
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Changes /></MemoryRouter>);
+
+    expect(await screen.findByRole('article', { name: 'Closed legacy test' })).toHaveTextContent('Ready to decide');
+    expect(screen.getByRole('article', { name: 'Closed legacy test' })).toHaveTextContent('Concluded without decision');
+    expect(screen.getByRole('article', { name: 'Recorded outcome' })).toHaveTextContent('Decision recorded · rollout unchanged');
+    expect(screen.getByRole('article', { name: 'Delivered winner' })).toHaveTextContent('treatment moved to 100%');
+  });
+
+  it('leads decision review with the human outcome and keeps audit detail collapsed', async () => {
+    const approved = decision('approved');
+    const detail = decisionDetail(approved);
+    const listDecisions = vi.fn().mockResolvedValue([approved]);
+    mockedStore.mockReturnValue({
+      client: {
+        decisions: listDecisions,
         decision: vi.fn().mockResolvedValue(detail),
         decisionInbox: vi.fn().mockResolvedValue([]),
         decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
@@ -215,9 +273,46 @@ describe('Ship lifecycle', () => {
     render(<MemoryRouter><Decisions /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Decision review' })).toBeInTheDocument();
+    expect(listDecisions).toHaveBeenCalledWith('alpha', { env: 'prod' });
+    expect(screen.getByLabelText("Current environment prod")).toBeInTheDocument();
     expect(await screen.findAllByText('Decided: keep')).not.toHaveLength(0);
     expect(screen.getAllByText('Ship the measured improvement.').length).toBeGreaterThan(0);
     expect((await screen.findByText('Technical record')).closest('details')).not.toHaveAttribute('open');
     expect(screen.getByText('Decision operations & audit').closest('details')).not.toHaveAttribute('open');
+  });
+
+  it('reloads decisions on environment switch and blocks a stale cross-environment mutation', async () => {
+    let currentEnv = 'prod';
+    const proposed = decision('proposed');
+    const detail = decisionDetail(proposed, 'prod');
+    const listDecisions = vi.fn().mockResolvedValue([proposed]);
+    const client = {
+      decisions: listDecisions,
+      decision: vi.fn().mockResolvedValue(detail),
+      decisionInbox: vi.fn().mockResolvedValue([]),
+      decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+      webhookDeliveries: vi.fn().mockResolvedValue([]),
+      decisionExplanations: vi.fn().mockResolvedValue([]),
+      decisionActions: vi.fn().mockResolvedValue([]),
+    };
+    mockedStore.mockImplementation(() => ({ client, project: 'alpha', env: currentEnv }) as never);
+
+    const { rerender } = render(<MemoryRouter><Decisions /></MemoryRouter>);
+    await screen.findByText('Review: keep');
+    fireEvent.change(await screen.findByLabelText('Decision rationale'), {
+      target: { value: 'The trusted evidence supports approving this production decision.' },
+    });
+    expect(screen.getByRole('button', { name: 'Approve proposal' })).toBeEnabled();
+
+    currentEnv = 'dev';
+    rerender(<MemoryRouter><Decisions /></MemoryRouter>);
+
+    await waitFor(() => expect(listDecisions).toHaveBeenCalledWith('alpha', { env: 'dev' }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This decision belongs to prod. Switch back to that environment before reviewing it.",
+    );
+    expect(screen.getByRole('button', { name: 'Approve proposal' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Explain outcome' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Prepare' })).toBeDisabled();
   });
 });

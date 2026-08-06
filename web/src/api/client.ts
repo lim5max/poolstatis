@@ -219,8 +219,9 @@ export class PoolstatisClient {
     );
   }
 
-  decisions(slug: string, filter: { status?: Decision['status']; release_id?: string } = {}) {
+  decisions(slug: string, filter: { env?: string; status?: Decision['status']; release_id?: string } = {}) {
     const qs = new URLSearchParams();
+    if (filter.env) qs.set('env', filter.env);
     if (filter.status) qs.set('status', filter.status);
     if (filter.release_id) qs.set('release_id', filter.release_id);
     return this.req<{ decisions: Decision[] }>('GET', `/api/v1/projects/${slug}/decisions${qs.size ? `?${qs}` : ''}`)
