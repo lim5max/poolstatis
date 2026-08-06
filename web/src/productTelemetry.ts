@@ -5,6 +5,7 @@ export type TelemetryGoalId =
   | 'feature_adoption' | 'retention' | 'release'
   | 'reliability_performance' | 'custom';
 export type TelemetryEnvironment = 'prod' | 'dev' | 'staging' | 'other';
+export type TelemetryCompletionMethod = 'clipboard' | 'manual';
 export type TelemetryAgentId = 'codex' | 'claude-code' | 'cursor' | 'other';
 export type TelemetryTaskSource = 'deterministic' | 'llm' | 'fallback';
 export type TelemetryLatencyBucket = 'under_250ms' | '250ms_to_1s' | '1s_to_3s' | 'over_3s';
@@ -24,10 +25,10 @@ export interface ProductTelemetryInputMap {
   'onboarding.mode_selected': { mode: TelemetryProjectMode };
   'onboarding.goals_selected': { goal_ids: TelemetryGoalId[] };
   'onboarding.custom_goal_submitted': { length_bucket: TelemetryLengthBucket };
-  'onboarding.key_copied': { environment: TelemetryEnvironment };
+  'onboarding.key_copied': { environment: TelemetryEnvironment; method: TelemetryCompletionMethod };
   'onboarding.agent_selected': { agent_id: TelemetryAgentId };
   'onboarding.task_generated': { source: TelemetryTaskSource; latency_bucket: TelemetryLatencyBucket };
-  'onboarding.task_copied': { agent_id: TelemetryAgentId };
+  'onboarding.task_copied': { agent_id: TelemetryAgentId; method: TelemetryCompletionMethod };
   'onboarding.first_event_received': { elapsed_bucket: TelemetryElapsedBucket };
   'onboarding.completed': { mode: TelemetryProjectMode; goal_ids: TelemetryGoalId[]; elapsed_bucket: TelemetryElapsedBucket };
   'onboarding.blocked': { blocker: string };
@@ -58,6 +59,8 @@ export interface ProductTelemetryRuntime {
 }
 
 const ANONYMOUS_ID_KEY = 'poolstatis.telemetry.anonymous_id';
+const DEDUPE_STORAGE_KEY = 'poolstatis.telemetry.once.v1';
+const MAX_DEDUPE_KEYS = 256;
 const INGEST_KEY = /^pk_[a-f0-9]{48}$/i;
 const SAFE_ACTOR_ID = /^[a-z0-9][a-z0-9:_-]{0,127}$/i;
 const SAFE_ANONYMOUS_ID = /^anon_[a-z0-9-]{16,80}$/i;
@@ -69,6 +72,7 @@ const GOALS = new Set<TelemetryGoalId>([
 ]);
 const MODES = new Set<TelemetryProjectMode>(['website', 'product', 'both']);
 const ENVIRONMENTS = new Set<TelemetryEnvironment>(['prod', 'dev', 'staging', 'other']);
+const COMPLETION_METHODS = new Set<TelemetryCompletionMethod>(['clipboard', 'manual']);
 const AGENTS = new Set<TelemetryAgentId>(['codex', 'claude-code', 'cursor', 'other']);
 const TASK_SOURCES = new Set<TelemetryTaskSource>(['deterministic', 'llm', 'fallback']);
 const LATENCY_BUCKETS = new Set<TelemetryLatencyBucket>(['under_250ms', '250ms_to_1s', '1s_to_3s', 'over_3s']);
@@ -82,6 +86,27 @@ const HOME_ACTIONS = new Set<TelemetryHomeAction>([
   'open_web', 'explore_product', 'review_outcomes', 'open_primary_answer',
   'review_identity', 'open_current_answer', 'open_definitions',
 ]);
+const memoryDedupeKeys = new Set<string>();
+
+export function claimProductTelemetryOnce(idempotencyKey: string): boolean {
+  const key = idempotencyKey.trim();
+  if (!/^[a-z0-9][a-z0-9:._-]{0,239}$/i.test(key)) return false;
+  try {
+    const storage = window.sessionStorage;
+    const keys = parseDedupeKeys(storage.getItem(DEDUPE_STORAGE_KEY));
+    if (keys.includes(key)) return false;
+    storage.setItem(DEDUPE_STORAGE_KEY, JSON.stringify([...keys.slice(-(MAX_DEDUPE_KEYS - 1)), key]));
+    return true;
+  } catch {
+    if (memoryDedupeKeys.has(key)) return false;
+    if (memoryDedupeKeys.size >= MAX_DEDUPE_KEYS) {
+      const oldest = memoryDedupeKeys.values().next().value as string | undefined;
+      if (oldest) memoryDedupeKeys.delete(oldest);
+    }
+    memoryDedupeKeys.add(key);
+    return true;
+  }
+}
 
 export function createProductTelemetry(runtime: ProductTelemetryRuntime): CaptureProductTelemetry {
   let ephemeralAnonymousId: string | null = null;
@@ -230,7 +255,8 @@ function sanitizeProperties(event: ProductTelemetryEventName, input: unknown): R
     }
     case 'onboarding.key_copied': {
       const environment = allowed(properties.environment, ENVIRONMENTS);
-      return environment ? { environment } : null;
+      const method = allowed(properties.method, COMPLETION_METHODS);
+      return environment && method ? { environment, method } : null;
     }
     case 'onboarding.agent_selected': {
       const agentId = allowed(properties.agent_id, AGENTS);
@@ -243,7 +269,8 @@ function sanitizeProperties(event: ProductTelemetryEventName, input: unknown): R
     }
     case 'onboarding.task_copied': {
       const agentId = allowed(properties.agent_id, AGENTS);
-      return agentId ? { agent_id: agentId } : null;
+      const method = allowed(properties.method, COMPLETION_METHODS);
+      return agentId && method ? { agent_id: agentId, method } : null;
     }
     case 'onboarding.first_event_received': {
       const elapsedBucket = allowed(properties.elapsed_bucket, ELAPSED_BUCKETS);
@@ -290,4 +317,17 @@ function allowed<Value extends string>(value: unknown, values: Set<Value>): Valu
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseDedupeKeys(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => (
+      typeof item === 'string' && /^[a-z0-9][a-z0-9:._-]{0,239}$/i.test(item)
+    )).slice(-MAX_DEDUPE_KEYS);
+  } catch {
+    return [];
+  }
 }

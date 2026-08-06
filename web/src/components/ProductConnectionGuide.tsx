@@ -84,7 +84,7 @@ export function ProductConnectionGuide({
   telemetryUserId,
   telemetryEnvironment: telemetryEnvironmentName = eventEnvironment,
 }: ProductConnectionGuideProps) {
-  const hasKey = keyReady ?? Boolean(ingestKey);
+  const hasKey = Boolean(ingestKey) || keyReady === true;
   const [keySaved, setKeySaved] = useState(!ingestKey && hasKey);
   const [agentId, setAgentId] = useState<AgentId>('codex');
   const [taskCopied, setTaskCopied] = useState(false);
@@ -223,9 +223,16 @@ export function ProductConnectionGuide({
                     setKeySaved(true);
                     captureProductTelemetry('onboarding.key_copied', {
                       environment: telemetryEnvironment(telemetryEnvironmentName),
+                      method: 'clipboard',
                     }, { distinctId: telemetryUserId });
                   }}
-                  onManualConfirmed={() => setKeySaved(true)}
+                  onManualConfirmed={() => {
+                    setKeySaved(true);
+                    captureProductTelemetry('onboarding.key_copied', {
+                      environment: telemetryEnvironment(telemetryEnvironmentName),
+                      method: 'manual',
+                    }, { distinctId: telemetryUserId });
+                  }}
                   manualConfirmLabel="I saved it"
                 >
                   Copy .env line
@@ -296,9 +303,18 @@ export function ProductConnectionGuide({
                 disabled={!taskResponse || taskLoading || taskUnsafe}
                 onCopied={() => {
                   setTaskCopied(true);
-                  captureProductTelemetry('onboarding.task_copied', { agent_id: agentId }, { distinctId: telemetryUserId });
+                  captureProductTelemetry('onboarding.task_copied', {
+                    agent_id: agentId,
+                    method: 'clipboard',
+                  }, { distinctId: telemetryUserId });
                 }}
-                onManualConfirmed={() => setTaskCopied(true)}
+                onManualConfirmed={() => {
+                  setTaskCopied(true);
+                  captureProductTelemetry('onboarding.task_copied', {
+                    agent_id: agentId,
+                    method: 'manual',
+                  }, { distinctId: telemetryUserId });
+                }}
                 manualConfirmLabel="I copied it"
               >
                 {taskLoading ? 'Preparing task…' : 'Copy setup task'}

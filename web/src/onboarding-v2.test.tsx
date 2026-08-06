@@ -67,6 +67,7 @@ const setupTask = (agentId = 'codex', blocker: string | null = null): SetupTaskR
 describe('Product Experience V2 onboarding', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.sessionStorage.clear();
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
@@ -170,7 +171,7 @@ describe('Product Experience V2 onboarding', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy .env line' }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('VITE_POOLSTATIS_INGEST_KEY=pk_onetime_private'));
     expect(telemetryEvents('onboarding.key_copied')).toEqual([
-      ['onboarding.key_copied', { environment: 'prod' }, { distinctId: 'user-2' }],
+      ['onboarding.key_copied', { environment: 'prod', method: 'clipboard' }, { distinctId: 'user-2' }],
     ]);
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('docs', { agent_id: 'codex', prefer_llm: false }));
@@ -183,7 +184,7 @@ describe('Product Experience V2 onboarding', () => {
     expect(copiedTask).not.toContain('pk_onetime_private');
     expect(copiedTask).not.toContain('pt_onetime_private');
     await waitFor(() => expect(telemetryEvents('onboarding.task_copied').at(-1)).toEqual([
-      'onboarding.task_copied', { agent_id: 'claude-code' }, { distinctId: 'user-2' },
+      'onboarding.task_copied', { agent_id: 'claude-code', method: 'clipboard' }, { distinctId: 'user-2' },
     ]));
     expect(telemetryEvents('onboarding.task_generated').at(-1)?.[1]).toMatchObject({ source: 'deterministic' });
     expect(await screen.findByText('Waiting for your first event…')).toHaveAttribute('id', 'waiting-title');
@@ -259,7 +260,9 @@ describe('Product Experience V2 onboarding', () => {
     expect(screen.getByText('VITE_POOLSTATIS_INGEST_KEY=pk_private_value')).toBeInTheDocument();
     expect(telemetryEvents('onboarding.key_copied')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'I saved it' }));
-    expect(telemetryEvents('onboarding.key_copied')).toHaveLength(0);
+    expect(telemetryEvents('onboarding.key_copied')).toEqual([
+      ['onboarding.key_copied', { environment: 'prod', method: 'manual' }, { distinctId: undefined }],
+    ]);
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledOnce());
 
@@ -270,7 +273,9 @@ describe('Product Experience V2 onboarding', () => {
     expect(screen.getByText(setupTask().task)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'I copied it' }));
     expect(await screen.findByText('Waiting for your first event…')).toBeInTheDocument();
-    expect(telemetryEvents('onboarding.task_copied')).toHaveLength(0);
+    expect(telemetryEvents('onboarding.task_copied')).toEqual([
+      ['onboarding.task_copied', { agent_id: 'codex', method: 'manual' }, { distinctId: undefined }],
+    ]);
   });
 
   it('reports an unregistered received event as attention without making MCP a setup error', () => {
@@ -306,6 +311,7 @@ describe('Product Experience V2 onboarding', () => {
 describe('condensed Setup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.sessionStorage.clear();
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
@@ -324,20 +330,25 @@ describe('condensed Setup', () => {
         next_action: 'Review and activate a metric.',
       },
     };
-    mockedStore.mockReturnValue({
-      client: {
-        onboardingStatus: vi.fn().mockResolvedValue(proof),
-        projectIntent: vi.fn().mockResolvedValue({
-          intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
-        }),
-      },
+    const client = {
+      onboardingStatus: vi.fn().mockResolvedValue(proof),
+      projectIntent: vi.fn().mockResolvedValue({
+        intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
+      }),
+    };
+    const storeFor = (project: string) => ({
+      client,
       baseUrl: 'https://api.poolstatis.test',
       token: 'sk_private',
       tokenKind: 'secret',
-      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
-      project: 'alpha',
+      projects: [
+        { slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 },
+        { slug: 'beta', name: 'Beta', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 },
+      ],
+      project,
       env: 'prod',
-    } as never);
+    });
+    mockedStore.mockReturnValue(storeFor('alpha') as never);
 
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
@@ -350,6 +361,12 @@ describe('condensed Setup', () => {
     expect(telemetryEvents('onboarding.blocked')[0]?.[1]).toEqual({ blocker: 'metrics_activated' });
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(telemetryEvents('onboarding.blocked')).toHaveLength(1);
+    view.unmount();
+    render(<MemoryRouter><Setup /></MemoryRouter>).unmount();
+    expect(telemetryEvents('onboarding.blocked')).toHaveLength(1);
+    mockedStore.mockReturnValue(storeFor('beta') as never);
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+    await waitFor(() => expect(telemetryEvents('onboarding.blocked')).toHaveLength(2));
   });
 
   it('copies a server fix task and records only the normalized server gate key', async () => {
@@ -397,7 +414,9 @@ describe('condensed Setup', () => {
       blocker: 'first_query_produced',
     }));
     expect(Object.keys(feedback.mock.calls[0]![1])).toEqual(['outcome', 'blocker']);
-    expect(telemetryEvents('onboarding.task_copied')).toHaveLength(1);
+    expect(telemetryEvents('onboarding.task_copied')).toEqual([
+      ['onboarding.task_copied', { agent_id: 'codex', method: 'clipboard' }, { distinctId: undefined }],
+    ]);
   });
 
   it('never renders or copies a credential-like server task', async () => {
@@ -465,7 +484,9 @@ describe('condensed Setup', () => {
       outcome: 'blocked',
       blocker: 'first_decision_saved',
     }));
-    expect(telemetryEvents('onboarding.task_copied')).toHaveLength(0);
+    expect(telemetryEvents('onboarding.task_copied')).toEqual([
+      ['onboarding.task_copied', { agent_id: 'codex', method: 'manual' }, { distinctId: undefined }],
+    ]);
   });
 
   it('keeps a connected legacy project usable with four compact rows and optional MCP', async () => {
@@ -505,16 +526,20 @@ describe('condensed Setup', () => {
       ...connectedProof,
       gates: connectedProof.gates.map((gate) => gate.key === 'agent_connected' ? { ...gate, complete: true } : gate),
     };
-    mockedStore.mockReturnValue({
+    const storeFor = (project: string) => ({
       account: { organization: { name: 'Acme' }, user: { id: 'user-mcp' } },
       client: {
         onboardingStatus: vi.fn().mockResolvedValue(proof),
         projectIntent: vi.fn().mockResolvedValue({ intent: null }),
       },
       baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
-      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
-      project: 'alpha', env: 'prod',
-    } as never);
+      projects: [
+        { slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 },
+        { slug: 'beta', name: 'Beta', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 },
+      ],
+      project, env: 'prod',
+    });
+    mockedStore.mockReturnValue(storeFor('alpha') as never);
 
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
     await waitFor(() => expect(telemetryEvents('mcp.connected')).toEqual([
@@ -522,5 +547,96 @@ describe('condensed Setup', () => {
     ]));
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(telemetryEvents('mcp.connected')).toHaveLength(1);
+    view.unmount();
+    render(<MemoryRouter><Setup /></MemoryRouter>).unmount();
+    expect(telemetryEvents('mcp.connected')).toHaveLength(1);
+    mockedStore.mockReturnValue(storeFor('beta') as never);
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+    await waitFor(() => expect(telemetryEvents('mcp.connected')).toHaveLength(2));
+  });
+
+  it('clears one-time key and error state when project or environment changes', async () => {
+    const disconnectedProof = {
+      complete: false,
+      gates: [
+        { key: 'data_source_connected', complete: false, required: true, evidence: {}, blocker: null, next_action: null },
+        { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: null, next_action: null },
+      ],
+      next_blocker: null,
+      final_result: null,
+    };
+    const issueKey = vi.fn()
+      .mockRejectedValueOnce(new Error('Alpha key failed'))
+      .mockResolvedValueOnce({ token: 'pk_beta_once' });
+    const client = {
+      onboardingStatus: vi.fn().mockResolvedValue(disconnectedProof),
+      projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+      issueKey,
+    };
+    const storeFor = (project: string, env = 'prod') => ({
+      client,
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [
+        { slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 },
+        { slug: 'beta', name: 'Beta', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 },
+      ],
+      project, env,
+    });
+    mockedStore.mockReturnValue(storeFor('alpha') as never);
+    const view = render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create product key' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Alpha key failed');
+
+    mockedStore.mockReturnValue(storeFor('beta') as never);
+    view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
+    expect(await screen.findByText('Beta · prod')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
+    expect(screen.queryByText('Alpha key failed')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Create product key' }));
+    expect(await screen.findByRole('button', { name: 'Copy .env line' })).toBeInTheDocument();
+
+    mockedStore.mockReturnValue(storeFor('alpha', 'dev') as never);
+    view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
+    expect(await screen.findByText('Alpha · dev')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
+    expect(await screen.findByRole('button', { name: 'Create product key' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy .env line' })).not.toBeInTheDocument();
+  });
+
+  it('remounts agent and task state for the selected project and environment', async () => {
+    const requestTask = vi.fn().mockImplementation((_slug: string, body: { agent_id: string }) => Promise.resolve(setupTask(body.agent_id)));
+    const client = {
+      onboardingStatus: vi.fn().mockResolvedValue(pendingProof),
+      projectIntent: vi.fn().mockResolvedValue({
+        intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
+      }),
+      setupTask: requestTask,
+    };
+    const storeFor = (project: string, env = 'prod') => ({
+      client,
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [
+        { slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 },
+        { slug: 'beta', name: 'Beta', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 },
+      ],
+      project, env,
+    });
+    mockedStore.mockReturnValue(storeFor('alpha') as never);
+    const view = render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
+    expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
+    await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', { agent_id: 'codex', prefer_llm: false, env: 'prod' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Claude Code' }));
+    await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', { agent_id: 'claude-code', prefer_llm: false, env: 'prod' }));
+
+    mockedStore.mockReturnValue(storeFor('beta', 'dev') as never);
+    view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
+    expect(await screen.findByText('Beta · dev')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
+    expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
+    await waitFor(() => expect(requestTask).toHaveBeenCalledWith('beta', { agent_id: 'codex', prefer_llm: false, env: 'dev' }));
   });
 });

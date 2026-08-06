@@ -62,17 +62,20 @@ function websiteClient(intent: 'website' | 'both' | null = 'website', activeLink
   };
 }
 
-function setStore(client: Record<string, unknown>) {
+function setStore(client: Record<string, unknown>, project = 'alpha', env = 'prod') {
   mockedStore.mockReturnValue({
     account: { organization: { name: 'Acme' }, user: { id: 'home-user' } },
     client,
-    project: 'alpha',
-    env: 'prod',
+    project,
+    env,
   } as never);
 }
 
 describe('goal-aware Home', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.sessionStorage.clear();
+  });
 
   it('renders a website answer from server facts with trust and responsive structure', async () => {
     setStore(websiteClient());
@@ -95,6 +98,17 @@ describe('goal-aware Home', () => {
     expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.next_action_clicked')).toEqual([
       ['home.next_action_clicked', { action_id: 'open_web' }, { distinctId: 'home-user' }],
     ]);
+    view.unmount();
+
+    const sameScope = render(<MemoryRouter><Overview /></MemoryRouter>);
+    await screen.findByRole('heading', { name: 'Website performance' });
+    expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toHaveLength(1);
+    sameScope.unmount();
+
+    setStore(websiteClient(), 'beta');
+    render(<MemoryRouter><Overview /></MemoryRouter>);
+    await screen.findByRole('heading', { name: 'Website performance' });
+    await waitFor(() => expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toHaveLength(2));
   });
 
   it('keeps null intent as a usable legacy project without assigning a mode', async () => {

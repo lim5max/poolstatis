@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useStore, useAsync } from '../store';
@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import {
+  claimProductTelemetryOnce,
   captureProductTelemetry,
   telemetryEnvironment,
   telemetryLatencyBucket,
@@ -62,8 +63,10 @@ export function Setup() {
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(() => window.location.hash === '#agent-access');
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const blockedTracked = useRef(new Set<string>());
-  const mcpConnectedTracked = useRef(false);
+  const uiScope = `${project ?? ''}\u0000${env}`;
+  const telemetryScope = `${project ?? 'none'}:${env}`;
+  const currentScope = useRef(uiScope);
+  currentScope.current = uiScope;
   const publicUrl =
     (import.meta.env.VITE_POOLSTATIS_PUBLIC_URL as string | undefined) ||
     (import.meta.env.VITE_POOLSTATIS_API_URL as string | undefined) ||
@@ -74,23 +77,39 @@ export function Setup() {
   const setupClient = client as unknown as SetupClient | null;
 
   const proof = useAsync(
-    () => project ? client!.onboardingStatus(project, env) : Promise.resolve(null),
+    async () => {
+      try {
+        return {
+          scope: uiScope,
+          value: project ? await client!.onboardingStatus(project, env) : null,
+          error: null as string | null,
+        };
+      } catch (caught) {
+        return { scope: uiScope, value: null, error: (caught as Error).message };
+      }
+    },
     [project, env],
   );
   const intent = useAsync(
-    () => project && setupClient && typeof setupClient.projectIntent === 'function'
-      ? setupClient.projectIntent(project)
-      : Promise.resolve({ intent: null }),
-    [project],
+    async () => ({
+      scope: uiScope,
+      value: project && setupClient && typeof setupClient.projectIntent === 'function'
+        ? await setupClient.projectIntent(project)
+        : { intent: null },
+    }),
+    [project, env],
   );
   const standard = useAsync(
     () => advancedOpen ? client!.standard() : Promise.resolve(null),
     [advancedOpen],
   );
 
-  const sourceGate = proof.data?.gates.find((gate) => gate.key === 'data_source_connected');
-  const eventGate = proof.data?.gates.find((gate) => gate.key === 'first_event_observed');
-  const agentGate = proof.data?.gates.find((gate) => gate.key === 'agent_connected');
+  const proofData = proof.data?.scope === uiScope ? proof.data.value : null;
+  const proofError = proof.data?.scope === uiScope ? proof.data.error : null;
+  const intentData = intent.data?.scope === uiScope ? intent.data.value : null;
+  const sourceGate = proofData?.gates.find((gate) => gate.key === 'data_source_connected');
+  const eventGate = proofData?.gates.find((gate) => gate.key === 'first_event_observed');
+  const agentGate = proofData?.gates.find((gate) => gate.key === 'agent_connected');
   const eventSeen = eventGate?.complete ?? false;
   const lastSeen = typeof eventGate?.evidence.received_at === 'string'
     ? eventGate.evidence.received_at
@@ -112,9 +131,19 @@ export function Setup() {
     : eventGate?.evidence.unregistered === true
       ? false
       : null;
-  const preferLlm = Boolean(intent.data?.intent?.custom_goal);
-  const serverBlocker = proof.data?.next_blocker ?? null;
+  const preferLlm = Boolean(intentData?.intent?.custom_goal);
+  const serverBlocker = proofData?.next_blocker ?? null;
   const blockerCode = serverBlocker ? normalizeBlockerKey(serverBlocker.key) : null;
+  const blockerEvidence = localEvidenceFingerprint(serverBlocker?.evidence ?? {});
+  const agentEvidence = localEvidenceFingerprint(agentGate?.evidence ?? {});
+
+  useLayoutEffect(() => {
+    setFreshIngestKey(null);
+    setCreatingKey(false);
+    setKeyError(null);
+    setConnectionOpen(false);
+    setMcpOpen(window.location.hash === '#agent-access');
+  }, [uiScope]);
 
   useEffect(() => {
     if (!project || eventSeen) return;
@@ -125,29 +154,30 @@ export function Setup() {
   }, [eventSeen, project]);
 
   useEffect(() => {
-    if (!blockerCode || blockedTracked.current.has(blockerCode)) return;
-    blockedTracked.current.add(blockerCode);
+    if (!blockerCode || !claimProductTelemetryOnce(`setup:blocker:${telemetryScope}:${blockerCode}:${blockerEvidence}`)) return;
     captureProductTelemetry('onboarding.blocked', { blocker: blockerCode }, { distinctId: account?.user?.id });
-  }, [account?.user?.id, blockerCode]);
+  }, [account?.user?.id, blockerCode, blockerEvidence, telemetryScope]);
 
   useEffect(() => {
-    if (!eventSeen || !agentGate?.complete || mcpConnectedTracked.current) return;
-    mcpConnectedTracked.current = true;
+    if (!eventSeen || !agentGate?.complete || !claimProductTelemetryOnce(`setup:mcp_connected:${telemetryScope}:${agentEvidence}`)) return;
     captureProductTelemetry('mcp.connected', {}, { distinctId: account?.user?.id });
-  }, [account?.user?.id, agentGate?.complete, eventSeen]);
+  }, [account?.user?.id, agentEvidence, agentGate?.complete, eventSeen, telemetryScope]);
 
   const createIngestKey = async () => {
     if (!client || !project) return;
+    const requestedScope = uiScope;
     setCreatingKey(true);
     setKeyError(null);
     try {
       const created = await client.issueKey(project, { kind: 'ingest', env, label: 'Setup guide' });
+      if (currentScope.current !== requestedScope) return;
       setFreshIngestKey(created.token);
       proof.reload();
     } catch (error) {
+      if (currentScope.current !== requestedScope) return;
       setKeyError((error as Error).message);
     } finally {
-      setCreatingKey(false);
+      if (currentScope.current === requestedScope) setCreatingKey(false);
     }
   };
 
@@ -155,20 +185,20 @@ export function Setup() {
     if (!setupClient || !project || typeof setupClient.setupTask !== 'function') {
       throw new Error('Setup task generation is unavailable on this server.');
     }
-    return setupClient.setupTask(project, { agent_id: agentId, prefer_llm: preferLlm });
-  }, [preferLlm, project, setupClient]);
+    return setupClient.setupTask(project, { agent_id: agentId, prefer_llm: preferLlm, env });
+  }, [env, preferLlm, project, setupClient]);
 
   if (!project) {
     return <Panel title="Setup"><p className="text-sm text-muted-foreground">Select a project first.</p></Panel>;
   }
 
   const sourceReady = sourceGate?.complete ?? false;
-  const projectMode = intent.data?.intent?.project_mode;
+  const projectMode = intentData?.intent?.project_mode;
   const reviewBlocker = serverBlocker ? needsRegistryReview(serverBlocker.key) : false;
-  const blocker = proof.loading && !proof.data
+  const blocker = proof.loading && !proofData
     ? { kind: 'loading' as const, title: 'Checking connection', why: 'Reading the latest server proof for this project.' }
-    : proof.error
-      ? { kind: 'error' as const, title: 'Connection status unavailable', why: proof.error }
+    : proofError
+      ? { kind: 'error' as const, title: 'Connection status unavailable', why: proofError }
       : serverBlocker
         ? {
             kind: 'server' as const,
@@ -203,16 +233,16 @@ export function Setup() {
             {blocker.kind === 'server' && reviewBlocker && (
               <Button size="sm" onClick={() => navigate('/registry')}>Review proposed metrics</Button>
             )}
-            {blocker.kind === 'server' && !reviewBlocker && intent.data?.intent && blockerCode && setupClient && typeof setupClient.setupTaskFeedback === 'function' && (
+            {blocker.kind === 'server' && !reviewBlocker && intentData?.intent && blockerCode && setupClient && typeof setupClient.setupTaskFeedback === 'function' && (
               <FixTaskAction
-                key={blockerCode}
+                key={`${uiScope}:${blockerCode}`}
                 projectSlug={project}
                 env={env}
                 client={setupClient}
                 telemetryUserId={account?.user?.id}
               />
             )}
-            {blocker.kind === 'server' && !reviewBlocker && !intent.loading && !intent.data?.intent && (
+            {blocker.kind === 'server' && !reviewBlocker && !intent.loading && !intentData?.intent && (
               <Button size="sm" onClick={() => setConnectionOpen(true)}>Continue setup</Button>
             )}
           </div>
@@ -229,8 +259,8 @@ export function Setup() {
         />
         <SetupRow
           title="Tracking plan"
-          status={intent.loading ? 'Checking' : intent.data?.intent ? `${intent.data.intent.goal_ids.length} goals` : 'Not set'}
-          description={intent.data?.intent ? 'Selected outcomes shape the setup task and first answers.' : 'Existing projects keep working without choosing a mode.'}
+          status={intent.loading ? 'Checking' : intentData?.intent ? `${intentData.intent.goal_ids.length} goals` : 'Not set'}
+          description={intentData?.intent ? 'Selected outcomes shape the setup task and first answers.' : 'Existing projects keep working without choosing a mode.'}
           action="Review"
           onAction={() => navigate('/measurement')}
         />
@@ -258,6 +288,7 @@ export function Setup() {
 
       {connectionOpen && (
         <ProductConnectionGuide
+          key={`${uiScope}:connection`}
           ingestKey={freshIngestKey}
           keyReady={sourceReady}
           serverUrl={serverUrl}
@@ -271,7 +302,7 @@ export function Setup() {
           eventRegistered={eventRegistered}
           checking={proof.loading}
           creatingKey={creatingKey}
-          error={keyError ?? proof.error}
+          error={keyError ?? proofError}
           onCreateKey={() => void createIngestKey()}
           getSetupTask={getSetupTask}
           onCheck={proof.reload}
@@ -284,6 +315,7 @@ export function Setup() {
 
       {mcpOpen && (
         <OptionalMcp
+          key={`${uiScope}:mcp`}
           serverUrl={serverUrl}
           storedToken={tokenKind === 'personal' || tokenKind === 'secret' ? token : null}
           canIssuePersonalToken={tokenKind === 'user'}
@@ -348,6 +380,7 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
   const [copied, setCopied] = useState(false);
   const [fallbackTask, setFallbackTask] = useState<{ task: string; blocker: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const copyTracked = useRef(false);
 
   const recordFeedback = async (blocker: string) => {
     await client.setupTaskFeedback(projectSlug, {
@@ -388,9 +421,15 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
         setFallbackTask({ task, blocker: responseBlocker });
         return;
       }
+      if (!copyTracked.current) {
+        copyTracked.current = true;
+        captureProductTelemetry('onboarding.task_copied', {
+          agent_id: 'codex',
+          method: 'clipboard',
+        }, { distinctId: telemetryUserId });
+      }
       await recordFeedback(responseBlocker);
       setCopied(true);
-      captureProductTelemetry('onboarding.task_copied', { agent_id: 'codex' }, { distinctId: telemetryUserId });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not prepare the fix task.');
     } finally {
@@ -403,6 +442,13 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
     setError(null);
     try {
       if (!fallbackTask) return;
+      if (!copyTracked.current) {
+        copyTracked.current = true;
+        captureProductTelemetry('onboarding.task_copied', {
+          agent_id: 'codex',
+          method: 'manual',
+        }, { distinctId: telemetryUserId });
+      }
       await recordFeedback(fallbackTask.blocker);
       setFallbackTask(null);
       setCopied(true);
@@ -442,6 +488,20 @@ function normalizeBlockerKey(value: string): string | null {
     .slice(0, 100)
     .replace(/_+$/g, '');
   return /^[a-z][a-z0-9_]*$/.test(normalized) ? normalized : null;
+}
+
+function localEvidenceFingerprint(value: unknown): string {
+  const serialized = typeof value === 'string'
+    ? value
+    : value && typeof value === 'object' && !Array.isArray(value)
+      ? JSON.stringify(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)))
+      : String(value);
+  let hash = 2166136261;
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash ^= serialized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 function needsRegistryReview(key: string): boolean {

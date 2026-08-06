@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,7 @@ import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualizat
 import type { ProjectMode } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
 import {
+  claimProductTelemetryOnce,
   captureProductTelemetry,
   type TelemetryHomeAction,
   type TelemetryHomeTemplate,
@@ -45,40 +46,45 @@ interface WebsiteAnswer {
 
 export function Overview() {
   const { account, client, project, env } = useStore();
-  const viewedAnswers = useRef(new Set<string>());
+  const homeScope = `${project ?? ''}\u0000${env}`;
   const home = useAsync(async () => {
-    const [intent, metrics, funnels, schema] = await Promise.all([
-      readProjectIntent(client as unknown as IntentCapableClient, project!),
-      client!.metrics(project!, { status: 'active' }),
-      client!.funnels(project!),
-      client!.schema(project!, env).catch(() => null),
-    ]);
-    const primaryMetric = pickPrimaryMetric(metrics, intent?.primary_goal_id ?? null);
-    const pageMetric = webPageMetric(metrics);
-    const [product, website] = await Promise.all([
-      readProductAnswer(client!, project!, env, primaryMetric, funnels[0] ?? null),
-      readWebsiteAnswer(client!, project!, env, pageMetric),
-    ]);
-    return { intent, product, website, schema };
+    try {
+      const [intent, metrics, funnels, schema] = await Promise.all([
+        readProjectIntent(client as unknown as IntentCapableClient, project!),
+        client!.metrics(project!, { status: 'active' }),
+        client!.funnels(project!),
+        client!.schema(project!, env).catch(() => null),
+      ]);
+      const primaryMetric = pickPrimaryMetric(metrics, intent?.primary_goal_id ?? null);
+      const pageMetric = webPageMetric(metrics);
+      const [product, website] = await Promise.all([
+        readProductAnswer(client!, project!, env, primaryMetric, funnels[0] ?? null),
+        readWebsiteAnswer(client!, project!, env, pageMetric),
+      ]);
+      return { scope: homeScope, value: { intent, product, website, schema }, error: null as string | null };
+    } catch (caught) {
+      return { scope: homeScope, value: null, error: (caught as Error).message };
+    }
   }, [project, env]);
 
-  const answerTelemetry = home.data ? homeAnswerTelemetry(home.data) : null;
+  const scopedHome = home.data?.scope === homeScope ? home.data : null;
+  const homeData = scopedHome?.value ?? null;
+  const answerTelemetry = homeData ? homeAnswerTelemetry(homeData) : null;
   useEffect(() => {
-    if (!answerTelemetry) return;
-    const viewKey = `${answerTelemetry.templateId}:${answerTelemetry.trust}`;
-    if (viewedAnswers.current.has(viewKey)) return;
-    viewedAnswers.current.add(viewKey);
+    if (!answerTelemetry || !project) return;
+    const viewKey = `home:${project}:${env}:${answerTelemetry.templateId}:${answerTelemetry.trust}`;
+    if (!claimProductTelemetryOnce(viewKey)) return;
     captureProductTelemetry('home.answer_viewed', {
       template_id: answerTelemetry.templateId,
       trust: answerTelemetry.trust,
     }, { distinctId: account?.user?.id });
-  }, [account?.user?.id, answerTelemetry?.templateId, answerTelemetry?.trust]);
+  }, [account?.user?.id, answerTelemetry?.templateId, answerTelemetry?.trust, env, project]);
 
   if (home.loading) return <Loading what="reading current answers…" />;
-  if (home.error) return <ErrorNote>{home.error}</ErrorNote>;
-  if (!home.data) return null;
+  if (scopedHome?.error) return <ErrorNote>{scopedHome.error}</ErrorNote>;
+  if (!homeData) return <Loading what="reading current answers…" />;
 
-  const { intent, product, website, schema } = home.data;
+  const { intent, product, website, schema } = homeData;
   const mode = intent?.project_mode ?? null;
   if (mode === 'website') return <WebsiteHome answer={website} env={env} telemetryUserId={account?.user?.id} />;
   if (mode === 'product') return <ProductHome answer={product} env={env} telemetryUserId={account?.user?.id} />;

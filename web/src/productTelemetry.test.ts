@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  claimProductTelemetryOnce,
   createProductTelemetry,
   normalizeTelemetryCode,
   telemetryElapsedBucket,
@@ -40,7 +41,10 @@ function request(fetch: ReturnType<typeof vi.fn>, index: number) {
 }
 
 describe('optional product telemetry', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.sessionStorage.clear();
+  });
 
   it('emits only the exact typed allowlist and never serializes custom text, tasks, credentials, or URLs', () => {
     const { capture, fetch } = runtime();
@@ -51,10 +55,10 @@ describe('optional product telemetry', () => {
     capture('onboarding.mode_selected', { mode: 'website', ...unsafe } as never, { distinctId: 'user_123' });
     capture('onboarding.goals_selected', { goal_ids: ['website_traffic', 'custom', 'not_allowed'], ...unsafe } as never, { distinctId: 'user_123' });
     capture('onboarding.custom_goal_submitted', { length_bucket: '50_to_149', ...unsafe } as never, { distinctId: 'user_123' });
-    capture('onboarding.key_copied', { environment: 'prod', ...unsafe } as never, { distinctId: 'user_123' });
+    capture('onboarding.key_copied', { environment: 'prod', method: 'manual', ...unsafe } as never, { distinctId: 'user_123' });
     capture('onboarding.agent_selected', { agent_id: 'codex', ...unsafe } as never, { distinctId: 'user_123' });
     capture('onboarding.task_generated', { source: 'llm', latency_bucket: '250ms_to_1s', ...unsafe } as never, { distinctId: 'user_123' });
-    capture('onboarding.task_copied', { agent_id: 'codex', ...unsafe } as never, { distinctId: 'user_123' });
+    capture('onboarding.task_copied', { agent_id: 'codex', method: 'clipboard', ...unsafe } as never, { distinctId: 'user_123' });
     capture('onboarding.first_event_received', { elapsed_bucket: '1m_to_5m', ...unsafe } as never, { distinctId: 'user_123' });
     capture('onboarding.completed', { mode: 'website', goal_ids: ['website_traffic'], elapsed_bucket: '1m_to_5m', ...unsafe } as never, { distinctId: 'user_123' });
     capture('onboarding.blocked', { blocker: 'First Event-Observed', ...unsafe } as never, { distinctId: 'user_123' });
@@ -68,10 +72,10 @@ describe('optional product telemetry', () => {
       { mode: 'website' },
       { goal_ids: ['website_traffic', 'custom'], goal_count: 2 },
       { length_bucket: '50_to_149' },
-      { environment: 'prod' },
+      { environment: 'prod', method: 'manual' },
       { agent_id: 'codex' },
       { source: 'llm', latency_bucket: '250ms_to_1s' },
-      { agent_id: 'codex' },
+      { agent_id: 'codex', method: 'clipboard' },
       { elapsed_bucket: '1m_to_5m' },
       { mode: 'website', goal_ids: ['website_traffic'], goal_count: 1, elapsed_bucket: '1m_to_5m' },
       { blocker: 'first_event_observed' },
@@ -128,9 +132,19 @@ describe('optional product telemetry', () => {
     capture('onboarding.goals_selected', { goal_ids: [] });
     capture('onboarding.goals_selected', { goal_ids: ['not_allowed'] } as never);
     capture('onboarding.completed', { mode: 'product', goal_ids: [], elapsed_bucket: 'under_1m' });
+    capture('onboarding.key_copied', { environment: 'prod', method: 'other' } as never);
+    capture('onboarding.task_copied', { agent_id: 'codex', method: 'other' } as never);
     capture('home.next_action_clicked', { action_id: 'raw private action' } as never);
     capture('unknown.event' as never, { secret: 'value' } as never);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('claims bounded local idempotency keys once per exact project and environment scope', () => {
+    expect(claimProductTelemetryOnce('home:alpha:prod:website_overview:trusted')).toBe(true);
+    expect(claimProductTelemetryOnce('home:alpha:prod:website_overview:trusted')).toBe(false);
+    expect(claimProductTelemetryOnce('home:beta:prod:website_overview:trusted')).toBe(true);
+    expect(claimProductTelemetryOnce('home:alpha:dev:website_overview:trusted')).toBe(true);
+    expect(claimProductTelemetryOnce('raw project path?q=secret')).toBe(false);
   });
 
   it('swallows synchronous and asynchronous transport failures', async () => {
