@@ -1,12 +1,19 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
 import { Overview } from './Overview';
 
+const { telemetryCapture } = vi.hoisted(() => ({ telemetryCapture: vi.fn() }));
+
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
   useStore: vi.fn(),
+}));
+
+vi.mock('../productTelemetry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../productTelemetry')>()),
+  captureProductTelemetry: telemetryCapture,
 }));
 
 vi.mock('../analysis/charts', () => ({
@@ -56,7 +63,12 @@ function websiteClient(intent: 'website' | 'both' | null = 'website', activeLink
 }
 
 function setStore(client: Record<string, unknown>) {
-  mockedStore.mockReturnValue({ client, project: 'alpha', env: 'prod' } as never);
+  mockedStore.mockReturnValue({
+    account: { organization: { name: 'Acme' }, user: { id: 'home-user' } },
+    client,
+    project: 'alpha',
+    env: 'prod',
+  } as never);
 }
 
 describe('goal-aware Home', () => {
@@ -64,7 +76,7 @@ describe('goal-aware Home', () => {
 
   it('renders a website answer from server facts with trust and responsive structure', async () => {
     setStore(websiteClient());
-    render(<MemoryRouter><Overview /></MemoryRouter>);
+    const view = render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Website performance' })).toBeInTheDocument();
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
@@ -74,6 +86,15 @@ describe('goal-aware Home', () => {
     expect(screen.getByRole('img', { name: 'Trend chart' })).toHaveTextContent('Day 1: 4');
     expect(screen.getByText('organic')).toBeInTheDocument();
     expect(screen.getByText('home')).toBeInTheDocument();
+    await waitFor(() => expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toEqual([
+      ['home.answer_viewed', { template_id: 'website_overview', trust: 'trusted' }, { distinctId: 'home-user' }],
+    ]));
+    view.rerender(<MemoryRouter><Overview /></MemoryRouter>);
+    expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('link', { name: /Open Web/ }));
+    expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.next_action_clicked')).toEqual([
+      ['home.next_action_clicked', { action_id: 'open_web' }, { distinctId: 'home-user' }],
+    ]);
   });
 
   it('keeps null intent as a usable legacy project without assigning a mode', async () => {

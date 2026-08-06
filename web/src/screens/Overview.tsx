@@ -1,3 +1,4 @@
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Button } from '@/components/ui/button';
@@ -9,6 +10,11 @@ import type { Funnel, MeasurementTrust, Metric, ProjectSchema } from '../api/typ
 import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
 import type { ProjectMode } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
+import {
+  captureProductTelemetry,
+  type TelemetryHomeAction,
+  type TelemetryHomeTemplate,
+} from '../productTelemetry';
 
 interface ProjectIntentSummary {
   project_mode: ProjectMode;
@@ -38,7 +44,8 @@ interface WebsiteAnswer {
 }
 
 export function Overview() {
-  const { client, project, env } = useStore();
+  const { account, client, project, env } = useStore();
+  const viewedAnswers = useRef(new Set<string>());
   const home = useAsync(async () => {
     const [intent, metrics, funnels, schema] = await Promise.all([
       readProjectIntent(client as unknown as IntentCapableClient, project!),
@@ -55,16 +62,28 @@ export function Overview() {
     return { intent, product, website, schema };
   }, [project, env]);
 
+  const answerTelemetry = home.data ? homeAnswerTelemetry(home.data) : null;
+  useEffect(() => {
+    if (!answerTelemetry) return;
+    const viewKey = `${answerTelemetry.templateId}:${answerTelemetry.trust}`;
+    if (viewedAnswers.current.has(viewKey)) return;
+    viewedAnswers.current.add(viewKey);
+    captureProductTelemetry('home.answer_viewed', {
+      template_id: answerTelemetry.templateId,
+      trust: answerTelemetry.trust,
+    }, { distinctId: account?.user?.id });
+  }, [account?.user?.id, answerTelemetry?.templateId, answerTelemetry?.trust]);
+
   if (home.loading) return <Loading what="reading current answers…" />;
   if (home.error) return <ErrorNote>{home.error}</ErrorNote>;
   if (!home.data) return null;
 
   const { intent, product, website, schema } = home.data;
   const mode = intent?.project_mode ?? null;
-  if (mode === 'website') return <WebsiteHome answer={website} env={env} />;
-  if (mode === 'product') return <ProductHome answer={product} env={env} />;
+  if (mode === 'website') return <WebsiteHome answer={website} env={env} telemetryUserId={account?.user?.id} />;
+  if (mode === 'product') return <ProductHome answer={product} env={env} telemetryUserId={account?.user?.id} />;
   if (mode === 'both' && intent) {
-    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} />;
+    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} telemetryUserId={account?.user?.id} />;
   }
 
   // A missing intent row is legacy/unset. Keep the project useful and never
@@ -74,7 +93,7 @@ export function Overview() {
       <PageHeader
         title="Home"
         answer="Project mode is not set. Your existing answers and data remain available."
-        action={<Button asChild className="h-11"><Link to={website.overview ? '/analyze/web' : '/analyze/product'}>Open current answer <ArrowRight className="size-4" /></Link></Button>}
+        action={<Button asChild className="h-11"><Link to={website.overview ? '/analyze/web' : '/analyze/product'} onClick={() => trackHomeAction('open_current_answer', account?.user?.id)}>Open current answer <ArrowRight className="size-4" /></Link></Button>}
       />
       <div className="rounded-panel border border-dashed bg-card px-4 py-3 text-sm text-muted-foreground">
         Legacy project · choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
@@ -86,21 +105,21 @@ export function Overview() {
   );
 }
 
-function WebsiteHome({ answer, env }: { answer: WebsiteAnswer; env: string }) {
+function WebsiteHome({ answer, env, telemetryUserId }: { answer: WebsiteAnswer; env: string; telemetryUserId?: string | null }) {
   const lead = websiteLead(answer);
   return (
     <div className="space-y-5">
       <PageHeader
         title="Website performance"
         answer={lead}
-        action={<Button asChild className="h-11"><Link to="/analyze/web">Open Web <ArrowRight className="size-4" /></Link></Button>}
+        action={<Button asChild className="h-11"><Link to="/analyze/web" onClick={() => trackHomeAction('open_web', telemetryUserId)}>Open Web <ArrowRight className="size-4" /></Link></Button>}
       />
       <WebsiteAnswerCanvas answer={answer} env={env} />
     </div>
   );
 }
 
-function ProductHome({ answer, env }: { answer: ProductAnswer; env: string }) {
+function ProductHome({ answer, env, telemetryUserId }: { answer: ProductAnswer; env: string; telemetryUserId?: string | null }) {
   const lead = answer.metric
     ? `${answer.metric.name} is the clearest active outcome available for this project.`
     : 'Events may be arriving, but no active outcome is defined yet.';
@@ -109,7 +128,7 @@ function ProductHome({ answer, env }: { answer: ProductAnswer; env: string }) {
       <PageHeader
         title="Product performance"
         answer={lead}
-        action={<Button asChild className="h-11"><Link to={answer.metric ? '/analyze/product' : '/registry'}>{answer.metric ? 'Explore Product' : 'Review outcomes'} <ArrowRight className="size-4" /></Link></Button>}
+        action={<Button asChild className="h-11"><Link to={answer.metric ? '/analyze/product' : '/registry'} onClick={() => trackHomeAction(answer.metric ? 'explore_product' : 'review_outcomes', telemetryUserId)}>{answer.metric ? 'Explore Product' : 'Review outcomes'} <ArrowRight className="size-4" /></Link></Button>}
       />
       <ProductAnswerCanvas answer={answer} env={env} />
     </div>
@@ -121,11 +140,13 @@ function BothHome({
   websiteFirst,
   schema,
   env,
+  telemetryUserId,
 }: {
   answer: WebsiteAnswer | ProductAnswer;
   websiteFirst: boolean;
   schema: ProjectSchema | null;
   env: string;
+  telemetryUserId?: string | null;
 }) {
   const identityState = schema === null
     ? 'unavailable'
@@ -142,7 +163,7 @@ function BothHome({
           : identityLinked
             ? 'Identity evidence exists. Poolstatis still requires a registered cross-surface funnel before claiming an acquisition-to-activation path.'
             : 'Website and product activity are not linked yet.'}
-        action={<Button asChild className="h-11"><Link to={identityLinked ? (websiteFirst ? '/analyze/web' : '/analyze/product') : '/measurement'}>{identityLinked ? 'Open primary answer' : 'Review identity'} <ArrowRight className="size-4" /></Link></Button>}
+        action={<Button asChild className="h-11"><Link to={identityLinked ? (websiteFirst ? '/analyze/web' : '/analyze/product') : '/measurement'} onClick={() => trackHomeAction(identityLinked ? 'open_primary_answer' : 'review_identity', telemetryUserId)}>{identityLinked ? 'Open primary answer' : 'Review identity'} <ArrowRight className="size-4" /></Link></Button>}
       />
       <div className="flex max-w-full gap-1 overflow-x-auto rounded-control border bg-card p-1" aria-label="Both mode surfaces">
         <span className="flex min-h-11 items-center rounded-control bg-secondary px-4 text-sm font-medium">All</span>
@@ -274,7 +295,7 @@ function ProductAnswerCanvas({ answer, env }: { answer: ProductAnswer; env: stri
   );
 }
 
-function PageHeader({ title, answer, action }: { title: string; answer: string; action: React.ReactNode }) {
+function PageHeader({ title, answer, action }: { title: string; answer: string; action: ReactNode }) {
   return (
     <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
       <div className="max-w-3xl">
@@ -284,6 +305,33 @@ function PageHeader({ title, answer, action }: { title: string; answer: string; 
       <div className="shrink-0">{action}</div>
     </header>
   );
+}
+
+function homeAnswerTelemetry(data: {
+  intent: ProjectIntentSummary | null;
+  product: ProductAnswer;
+  website: WebsiteAnswer;
+}): { templateId: TelemetryHomeTemplate; trust: EvidenceTrust } {
+  const mode = data.intent?.project_mode;
+  if (mode === 'website') {
+    return { templateId: 'website_overview', trust: evidenceTrust(data.website.trust, data.website.trustUnavailable) };
+  }
+  if (mode === 'product') {
+    return { templateId: 'product_overview', trust: evidenceTrust(data.product.trust, data.product.trustUnavailable) };
+  }
+  if (mode === 'both' && data.intent) {
+    const websiteFirst = prefersWebsite(data.intent.primary_goal_id);
+    return websiteFirst
+      ? { templateId: 'both_website', trust: evidenceTrust(data.website.trust, data.website.trustUnavailable) }
+      : { templateId: 'both_product', trust: evidenceTrust(data.product.trust, data.product.trustUnavailable) };
+  }
+  return data.website.overview
+    ? { templateId: 'legacy_website', trust: evidenceTrust(data.website.trust, data.website.trustUnavailable) }
+    : { templateId: 'legacy_product', trust: evidenceTrust(data.product.trust, data.product.trustUnavailable) };
+}
+
+function trackHomeAction(actionId: TelemetryHomeAction, distinctId: string | null | undefined) {
+  captureProductTelemetry('home.next_action_clicked', { action_id: actionId }, { distinctId });
 }
 
 async function readProjectIntent(client: IntentCapableClient, project: string): Promise<ProjectIntentSummary | null> {

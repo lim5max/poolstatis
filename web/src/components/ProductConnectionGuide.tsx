@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, Copy, Loader2 } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -6,6 +6,11 @@ import { CodexLogo } from '@/components/logos/codex';
 import { ClaudeCodeLogo } from '@/components/logos/claude-code';
 import { CursorLogo } from '@/components/logos/cursor';
 import { cn } from '@/lib/utils';
+import {
+  captureProductTelemetry,
+  telemetryEnvironment,
+  telemetryLatencyBucket,
+} from '../productTelemetry';
 
 export type AgentId = 'codex' | 'claude-code' | 'cursor' | 'other';
 type ProjectMode = 'website' | 'product' | 'both';
@@ -51,6 +56,8 @@ export interface ProductConnectionGuideProps {
   onOpenProject?: () => void;
   onReviewMetrics?: () => void;
   onConnectMcp?: () => void;
+  telemetryUserId?: string | null;
+  telemetryEnvironment?: string | null;
 }
 
 export function ProductConnectionGuide({
@@ -74,6 +81,8 @@ export function ProductConnectionGuide({
   onOpenProject,
   onReviewMetrics,
   onConnectMcp,
+  telemetryUserId,
+  telemetryEnvironment: telemetryEnvironmentName = eventEnvironment,
 }: ProductConnectionGuideProps) {
   const hasKey = keyReady ?? Boolean(ingestKey);
   const [keySaved, setKeySaved] = useState(!ingestKey && hasKey);
@@ -84,6 +93,7 @@ export function ProductConnectionGuide({
   const [taskError, setTaskError] = useState<string | null>(null);
   const [taskRequestNonce, setTaskRequestNonce] = useState(0);
   const [manualRuntime, setManualRuntime] = useState<ManualRuntime>('browser');
+  const selectedAgentsTracked = useRef(new Set<AgentId>());
   const selectedAgent = AGENTS.find((agent) => agent.id === agentId) ?? AGENTS[0]!;
   const normalizedServerUrl = serverUrl.replace(/\/$/, '');
   const envName = 'VITE_POOLSTATIS_INGEST_KEY';
@@ -100,9 +110,20 @@ export function ProductConnectionGuide({
     setTaskLoading(true);
     setTaskError(null);
     setTaskResponse(null);
+    if (!selectedAgentsTracked.current.has(agentId)) {
+      selectedAgentsTracked.current.add(agentId);
+      captureProductTelemetry('onboarding.agent_selected', { agent_id: agentId }, { distinctId: telemetryUserId });
+    }
+    const startedAt = Date.now();
     getSetupTask(agentId)
       .then((response) => {
-        if (active) setTaskResponse(response);
+        if (active) {
+          setTaskResponse(response);
+          captureProductTelemetry('onboarding.task_generated', {
+            source: response.source,
+            latency_bucket: telemetryLatencyBucket(Date.now() - startedAt),
+          }, { distinctId: telemetryUserId });
+        }
       })
       .catch((caught) => {
         if (active) setTaskError(caught instanceof Error ? caught.message : 'Could not prepare the setup task.');
@@ -111,7 +132,7 @@ export function ProductConnectionGuide({
         if (active) setTaskLoading(false);
       });
     return () => { active = false; };
-  }, [agentId, eventSeen, getSetupTask, hasKey, ingestKey, keySaved, projectSlug, taskCopied, taskRequestNonce, taskResponse]);
+  }, [agentId, eventSeen, getSetupTask, hasKey, ingestKey, keySaved, projectSlug, taskCopied, taskRequestNonce, taskResponse, telemetryUserId]);
 
   const manualCode = useMemo(
     () => buildManualCode(normalizedServerUrl, manualRuntime),
@@ -169,7 +190,10 @@ export function ProductConnectionGuide({
                 <p className="mt-1 text-xs text-muted-foreground">Connect MCP so your agent can read analytics and manage Poolstatis.</p>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={onConnectMcp}>Connect agent</Button>
+                <Button variant="outline" onClick={() => {
+                  captureProductTelemetry('mcp.connect_started', {}, { distinctId: telemetryUserId });
+                  onConnectMcp?.();
+                }}>Connect agent</Button>
                 {onOpenProject && <Button variant="ghost" onClick={onOpenProject}>Not now</Button>}
               </div>
             </div>
@@ -195,7 +219,13 @@ export function ProductConnectionGuide({
                 <CopyButton
                   value={envLine}
                   showFallback
-                  onCopied={() => setKeySaved(true)}
+                  onCopied={() => {
+                    setKeySaved(true);
+                    captureProductTelemetry('onboarding.key_copied', {
+                      environment: telemetryEnvironment(telemetryEnvironmentName),
+                    }, { distinctId: telemetryUserId });
+                  }}
+                  onManualConfirmed={() => setKeySaved(true)}
                   manualConfirmLabel="I saved it"
                 >
                   Copy .env line
@@ -264,7 +294,11 @@ export function ProductConnectionGuide({
                 value={taskResponse?.task ?? ''}
                 showFallback
                 disabled={!taskResponse || taskLoading || taskUnsafe}
-                onCopied={() => setTaskCopied(true)}
+                onCopied={() => {
+                  setTaskCopied(true);
+                  captureProductTelemetry('onboarding.task_copied', { agent_id: agentId }, { distinctId: telemetryUserId });
+                }}
+                onManualConfirmed={() => setTaskCopied(true)}
                 manualConfirmLabel="I copied it"
               >
                 {taskLoading ? 'Preparing task…' : 'Copy setup task'}
@@ -422,6 +456,7 @@ export function CopyButton({
   showFallback = false,
   disabled = false,
   onCopied,
+  onManualConfirmed,
   manualConfirmLabel,
 }: {
   value: string;
@@ -429,6 +464,7 @@ export function CopyButton({
   showFallback?: boolean;
   disabled?: boolean;
   onCopied?: () => void;
+  onManualConfirmed?: () => void;
   manualConfirmLabel?: string;
 }) {
   const [copied, setCopied] = useState(false);
@@ -458,7 +494,7 @@ export function CopyButton({
       {failed && showFallback && (
         <>
           <pre tabIndex={0} className="max-h-72 max-w-full overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 text-xs text-foreground">{value}</pre>
-          {onCopied && manualConfirmLabel && <Button size="sm" onClick={onCopied}>{manualConfirmLabel}</Button>}
+          {onManualConfirmed && manualConfirmLabel && <Button size="sm" onClick={onManualConfirmed}>{manualConfirmLabel}</Button>}
         </>
       )}
     </span>

@@ -6,12 +6,20 @@ import { Setup } from './screens/Setup';
 import { ProductConnectionGuide, type SetupTaskResponse } from './components/ProductConnectionGuide';
 import { useStore } from './store';
 
+const { telemetryCapture } = vi.hoisted(() => ({ telemetryCapture: vi.fn() }));
+
 vi.mock('./store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./store')>()),
   useStore: vi.fn(),
 }));
 
+vi.mock('./productTelemetry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./productTelemetry')>()),
+  captureProductTelemetry: telemetryCapture,
+}));
+
 const mockedStore = vi.mocked(useStore);
+const telemetryEvents = (name: string) => telemetryCapture.mock.calls.filter(([event]) => event === name);
 
 const pendingProof = {
   complete: false,
@@ -64,7 +72,7 @@ describe('Product Experience V2 onboarding', () => {
 
   it('uses native keyboard/screen-reader controls and validates bounded multi-select goals', () => {
     mockedStore.mockReturnValue({
-      account: { organization: { name: 'Acme' } },
+      account: { organization: { name: 'Acme' }, user: { id: 'user-1' } },
       client: {},
       baseUrl: 'https://api.poolstatis.test',
       refreshProjects: vi.fn(),
@@ -79,6 +87,9 @@ describe('Product Experience V2 onboarding', () => {
     expect(productMode).toHaveAttribute('type', 'radio');
     fireEvent.click(productMode);
     expect(productMode).toBeChecked();
+    expect(telemetryEvents('onboarding.mode_selected')).toEqual([
+      ['onboarding.mode_selected', { mode: 'product' }, { distinctId: 'user-1' }],
+    ]);
     expect(screen.queryByLabelText(/Domain/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
@@ -97,6 +108,9 @@ describe('Product Experience V2 onboarding', () => {
     expect(screen.getByText('3 of 3 selected')).toHaveAttribute('aria-live', 'polite');
     expect(screen.getByRole('checkbox', { name: 'Understand retention' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Create project' })).toBeEnabled();
+    expect(telemetryEvents('onboarding.goals_selected').at(-1)?.[1]).toEqual({
+      goal_ids: ['custom', 'activation', 'feature_adoption'],
+    });
   });
 
   it('creates website intent atomically, separates the key from the server task, and routes on server proof', async () => {
@@ -115,7 +129,7 @@ describe('Product Experience V2 onboarding', () => {
     const refreshProjects = vi.fn().mockResolvedValue(undefined);
     const setProject = vi.fn();
     mockedStore.mockReturnValue({
-      account: { organization: { name: 'Acme' } },
+      account: { organization: { name: 'Acme' }, user: { id: 'user-2' } },
       client: { completeOnboarding, onboardingStatus, setupTask: requestTask },
       baseUrl: 'https://api.poolstatis.test',
       refreshProjects,
@@ -151,9 +165,13 @@ describe('Product Experience V2 onboarding', () => {
     }));
     expect(await screen.findByText('Product key ready')).toBeInTheDocument();
     expect(screen.queryByText('pk_onetime_private')).not.toBeInTheDocument();
+    expect(telemetryEvents('onboarding.key_copied')).toHaveLength(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy .env line' }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('VITE_POOLSTATIS_INGEST_KEY=pk_onetime_private'));
+    expect(telemetryEvents('onboarding.key_copied')).toEqual([
+      ['onboarding.key_copied', { environment: 'prod' }, { distinctId: 'user-2' }],
+    ]);
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('docs', { agent_id: 'codex', prefer_llm: false }));
     fireEvent.click(screen.getByRole('radio', { name: 'Claude Code' }));
@@ -164,11 +182,17 @@ describe('Product Experience V2 onboarding', () => {
     expect(copiedTask).toContain('Set up Poolstatis for claude-code');
     expect(copiedTask).not.toContain('pk_onetime_private');
     expect(copiedTask).not.toContain('pt_onetime_private');
+    await waitFor(() => expect(telemetryEvents('onboarding.task_copied').at(-1)).toEqual([
+      'onboarding.task_copied', { agent_id: 'claude-code' }, { distinctId: 'user-2' },
+    ]));
+    expect(telemetryEvents('onboarding.task_generated').at(-1)?.[1]).toMatchObject({ source: 'deterministic' });
     expect(await screen.findByText('Waiting for your first event…')).toHaveAttribute('id', 'waiting-title');
 
     connected = true;
     fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
     expect(await screen.findByText('Event received')).toBeInTheDocument();
+    await waitFor(() => expect(telemetryEvents('onboarding.first_event_received')).toHaveLength(1));
+    expect(telemetryEvents('onboarding.completed')).toHaveLength(1);
     expect(screen.getByText('Let your agent answer questions')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open website overview' }));
     expect(await screen.findByText('Website destination')).toBeInTheDocument();
@@ -179,7 +203,7 @@ describe('Product Experience V2 onboarding', () => {
   it('requests an LLM-preferred setup task only after a custom goal is persisted', async () => {
     const requestTask = vi.fn().mockResolvedValue(setupTask());
     mockedStore.mockReturnValue({
-      account: { organization: { name: 'Acme' } },
+      account: { organization: { name: 'Acme' }, user: { id: 'user-3' } },
       client: {
         completeOnboarding: vi.fn().mockResolvedValue({
           organization: { id: 'org-1', name: 'Acme' },
@@ -204,6 +228,10 @@ describe('Product Experience V2 onboarding', () => {
       target: { value: 'Understand successful workspace activation' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    await waitFor(() => expect(telemetryEvents('onboarding.custom_goal_submitted')).toEqual([
+      ['onboarding.custom_goal_submitted', { length_bucket: '10_to_49' }, { distinctId: 'user-3' }],
+    ]));
+    expect(JSON.stringify(telemetryCapture.mock.calls)).not.toContain('Understand successful workspace activation');
     fireEvent.click(await screen.findByRole('button', { name: 'Copy .env line' }));
 
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('custom-project', {
@@ -229,7 +257,9 @@ describe('Product Experience V2 onboarding', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy .env line' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Select the content below');
     expect(screen.getByText('VITE_POOLSTATIS_INGEST_KEY=pk_private_value')).toBeInTheDocument();
+    expect(telemetryEvents('onboarding.key_copied')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'I saved it' }));
+    expect(telemetryEvents('onboarding.key_copied')).toHaveLength(0);
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledOnce());
 
@@ -240,6 +270,7 @@ describe('Product Experience V2 onboarding', () => {
     expect(screen.getByText(setupTask().task)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'I copied it' }));
     expect(await screen.findByText('Waiting for your first event…')).toBeInTheDocument();
+    expect(telemetryEvents('onboarding.task_copied')).toHaveLength(0);
   });
 
   it('reports an unregistered received event as attention without making MCP a setup error', () => {
@@ -308,13 +339,17 @@ describe('condensed Setup', () => {
       env: 'prod',
     } as never);
 
-    render(<MemoryRouter><Setup /></MemoryRouter>);
+    const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
     expect(await screen.findByText('Metrics need review')).toBeInTheDocument();
     expect(screen.getByText('No active metric has verified source evidence.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Review proposed metrics' })).toBeInTheDocument();
     expect(screen.queryByText('No product key yet')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy fix task' })).not.toBeInTheDocument();
+    await waitFor(() => expect(telemetryEvents('onboarding.blocked')).toHaveLength(1));
+    expect(telemetryEvents('onboarding.blocked')[0]?.[1]).toEqual({ blocker: 'metrics_activated' });
+    view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
+    expect(telemetryEvents('onboarding.blocked')).toHaveLength(1);
   });
 
   it('copies a server fix task and records only the normalized server gate key', async () => {
@@ -362,6 +397,7 @@ describe('condensed Setup', () => {
       blocker: 'first_query_produced',
     }));
     expect(Object.keys(feedback.mock.calls[0]![1])).toEqual(['outcome', 'blocker']);
+    expect(telemetryEvents('onboarding.task_copied')).toHaveLength(1);
   });
 
   it('never renders or copies a credential-like server task', async () => {
@@ -429,6 +465,7 @@ describe('condensed Setup', () => {
       outcome: 'blocked',
       blocker: 'first_decision_saved',
     }));
+    expect(telemetryEvents('onboarding.task_copied')).toHaveLength(0);
   });
 
   it('keeps a connected legacy project usable with four compact rows and optional MCP', async () => {
@@ -460,5 +497,30 @@ describe('condensed Setup', () => {
     fireEvent.click(within(rows).getByRole('button', { name: 'Connect' }));
     expect(screen.getByText('Let your agent answer questions')).toBeInTheDocument();
     expect(screen.getByText('Connect MCP so your agent can read analytics and manage Poolstatis.')).toBeInTheDocument();
+    expect(telemetryEvents('mcp.connect_started')).toHaveLength(1);
+  });
+
+  it('records MCP connected once only after both SDK proof and agent proof exist', async () => {
+    const proof = {
+      ...connectedProof,
+      gates: connectedProof.gates.map((gate) => gate.key === 'agent_connected' ? { ...gate, complete: true } : gate),
+    };
+    mockedStore.mockReturnValue({
+      account: { organization: { name: 'Acme' }, user: { id: 'user-mcp' } },
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(proof),
+        projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    const view = render(<MemoryRouter><Setup /></MemoryRouter>);
+    await waitFor(() => expect(telemetryEvents('mcp.connected')).toEqual([
+      ['mcp.connected', {}, { distinctId: 'user-mcp' }],
+    ]));
+    view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
+    expect(telemetryEvents('mcp.connected')).toHaveLength(1);
   });
 });

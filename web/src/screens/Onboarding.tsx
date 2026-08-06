@@ -14,6 +14,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import {
+  captureProductTelemetry,
+  telemetryElapsedBucket,
+  telemetryLengthBucket,
+} from '../productTelemetry';
 
 type ProjectMode = 'website' | 'product' | 'both';
 type GoalId =
@@ -96,6 +101,8 @@ export function Onboarding() {
   const { account, client, baseUrl, refreshProjects, setProject } = useStore();
   const navigate = useNavigate();
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const onboardingStartedAt = useRef(Date.now());
+  const completionTracked = useRef(false);
   const [workspace] = useState(account?.organization.name ?? 'My workspace');
   const [stage, setStage] = useState<'mode' | 'goals'>('mode');
   const [mode, setMode] = useState<ProjectMode | null>(null);
@@ -165,14 +172,28 @@ export function Onboarding() {
     return () => window.clearInterval(timer);
   }, [checkStatus, eventSeen, result]);
 
+  useEffect(() => {
+    if (!result || !eventSeen || completionTracked.current) return;
+    completionTracked.current = true;
+    const elapsedBucket = telemetryElapsedBucket(Date.now() - onboardingStartedAt.current);
+    const telemetryOptions = { distinctId: account?.user?.id };
+    captureProductTelemetry('onboarding.first_event_received', { elapsed_bucket: elapsedBucket }, telemetryOptions);
+    captureProductTelemetry('onboarding.completed', {
+      mode: selectedMode,
+      goal_ids: goalIds,
+      elapsed_bucket: elapsedBucket,
+    }, telemetryOptions);
+  }, [account?.user?.id, eventSeen, goalIds, result, selectedMode]);
+
   const availableGoals = useMemo(() => mode ? GOALS[mode] : [], [mode]);
 
   const toggleGoal = (goalId: GoalId) => {
-    setGoalIds((current) => {
-      if (current.includes(goalId)) return current.filter((item) => item !== goalId);
-      if (current.length === 3) return current;
-      return [...current, goalId];
-    });
+    const next = goalIds.includes(goalId)
+      ? goalIds.filter((item) => item !== goalId)
+      : goalIds.length === 3 ? goalIds : [...goalIds, goalId];
+    if (next === goalIds) return;
+    setGoalIds(next);
+    captureProductTelemetry('onboarding.goals_selected', { goal_ids: next }, { distinctId: account?.user?.id });
   };
 
   const submit = async () => {
@@ -190,6 +211,11 @@ export function Onboarding() {
         primary_goal_id: goalIds[0]!,
         website_domain: mode === 'product' ? null : normalizedDomain(domain),
       });
+      if (customSelected) {
+        captureProductTelemetry('onboarding.custom_goal_submitted', {
+          length_bucket: telemetryLengthBucket(customGoal.trim().length),
+        }, { distinctId: account?.user?.id });
+      }
       setResult(created);
       setProject(created.project.slug);
       await refreshProjects();
@@ -235,6 +261,8 @@ export function Onboarding() {
           onOpenProject={() => navigate(successRoute, { replace: true })}
           onReviewMetrics={() => navigate('/registry', { replace: true })}
           onConnectMcp={() => navigate('/setup#agent-access', { replace: true })}
+          telemetryUserId={account?.user?.id}
+          telemetryEnvironment="prod"
         />
 
         {!eventSeen && (
@@ -279,6 +307,7 @@ export function Onboarding() {
                   checked={mode === item.id}
                   onChange={() => {
                     setMode(item.id);
+                    captureProductTelemetry('onboarding.mode_selected', { mode: item.id }, { distinctId: account?.user?.id });
                     if (item.id === 'product') setDomain('');
                     setGoalIds([]);
                     setCustomGoal('');

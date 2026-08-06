@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useStore, useAsync } from '../store';
@@ -15,6 +15,11 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import {
+  captureProductTelemetry,
+  telemetryEnvironment,
+  telemetryLatencyBucket,
+} from '../productTelemetry';
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -48,7 +53,7 @@ interface SetupClient {
 }
 
 export function Setup() {
-  const { client, baseUrl, token, tokenKind, projects, project, env } = useStore();
+  const { account, client, baseUrl, token, tokenKind, projects, project, env } = useStore();
   const navigate = useNavigate();
   const [freshIngestKey, setFreshIngestKey] = useState<string | null>(null);
   const [creatingKey, setCreatingKey] = useState(false);
@@ -56,6 +61,8 @@ export function Setup() {
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(() => window.location.hash === '#agent-access');
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const blockedTracked = useRef(new Set<string>());
+  const mcpConnectedTracked = useRef(false);
   const publicUrl =
     (import.meta.env.VITE_POOLSTATIS_PUBLIC_URL as string | undefined) ||
     (import.meta.env.VITE_POOLSTATIS_API_URL as string | undefined) ||
@@ -101,6 +108,8 @@ export function Setup() {
       ? false
       : null;
   const preferLlm = Boolean(intent.data?.intent?.custom_goal);
+  const serverBlocker = proof.data?.next_blocker ?? null;
+  const blockerCode = serverBlocker ? normalizeBlockerKey(serverBlocker.key) : null;
 
   useEffect(() => {
     if (!project || eventSeen) return;
@@ -109,6 +118,18 @@ export function Setup() {
     // The reload callback is intentionally read from the latest render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventSeen, project]);
+
+  useEffect(() => {
+    if (!blockerCode || blockedTracked.current.has(blockerCode)) return;
+    blockedTracked.current.add(blockerCode);
+    captureProductTelemetry('onboarding.blocked', { blocker: blockerCode }, { distinctId: account?.user?.id });
+  }, [account?.user?.id, blockerCode]);
+
+  useEffect(() => {
+    if (!eventSeen || !agentGate?.complete || mcpConnectedTracked.current) return;
+    mcpConnectedTracked.current = true;
+    captureProductTelemetry('mcp.connected', {}, { distinctId: account?.user?.id });
+  }, [account?.user?.id, agentGate?.complete, eventSeen]);
 
   const createIngestKey = async () => {
     if (!client || !project) return;
@@ -138,8 +159,6 @@ export function Setup() {
 
   const sourceReady = sourceGate?.complete ?? false;
   const projectMode = intent.data?.intent?.project_mode;
-  const serverBlocker = proof.data?.next_blocker ?? null;
-  const blockerCode = serverBlocker ? normalizeBlockerKey(serverBlocker.key) : null;
   const reviewBlocker = serverBlocker ? needsRegistryReview(serverBlocker.key) : false;
   const blocker = proof.loading && !proof.data
     ? { kind: 'loading' as const, title: 'Checking connection', why: 'Reading the latest server proof for this project.' }
@@ -186,6 +205,7 @@ export function Setup() {
                 env={env}
                 preferLlm={preferLlm}
                 client={setupClient}
+                telemetryUserId={account?.user?.id}
               />
             )}
             {blocker.kind === 'server' && !reviewBlocker && !intent.loading && !intent.data?.intent && (
@@ -215,7 +235,12 @@ export function Setup() {
           status={agentGate?.complete ? 'Connected' : 'Optional'}
           description="Let your agent read analytics and manage Poolstatis with MCP."
           action={mcpOpen ? 'Hide' : agentGate?.complete ? 'View' : 'Connect'}
-          onAction={() => setMcpOpen((value) => !value)}
+          onAction={() => {
+            if (!mcpOpen && eventSeen) {
+              captureProductTelemetry('mcp.connect_started', {}, { distinctId: account?.user?.id });
+            }
+            setMcpOpen((value) => !value);
+          }}
         />
         <SetupRow
           title="Destinations & advanced"
@@ -248,6 +273,8 @@ export function Setup() {
           onCheck={proof.reload}
           onOpenProject={() => navigate(projectMode === 'website' ? '/analyze/web' : projectMode === 'product' ? '/analyze/product' : '/')}
           onReviewMetrics={() => navigate('/registry')}
+          telemetryUserId={account?.user?.id}
+          telemetryEnvironment={telemetryEnvironment(env)}
         />
       )}
 
@@ -307,11 +334,12 @@ function SetupRow({ title, status, description, action, onAction, last = false }
   );
 }
 
-function FixTaskAction({ projectSlug, env, preferLlm, client }: {
+function FixTaskAction({ projectSlug, env, preferLlm, client, telemetryUserId }: {
   projectSlug: string;
   env: string;
   preferLlm: boolean;
   client: SetupClient;
+  telemetryUserId?: string | null;
 }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -331,6 +359,7 @@ function FixTaskAction({ projectSlug, env, preferLlm, client }: {
     setFallbackTask(null);
     setError(null);
     try {
+      const startedAt = Date.now();
       const response = await client.setupTask(projectSlug, {
         agent_id: 'codex',
         prefer_llm: preferLlm,
@@ -346,6 +375,10 @@ function FixTaskAction({ projectSlug, env, preferLlm, client }: {
       if (containsCredentialValue(task)) {
         throw new Error('Task generation was blocked because it contained credential-like text.');
       }
+      captureProductTelemetry('onboarding.task_generated', {
+        source: response.source,
+        latency_bucket: telemetryLatencyBucket(Date.now() - startedAt),
+      }, { distinctId: telemetryUserId });
       try {
         await navigator.clipboard.writeText(task);
       } catch {
@@ -354,6 +387,7 @@ function FixTaskAction({ projectSlug, env, preferLlm, client }: {
       }
       await recordFeedback(responseBlocker);
       setCopied(true);
+      captureProductTelemetry('onboarding.task_copied', { agent_id: 'codex' }, { distinctId: telemetryUserId });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not prepare the fix task.');
     } finally {
