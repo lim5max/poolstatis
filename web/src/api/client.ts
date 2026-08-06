@@ -79,6 +79,7 @@ export class PoolstatisClient {
 
   completeOnboarding(body: {
     workspace_name: string; project_slug: string; project_name: string;
+    issue_personal_token?: boolean;
   } & Partial<ProjectIntentInput>) {
     return this.req<HostedOnboardingResult>('POST', '/api/v1/onboarding', body);
   }

@@ -121,6 +121,7 @@ export const hostedOnboardingSchema = z.object({
   workspace_name: z.string().trim().min(1).max(200),
   project_slug: z.string().trim().min(1).max(200),
   project_name: z.string().trim().min(1).max(200),
+  issue_personal_token: z.boolean().optional(),
 }).merge(hostedIntentFieldsSchema).strict().superRefine((input, ctx) => {
   const intentKeys = ['project_mode', 'website_domain', 'goal_ids', 'custom_goal', 'primary_goal_id'] as const;
   const hasAnyIntent = intentKeys.some((key) => input[key] !== undefined);

@@ -71,7 +71,7 @@ export interface OnboardingResult {
   project: Pick<Project, 'slug' | 'name' | 'timezone'>;
   intent: StoredProjectIntent | null;
   tokens: {
-    personal: string;
+    personal: string | null;
     ingest_prod: string;
   };
   mcp: {
@@ -81,7 +81,7 @@ export interface OnboardingResult {
     note: string;
     env: {
       POOLSTATIS_URL: string;
-      POOLSTATIS_TOKEN: string;
+      POOLSTATIS_TOKEN: string | null;
     };
   };
 }
@@ -627,13 +627,15 @@ export async function completeHostedOnboarding(
       }
       throw err;
     }
-    const personal = await createApiKey(client as unknown as pg.Pool, {
-      orgId,
-      projectId: null,
-      kind: 'personal',
-      label: 'hosted onboarding MCP',
-      issuedByUserId: userId,
-    });
+    const personal = input.issue_personal_token === false
+      ? null
+      : await createApiKey(client as unknown as pg.Pool, {
+          orgId,
+          projectId: null,
+          kind: 'personal',
+          label: 'hosted onboarding MCP',
+          issuedByUserId: userId,
+        });
     const ingest = await createApiKey(client as unknown as pg.Pool, {
       orgId,
       projectId: project.id,
@@ -657,7 +659,7 @@ export async function completeHostedOnboarding(
       organization: { id: orgRows[0].id, name: orgRows[0].name },
       project: { slug: project.slug, name: project.name, timezone: project.timezone },
       intent,
-      tokens: { personal: personal.token, ingest_prod: ingest.token },
+      tokens: { personal: personal?.token ?? null, ingest_prod: ingest.token },
       mcp: {
         command: mcpRunner.command,
         args: mcpRunner.args,
@@ -665,7 +667,7 @@ export async function completeHostedOnboarding(
         note: mcpRunner.note,
         env: {
           POOLSTATIS_URL: publicUrl.replace(/\/$/, ''),
-          POOLSTATIS_TOKEN: personal.token,
+          POOLSTATIS_TOKEN: personal?.token ?? null,
         },
       },
     };
