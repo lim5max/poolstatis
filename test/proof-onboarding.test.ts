@@ -31,6 +31,35 @@ describe('proof-gated onboarding', () => {
     const copiedOnly = await api(env, env.secretToken, 'GET', statusUrl());
     expect(gate(copiedOnly.body, 'agent_connected').complete).toBe(false);
 
+    const devOnly = await api(env, env.ingestDevToken, 'POST', '/i/v1/events', {
+      batch_id: 'onboarding-dev-only',
+      events: [{ event: 'dev.only_event', distinct_id: 'dev-user' }],
+    });
+    expect(devOnly.status).toBe(200);
+    const prodAfterDev = await api(env, env.secretToken, 'GET', statusUrl());
+    expect(gate(prodAfterDev.body, 'first_event_observed')).toMatchObject({
+      complete: false,
+      evidence: {
+        event_name: null,
+        env: 'prod',
+        registered: null,
+      },
+    });
+    const devStatus = await api(
+      env,
+      env.secretToken,
+      'GET',
+      `/api/v1/projects/${env.projectSlug}/onboarding/status?env=dev`,
+    );
+    expect(gate(devStatus.body, 'first_event_observed')).toMatchObject({
+      complete: true,
+      evidence: {
+        event_name: 'dev.only_event',
+        env: 'dev',
+        registered: false,
+      },
+    });
+
     const unproved = await api(
       env,
       env.secretToken,
@@ -48,7 +77,12 @@ describe('proof-gated onboarding', () => {
     expect(wild.status).toBe(200);
     const afterWild = await api(env, env.secretToken, 'GET', statusUrl());
     expect(gate(afterWild.body, 'first_event_observed').complete).toBe(true);
-    expect(gate(afterWild.body, 'first_event_observed').evidence.observation_source).toBe('native');
+    expect(gate(afterWild.body, 'first_event_observed').evidence).toMatchObject({
+      observation_source: 'native',
+      event_name: 'wild.event',
+      env: 'prod',
+      registered: false,
+    });
     expect(gate(afterWild.body, 'metrics_activated').complete).toBe(false);
 
     await activeMetric(env, {
@@ -60,6 +94,13 @@ describe('proof-gated onboarding', () => {
     await api(env, env.ingestToken, 'POST', '/i/v1/events', {
       batch_id: 'onboarding-registered',
       events: [{ event: 'signup.completed', distinct_id: 'u1' }],
+    });
+
+    const afterRegistered = await api(env, env.secretToken, 'GET', statusUrl());
+    expect(gate(afterRegistered.body, 'first_event_observed').evidence).toMatchObject({
+      event_name: 'signup.completed',
+      env: 'prod',
+      registered: true,
     });
 
     const queryBody = {

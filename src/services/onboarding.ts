@@ -138,9 +138,20 @@ export async function getOnboardingStatus(
       [projectId, env],
     ),
     pool.query(
-      `SELECT count(*)::int AS count, max("timestamp") AS last_seen
-       FROM events
-       WHERE project_id = $1 AND env = $2 AND is_system = false`,
+      `SELECT aggregate.count, aggregate.last_seen,
+              latest.event AS event_name, latest.registered
+       FROM (
+         SELECT count(*)::int AS count, max("timestamp") AS last_seen
+         FROM events
+         WHERE project_id = $1 AND env = $2 AND is_system = false
+       ) aggregate
+       LEFT JOIN LATERAL (
+         SELECT event, registered
+         FROM events
+         WHERE project_id = $1 AND env = $2 AND is_system = false
+         ORDER BY "timestamp" DESC, ingested_at DESC, event DESC
+         LIMIT 1
+       ) latest ON true`,
       [projectId, env],
     ),
     pool.query(
@@ -282,6 +293,9 @@ export async function getOnboardingStatus(
             : null,
         native_events: Number(eventRow.count),
         last_seen: eventRow.last_seen ?? null,
+        event_name: eventRow.event_name ?? null,
+        env,
+        registered: typeof eventRow.registered === 'boolean' ? eventRow.registered : null,
         posthog_query_at: queryRow?.source === 'posthog' ? queryRow.created_at : null,
       },
       'No real product observation has reached Poolstatis.',
