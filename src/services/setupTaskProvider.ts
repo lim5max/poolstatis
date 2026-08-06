@@ -25,7 +25,7 @@ const DRAFT_JSON_SCHEMA = {
   additionalProperties: false,
   required: ['summary', 'events', 'smoke_action'],
   properties: {
-    summary: { type: 'string', minLength: 10, maxLength: 240 },
+    summary: { type: 'string', minLength: 10, maxLength: 240, pattern: '^[^\\u0000-\\u001F\\u007F\\u2028\\u2029]+$' },
     events: {
       type: 'array',
       minItems: 1,
@@ -36,11 +36,11 @@ const DRAFT_JSON_SCHEMA = {
         required: ['name', 'purpose'],
         properties: {
           name: { type: 'string', pattern: '^[a-z0-9$][a-z0-9_.]*$', maxLength: 200 },
-          purpose: { type: 'string', minLength: 10, maxLength: 240 },
+          purpose: { type: 'string', minLength: 10, maxLength: 240, pattern: '^[^\\u0000-\\u001F\\u007F\\u2028\\u2029]+$' },
         },
       },
     },
-    smoke_action: { type: 'string', minLength: 5, maxLength: 240 },
+    smoke_action: { type: 'string', minLength: 5, maxLength: 240, pattern: '^[^\\u0000-\\u001F\\u007F\\u2028\\u2029]+$' },
   },
 } as const;
 

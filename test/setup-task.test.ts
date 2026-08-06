@@ -52,6 +52,11 @@ describe('deterministic setup task', () => {
     });
     expect(response.body.plan.events).toHaveLength(3);
     expect(response.body.task).toContain('install exactly @poolstatis/sdk@0.3.0');
+    expect(response.body.plan.release_manifest).toMatchObject({
+      skills_cli: 'skills@1.5.22',
+      skills_source: 'https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz',
+    });
+    expect(response.body.task).toContain('pnpm dlx skills@1.5.22 add https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz');
     expect(response.body.task).toContain('poolstatis-instrument poolstatis-analyze poolstatis-maintain');
     expect(response.body.task).toContain('MCP is optional');
     expect(response.body.task).not.toContain('@latest');

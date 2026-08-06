@@ -102,15 +102,15 @@ documentation workflow for using them. Install all three in the **product repo**
 
 ```bash
 # Portable: every agent supported by the skills CLI
-pnpm dlx skills add https://github.com/lim5max/poolstatis \
+pnpm dlx skills@1.5.22 add https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz \
   --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
   --agent '*' -y
 
 # Or target one runtime
-pnpm dlx skills add https://github.com/lim5max/poolstatis \
+pnpm dlx skills@1.5.22 add https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz \
   --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
   --agent codex -y
-pnpm dlx skills add https://github.com/lim5max/poolstatis \
+pnpm dlx skills@1.5.22 add https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz \
   --skill poolstatis-instrument poolstatis-analyze poolstatis-maintain \
   --agent claude-code -y
 ```
@@ -119,15 +119,14 @@ For an approved local Core checkout, replace the GitHub URL with its absolute
 path. Verify project-scope installation:
 
 ```bash
-pnpm dlx skills list --json
+pnpm dlx skills@1.5.22 list --json
 ```
 
 The list must include `poolstatis-instrument`, `poolstatis-analyze`, and
 `poolstatis-maintain`. The canonical copies are under `.agents/skills`; the
 `.claude/skills` copies are kept byte-identical for direct Claude discovery.
-The GitHub-source command above installs the repository state resolved by the
-skills CLI; it does not promise a pinned commit. Verify the installed names and
-inspect the resolved source before relying on it in a controlled release.
+The archive URL and CLI version above pin the reviewed workflow release. Verify
+the installed names and resolved source before relying on a different release.
 
 ### 4. Run the instrumentation skill
 

@@ -1111,6 +1111,8 @@ export interface SetupTaskPlan {
   release_manifest: {
     sdk: '@poolstatis/sdk@0.3.0';
     skills: ['poolstatis-instrument', 'poolstatis-analyze', 'poolstatis-maintain'];
+    skills_cli: 'skills@1.5.22';
+    skills_source: 'https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz';
   };
   security_rules: string[];
 }

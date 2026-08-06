@@ -165,13 +165,19 @@ export const setupTaskInputSchema = z.object({
   env: z.string().trim().min(1).max(100).optional(),
 }).strict();
 
+const providerSemanticText = (minimumLength: number) => z.string().trim().min(minimumLength).max(240)
+  .refine(
+    (value) => !/[\u0000-\u001f\u007f\u2028\u2029]/u.test(value),
+    'provider text must be a single printable line',
+  );
+
 export const setupTaskDraftSchema = z.object({
-  summary: z.string().trim().min(10).max(240),
+  summary: providerSemanticText(10),
   events: z.array(z.object({
     name: eventName,
-    purpose: z.string().trim().min(10).max(240),
+    purpose: providerSemanticText(10),
   }).strict()).min(1).max(3),
-  smoke_action: z.string().trim().min(5).max(240),
+  smoke_action: providerSemanticText(5),
 }).strict();
 
 export const setupTaskPlanSchema = z.object({
@@ -193,6 +199,8 @@ export const setupTaskPlanSchema = z.object({
       z.literal('poolstatis-analyze'),
       z.literal('poolstatis-maintain'),
     ]),
+    skills_cli: z.literal('skills@1.5.22'),
+    skills_source: z.literal('https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz'),
   }).strict(),
   security_rules: z.array(z.string().trim().min(10).max(300)).length(4),
 }).strict().superRefine((plan, ctx) => {

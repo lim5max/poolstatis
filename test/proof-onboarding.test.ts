@@ -248,6 +248,37 @@ describe('proof-gated onboarding', () => {
       await funnelEnv.close();
     }
   });
+
+  test('labels the latest received event without letting client timestamps pin setup proof', async () => {
+    const receiptEnv = await createTestEnv();
+    try {
+      const futureTimestamp = new Date(Date.now() + 30_000).toISOString();
+      const pastTimestamp = new Date(Date.now() - 30_000).toISOString();
+      expect((await api(receiptEnv, receiptEnv.ingestToken, 'POST', '/i/v1/events', {
+        batch_id: 'proof-client-time-first',
+        events: [{ event: 'client.future_event', distinct_id: 'receipt-user', timestamp: futureTimestamp }],
+      })).status).toBe(200);
+      expect((await api(receiptEnv, receiptEnv.ingestToken, 'POST', '/i/v1/events', {
+        batch_id: 'proof-client-time-second',
+        events: [{ event: 'server.latest_received', distinct_id: 'receipt-user', timestamp: pastTimestamp }],
+      })).status).toBe(200);
+
+      const status = await api(
+        receiptEnv,
+        receiptEnv.secretToken,
+        'GET',
+        `/api/v1/projects/${receiptEnv.projectSlug}/onboarding/status?env=prod`,
+      );
+      expect(gate(status.body, 'first_event_observed').evidence).toMatchObject({
+        event_name: 'server.latest_received',
+        event_timestamp: pastTimestamp,
+        last_seen: futureTimestamp,
+      });
+      expect(gate(status.body, 'first_event_observed').evidence.received_at).toBeTruthy();
+    } finally {
+      await receiptEnv.close();
+    }
+  });
 });
 
 function gate(body: any, key: string): any {

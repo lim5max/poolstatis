@@ -122,7 +122,7 @@ export function Onboarding() {
   const firstEvent = status?.gates.find((gate) => gate.key === 'first_event_observed');
   const eventSeen = firstEvent?.complete ?? false;
   const eventEvidence = firstEvent?.evidence ?? {};
-  const lastSeen = evidenceText(eventEvidence, 'last_seen', 'observed_at');
+  const lastSeen = evidenceText(eventEvidence, 'received_at', 'last_seen', 'observed_at');
   const eventName = evidenceText(eventEvidence, 'event_name', 'event');
   const eventEnvironment = evidenceText(eventEvidence, 'environment', 'env') ?? 'prod';
   const eventRegistered = typeof eventEvidence.registered === 'boolean'

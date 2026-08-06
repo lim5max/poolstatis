@@ -19,13 +19,14 @@ import {
 import type { OnboardingGate } from './onboarding.js';
 
 export const SDK_RELEASE = '@poolstatis/sdk@0.3.0' as const;
+export const SKILLS_CLI_RELEASE = 'skills@1.5.22' as const;
+export const SKILLS_SOURCE_RELEASE = 'https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz' as const;
 export const SKILL_RELEASE_MANIFEST = [
   'poolstatis-instrument',
   'poolstatis-analyze',
   'poolstatis-maintain',
 ] as const;
 
-const SKILLS_SOURCE = 'https://github.com/lim5max/poolstatis';
 const SECURITY_RULES = [
   'Read the Poolstatis product key only from the local product environment. Stop if it is missing.',
   'Never print, paste, log, commit, or send credentials to a chat, model, telemetry system, or source file.',
@@ -183,7 +184,9 @@ export async function generateSetupTask(
   }
   let plan = compileDeterministicPlan(intent, input.agentId);
   let source: SetupTaskResult['source'] = 'deterministic';
-  if (input.preferLlm) {
+  // Blocker repair is entirely server-authored. It must not egress custom-goal
+  // data or wait for a provider whose prose is unused by the fix template.
+  if (input.preferLlm && !input.blocker) {
     source = 'fallback';
     if (input.provider) {
       try {
@@ -196,11 +199,15 @@ export async function generateSetupTask(
           }),
         ));
         assertProviderDraftSafe(draft);
+        // Provider prose is validation input only, never executable task text.
+        // The provider may propose bounded event identifiers; all purposes,
+        // summary and smoke instructions remain server-owned templates.
         plan = setupTaskPlanSchema.parse({
           ...plan,
-          summary: draft.summary,
-          events: draft.events,
-          smoke_action: draft.smoke_action,
+          events: plan.events.map((event, index) => ({
+            ...event,
+            name: draft.events[index]?.name ?? event.name,
+          })),
         });
         source = 'llm';
       } catch {
@@ -231,6 +238,8 @@ export function compileDeterministicPlan(
     release_manifest: {
       sdk: SDK_RELEASE,
       skills: SKILL_RELEASE_MANIFEST,
+      skills_cli: SKILLS_CLI_RELEASE,
+      skills_source: SKILLS_SOURCE_RELEASE,
     },
     security_rules: SECURITY_RULES,
   });
@@ -253,7 +262,7 @@ export function compileTask(
   const implementation = fix
     ? `1. Inspect the current Poolstatis integration and configuration without reading or printing environment values.
 2. Install the Poolstatis workflows before editing code:
-   pnpm dlx skills add ${SKILLS_SOURCE} --skill ${skills} --agent ${AGENT_TARGET[plan.agent_id]} -y
+   pnpm dlx ${plan.release_manifest.skills_cli} add ${plan.release_manifest.skills_source} --skill ${skills} --agent ${AGENT_TARGET[plan.agent_id]} -y
 3. Resolve only the server-reported blocker for project ${projectSlug} at ${publicUrl}: ${fix.action}
 4. Keep the SDK pinned to exactly ${plan.release_manifest.sdk}. If code changes are needed, make the smallest change that addresses this blocker.
 5. Run the relevant typecheck, tests, and build. Fix only issues caused by this change.
@@ -261,7 +270,7 @@ export function compileTask(
 7. Report the exact files changed and the remaining root blocker, if any.`
     : `1. Inspect the repository and identify its framework, runtime, package manager, and existing analytics conventions.
 2. Install the Poolstatis workflows before editing code:
-   pnpm dlx skills add ${SKILLS_SOURCE} --skill ${skills} --agent ${AGENT_TARGET[plan.agent_id]} -y
+   pnpm dlx ${plan.release_manifest.skills_cli} add ${plan.release_manifest.skills_source} --skill ${skills} --agent ${AGENT_TARGET[plan.agent_id]} -y
 3. Follow poolstatis-instrument and install exactly ${plan.release_manifest.sdk}.
 4. Configure the SDK for project ${projectSlug} and Poolstatis API origin ${publicUrl}. Read the write key only from the local environment.
 5. Instrument the smallest real tracking plan for ${plan.project_mode} mode:
@@ -289,7 +298,10 @@ function assertProviderDraftSafe(draft: unknown): void {
   if (/(?:pk|sk|pt)_[a-z0-9_-]+/i.test(serialized)
       || /@poolstatis\/sdk@(?!0\.3\.0\b)/i.test(serialized)
       || /https?:\/\//i.test(serialized)
-      || /\.env\b/i.test(serialized)) {
+      || /\.env\b/i.test(serialized)
+      || /\bignore\s+(?:previous|mandatory|security|the)\b/i.test(serialized)
+      || /\b(?:delete|upload|send|print|read|log|commit)\s+(?:repository|local|environment|credential|secret|key|file|configuration|source)\b/i.test(serialized)
+      || /\b(?:curl|wget|sudo|powershell)\b/i.test(serialized)) {
     throw new Error('setup task provider returned a forbidden artifact');
   }
 }

@@ -387,7 +387,7 @@ describe('condensed Setup', () => {
 
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', {
       agent_id: 'codex',
-      prefer_llm: true,
+      prefer_llm: false,
       kind: 'fix',
       env: 'prod',
     }));

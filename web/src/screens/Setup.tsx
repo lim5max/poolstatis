@@ -24,7 +24,8 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 
-const SKILLS_SOURCE = 'https://github.com/lim5max/poolstatis';
+const SKILLS_CLI = 'skills@1.5.22';
+const SKILLS_SOURCE = 'https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz';
 const SKILLS = 'poolstatis-instrument poolstatis-analyze poolstatis-maintain';
 
 const TOOLS = [
@@ -91,7 +92,11 @@ export function Setup() {
   const eventGate = proof.data?.gates.find((gate) => gate.key === 'first_event_observed');
   const agentGate = proof.data?.gates.find((gate) => gate.key === 'agent_connected');
   const eventSeen = eventGate?.complete ?? false;
-  const lastSeen = typeof eventGate?.evidence.last_seen === 'string' ? eventGate.evidence.last_seen : null;
+  const lastSeen = typeof eventGate?.evidence.received_at === 'string'
+    ? eventGate.evidence.received_at
+    : typeof eventGate?.evidence.last_seen === 'string'
+      ? eventGate.evidence.last_seen
+      : null;
   const eventName = typeof eventGate?.evidence.event_name === 'string'
     ? eventGate.evidence.event_name
     : typeof eventGate?.evidence.event === 'string'
@@ -203,7 +208,6 @@ export function Setup() {
                 key={blockerCode}
                 projectSlug={project}
                 env={env}
-                preferLlm={preferLlm}
                 client={setupClient}
                 telemetryUserId={account?.user?.id}
               />
@@ -334,10 +338,9 @@ function SetupRow({ title, status, description, action, onAction, last = false }
   );
 }
 
-function FixTaskAction({ projectSlug, env, preferLlm, client, telemetryUserId }: {
+function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
   projectSlug: string;
   env: string;
-  preferLlm: boolean;
   client: SetupClient;
   telemetryUserId?: string | null;
 }) {
@@ -362,7 +365,7 @@ function FixTaskAction({ projectSlug, env, preferLlm, client, telemetryUserId }:
       const startedAt = Date.now();
       const response = await client.setupTask(projectSlug, {
         agent_id: 'codex',
-        prefer_llm: preferLlm,
+        prefer_llm: false,
         kind: 'fix',
         env,
       });
@@ -479,7 +482,7 @@ function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected 
     mcpToken ?? '<create-agent-token-first>',
   );
   const skillTarget = clientId === 'codex' ? 'codex' : clientId === 'claude-code' ? 'claude-code' : "'*'";
-  const skillsCommand = `pnpm dlx skills add ${SKILLS_SOURCE} --skill ${SKILLS} --agent ${skillTarget} -y`;
+  const skillsCommand = `pnpm dlx ${SKILLS_CLI} add ${SKILLS_SOURCE} --skill ${SKILLS} --agent ${skillTarget} -y`;
 
   const issueToken = async () => {
     if (!client) return;
