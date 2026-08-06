@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Add, GridView, Loader2 } from '@/components/icons';
+import { Add, Check, Copy, GridView, Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, Stat, fmtNum } from '../components/ui';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,7 @@ import type {
 
 export function Experience() {
   const { client, project, env, availableEnvs, setEnv } = useStore();
+  const configurationRef = useRef<HTMLDetailsElement>(null);
   const { data, error, loading, reload } = useAsync(
     () => Promise.all([
       client!.experienceSurfaces(project!, env),
@@ -34,11 +35,20 @@ export function Experience() {
   if (error) return <RecoverableError onRetry={reload}>{error}</RecoverableError>;
   if (!data) return null;
 
+  const activeSurfaces = data.surfaces.filter((item) => item.status === 'active');
+  const activeSurfaceKeys = new Set(activeSurfaces.map((item) => item.key));
+  const setupReady = data.routes.some((item) => activeSurfaceKeys.has(item.surface_key));
+  const openManualSetup = () => {
+    if (!configurationRef.current) return;
+    configurationRef.current.open = true;
+    configurationRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <div className="space-y-4">
       <Panel
         title="Visual Experience"
-        right={<span className="text-xs text-muted-foreground">aggregate maps · no DOM replay</span>}
+        right={<span className="text-sm text-muted-foreground">aggregate maps · no DOM replay</span>}
       >
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-3xl">
@@ -57,7 +67,16 @@ export function Experience() {
         </div>
       </Panel>
 
-      {data.snapshots.length === 0
+      {!setupReady && (
+        <ExperienceSetupGate
+          project={project!}
+          env={env}
+          surfaces={data.surfaces}
+          onManualSetup={openManualSetup}
+        />
+      )}
+
+      {setupReady && data.snapshots.length === 0
         ? (
           <Panel title="No visual evidence yet">
             <EmptyState
@@ -66,40 +85,114 @@ export function Experience() {
             />
           </Panel>
         )
-        : (
+        : setupReady ? (
           <VisualExplorer
             surfaces={data.surfaces}
             routes={data.routes}
             snapshots={data.snapshots}
             env={env}
           />
-        )}
+        ) : null}
 
-      <SnapshotSetup
-        surfaces={data.surfaces}
-        routes={data.routes}
-        env={env}
-        onChanged={reload}
-      />
+      {setupReady && (
+        <SnapshotSetup
+          surfaces={activeSurfaces}
+          routes={data.routes}
+          env={env}
+          onChanged={reload}
+        />
+      )}
 
-      <AggregateClickEvidence surfaces={data.surfaces} env={env} />
+      {setupReady && <AggregateClickEvidence surfaces={activeSurfaces} env={env} />}
 
-      <details className="group">
+      <details ref={configurationRef} className="group scroll-mt-4">
         <DisclosureSummary className="cursor-pointer rounded-md border bg-card px-5 py-4 text-sm font-medium outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring">
           Capture configuration and session details
-          <span className="ml-2 text-xs font-normal text-muted-foreground">
+          <span className="ml-2 text-sm font-normal text-muted-foreground">
             {data.surfaces.length} surfaces · {data.routes.length} routes
           </span>
         </DisclosureSummary>
         <div className="mt-4 space-y-4">
           <SurfaceForm onCreated={reload} />
-          <RouteForm surfaces={data.surfaces} onCreated={reload} />
-          <SurfacesTable surfaces={data.surfaces} routes={data.routes} onChanged={reload} />
-          <SessionTimeline surfaces={data.surfaces} env={env} />
+          {activeSurfaces.length > 0 && <RouteForm surfaces={activeSurfaces} onCreated={reload} />}
+          {data.surfaces.length > 0 && <SurfacesTable surfaces={data.surfaces} routes={data.routes} onChanged={reload} />}
+          {activeSurfaces.length > 0 && <SessionTimeline surfaces={activeSurfaces} env={env} />}
         </div>
       </details>
     </div>
   );
+}
+
+function ExperienceSetupGate({
+  project,
+  env,
+  surfaces,
+  onManualSetup,
+}: {
+  project: string;
+  env: string;
+  surfaces: ExperienceSurface[];
+  onManualSetup: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const hasArchivedSurface = surfaces.some((item) => item.status !== 'active');
+  const task = experienceSetupTask(project, env, surfaces);
+
+  const copyTask = async () => {
+    try {
+      await navigator.clipboard.writeText(task);
+      setCopyFailed(false);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopyFailed(true);
+    }
+  };
+
+  return (
+    <Panel title="Set up Browser Experience">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="max-w-2xl">
+          <p className="font-medium text-foreground">Give your coding agent one task.</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {hasArchivedSurface
+              ? 'No surface accepts new capture. The task creates a fresh active surface, adds safe routes, and verifies one real event.'
+              : 'It will create a purposeful surface, add safe routes, connect the SDK, and verify one real event.'}
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button onClick={() => void copyTask()}>
+            {copied ? <Check className="size-4" aria-hidden="true" /> : <Copy className="size-4" aria-hidden="true" />}
+            {copied ? 'Task copied' : 'Copy agent task'}
+          </Button>
+          <Button variant="outline" onClick={onManualSetup}>Set up manually</Button>
+        </div>
+      </div>
+      {copyFailed && (
+        <div className="mt-3">
+          <ErrorNote>Copy was blocked by the browser. Open manual setup below or allow clipboard access and try again.</ErrorNote>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function experienceSetupTask(project: string, env: string, surfaces: ExperienceSurface[]): string {
+  const knownSurfaces = surfaces.length === 0
+    ? 'No Browser Experience surfaces exist yet.'
+    : `Existing surfaces: ${surfaces.map((item) => `${item.key} (${item.status})`).join(', ')}.`;
+
+  return `Set up Poolstatis Browser Experience for project "${project}" in environment "${env}".
+
+${knownSurfaces}
+
+1. Inspect this codebase and identify one user-facing browser surface plus a small, finite set of canonical routes. Every surface purpose must name the UX decision its evidence will inform.
+2. Use the installed Poolstatis MCP tools. Read existing state first, then use create_experience_surface and register_experience_route as needed. Do not delete, archive, rename, or overwrite existing surfaces, routes, events, or project data. If every existing surface is archived, create a fresh active surface with a new stable key.
+3. Reuse the Poolstatis client and SDK version already compatible with this project. Add BrowserExperience from @poolstatis/sdk/experience only where browser code runs. Do not upgrade the SDK unless compatibility with the existing ingest contract is verified.
+4. Keep the product key in the local environment where it is already saved. Do not ask me to paste or expose any key in chat, source code, logs, screenshots, or git.
+5. Capture only normalized coordinates and stable developer labels such as data-poolstatis-label and data-poolstatis-section. Never capture DOM, text, form values, raw URLs, query strings, pointer paths, or session replay.
+6. Run the relevant tests and build, open one real route in "${env}", and verify that Poolstatis accepted a real Browser Experience event. Report the files changed and the server-side verification. Do not call the setup complete from a local mock alone.`;
 }
 
 function VisualExplorer({
@@ -249,8 +342,8 @@ function VisualExplorer({
       <Panel
         title="Page evidence"
         right={result?.snapshot?.stale
-          ? <span className="text-xs text-amber-700">Snapshot may be stale</span>
-          : <span className="text-xs text-muted-foreground">Exact version + layout</span>}
+          ? <span className="text-sm text-amber-700">Snapshot may be stale</span>
+          : <span className="text-sm text-muted-foreground">Exact version + layout</span>}
       >
       <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
         <Filter label="Surface">
@@ -267,7 +360,7 @@ function VisualExplorer({
         </Filter>
         <Filter label="Version">
           <Select value={version} onValueChange={setVersion}>
-            <SelectTrigger className="h-9 w-full font-mono text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-9 w-full font-mono text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>{versions.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent>
           </Select>
         </Filter>
@@ -290,7 +383,7 @@ function VisualExplorer({
       </div>
 
       <div className="mt-3 flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           {comparisonTarget
             ? (
               <>
@@ -376,7 +469,7 @@ function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode
       </div>
 
       <div className="overflow-hidden rounded-md border bg-muted/30">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 text-sm text-muted-foreground">
           <span className="font-medium text-foreground">
             {result.device === 'mobile' ? 'Mobile' : 'Desktop'} viewport · {result.snapshot.viewport_width} × {result.snapshot.viewport_height}
           </span>
@@ -442,7 +535,7 @@ function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode
                   className="pointer-events-none absolute inset-x-0 border-t border-dashed border-foreground/60"
                   style={{ top: `${section.top * 100}%` }}
                 >
-                  <span className="absolute left-2 top-1 rounded-sm bg-background/90 px-1.5 py-0.5 font-mono text-xs">
+                  <span className="absolute left-2 top-1 rounded-sm bg-background/90 px-1.5 py-0.5 font-mono text-sm">
                     {section.section} · {section.percentage}%
                   </span>
                   </span>
@@ -455,13 +548,13 @@ function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode
       <div data-testid="visual-evidence-notes" className="grid gap-3 rounded-md border bg-muted/20 p-4 md:grid-cols-2">
         <div className="min-w-0">
           <div>
-            <div className="mb-2 text-xs font-medium text-muted-foreground">Labelled targets</div>
+            <div className="mb-2 text-sm font-medium text-muted-foreground">Labelled targets</div>
             {!hasSignals
               ? <p className="text-sm text-muted-foreground">No accepted signals match this exact version and device.</p>
               : (
                 <div className="flex flex-wrap gap-2">
                   {result.click_labels.map((item) => (
-                    <span key={item.label} className="inline-flex max-w-full items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs">
+                    <span key={item.label} className="inline-flex max-w-full items-center gap-2 rounded-md border bg-background px-2 py-1 text-sm">
                       <code className="truncate">{item.label}</code>
                       <span className="shrink-0 tabular-nums text-muted-foreground">{item.count} · {item.actors}</span>
                     </span>
@@ -471,8 +564,8 @@ function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode
           </div>
         </div>
         <details className="rounded-md border bg-background px-3 py-2">
-          <DisclosureSummary className="inline-flex cursor-pointer items-center text-xs font-medium">How to read this evidence</DisclosureSummary>
-          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{result.causality}</p>
+          <DisclosureSummary className="inline-flex cursor-pointer items-center text-sm font-medium">How to read this evidence</DisclosureSummary>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{result.causality}</p>
         </details>
       </div>
 
@@ -486,7 +579,7 @@ function SectionDropoff({ sections, total }: { sections: VisualExperienceRespons
     <div>
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="text-sm font-medium">Section drop-off</div>
-        <div className="text-xs text-muted-foreground">Denominator: {total} page-view sessions</div>
+        <div className="text-sm text-muted-foreground">Denominator: {total} page-view sessions</div>
       </div>
       {sections.length === 0
         ? <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">No named section exposure yet. Add <code>data-poolstatis-section</code> to real blocks.</div>
@@ -505,7 +598,7 @@ function SectionDropoff({ sections, total }: { sections: VisualExperienceRespons
               <TableBody>
                 {sections.map((section) => (
                   <TableRow key={section.section}>
-                    <TableCell><code className="text-xs">{section.section}</code></TableCell>
+                    <TableCell><code className="text-sm">{section.section}</code></TableCell>
                     <TableCell className="tabular-nums">{section.sessions}</TableCell>
                     <TableCell className="tabular-nums">{section.actors}</TableCell>
                     <TableCell className="tabular-nums">{section.percentage}%</TableCell>
@@ -527,9 +620,9 @@ function ComparisonStrip({ comparison }: { comparison: VisualExperienceCompareRe
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-sm font-medium">Compared with {target}</div>
-          <p className="mt-1 text-xs text-muted-foreground">{comparison.causality}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{comparison.causality}</p>
         </div>
-        <div className="flex gap-4 font-mono text-xs">
+        <div className="flex gap-4 font-mono text-sm">
           <span>sessions {signed(comparison.delta.sessions)}</span>
           <span>clicks {signed(comparison.delta.clicks)}</span>
           <span>actors {signed(comparison.delta.actors)}</span>
@@ -538,7 +631,7 @@ function ComparisonStrip({ comparison }: { comparison: VisualExperienceCompareRe
       {comparison.delta.sections.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           {comparison.delta.sections.map((section) => (
-            <span key={section.section} className="rounded-md border bg-background px-2 py-1 font-mono text-xs">
+            <span key={section.section} className="rounded-md border bg-background px-2 py-1 font-mono text-sm">
               {section.section}{' '}
               {section.percentage_points === null
                 ? 'taxonomy mismatch'
@@ -619,52 +712,46 @@ function SnapshotSetup({
   );
 
   return (
-    <Panel title="Add a deploy snapshot" right={<span className="text-xs text-muted-foreground">PNG / WebP · 5 MB max · 90 days</span>}>
-      {surfaces.length === 0
-        ? <p className="text-sm text-muted-foreground">Create a capture surface first.</p>
-        : (
-          <>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <Field label="Surface">
-                <Select value={surface} onValueChange={setSurface}>
-                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                  <SelectContent>{surfaces.map((item) => <SelectItem key={item.key} value={item.key}>{item.name}</SelectItem>)}</SelectContent>
-                </Select>
-              </Field>
-              <Field label="Route">
-                <Select value={route} onValueChange={setRoute}>
-                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                  <SelectContent>{availableRoutes.map((item) => <SelectItem key={item.key} value={item.key}>{item.name}</SelectItem>)}</SelectContent>
-                </Select>
-              </Field>
-              <Field label="Version"><Input value={version} onChange={(event) => setVersion(event.target.value)} placeholder="2026.07.27-abc123" /></Field>
-              <Field label="Release hash"><Input value={releaseHash} onChange={(event) => setReleaseHash(event.target.value)} placeholder="abc123" /></Field>
-              <Field label="Device">
-                <Select value={device} onValueChange={(value) => setDevice(value as 'desktop' | 'mobile')}>
-                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem value="desktop">Desktop</SelectItem><SelectItem value="mobile">Mobile</SelectItem></SelectContent>
-                </Select>
-              </Field>
-              <Field label="Viewport width"><Input inputMode="numeric" value={viewportWidth} onChange={(event) => setViewportWidth(event.target.value)} /></Field>
-              <Field label="Viewport height"><Input inputMode="numeric" value={viewportHeight} onChange={(event) => setViewportHeight(event.target.value)} /></Field>
-              <Field label="Document width"><Input inputMode="numeric" value={documentWidth} onChange={(event) => setDocumentWidth(event.target.value)} /></Field>
-              <Field label="Document height"><Input inputMode="numeric" value={documentHeight} onChange={(event) => setDocumentHeight(event.target.value)} /></Field>
-              <Field label="Snapshot file">
-                <Input
-                  type="file"
-                  accept="image/png,image/webp"
-                  onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                />
-              </Field>
-            </div>
-            <div className="mt-4 flex justify-end">
-              <Button onClick={upload} disabled={!valid || busy}>
-                {busy ? <Loader2 className="size-4 animate-spin" /> : <Add className="size-4" />}
-                Upload immutable snapshot
-              </Button>
-            </div>
-          </>
-        )}
+    <Panel title="Add a deploy snapshot" right={<span className="text-sm text-muted-foreground">PNG / WebP · 5 MB max · 90 days</span>}>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <Field label="Surface">
+          <Select value={surface} onValueChange={setSurface}>
+            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>{surfaces.map((item) => <SelectItem key={item.key} value={item.key}>{item.name}</SelectItem>)}</SelectContent>
+          </Select>
+        </Field>
+        <Field label="Route">
+          <Select value={route} onValueChange={setRoute}>
+            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>{availableRoutes.map((item) => <SelectItem key={item.key} value={item.key}>{item.name}</SelectItem>)}</SelectContent>
+          </Select>
+        </Field>
+        <Field label="Version"><Input value={version} onChange={(event) => setVersion(event.target.value)} placeholder="2026.07.27-abc123" /></Field>
+        <Field label="Release hash"><Input value={releaseHash} onChange={(event) => setReleaseHash(event.target.value)} placeholder="abc123" /></Field>
+        <Field label="Device">
+          <Select value={device} onValueChange={(value) => setDevice(value as 'desktop' | 'mobile')}>
+            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="desktop">Desktop</SelectItem><SelectItem value="mobile">Mobile</SelectItem></SelectContent>
+          </Select>
+        </Field>
+        <Field label="Viewport width"><Input inputMode="numeric" value={viewportWidth} onChange={(event) => setViewportWidth(event.target.value)} /></Field>
+        <Field label="Viewport height"><Input inputMode="numeric" value={viewportHeight} onChange={(event) => setViewportHeight(event.target.value)} /></Field>
+        <Field label="Document width"><Input inputMode="numeric" value={documentWidth} onChange={(event) => setDocumentWidth(event.target.value)} /></Field>
+        <Field label="Document height"><Input inputMode="numeric" value={documentHeight} onChange={(event) => setDocumentHeight(event.target.value)} /></Field>
+        <Field label="Snapshot file">
+          <Input
+            type="file"
+            accept="image/png,image/webp"
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
+        </Field>
+      </div>
+      <div className="mt-4 flex justify-end">
+        <Button onClick={upload} disabled={!valid || busy}>
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <Add className="size-4" />}
+          Upload immutable snapshot
+        </Button>
+      </div>
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     </Panel>
   );
@@ -780,39 +867,33 @@ function RouteForm({
 
   return (
     <Panel title="Add route to a surface">
-      {activeSurfaces.length === 0
-        ? <EmptyState headline="No active surface" lead="Create or reactivate a capture surface before adding routes." />
-        : (
-          <>
-            <div className="grid gap-3 md:grid-cols-2">
-              <Field label="Surface">
-                <Select value={surface} onValueChange={setSurface}>
-                  <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {activeSurfaces.map((item) => (
-                      <SelectItem key={item.key} value={item.key}>{item.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Route key">
-                <Input value={key} onChange={(event) => setKey(event.target.value)} placeholder="docs" />
-              </Field>
-              <Field label="Route name">
-                <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Documentation" />
-              </Field>
-              <Field label="Canonical path pattern">
-                <Input value={pathPattern} onChange={(event) => setPathPattern(event.target.value)} placeholder="/docs/*" />
-              </Field>
-            </div>
-            <div className="mt-4 flex justify-end">
-              <Button onClick={submit} disabled={!valid || busy}>
-                {busy ? <Loader2 className="size-4 animate-spin" /> : <Add className="size-4" />}
-                Add route
-              </Button>
-            </div>
-          </>
-        )}
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Surface">
+          <Select value={surface} onValueChange={setSurface}>
+            <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {activeSurfaces.map((item) => (
+                <SelectItem key={item.key} value={item.key}>{item.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label="Route key">
+          <Input value={key} onChange={(event) => setKey(event.target.value)} placeholder="docs" />
+        </Field>
+        <Field label="Route name">
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Documentation" />
+        </Field>
+        <Field label="Canonical path pattern">
+          <Input value={pathPattern} onChange={(event) => setPathPattern(event.target.value)} placeholder="/docs/*" />
+        </Field>
+      </div>
+      <div className="mt-4 flex justify-end">
+        <Button onClick={submit} disabled={!valid || busy}>
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <Add className="size-4" />}
+          Add route
+        </Button>
+      </div>
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     </Panel>
   );
@@ -846,38 +927,34 @@ function SurfacesTable({
 
   return (
     <Panel title="Capture registry">
-      {surfaces.length === 0
-        ? <EmptyState headline="No surfaces" lead="Declare a purpose and canonical route before enabling BrowserExperience." />
-        : (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader><TableRow><TableHead>Surface</TableHead><TableHead>Routes</TableHead><TableHead>Purpose</TableHead><TableHead>Capture status</TableHead><TableHead /></TableRow></TableHeader>
-              <TableBody>
-                {surfaces.map((surface) => (
-                  <TableRow key={surface.id}>
-                    <TableCell><div className="font-medium">{surface.name}</div><code className="text-xs text-muted-foreground">{surface.key}</code></TableCell>
-                    <TableCell>{routes.filter((item) => item.surface_key === surface.key).map((item) => <div key={item.id} className="text-xs"><code>{item.key}</code> · {item.path_pattern}</div>)}</TableCell>
-                    <TableCell className="max-w-lg text-sm text-muted-foreground">{surface.purpose}</TableCell>
-                    <TableCell className="text-xs">
-                      <div>{surface.status}</div>
-                      <div className="mt-1 whitespace-nowrap text-muted-foreground">
-                        {surface.last_capture_at
-                          ? `Last accepted capture ${formatDate(surface.last_capture_at)}`
-                          : 'No accepted capture yet'}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="inline-flex items-center gap-2">
-                        <Button variant="link" size="sm" asChild><a href="#experience-evidence">View click details</a></Button>
-                        {surface.status === 'active' && <Button variant="outline" size="sm" disabled={busy === surface.key} onClick={() => archive(surface.key)}>Archive</Button>}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader><TableRow><TableHead>Surface</TableHead><TableHead>Routes</TableHead><TableHead>Purpose</TableHead><TableHead>Capture status</TableHead><TableHead /></TableRow></TableHeader>
+          <TableBody>
+            {surfaces.map((surface) => (
+              <TableRow key={surface.id}>
+                <TableCell><div className="font-medium">{surface.name}</div><code className="text-sm text-muted-foreground">{surface.key}</code></TableCell>
+                <TableCell>{routes.filter((item) => item.surface_key === surface.key).map((item) => <div key={item.id} className="text-sm"><code>{item.key}</code> · {item.path_pattern}</div>)}</TableCell>
+                <TableCell className="max-w-lg text-sm text-muted-foreground">{surface.purpose}</TableCell>
+                <TableCell className="text-sm">
+                  <div>{surface.status}</div>
+                  <div className="mt-1 whitespace-nowrap text-muted-foreground">
+                    {surface.last_capture_at
+                      ? `Last accepted capture ${formatDate(surface.last_capture_at)}`
+                      : 'No accepted capture yet'}
+                  </div>
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="inline-flex items-center gap-2">
+                    <Button variant="link" size="sm" asChild><a href="#experience-evidence">View click details</a></Button>
+                    {surface.status === 'active' && <Button variant="outline" size="sm" disabled={busy === surface.key} onClick={() => archive(surface.key)}>Archive</Button>}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     </Panel>
   );
@@ -926,9 +1003,9 @@ function AggregateClickEvidence({ surfaces, env }: { surfaces: ExperienceSurface
     <div id="experience-evidence" className="scroll-mt-4">
       <Panel
         title="Aggregate click details"
-        right={<span className="text-xs text-muted-foreground">snapshot optional · accepted events only</span>}
+        right={<span className="text-sm text-muted-foreground">snapshot optional · accepted events only</span>}
       >
-        <p className="mb-3 text-xs text-muted-foreground">
+        <p className="mb-3 text-sm text-muted-foreground">
           This normalized grid remains available before a deploy snapshot exists. Use the versioned map above for layout-accurate decisions.
         </p>
         <div className="flex flex-wrap gap-2">
@@ -980,7 +1057,7 @@ function AggregateClickEvidence({ surfaces, env }: { surfaces: ExperienceSurface
                 <TableHeader><TableRow><TableHead>Label</TableHead><TableHead>Clicks</TableHead><TableHead>Actors</TableHead></TableRow></TableHeader>
                 <TableBody>{result.labels.map((label) => (
                   <TableRow key={label.label}>
-                    <TableCell><code className="text-xs">{label.label}</code></TableCell>
+                    <TableCell><code className="text-sm">{label.label}</code></TableCell>
                     <TableCell>{fmtNum(label.count)}</TableCell>
                     <TableCell>{fmtNum(label.actors)}</TableCell>
                   </TableRow>
@@ -1021,7 +1098,7 @@ function SessionTimeline({ surfaces, env }: { surfaces: ExperienceSurface[]; env
   };
 
   return (
-    <Panel title="Session details" right={<span className="text-xs text-muted-foreground">known session id · numeric evidence only</span>}>
+    <Panel title="Session details" right={<span className="text-sm text-muted-foreground">known session id · numeric evidence only</span>}>
       <div className="flex flex-wrap gap-2">
         <Select value={surface} onValueChange={setSurface}>
           <SelectTrigger className="h-9 min-w-44"><SelectValue placeholder="Choose surface" /></SelectTrigger>
@@ -1038,9 +1115,9 @@ function SessionTimeline({ surfaces, env }: { surfaces: ExperienceSurface[]; env
             <TableBody>{result.events.map((event) => (
               <TableRow key={`${event.sequence}-${event.kind}`}>
                 <TableCell>{event.sequence}</TableCell>
-                <TableCell><code className="text-xs">{event.kind}</code></TableCell>
-                <TableCell><code className="text-xs">{event.route}</code></TableCell>
-                <TableCell className="text-xs text-muted-foreground">
+                <TableCell><code className="text-sm">{event.kind}</code></TableCell>
+                <TableCell><code className="text-sm">{event.route}</code></TableCell>
+                <TableCell className="text-sm text-muted-foreground">
                   {event.label ?? event.section ?? (event.depth !== undefined ? `${event.depth}%` : event.error_type ?? '—')}
                 </TableCell>
               </TableRow>
@@ -1053,7 +1130,7 @@ function SessionTimeline({ surfaces, env }: { surfaces: ExperienceSurface[]; env
 }
 
 function Filter({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className="space-y-1.5"><div className="text-xs font-medium text-muted-foreground">{label}</div>{children}</div>;
+  return <div className="space-y-1.5"><div className="text-sm font-medium text-muted-foreground">{label}</div>{children}</div>;
 }
 
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {

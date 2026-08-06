@@ -39,7 +39,13 @@ function store(client: Record<string, unknown>) {
 }
 
 describe('live customer screen UX', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+  });
 
   it('keeps funnel purpose and steps in a responsive summary with an accessible detail toggle', async () => {
     mockedStore.mockReturnValue(store({
@@ -811,7 +817,10 @@ describe('live customer screen UX', () => {
         status: 'active', created_at: '2026-07-01', updated_at: '2026-07-01',
         last_capture_at: '2026-07-27T10:00:00.000Z',
       }]),
-      experienceRoutes: vi.fn().mockResolvedValue([]),
+      experienceRoutes: vi.fn().mockResolvedValue([{
+        id: 'r1', surface_key: 'checkout', key: 'checkout', name: 'Checkout', path_pattern: '/checkout',
+        created_at: '2026-07-01', updated_at: '2026-07-01',
+      }]),
       experienceSnapshots: vi.fn().mockResolvedValue([]),
       interactionMap: vi.fn().mockResolvedValue({
         kind: 'interaction_map',
@@ -830,5 +839,36 @@ describe('live customer screen UX', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load aggregate clicks' }));
     expect(await screen.findByText('checkout.submit')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: /4 accepted clicks/ })).toBeInTheDocument();
+  });
+
+  it('turns an empty Visual Experience project into one agent-first next action', async () => {
+    mockedStore.mockReturnValue(store({
+      experienceSurfaces: vi.fn().mockResolvedValue([]),
+      experienceRoutes: vi.fn().mockResolvedValue([]),
+      experienceSnapshots: vi.fn().mockResolvedValue([]),
+    }));
+
+    const { container } = render(<Experience />);
+
+    expect(await screen.findByText('Set up Browser Experience')).toBeInTheDocument();
+    expect(screen.queryByText('No active surface')).not.toBeInTheDocument();
+    expect(screen.queryByText('No surfaces')).not.toBeInTheDocument();
+    expect(screen.queryByText('Create a capture surface first.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy agent task' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Task copied' })).toBeInTheDocument());
+    const task = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] as string;
+    expect(task).toContain('create_experience_surface');
+    expect(task).toContain('register_experience_route');
+    expect(task).toContain('project "alpha"');
+    expect(task).toContain('environment "prod"');
+    expect(task).toContain('Do not ask me to paste');
+    expect(task).not.toMatch(/(?:pk|sk|pt)_[A-Za-z0-9_-]+/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set up manually' }));
+    const configuration = screen.getByText(/Capture configuration and session details/).closest('details');
+    expect(configuration).toHaveAttribute('open');
+    expect(screen.getByText('New capture surface')).toBeInTheDocument();
+    expect(container.querySelector('.text-xs')).toBeNull();
   });
 });
