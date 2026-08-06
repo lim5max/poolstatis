@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Onboarding } from './screens/Onboarding';
@@ -68,6 +68,7 @@ describe('Product Experience V2 onboarding', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
+    window.localStorage.clear();
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
@@ -312,6 +313,7 @@ describe('condensed Setup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
+    window.localStorage.clear();
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
@@ -522,16 +524,25 @@ describe('condensed Setup', () => {
   });
 
   it('records MCP connected once only after both SDK proof and agent proof exist', async () => {
-    const proof = {
-      ...connectedProof,
-      gates: connectedProof.gates.map((gate) => gate.key === 'agent_connected' ? { ...gate, complete: true } : gate),
+    let observation = 0;
+    const onboardingStatus = vi.fn().mockImplementation(async () => {
+      observation += 1;
+      return {
+        ...connectedProof,
+        gates: connectedProof.gates.map((gate) => gate.key === 'agent_connected' ? {
+          ...gate,
+          complete: true,
+          evidence: { observed_at: `2026-08-06T10:00:${String(observation).padStart(2, '0')}.000Z` },
+        } : gate),
+      };
+    });
+    const client = {
+      onboardingStatus,
+      projectIntent: vi.fn().mockResolvedValue({ intent: null }),
     };
     const storeFor = (project: string) => ({
       account: { organization: { name: 'Acme' }, user: { id: 'user-mcp' } },
-      client: {
-        onboardingStatus: vi.fn().mockResolvedValue(proof),
-        projectIntent: vi.fn().mockResolvedValue({ intent: null }),
-      },
+      client,
       baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
       projects: [
         { slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 },
@@ -550,9 +561,71 @@ describe('condensed Setup', () => {
     view.unmount();
     render(<MemoryRouter><Setup /></MemoryRouter>).unmount();
     expect(telemetryEvents('mcp.connected')).toHaveLength(1);
+    expect(observation).toBeGreaterThan(1);
+    const persistedDedupe = Array.from(
+      { length: window.localStorage.length },
+      (_, index) => window.localStorage.getItem(window.localStorage.key(index) ?? '') ?? '',
+    ).join(' ');
+    expect(persistedDedupe).not.toContain('alpha');
+    expect(persistedDedupe).not.toContain('observed_at');
+    expect(persistedDedupe).not.toContain('2026-08-06');
     mockedStore.mockReturnValue(storeFor('beta') as never);
     render(<MemoryRouter><Setup /></MemoryRouter>);
     await waitFor(() => expect(telemetryEvents('mcp.connected')).toHaveLength(2));
+  });
+
+  it('drops a stale fix-task response after the selected project unmounts it', async () => {
+    let resolveAlpha!: (response: SetupTaskResponse) => void;
+    const alphaResponse = new Promise<SetupTaskResponse>((resolve) => { resolveAlpha = resolve; });
+    const requestTask = vi.fn((slug: string) => slug === 'alpha'
+      ? alphaResponse
+      : Promise.resolve(setupTask('codex', 'first_query_produced')));
+    const feedback = vi.fn().mockResolvedValue({ recorded: true });
+    const proof = {
+      ...connectedProof,
+      next_blocker: {
+        key: 'first_query_produced', complete: false, required: true, evidence: {},
+        blocker: 'No answer yet.', next_action: 'Run a query.',
+      },
+    };
+    const client = {
+      onboardingStatus: vi.fn().mockResolvedValue(proof),
+      projectIntent: vi.fn().mockResolvedValue({
+        intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
+      }),
+      setupTask: requestTask,
+      setupTaskFeedback: feedback,
+    };
+    const storeFor = (project: string) => ({
+      client,
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [
+        { slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 },
+        { slug: 'beta', name: 'Beta', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 },
+      ],
+      project, env: 'prod',
+    });
+    mockedStore.mockReturnValue(storeFor('alpha') as never);
+    const view = render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+    await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', expect.any(Object)));
+
+    mockedStore.mockReturnValue(storeFor('beta') as never);
+    view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
+    expect(await screen.findByText('Beta · prod')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Copy fix task' })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveAlpha(setupTask('codex', 'first_query_produced'));
+      await alphaResponse;
+    });
+
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(feedback).not.toHaveBeenCalled();
+    expect(telemetryEvents('onboarding.task_generated')).toHaveLength(0);
+    expect(telemetryEvents('onboarding.task_copied')).toHaveLength(0);
+    expect(screen.queryByText('Fix task copied')).not.toBeInTheDocument();
   });
 
   it('clears one-time key and error state when project or environment changes', async () => {
@@ -638,5 +711,54 @@ describe('condensed Setup', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('beta', { agent_id: 'codex', prefer_llm: false, env: 'dev' }));
+  });
+
+  it('fully resets advanced webhook and danger-zone state when project or environment changes', async () => {
+    const webhookDestinations = vi.fn().mockResolvedValue([]);
+    const purgeData = vi.fn().mockResolvedValue({ events_deleted: 3, entities_deleted: 0 });
+    const client = {
+      onboardingStatus: vi.fn().mockResolvedValue(connectedProof),
+      projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+      standard: vi.fn().mockResolvedValue('standard'),
+      webhookDestinations,
+      purgeData,
+    };
+    const storeFor = (project: string, env = 'prod') => ({
+      client,
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [
+        { slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 },
+        { slug: 'beta', name: 'Beta', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 },
+      ],
+      project, env,
+    });
+    mockedStore.mockReturnValue(storeFor('alpha') as never);
+    const view = render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    const rows = await screen.findByLabelText('Setup status');
+    fireEvent.click(within(rows).getByRole('button', { name: 'Open' }));
+    fireEvent.change(await screen.findByLabelText('Webhook URL'), { target: { value: 'https://hooks.alpha.test/private' } });
+    fireEvent.change(screen.getByLabelText('Webhook authorization'), { target: { value: 'Bearer alpha-private' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Purge event data' }));
+    fireEvent.change(await screen.findByPlaceholderText('alpha'), { target: { value: 'alpha' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purge event data' }).at(-1)!);
+    expect(await screen.findByText('Purged prod: 3 events, 0 entities removed.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Purge entities' }));
+    fireEvent.change(await screen.findByPlaceholderText('alpha'), { target: { value: 'alpha' } });
+    expect(screen.getByRole('heading', { name: 'Purge entities?' })).toBeInTheDocument();
+
+    mockedStore.mockReturnValue(storeFor('beta', 'dev') as never);
+    view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
+    expect(await screen.findByText('Beta · dev')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByLabelText('Advanced setup and administration')).not.toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: 'Purge entities?' })).not.toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByLabelText('Setup status')).getByRole('button', { name: 'Open' }));
+    expect(await screen.findByLabelText('Webhook URL')).toHaveValue('');
+    expect(screen.getByLabelText('Webhook authorization')).toHaveValue('');
+    expect(screen.queryByText('Purged prod: 3 events, 0 entities removed.')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('alpha')).not.toBeInTheDocument();
+    await waitFor(() => expect(webhookDestinations).toHaveBeenCalledWith('beta'));
   });
 });

@@ -44,6 +44,7 @@ describe('optional product telemetry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
+    window.localStorage.clear();
   });
 
   it('emits only the exact typed allowlist and never serializes custom text, tasks, credentials, or URLs', () => {
@@ -145,6 +146,16 @@ describe('optional product telemetry', () => {
     expect(claimProductTelemetryOnce('home:beta:prod:website_overview:trusted')).toBe(true);
     expect(claimProductTelemetryOnce('home:alpha:dev:website_overview:trusted')).toBe(true);
     expect(claimProductTelemetryOnce('raw project path?q=secret')).toBe(false);
+
+    const durableKey = 'setup:mcp_connected:private-project:prod';
+    expect(claimProductTelemetryOnce(durableKey, 'local')).toBe(true);
+    expect(claimProductTelemetryOnce(durableKey, 'local')).toBe(false);
+    const persisted = Array.from(
+      { length: window.localStorage.length },
+      (_, index) => window.localStorage.getItem(window.localStorage.key(index) ?? '') ?? '',
+    ).join(' ');
+    expect(persisted).not.toContain('private-project');
+    expect(persisted).not.toContain(durableKey);
   });
 
   it('swallows synchronous and asynchronous transport failures', async () => {

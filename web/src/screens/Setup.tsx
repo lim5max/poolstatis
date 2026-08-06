@@ -135,7 +135,6 @@ export function Setup() {
   const serverBlocker = proofData?.next_blocker ?? null;
   const blockerCode = serverBlocker ? normalizeBlockerKey(serverBlocker.key) : null;
   const blockerEvidence = localEvidenceFingerprint(serverBlocker?.evidence ?? {});
-  const agentEvidence = localEvidenceFingerprint(agentGate?.evidence ?? {});
 
   useLayoutEffect(() => {
     setFreshIngestKey(null);
@@ -143,6 +142,7 @@ export function Setup() {
     setKeyError(null);
     setConnectionOpen(false);
     setMcpOpen(window.location.hash === '#agent-access');
+    setAdvancedOpen(false);
   }, [uiScope]);
 
   useEffect(() => {
@@ -159,9 +159,9 @@ export function Setup() {
   }, [account?.user?.id, blockerCode, blockerEvidence, telemetryScope]);
 
   useEffect(() => {
-    if (!eventSeen || !agentGate?.complete || !claimProductTelemetryOnce(`setup:mcp_connected:${telemetryScope}:${agentEvidence}`)) return;
+    if (!eventSeen || !agentGate?.complete || !claimProductTelemetryOnce(`setup:mcp_connected:${telemetryScope}`, 'local')) return;
     captureProductTelemetry('mcp.connected', {}, { distinctId: account?.user?.id });
-  }, [account?.user?.id, agentEvidence, agentGate?.complete, eventSeen, telemetryScope]);
+  }, [account?.user?.id, agentGate?.complete, eventSeen, telemetryScope]);
 
   const createIngestKey = async () => {
     if (!client || !project) return;
@@ -324,7 +324,7 @@ export function Setup() {
       )}
 
       {advancedOpen && (
-        <section className="space-y-4 rounded-lg border bg-card p-4" aria-label="Advanced setup and administration">
+        <section key={`${uiScope}:advanced`} className="space-y-4 rounded-lg border bg-card p-4" aria-label="Advanced setup and administration">
           <KeyMap />
           <HttpExample serverUrl={serverUrl} />
           <WebhookSetup project={project} />
@@ -381,6 +381,14 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
   const [fallbackTask, setFallbackTask] = useState<{ task: string; blocker: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const copyTracked = useRef(false);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const recordFeedback = async (blocker: string) => {
     await client.setupTaskFeedback(projectSlug, {
@@ -402,6 +410,7 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
         kind: 'fix',
         env,
       });
+      if (!mounted.current) return;
       const task = response.task.trim();
       const responseBlocker = typeof response.blocker === 'string'
         ? normalizeBlockerKey(response.blocker)
@@ -418,9 +427,11 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
       try {
         await navigator.clipboard.writeText(task);
       } catch {
+        if (!mounted.current) return;
         setFallbackTask({ task, blocker: responseBlocker });
         return;
       }
+      if (!mounted.current) return;
       if (!copyTracked.current) {
         copyTracked.current = true;
         captureProductTelemetry('onboarding.task_copied', {
@@ -428,12 +439,14 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
           method: 'clipboard',
         }, { distinctId: telemetryUserId });
       }
+      if (!mounted.current) return;
       await recordFeedback(responseBlocker);
+      if (!mounted.current) return;
       setCopied(true);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not prepare the fix task.');
+      if (mounted.current) setError(caught instanceof Error ? caught.message : 'Could not prepare the fix task.');
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
@@ -449,13 +462,15 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
           method: 'manual',
         }, { distinctId: telemetryUserId });
       }
+      if (!mounted.current) return;
       await recordFeedback(fallbackTask.blocker);
+      if (!mounted.current) return;
       setFallbackTask(null);
       setCopied(true);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not record the copied task.');
+      if (mounted.current) setError(caught instanceof Error ? caught.message : 'Could not record the copied task.');
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 

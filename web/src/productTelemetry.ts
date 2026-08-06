@@ -59,7 +59,10 @@ export interface ProductTelemetryRuntime {
 }
 
 const ANONYMOUS_ID_KEY = 'poolstatis.telemetry.anonymous_id';
-const DEDUPE_STORAGE_KEY = 'poolstatis.telemetry.once.v1';
+const DEDUPE_STORAGE_KEYS = {
+  session: 'poolstatis.telemetry.once.session.v2',
+  local: 'poolstatis.telemetry.once.local.v2',
+} as const;
 const MAX_DEDUPE_KEYS = 256;
 const INGEST_KEY = /^pk_[a-f0-9]{48}$/i;
 const SAFE_ACTOR_ID = /^[a-z0-9][a-z0-9:_-]{0,127}$/i;
@@ -88,24 +91,41 @@ const HOME_ACTIONS = new Set<TelemetryHomeAction>([
 ]);
 const memoryDedupeKeys = new Set<string>();
 
-export function claimProductTelemetryOnce(idempotencyKey: string): boolean {
+export function claimProductTelemetryOnce(
+  idempotencyKey: string,
+  persistence: keyof typeof DEDUPE_STORAGE_KEYS = 'session',
+): boolean {
   const key = idempotencyKey.trim();
   if (!/^[a-z0-9][a-z0-9:._-]{0,239}$/i.test(key)) return false;
+  const token = dedupeToken(key);
+  const memoryKey = `${persistence}:${token}`;
   try {
-    const storage = window.sessionStorage;
-    const keys = parseDedupeKeys(storage.getItem(DEDUPE_STORAGE_KEY));
-    if (keys.includes(key)) return false;
-    storage.setItem(DEDUPE_STORAGE_KEY, JSON.stringify([...keys.slice(-(MAX_DEDUPE_KEYS - 1)), key]));
+    const storage = persistence === 'local' ? window.localStorage : window.sessionStorage;
+    const storageKey = DEDUPE_STORAGE_KEYS[persistence];
+    const keys = parseDedupeKeys(storage.getItem(storageKey));
+    if (keys.includes(token)) return false;
+    storage.setItem(storageKey, JSON.stringify([...keys.slice(-(MAX_DEDUPE_KEYS - 1)), token]));
     return true;
   } catch {
-    if (memoryDedupeKeys.has(key)) return false;
+    if (memoryDedupeKeys.has(memoryKey)) return false;
     if (memoryDedupeKeys.size >= MAX_DEDUPE_KEYS) {
       const oldest = memoryDedupeKeys.values().next().value as string | undefined;
       if (oldest) memoryDedupeKeys.delete(oldest);
     }
-    memoryDedupeKeys.add(key);
+    memoryDedupeKeys.add(memoryKey);
     return true;
   }
+}
+
+function dedupeToken(value: string): string {
+  let left = 0x811c9dc5;
+  let right = 0x9e3779b9;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    left = Math.imul(left ^ code, 0x01000193);
+    right = Math.imul(right ^ (code + index), 0x85ebca6b);
+  }
+  return `${(left >>> 0).toString(16).padStart(8, '0')}${(right >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 export function createProductTelemetry(runtime: ProductTelemetryRuntime): CaptureProductTelemetry {
@@ -325,7 +345,7 @@ function parseDedupeKeys(raw: string | null): string[] {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((item): item is string => (
-      typeof item === 'string' && /^[a-z0-9][a-z0-9:._-]{0,239}$/i.test(item)
+      typeof item === 'string' && /^[a-f0-9]{16}$/.test(item)
     )).slice(-MAX_DEDUPE_KEYS);
   } catch {
     return [];
