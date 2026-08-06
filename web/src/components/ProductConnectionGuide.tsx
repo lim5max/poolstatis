@@ -59,6 +59,8 @@ export interface ProductConnectionGuideProps {
   onConnectMcp?: () => void;
   telemetryUserId?: string | null;
   telemetryEnvironment?: string | null;
+  showProgress?: boolean;
+  onStepChange?: (step: 1 | 2 | 3) => void;
 }
 
 export function ProductConnectionGuide({
@@ -84,6 +86,8 @@ export function ProductConnectionGuide({
   onConnectMcp,
   telemetryUserId,
   telemetryEnvironment: telemetryEnvironmentName = eventEnvironment,
+  showProgress = true,
+  onStepChange,
 }: ProductConnectionGuideProps) {
   const hasKey = Boolean(ingestKey) || keyReady === true;
   const [keySaved, setKeySaved] = useState(!ingestKey && hasKey);
@@ -104,6 +108,17 @@ export function ProductConnectionGuide({
     ? taskResponse.plan as { release_manifest?: { sdk?: string }; smoke_action?: string }
     : null;
   const sdkPackage = plan?.release_manifest?.sdk ?? DEFAULT_SDK_PACKAGE;
+  const currentStep: 1 | 2 | 3 = eventSeen
+    ? 3
+    : !hasKey || (Boolean(ingestKey) && !keySaved)
+      ? 1
+      : !taskCopied
+        ? 2
+        : 3;
+
+  useEffect(() => {
+    onStepChange?.(currentStep);
+  }, [currentStep, onStepChange]);
 
   useEffect(() => {
     if (eventSeen || !hasKey || (ingestKey && !keySaved) || taskCopied || taskResponse || !getSetupTask) return;
@@ -154,7 +169,7 @@ export function ProductConnectionGuide({
 
     return (
       <div className="space-y-4">
-        <ProgressLine current={3} complete />
+        {showProgress && <ConnectionProgress current={3} complete />}
         <section className="rounded-lg border border-emerald-500/35 bg-emerald-500/5 p-4 sm:p-5" aria-live="polite">
           <div className="flex items-start gap-3">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
@@ -207,9 +222,9 @@ export function ProductConnectionGuide({
   if (!hasKey || (ingestKey && !keySaved)) {
     return (
       <div className="space-y-4">
-        <ProgressLine current={1} />
+        {showProgress && <ConnectionProgress current={1} />}
         <section className="rounded-lg border bg-card p-4 sm:p-5" aria-labelledby="key-title">
-          <h2 id="key-title" className="text-lg font-semibold">Product key ready</h2>
+          <h2 id="key-title" className="text-lg font-semibold">{ingestKey ? 'Save your product key' : 'Create a product key'}</h2>
           {ingestKey ? (
             <>
               <div className="mt-4 rounded-md border bg-muted/15 p-3">
@@ -263,7 +278,7 @@ export function ProductConnectionGuide({
   if (!taskCopied) {
     return (
       <div className="space-y-4">
-        <ProgressLine current={2} />
+        {showProgress && <ConnectionProgress current={2} />}
         <section className="rounded-lg border bg-card p-4 sm:p-5" aria-labelledby="agent-title">
           <h2 id="agent-title" className="text-lg font-semibold">Which agent edits your code?</h2>
           <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup" aria-labelledby="agent-title">
@@ -358,7 +373,7 @@ export function ProductConnectionGuide({
 
   return (
     <div className="space-y-4">
-      <ProgressLine current={3} />
+      {showProgress && <ConnectionProgress current={3} />}
       <section className="rounded-lg border bg-card p-4 sm:p-5" aria-labelledby="waiting-title">
         <div className="flex items-start gap-3">
           <span className="mt-1 size-2.5 shrink-0 animate-pulse rounded-full bg-primary motion-reduce:animate-none" aria-hidden="true" />
@@ -380,7 +395,7 @@ export function ProductConnectionGuide({
   );
 }
 
-function ProgressLine({ current, complete = false }: { current: 1 | 2 | 3; complete?: boolean }) {
+export function ConnectionProgress({ current, complete = false }: { current: 1 | 2 | 3; complete?: boolean }) {
   const steps = ['Product key', 'Agent task', 'First event'];
   return (
     <ol className="flex items-center gap-2 text-xs text-muted-foreground" aria-label="Connection progress">

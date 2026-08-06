@@ -159,7 +159,11 @@ export async function hostedAccessToken(
 ): Promise<string> {
   let current = callbackUser ?? await manager.getUser();
   if (current?.expired && current.refresh_token) {
-    current = await manager.signinSilent({ resource: audience });
+    try {
+      current = await manager.signinSilent({ resource: audience });
+    } catch {
+      throw new Error('Your session expired. Sign in again.');
+    }
   }
   if (!current || current.expired) throw new Error('OIDC session is unavailable');
   return current.access_token;

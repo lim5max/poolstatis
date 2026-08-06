@@ -56,8 +56,9 @@ describe('Better Auth portal', () => {
   it('uses the same 3D split shell for sign in and account creation', () => {
     renderPortal('/signup');
 
-    expect(screen.getByRole('region', { name: 'Why Poolstatis' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Why Poolstatis' })).toHaveClass('bg-primary', 'text-primary-foreground');
     expect(screen.getByText('See the signals behind every product decision.')).toBeInTheDocument();
+    expect(screen.getByText('Poolstatis Cloud · beta')).toHaveClass('text-success');
     expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
   });
 

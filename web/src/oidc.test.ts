@@ -105,6 +105,21 @@ describe('customer OIDC client policy', () => {
     )).resolves.toBe('callback-access-token');
   });
 
+  it('turns a raw refresh-token transport failure into a safe reauthentication message', async () => {
+    const manager = {
+      getUser: vi.fn().mockResolvedValue({ expired: true, refresh_token: 'refresh-secret' }),
+      signinSilent: vi.fn().mockRejectedValue(new Error(
+        'Invalid response Content-Type: text/plain;charset=UTF-8, from URL: https://auth.poolstatis.xyz/api/auth/oauth2/token',
+      )),
+    };
+
+    await expect(hostedAccessToken(
+      manager,
+      null,
+      'https://api.poolstatis.xyz',
+    )).rejects.toThrow('Your session expired. Sign in again.');
+  });
+
   it('restores a connected browser through a fresh PKCE redirect without persisting tokens', async () => {
     const persistent = new Map<string, string>();
     const flow = new Map<string, string>();

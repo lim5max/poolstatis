@@ -75,13 +75,15 @@ describe('goal-aware Home', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
+    window.localStorage.clear();
   });
 
   it('renders a website answer from server facts with trust and responsive structure', async () => {
     setStore(websiteClient());
     const view = render(<MemoryRouter><Overview /></MemoryRouter>);
 
-    expect(await screen.findByRole('heading', { name: 'Website performance' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Customize dashboard' })).toBeInTheDocument();
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
     expect(outcomes).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
     expect(within(outcomes).getByText('8')).toBeInTheDocument();
@@ -101,14 +103,36 @@ describe('goal-aware Home', () => {
     view.unmount();
 
     const sameScope = render(<MemoryRouter><Overview /></MemoryRouter>);
-    await screen.findByRole('heading', { name: 'Website performance' });
+    await screen.findByRole('heading', { name: 'Home' });
     expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toHaveLength(1);
     sameScope.unmount();
 
     setStore(websiteClient(), 'beta');
     render(<MemoryRouter><Overview /></MemoryRouter>);
-    await screen.findByRole('heading', { name: 'Website performance' });
+    await screen.findByRole('heading', { name: 'Home' });
     await waitFor(() => expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toHaveLength(2));
+  });
+
+  it('keeps a useful four-card Home when website measurement is not configured yet', async () => {
+    const client = websiteClient();
+    client.metrics.mockResolvedValue([]);
+    setStore(client);
+
+    render(<MemoryRouter><Overview /></MemoryRouter>);
+
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
+    expect(within(outcomes).getByText('Visitors')).toBeInTheDocument();
+    expect(within(outcomes).getByText('Sessions')).toBeInTheDocument();
+    expect(within(outcomes).getByText('Page views')).toBeInTheDocument();
+    expect(within(outcomes).getByText('Average duration')).toBeInTheDocument();
+    expect(within(outcomes).getAllByText('Not configured')).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'Customize dashboard' }));
+    expect(await screen.findByRole('region', { name: 'Dashboard settings' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Card 1'), { target: { value: 'engaged_rate' } });
+    expect(within(outcomes).getByText('Engagement rate')).toBeInTheDocument();
+    expect(within(outcomes).queryByText('Visitors')).not.toBeInTheDocument();
+    expect(localStorage.getItem('poolstatis.home.cards.alpha:prod:website')).toContain('engaged_rate');
   });
 
   it('keeps null intent as a usable legacy project without assigning a mode', async () => {
@@ -138,7 +162,7 @@ describe('goal-aware Home', () => {
     setStore(client);
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
-    expect(await screen.findByRole('heading', { name: 'Product performance' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByText(/Observed · Unavailable · event count unavailable ·/)).toBeInTheDocument();
     expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0);
     expect(screen.queryByText('0%')).not.toBeInTheDocument();

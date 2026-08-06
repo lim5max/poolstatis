@@ -5,6 +5,7 @@ import { useStore, useAsync } from '../store';
 import { MCP_CLIENTS, MCP_RUNNER, mcpClientById, mcpServerConfig, type McpClientId } from '../mcpClients';
 import {
   CopyButton,
+  ConnectionProgress,
   ProductConnectionGuide,
   type AgentId,
   type SetupTaskResponse,
@@ -60,7 +61,8 @@ export function Setup() {
   const [freshIngestKey, setFreshIngestKey] = useState<string | null>(null);
   const [creatingKey, setCreatingKey] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
-  const [connectionOpen, setConnectionOpen] = useState(false);
+  const [connectionOpen, setConnectionOpen] = useState<boolean | null>(null);
+  const [connectionStep, setConnectionStep] = useState<1 | 2 | 3>(1);
   const [mcpOpen, setMcpOpen] = useState(() => window.location.hash === '#agent-access');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const uiScope = `${project ?? ''}\u0000${env}`;
@@ -85,7 +87,7 @@ export function Setup() {
           error: null as string | null,
         };
       } catch (caught) {
-        return { scope: uiScope, value: null, error: (caught as Error).message };
+        return { scope: uiScope, value: null, error: setupStatusMessage(caught) };
       }
     },
     [project, env],
@@ -140,7 +142,8 @@ export function Setup() {
     setFreshIngestKey(null);
     setCreatingKey(false);
     setKeyError(null);
-    setConnectionOpen(false);
+    setConnectionOpen(null);
+    setConnectionStep(1);
     setMcpOpen(window.location.hash === '#agent-access');
     setAdvancedOpen(false);
   }, [uiScope]);
@@ -193,6 +196,13 @@ export function Setup() {
   }
 
   const sourceReady = sourceGate?.complete ?? false;
+  const connectionVisible = connectionOpen ?? Boolean(proofData && !eventSeen);
+  const currentConnectionStep: 1 | 2 | 3 = eventSeen ? 3 : connectionStep;
+  const nextConnectionAction = currentConnectionStep === 1
+    ? 'Create and save a product key'
+    : currentConnectionStep === 2
+      ? 'Copy one setup task to your agent'
+      : 'Send one real event';
   const projectMode = intentData?.intent?.project_mode;
   const reviewBlocker = serverBlocker ? needsRegistryReview(serverBlocker.key) : false;
   const blocker = proof.loading && !proofData
@@ -215,12 +225,46 @@ export function Setup() {
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">What is blocking this project from sending useful data?</p>
       </header>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-y py-3">
-        <div className="text-sm font-medium">
-          {eventSeen ? <>Connected <span className="font-normal text-muted-foreground">· {lastSeen ? `last event ${relativeTime(lastSeen)} · ` : ''}{env}</span></> : <>1 step left <span className="font-normal text-muted-foreground">· Send your first event</span></>}
+      <div className="space-y-3 border-y py-4">
+        <ConnectionProgress current={currentConnectionStep} complete={eventSeen} />
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+          <div className="font-medium">
+            {eventSeen
+              ? <>Connected <span className="font-normal text-muted-foreground">· {lastSeen ? `last event ${relativeTime(lastSeen)} · ` : ''}{env}</span></>
+              : `Next: ${nextConnectionAction}`}
+          </div>
+          {eventSeen && <Button size="sm" variant="outline" onClick={() => setConnectionOpen(true)}>View connection</Button>}
         </div>
-        {!eventSeen && <Button size="sm" onClick={() => setConnectionOpen(true)}>Continue setup</Button>}
       </div>
+
+      {connectionVisible && (
+        <ProductConnectionGuide
+          key={`${uiScope}:connection`}
+          ingestKey={freshIngestKey}
+          keyReady={sourceReady}
+          serverUrl={serverUrl}
+          projectName={projectName}
+          projectSlug={project}
+          projectMode={projectMode ?? 'product'}
+          eventSeen={eventSeen}
+          lastSeen={lastSeen}
+          eventName={eventName}
+          eventEnvironment={eventEnvironment}
+          eventRegistered={eventRegistered}
+          checking={proof.loading}
+          creatingKey={creatingKey}
+          error={keyError ?? proofError}
+          onCreateKey={() => void createIngestKey()}
+          getSetupTask={getSetupTask}
+          onCheck={proof.reload}
+          onOpenProject={() => navigate(projectMode === 'website' ? '/analyze/web' : projectMode === 'product' ? '/analyze/product' : '/')}
+          onReviewMetrics={() => navigate('/registry')}
+          telemetryUserId={account?.user?.id}
+          telemetryEnvironment={telemetryEnvironment(env)}
+          showProgress={false}
+          onStepChange={setConnectionStep}
+        />
+      )}
 
       {blocker && (
         <section className="rounded-lg border bg-muted/10 p-4" aria-live="polite">
@@ -243,7 +287,7 @@ export function Setup() {
               />
             )}
             {blocker.kind === 'server' && !reviewBlocker && !intent.loading && !intentData?.intent && (
-              <Button size="sm" onClick={() => setConnectionOpen(true)}>Continue setup</Button>
+              <Button size="sm" onClick={() => setConnectionOpen(true)}>Show connection steps</Button>
             )}
           </div>
         </section>
@@ -254,8 +298,8 @@ export function Setup() {
           title="Product connection"
           status={eventSeen ? 'Connected' : sourceReady ? 'Waiting for event' : 'Needs setup'}
           description={eventSeen ? `Last server-verified event${lastSeen ? ` ${relativeTime(lastSeen)}` : ''}.` : 'Product key, SDK, and first server-verified event.'}
-          action={connectionOpen ? 'Hide' : eventSeen ? 'View' : 'Continue'}
-          onAction={() => setConnectionOpen((value) => !value)}
+          action={connectionVisible ? 'Hide' : eventSeen ? 'View' : 'Show'}
+          onAction={() => setConnectionOpen(!connectionVisible)}
         />
         <SetupRow
           title="Tracking plan"
@@ -285,33 +329,6 @@ export function Setup() {
           last
         />
       </section>
-
-      {connectionOpen && (
-        <ProductConnectionGuide
-          key={`${uiScope}:connection`}
-          ingestKey={freshIngestKey}
-          keyReady={sourceReady}
-          serverUrl={serverUrl}
-          projectName={projectName}
-          projectSlug={project}
-          projectMode={projectMode ?? 'product'}
-          eventSeen={eventSeen}
-          lastSeen={lastSeen}
-          eventName={eventName}
-          eventEnvironment={eventEnvironment}
-          eventRegistered={eventRegistered}
-          checking={proof.loading}
-          creatingKey={creatingKey}
-          error={keyError ?? proofError}
-          onCreateKey={() => void createIngestKey()}
-          getSetupTask={getSetupTask}
-          onCheck={proof.reload}
-          onOpenProject={() => navigate(projectMode === 'website' ? '/analyze/web' : projectMode === 'product' ? '/analyze/product' : '/')}
-          onReviewMetrics={() => navigate('/registry')}
-          telemetryUserId={account?.user?.id}
-          telemetryEnvironment={telemetryEnvironment(env)}
-        />
-      )}
 
       {mcpOpen && (
         <OptionalMcp
@@ -494,6 +511,14 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
 
 function containsCredentialValue(value: string): boolean {
   return /\b(?:pk|sk|pt)_[a-z0-9][a-z0-9_-]{3,}/i.test(value);
+}
+
+function setupStatusMessage(caught: unknown): string {
+  const message = caught instanceof Error ? caught.message : String(caught);
+  if (/oauth2|content-type|session|token/i.test(message)) {
+    return 'Your session could not be refreshed. Sign in again, then retry.';
+  }
+  return 'Poolstatis could not verify setup right now. Retry the check.';
 }
 
 function normalizeBlockerKey(value: string): string | null {

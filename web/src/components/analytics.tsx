@@ -51,6 +51,7 @@ export function EvidenceLine({
 export interface KpiItem {
   label: string;
   value: ReactNode | null;
+  fallback?: ReactNode;
   note?: string;
 }
 
@@ -61,7 +62,7 @@ export function KpiStrip({ items }: { items: KpiItem[] }) {
         <div key={item.label} className="min-w-0 border-b p-4 even:border-l lg:border-b-0 lg:border-l lg:first:border-l-0">
           <dt className="text-xs font-medium text-muted-foreground">{item.label}</dt>
           <dd className={cn('mt-1 text-2xl font-semibold tabular-nums sm:text-3xl', item.value === null && 'text-muted-foreground')}>
-            {item.value ?? 'Unavailable'}
+            {item.value ?? item.fallback ?? 'Unavailable'}
           </dd>
           {item.note && <div className="mt-1 text-xs text-muted-foreground">{item.note}</div>}
         </div>

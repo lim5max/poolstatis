@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ArrowLeft, Eye, EyeOff } from '@/components/icons';
-import authEvidenceInstrument from '@/assets/auth-evidence-instrument.jpg';
+import authEvidenceInstrument from '@/assets/auth-evidence-instrument-lime.jpg';
 
 const authOrigin = 'https://auth.poolstatis.xyz';
 const customerAppUrl = 'https://app.poolstatis.xyz/';
@@ -149,15 +149,14 @@ function AuthShell({ children }: { children: ReactNode }) {
     <div className="min-h-dvh bg-background text-foreground lg:grid lg:grid-cols-5">
       <section
         aria-label="Why Poolstatis"
-        className="relative hidden min-h-dvh overflow-hidden border-r lg:col-span-3 lg:flex lg:flex-col"
+        className="relative hidden min-h-dvh overflow-hidden border-r bg-primary text-primary-foreground lg:col-span-3 lg:flex lg:flex-col"
       >
         <div
-          className="absolute inset-x-0 top-1/2 aspect-video -translate-y-1/2 bg-cover bg-center opacity-90"
+          className="absolute inset-0 bg-cover bg-center"
           aria-hidden="true"
           style={{ backgroundImage: `url(${authEvidenceInstrument})` }}
         />
-        <div className="absolute inset-0 bg-gradient-to-b from-background/20 via-transparent to-background" />
-        <div className="absolute inset-0 bg-gradient-to-r from-background/70 via-background/10 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-r from-primary/80 via-primary/20 to-transparent" />
         <div className="relative z-10 flex h-full flex-col justify-between p-10 xl:p-14">
           <a
             href="https://poolstatis.xyz/"
@@ -167,11 +166,11 @@ function AuthShell({ children }: { children: ReactNode }) {
             <span className="text-lg font-bold">Poolstatis</span>
           </a>
           <div className="max-w-xl pb-4">
-            <p className="text-sm font-medium text-primary">Product decisions, backed by real signals</p>
+            <p className="text-sm font-medium text-primary-foreground/75">Product decisions, backed by real signals</p>
             <p className="mt-4 text-5xl font-semibold leading-tight xl:text-6xl">
               See the signals behind every product decision.
             </p>
-            <p className="mt-5 max-w-lg text-lg text-foreground/70">
+            <p className="mt-5 max-w-lg text-lg text-primary-foreground/70">
               Evidence for your next keep, fix, or roll back decision.
             </p>
           </div>
@@ -277,7 +276,7 @@ function AuthCard({
 }) {
   return (
     <section>
-      <p className="text-sm font-medium text-primary">Poolstatis Cloud · beta</p>
+      <p className="text-sm font-medium text-success">Poolstatis Cloud · beta</p>
       <h1
         ref={titleRef}
         tabIndex={titleRef ? -1 : undefined}

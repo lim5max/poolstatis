@@ -51,6 +51,13 @@ function baseStore() {
       onboardingStatus: vi.fn().mockResolvedValue(proof),
       standard: vi.fn().mockResolvedValue('Instrumentation standard'),
       webhookDestinations: vi.fn().mockResolvedValue([]),
+      metrics: vi.fn().mockResolvedValue([]),
+      operationalQuery: vi.fn().mockResolvedValue({
+        kind: 'actors',
+        actors: [],
+        next_cursor: null,
+        meta: { computed_at: '2026-08-06T00:00:00.000Z' },
+      }),
     },
     baseUrl: 'https://api.poolstatis.test',
     token: 'sk_test',
@@ -84,9 +91,29 @@ describe('customer admin shell', () => {
   it('keeps answer jobs primary and control surfaces behind Data & settings', () => {
     render(<MemoryRouter><App /></MemoryRouter>);
     expect(screen.getAllByText('Home').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('Answers')).toBeInTheDocument();
+    expect(screen.queryByText('Answers')).not.toBeInTheDocument();
     expect(screen.getByText('Data & settings')).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: /^(Home|Web|Product|People|Ship|Setup)$/ })).toHaveLength(6);
+  });
+
+  it('keeps an unfinished project recoverable after the user navigates away from onboarding', async () => {
+    const current = baseStore() as any;
+    current.envReady = true;
+    current.client.onboardingStatus = vi.fn().mockResolvedValue({
+      ...proof,
+      gates: proof.gates.map((gate) => (
+        gate.key === 'data_source_connected' || gate.key === 'first_event_observed'
+          ? { ...gate, complete: false }
+          : gate
+      )),
+    });
+    mockedStore.mockReturnValue(current);
+
+    render(<MemoryRouter initialEntries={['/analyze/users']}><App /></MemoryRouter>);
+
+    const resume = await screen.findByRole('region', { name: 'Finish project setup' });
+    expect(resume).toHaveTextContent('Create and save a product key');
+    expect(screen.getByRole('link', { name: 'Open Setup' })).toHaveAttribute('href', '/setup');
   });
 
   it('adapts primary navigation to the persisted project mode', async () => {

@@ -21,6 +21,8 @@ describe('Core light-first visual system', () => {
     expect(css).toContain('--font-sans: "Geist"');
     expect(css).toContain('--font-mono: "Geist Mono"');
     expect(css).toContain('--font-serif: "STIX Two Text"');
+    expect(css).toContain('--text-xs: 0.875rem');
+    expect(css).toContain('--text-xs--line-height: 1.25rem');
     expect(card).toContain('bg-card');
     expect(dropdown).toContain('bg-popover');
     expect(select).toContain('bg-popover');

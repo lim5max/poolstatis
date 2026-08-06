@@ -166,7 +166,7 @@ describe('Product Experience V2 onboarding', () => {
       primary_goal_id: 'website_traffic',
       website_domain: 'docs.example.com',
     }));
-    expect(await screen.findByText('Product key ready')).toBeInTheDocument();
+    expect(await screen.findByText('Save your product key')).toBeInTheDocument();
     expect(screen.queryByText('pk_onetime_private')).not.toBeInTheDocument();
     expect(telemetryEvents('onboarding.key_copied')).toHaveLength(0);
 
@@ -316,6 +316,63 @@ describe('condensed Setup', () => {
     window.sessionStorage.clear();
     window.localStorage.clear();
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+  });
+
+  it('puts the real unfinished connection step first and opens it without an ambiguous continue action', async () => {
+    const disconnectedProof = {
+      complete: false,
+      gates: [
+        { key: 'data_source_connected', complete: false, required: true, evidence: {}, blocker: 'No key.', next_action: 'Create a key.' },
+        { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: 'No event.', next_action: 'Send one event.' },
+      ],
+      next_blocker: null,
+      final_result: null,
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(disconnectedProof),
+        projectIntent: vi.fn().mockResolvedValue({
+          intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
+        }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    const progress = await screen.findByRole('list', { name: 'Connection progress' });
+    const keyStep = await screen.findByRole('heading', { name: 'Create a product key' });
+    const status = screen.getByLabelText('Setup status');
+    expect(screen.getByText('Next: Create and save a product key')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue setup' })).not.toBeInTheDocument();
+    expect(progress.compareDocumentPosition(keyStep) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(keyStep.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('resumes at the agent task when the server proves a product key exists', async () => {
+    const requestTask = vi.fn().mockResolvedValue(setupTask());
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(pendingProof),
+        projectIntent: vi.fn().mockResolvedValue({
+          intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null },
+        }),
+        setupTask: requestTask,
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    expect(await screen.findByText('Next: Copy one setup task to your agent')).toBeInTheDocument();
+    expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
+    await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', {
+      agent_id: 'codex', prefer_llm: false, env: 'prod',
+    }));
   });
 
   it('uses the server next_blocker instead of inferring a blocker from local gates', async () => {
@@ -659,14 +716,12 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('alpha') as never);
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Create product key' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Alpha key failed');
 
     mockedStore.mockReturnValue(storeFor('beta') as never);
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Beta · prod')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
     expect(screen.queryByText('Alpha key failed')).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Create product key' }));
     expect(await screen.findByRole('button', { name: 'Copy .env line' })).toBeInTheDocument();
@@ -674,7 +729,6 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('alpha', 'dev') as never);
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Alpha · dev')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
     expect(await screen.findByRole('button', { name: 'Create product key' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy .env line' })).not.toBeInTheDocument();
   });
@@ -700,7 +754,6 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('alpha') as never);
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', { agent_id: 'codex', prefer_llm: false, env: 'prod' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Claude Code' }));
@@ -709,7 +762,6 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('beta', 'dev') as never);
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Beta · dev')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Continue setup' }));
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('beta', { agent_id: 'codex', prefer_llm: false, env: 'dev' }));
   });

@@ -1,9 +1,9 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorNote, Loading, fmtNum } from '@/components/ui';
-import { AnswerCanvas, EvidenceLine, KpiStrip, RankedRows, type EvidenceTrust } from '@/components/analytics';
+import { AnswerCanvas, EvidenceLine, KpiStrip, RankedRows, type EvidenceTrust, type KpiItem } from '@/components/analytics';
 import { TrendChart } from '../analysis/charts';
 import { formatDurationMs, webPageMetric, type WebAnalyticsResult } from '../analysis/operations';
 import type { Funnel, MeasurementTrust, Metric, ProjectSchema } from '../api/types';
@@ -30,6 +30,8 @@ interface IntentCapableClient {
 interface ProductAnswer {
   metric: Metric | null;
   trend: TrendQueryResult | null;
+  revenueMetric: Metric | null;
+  revenueTrend: TrendQueryResult | null;
   trust: MeasurementTrust | null;
   trustUnavailable: boolean;
   funnel: Funnel | null;
@@ -56,9 +58,10 @@ export function Overview() {
         client!.schema(project!, env).catch(() => null),
       ]);
       const primaryMetric = pickPrimaryMetric(metrics, intent?.primary_goal_id ?? null);
+      const revenueMetric = metrics.find((metric) => metric.category === 'revenue') ?? null;
       const pageMetric = webPageMetric(metrics);
       const [product, website] = await Promise.all([
-        readProductAnswer(client!, project!, env, primaryMetric, funnels[0] ?? null),
+        readProductAnswer(client!, project!, env, primaryMetric, revenueMetric, funnels[0] ?? null),
         readWebsiteAnswer(client!, project!, env, pageMetric),
       ]);
       return { scope: homeScope, value: { intent, product, website, schema }, error: null as string | null };
@@ -86,8 +89,8 @@ export function Overview() {
 
   const { intent, product, website, schema } = homeData;
   const mode = intent?.project_mode ?? null;
-  if (mode === 'website') return <WebsiteHome answer={website} env={env} telemetryUserId={account?.user?.id} />;
-  if (mode === 'product') return <ProductHome answer={product} env={env} telemetryUserId={account?.user?.id} />;
+  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} project={project!} env={env} telemetryUserId={account?.user?.id} />;
+  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} project={project!} env={env} telemetryUserId={account?.user?.id} />;
   if (mode === 'both' && intent) {
     return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} telemetryUserId={account?.user?.id} />;
   }
@@ -111,32 +114,36 @@ export function Overview() {
   );
 }
 
-function WebsiteHome({ answer, env, telemetryUserId }: { answer: WebsiteAnswer; env: string; telemetryUserId?: string | null }) {
+function WebsiteHome({ answer, project, env, telemetryUserId }: { answer: WebsiteAnswer; project: string; env: string; telemetryUserId?: string | null }) {
   const lead = websiteLead(answer);
+  const dashboard = useDashboardLayout(`${project}:${env}:website`, WEBSITE_KPIS);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Website performance"
+        title="Home"
         answer={lead}
-        action={<Button asChild className="h-11"><Link to="/analyze/web" onClick={() => trackHomeAction('open_web', telemetryUserId)}>Open Web <ArrowRight className="size-4" /></Link></Button>}
+        action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to="/analyze/web" onClick={() => trackHomeAction('open_web', telemetryUserId)}>Open Web <ArrowRight className="size-4" /></Link></Button></div>}
       />
-      <WebsiteAnswerCanvas answer={answer} env={env} />
+      {dashboard.open && <DashboardSettings ids={WEBSITE_KPIS} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
+      <WebsiteAnswerCanvas answer={answer} env={env} order={dashboard.order} />
     </div>
   );
 }
 
-function ProductHome({ answer, env, telemetryUserId }: { answer: ProductAnswer; env: string; telemetryUserId?: string | null }) {
+function ProductHome({ answer, project, env, telemetryUserId }: { answer: ProductAnswer; project: string; env: string; telemetryUserId?: string | null }) {
   const lead = answer.metric
     ? `${answer.metric.name} is the clearest active outcome available for this project.`
     : 'Events may be arriving, but no active outcome is defined yet.';
+  const dashboard = useDashboardLayout(`${project}:${env}:product`, PRODUCT_KPIS);
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Product performance"
+        title="Home"
         answer={lead}
-        action={<Button asChild className="h-11"><Link to={answer.metric ? '/analyze/product' : '/registry'} onClick={() => trackHomeAction(answer.metric ? 'explore_product' : 'review_outcomes', telemetryUserId)}>{answer.metric ? 'Explore Product' : 'Review outcomes'} <ArrowRight className="size-4" /></Link></Button>}
+        action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to={answer.metric ? '/analyze/product' : '/registry'} onClick={() => trackHomeAction(answer.metric ? 'explore_product' : 'review_outcomes', telemetryUserId)}>{answer.metric ? 'Explore Product' : 'Review outcomes'} <ArrowRight className="size-4" /></Link></Button></div>}
       />
-      <ProductAnswerCanvas answer={answer} env={env} />
+      {dashboard.open && <DashboardSettings ids={PRODUCT_KPIS} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
+      <ProductAnswerCanvas answer={answer} env={env} order={dashboard.order} />
     </div>
   );
 }
@@ -163,7 +170,7 @@ function BothHome({
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Website and product"
+        title="Home"
         answer={identityState === 'unavailable'
           ? 'Identity evidence is unavailable right now, so Poolstatis will not claim a cross-surface path.'
           : identityLinked
@@ -190,16 +197,45 @@ function BothHome({
   );
 }
 
-function WebsiteAnswerCanvas({ answer, env }: { answer: WebsiteAnswer; env: string }) {
+const WEBSITE_KPIS = [
+  { id: 'visitors', label: 'Visitors' },
+  { id: 'sessions', label: 'Sessions' },
+  { id: 'page_views', label: 'Page views' },
+  { id: 'average_duration', label: 'Average duration' },
+  { id: 'engaged_rate', label: 'Engagement rate' },
+  { id: 'bounce_rate', label: 'Bounce rate' },
+] as const;
+
+const PRODUCT_KPIS = [
+  { id: 'outcome', label: 'Primary outcome' },
+  { id: 'people', label: 'Observed people' },
+  { id: 'activation', label: 'Activation' },
+  { id: 'retention', label: 'Retention' },
+  { id: 'events', label: 'Event volume' },
+  { id: 'revenue', label: 'Revenue' },
+] as const;
+
+type DashboardDefinition = ReadonlyArray<{ id: string; label: string }>;
+
+function WebsiteAnswerCanvas({ answer, env, order = WEBSITE_KPIS.map((item) => item.id) }: { answer: WebsiteAnswer; env: string; order?: string[] }) {
+  const emptyItems: Array<KpiItem & { id: string }> = WEBSITE_KPIS.map((item) => ({
+    ...item,
+    value: null,
+    fallback: 'Not configured',
+    note: 'Connect website measurement',
+  }));
   if (!answer.metric || !answer.overview) {
     return (
-      <AnswerCanvas>
-        <EmptyState
-          headline="Website traffic is not configured"
-          lead="Activate the canonical web page-view definition, then open one real page."
-          action={<Button asChild><Link to="/measurement">Open Definitions</Link></Button>}
-        />
-      </AnswerCanvas>
+      <>
+        <KpiStrip items={orderDashboardItems(emptyItems, order)} />
+        <AnswerCanvas className="mt-5">
+          <EmptyState
+            headline="Website traffic is not configured"
+            lead="Activate the canonical web page-view definition, then open one real page."
+            action={<Button asChild><Link to="/measurement">Open Definitions</Link></Button>}
+          />
+        </AnswerCanvas>
+      </>
     );
   }
   const { overview, trend } = answer;
@@ -207,12 +243,14 @@ function WebsiteAnswerCanvas({ answer, env }: { answer: WebsiteAnswer; env: stri
   const pages = overview.breakdowns.route ?? [];
   return (
     <>
-      <KpiStrip items={[
-        { label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved people' },
-        { label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'canonical sessions' },
-        { label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted views' },
-        { label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? null : formatDurationMs(overview.summary.average_session_duration_ms), note: 'complete sessions' },
-      ]} />
+      <KpiStrip items={orderDashboardItems([
+        { id: 'visitors', label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved people' },
+        { id: 'sessions', label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'canonical sessions' },
+        { id: 'page_views', label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted views' },
+        { id: 'average_duration', label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? null : formatDurationMs(overview.summary.average_session_duration_ms), note: 'complete sessions' },
+        { id: 'engaged_rate', label: 'Engagement rate', value: answer.overview.engagement.engaged_rate == null ? null : `${Math.round(answer.overview.engagement.engaged_rate * 100)}%`, note: 'measured sessions' },
+        { id: 'bounce_rate', label: 'Bounce rate', value: answer.overview.engagement.bounce_rate == null ? null : `${Math.round(answer.overview.engagement.bounce_rate * 100)}%`, note: 'measured sessions' },
+      ], order)} />
       <EvidenceLine
         className="mt-3"
         trust={evidenceTrust(answer.trust, answer.trustUnavailable)}
@@ -242,28 +280,36 @@ function WebsiteAnswerCanvas({ answer, env }: { answer: WebsiteAnswer; env: stri
   );
 }
 
-function ProductAnswerCanvas({ answer, env }: { answer: ProductAnswer; env: string }) {
+function ProductAnswerCanvas({ answer, env, order = PRODUCT_KPIS.map((item) => item.id) }: { answer: ProductAnswer; env: string; order?: string[] }) {
   if (!answer.metric) {
     return (
-      <AnswerCanvas>
-        <EmptyState
-          headline="No active product outcome"
-          lead="Approve an outcome with a clear purpose before Poolstatis shows a product answer."
-          action={<Button asChild><Link to="/registry">Review outcomes</Link></Button>}
-        />
-      </AnswerCanvas>
+      <>
+        <KpiStrip items={orderDashboardItems(PRODUCT_KPIS.map((item) => ({ ...item, value: null, fallback: 'Not configured', note: 'Define a measurable outcome' })), order)} />
+        <AnswerCanvas className="mt-5">
+          <EmptyState
+            headline="No active product outcome"
+            lead="Approve an outcome with a clear purpose before Poolstatis shows a product answer."
+            action={<Button asChild><Link to="/registry">Review outcomes</Link></Button>}
+          />
+        </AnswerCanvas>
+      </>
     );
   }
   const metricValue = metricAnswerValue(answer.metric, answer.trend, answer.trust);
+  const revenueValue = answer.revenueMetric
+    ? metricAnswerValue(answer.revenueMetric, answer.revenueTrend, null)
+    : null;
   const finalStep = answer.funnelResult?.steps.at(-1) ?? null;
   return (
     <>
-      <KpiStrip items={[
-        { label: answer.metric.name, value: metricValue, note: 'current 30-day outcome' },
-        { label: 'Observed people', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_actors) : null, note: 'resolved actors' },
-        { label: 'Activation', value: finalStep?.conversion_from_start === null || finalStep?.conversion_from_start === undefined ? null : `${Math.round(finalStep.conversion_from_start * 100)}%`, note: answer.funnel?.name ?? 'saved funnel required' },
-        { label: 'Retention', value: null, note: 'choose a return outcome' },
-      ]} />
+      <KpiStrip items={orderDashboardItems([
+        { id: 'outcome', label: answer.metric.name, value: metricValue, note: 'current 30-day outcome' },
+        { id: 'people', label: 'Observed people', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_actors) : null, note: 'resolved actors' },
+        { id: 'activation', label: 'Activation', value: finalStep?.conversion_from_start === null || finalStep?.conversion_from_start === undefined ? null : `${Math.round(finalStep.conversion_from_start * 100)}%`, note: answer.funnel?.name ?? 'saved funnel required' },
+        { id: 'retention', label: 'Retention', value: null, note: 'choose a return outcome' },
+        { id: 'events', label: 'Event volume', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_events) : null, note: 'accepted observations' },
+        { id: 'revenue', label: answer.revenueMetric?.name ?? 'Revenue', value: revenueValue, fallback: 'Not configured', note: answer.revenueMetric ? 'active revenue outcome' : 'activate a revenue metric' },
+      ], order)} />
       <EvidenceLine
         className="mt-3"
         trust={evidenceTrust(answer.trust, answer.trustUnavailable)}
@@ -299,6 +345,81 @@ function ProductAnswerCanvas({ answer, env }: { answer: ProductAnswer; env: stri
       </AnswerCanvas>
     </>
   );
+}
+
+function useDashboardLayout(scope: string, definitions: DashboardDefinition) {
+  const defaults = definitions.slice(0, 4).map((item) => item.id);
+  const available = definitions.map((item) => item.id);
+  const storageKey = `poolstatis.home.cards.${scope}`;
+  const [open, setOpen] = useState(false);
+  const [order, setOrder] = useState<string[]>(() => readDashboardOrder(storageKey, defaults, available));
+  const persist = (next: string[]) => {
+    setOrder(next);
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* storage can be blocked */ }
+  };
+  return {
+    open,
+    order,
+    toggle: () => setOpen((value) => !value),
+    change: (slot: number, id: string) => {
+      const next = [...order];
+      const previousSlot = next.indexOf(id);
+      if (previousSlot === slot) return;
+      if (previousSlot === -1) next[slot] = id;
+      else [next[slot], next[previousSlot]] = [next[previousSlot]!, next[slot]!];
+      persist(next);
+    },
+    reset: () => persist(defaults),
+  };
+}
+
+function readDashboardOrder(storageKey: string, defaults: string[], available: string[]) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
+    if (Array.isArray(saved) && saved.length === 4 && new Set(saved).size === 4 && saved.every((id) => typeof id === 'string' && available.includes(id))) {
+      return saved as string[];
+    }
+  } catch { /* use the useful default dashboard */ }
+  return defaults;
+}
+
+function DashboardSettings({ ids, order, onChange, onReset }: {
+  ids: DashboardDefinition;
+  order: string[];
+  onChange(slot: number, id: string): void;
+  onReset(): void;
+}) {
+  return (
+    <section role="region" aria-label="Dashboard settings" className="rounded-panel border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">Dashboard settings</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Choose the order of the four answers shown first.</p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onReset}>Reset</Button>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {order.map((id, slot) => (
+          <label key={`${slot}:${id}`} className="grid gap-1.5 text-sm font-medium">
+            Card {slot + 1}
+            <select
+              aria-label={`Card ${slot + 1}`}
+              className="h-11 rounded-field border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              value={id}
+              onChange={(event) => onChange(slot, event.target.value)}
+            >
+              {ids.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function orderDashboardItems<T extends KpiItem & { id: string }>(items: T[], order: string[]): KpiItem[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  return order.map((id) => byId.get(id)).filter((item): item is T => Boolean(item));
 }
 
 function PageHeader({ title, answer, action }: { title: string; answer: string; action: ReactNode }) {
@@ -368,11 +489,16 @@ async function readProductAnswer(
   project: string,
   env: string,
   metric: Metric | null,
+  revenueMetric: Metric | null,
   funnel: Funnel | null,
 ): Promise<ProductAnswer> {
-  const [trend, trustResult, funnelResult] = await Promise.all([
+  const [trend, revenueTrend, trustResult, funnelResult] = await Promise.all([
     metric
       ? client.query(project, { kind: 'trend', metric: metric.key, date_from: '-30d', date_to: null, interval: 'day', filters: [], env })
+        .then((result) => result.kind === 'trend' ? result : null).catch(() => null)
+      : Promise.resolve(null),
+    revenueMetric
+      ? client.query(project, { kind: 'trend', metric: revenueMetric.key, date_from: '-30d', date_to: null, interval: 'day', filters: [], env })
         .then((result) => result.kind === 'trend' ? result : null).catch(() => null)
       : Promise.resolve(null),
     metric
@@ -385,7 +511,7 @@ async function readProductAnswer(
         .then((result) => result.kind === 'funnel' ? result : null).catch(() => null)
       : Promise.resolve(null),
   ]);
-  return { metric, trend, trust: trustResult.trust, trustUnavailable: trustResult.unavailable, funnel, funnelResult };
+  return { metric, trend, revenueMetric, revenueTrend, trust: trustResult.trust, trustUnavailable: trustResult.unavailable, funnel, funnelResult };
 }
 
 function pickPrimaryMetric(metrics: Metric[], primaryGoal: string | null): Metric | null {

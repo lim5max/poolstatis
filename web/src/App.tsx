@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import {
   ArrowLeft,
@@ -239,7 +239,6 @@ function NavGroups({ navigation, onNavigate, collapsed = false }: { navigation: 
   return (
     <>
       <div className="mb-1">
-        {!collapsed && <div className="px-3 pb-1.5 pt-3.5 text-xs font-medium text-muted-foreground">Answers</div>}
         {navigation.primary.map((item) => (
           <NavigationRow key={item.label} item={item} collapsed={collapsed} onNavigate={onNavigate} />
         ))}
@@ -402,6 +401,7 @@ function Main() {
       </div>
       <motion.main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-7xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
         initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
+        <SetupResumeBanner path={loc.pathname} />
         <Routes>
           <Route path="/" element={<Guarded><Overview /></Guarded>} />
           <Route path="/projects" element={<Projects />} />
@@ -426,6 +426,45 @@ function Main() {
         </Routes>
       </motion.main>
     </div>
+  );
+}
+
+function SetupResumeBanner({ path }: { path: string }) {
+  const { client, project, env } = useStore();
+  const [nextAction, setNextAction] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setNextAction(null);
+    if (!client || !project || !isProjectScoped(path) || path === '/setup') return () => { active = false; };
+    void client.onboardingStatus(project, env)
+      .then((status) => {
+        if (!active) return;
+        const sourceReady = status.gates.find((gate) => gate.key === 'data_source_connected')?.complete ?? false;
+        const eventSeen = status.gates.find((gate) => gate.key === 'first_event_observed')?.complete ?? false;
+        if (!sourceReady) setNextAction('Create and save a product key');
+        else if (!eventSeen) setNextAction('Copy the setup task and send your first event');
+      })
+      .catch(() => {
+        if (active) setNextAction(null);
+      });
+    return () => { active = false; };
+  }, [client, env, path, project]);
+
+  if (!nextAction) return null;
+  return (
+    <section
+      aria-label="Finish project setup"
+      className="mb-5 flex flex-col gap-3 rounded-panel border border-primary/45 bg-primary/10 p-4 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <div>
+        <div className="text-sm font-semibold">Finish project setup</div>
+        <p className="mt-1 text-sm text-muted-foreground">Next: {nextAction}.</p>
+      </div>
+      <Button asChild variant="outline" className="shrink-0 bg-card">
+        <Link to="/setup">Open Setup <ArrowRight className="size-4" /></Link>
+      </Button>
+    </section>
   );
 }
 
