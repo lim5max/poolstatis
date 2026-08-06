@@ -32,6 +32,7 @@ interface IntentOnboardingBody {
   workspace_name: string;
   project_name: string;
   project_slug: string;
+  issue_personal_token: false;
   project_mode: ProjectMode;
   goal_ids: GoalId[];
   custom_goal: string | null;
@@ -206,6 +207,7 @@ export function Onboarding() {
         workspace_name: workspace.trim() || 'My workspace',
         project_name: projectName.trim(),
         project_slug: projectSlug.trim(),
+        issue_personal_token: false,
         project_mode: mode,
         goal_ids: goalIds,
         custom_goal: customSelected ? customGoal.trim() : null,

@@ -123,13 +123,15 @@ describe('hosted auth onboarding', () => {
     expect(projects.body.projects).toEqual([]);
   });
 
-  it('creates project, intent, and one-time keys in one hosted onboarding transaction', async () => {
+  it('creates project and intent without an MCP token when agent access is optional', async () => {
     const isolatedToken = await authToken('auth0|intent-user', 'intent@example.com', 'Intent User');
-    expect((await authApiAs(isolatedToken, 'GET', '/api/v1/me')).status).toBe(200);
+    const profile = await authApiAs(isolatedToken, 'GET', '/api/v1/me');
+    expect(profile.status).toBe(200);
     const res = await authApiAs(isolatedToken, 'POST', '/api/v1/onboarding', {
       workspace_name: 'Intent workspace',
       project_slug: 'intent-product',
       project_name: 'Intent Product',
+      issue_personal_token: false,
       project_mode: 'product',
       website_domain: 'ignored.example.com',
       goal_ids: ['activation', 'feature_adoption'],
@@ -146,6 +148,14 @@ describe('hosted auth onboarding', () => {
       custom_goal: null,
     });
     expect(res.body.tokens.ingest_prod).toMatch(/^pk_/);
+    expect(res.body.tokens.personal).toBeNull();
+    expect(res.body.mcp.env.POOLSTATIS_TOKEN).toBeNull();
+
+    const personalTokens = await pool.query(
+      "SELECT count(*)::int AS count FROM api_keys WHERE org_id = $1 AND kind = 'personal'",
+      [profile.body.organization.id],
+    );
+    expect(personalTokens.rows[0].count).toBe(0);
 
     const intent = await authApiAs(
       isolatedToken,

@@ -1072,7 +1072,7 @@ export interface HostedOnboardingResult {
   project: { slug: string; name: string; timezone: string };
   intent: ProjectIntent | null;
   tokens: {
-    personal: string;
+    personal: string | null;
     ingest_prod: string;
   };
   mcp: {
@@ -1082,7 +1082,7 @@ export interface HostedOnboardingResult {
     note: string;
     env: {
       POOLSTATIS_URL: string;
-      POOLSTATIS_TOKEN: string;
+      POOLSTATIS_TOKEN: string | null;
     };
   };
 }

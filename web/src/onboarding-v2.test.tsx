@@ -159,6 +159,7 @@ describe('Product Experience V2 onboarding', () => {
       workspace_name: 'Acme',
       project_name: 'Docs',
       project_slug: 'docs',
+      issue_personal_token: false,
       project_mode: 'website',
       goal_ids: ['website_traffic', 'website_conversion'],
       custom_goal: null,
