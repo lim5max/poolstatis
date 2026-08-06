@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { ShipSectionNav, ShipStageBadge, deriveDecisionStage } from '../components/ship-lifecycle';
 import type { Decision, DecisionAction, DecisionActionType, DecisionDetail, DecisionOutcome } from '../api/types';
 
 export function Decisions() {
@@ -26,13 +27,17 @@ export function Decisions() {
   if (list.loading) return <Loading what="reading decision revisions…" />;
   if (list.error) return <RecoverableError onRetry={list.reload}>{list.error}</RecoverableError>;
   if (!list.data) return null;
-  return <div className="space-y-4">
-    <Panel title="Decisions" right={<span className="text-xs text-muted-foreground">facts are immutable · approval is human</span>}><p className="max-w-3xl text-sm text-muted-foreground">Approve, correct, or reject an agent proposal against its saved evidence.</p></Panel>
-    {loop.error ? <ErrorNote>{loop.error}</ErrorNote> : loop.data && <ContinuousLoopSummary {...loop.data} />}
+  return <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
+    <ShipSectionNav current="decisions" />
+    <header className="max-w-3xl">
+      <h1 className="serif text-3xl text-balance">Decision review</h1>
+      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Approve, correct, or reject an agent proposal against immutable evidence.</p>
+    </header>
     {list.data.length === 0 ? <Panel><EmptyState headline="No proposed decisions" lead="evaluate an eligible release to create evidence" /></Panel> : <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
-      <Panel title={<>Queue <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{list.data.length}</span></>}><div className="-m-2 space-y-1">{list.data.map((decision) => <button key={decision.id} type="button" onClick={() => setSelectedId(decision.id)} className={`w-full rounded-control p-3 text-left text-sm transition-colors ${selectedId === decision.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'}`}><div className="flex items-center justify-between gap-2"><span className="font-medium">{decision.proposed_outcome}</span><DecisionStatus status={decision.status} /></div><div className="mt-1 truncate text-xs text-muted-foreground">release {decision.release_id.slice(0, 8)}</div></button>)}</div></Panel>
+      <Panel title={<>Queue <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{list.data.length}</span></>}><div className="-m-2 space-y-1">{list.data.map((decision) => <button key={decision.id} type="button" onClick={() => setSelectedId(decision.id)} aria-pressed={selectedId === decision.id} className={`w-full rounded-control p-3 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 ${selectedId === decision.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'}`}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{decisionQueueTitle(decision)}</span><ShipStageBadge stage={deriveDecisionStage(decision)} /></div><div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{decision.accepted_rationale ?? decision.proposed_rationale}</div></button>)}</div></Panel>
       {detail.loading ? <Panel><Loading what="reproducing evidence…" /></Panel> : detail.error ? <ErrorNote>{detail.error}</ErrorNote> : detail.data ? <DecisionReview detail={detail.data} onChanged={() => { list.reload(); detail.reload(); loop.reload(); }} /> : null}
     </div>}
+    {loop.error ? <ErrorNote>{loop.error}</ErrorNote> : loop.data && <ContinuousLoopSummary {...loop.data} />}
   </div>;
 }
 
@@ -56,9 +61,14 @@ function DecisionReview({ detail, onChanged }: { detail: DecisionDetail; onChang
   const evidence = detail.evidence;
   const primary = evidence.primary_evidence;
   return <div className="space-y-4">
-    <Panel title={detail.contract.name} right={<DecisionStatus status={detail.decision.status} />}>
-      <p className="text-sm">{detail.contract.business_hypothesis}</p>
-      <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground"><span>release <code>{detail.release.commit_sha.slice(0, 10)}</code></span><span>contract r{detail.release.contract_revision}</span><span>{detail.release.env}</span><span>{primary.source}</span></div>
+    <Panel title={detail.contract.name} right={<ShipStageBadge stage={deriveDecisionStage(detail.decision)} />}>
+      <div className="flex flex-wrap items-center gap-2">{detail.decision.status === 'rejected' ? <Badge variant="destructive">proposal rejected</Badge> : <OutcomeBadge outcome={detail.decision.accepted_outcome ?? detail.decision.proposed_outcome} />}<span className="text-sm font-medium">{decisionQueueTitle(detail.decision)}</span></div>
+      <p className="mt-2 text-sm text-muted-foreground">{detail.decision.accepted_rationale ?? detail.decision.proposed_rationale}</p>
+      <p className="mt-3 border-t pt-3 text-sm">{detail.contract.business_hypothesis}</p>
+      <details className="mt-2">
+        <summary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</summary>
+        <div className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 border-l pl-3 text-xs text-muted-foreground"><span>Decision <code className="break-all">{detail.decision.id}</code></span><span>Raw status <code>{detail.decision.status}</code></span><span>Release <code>{detail.release.commit_sha.slice(0, 10)}</code></span><span>Contract r{detail.release.contract_revision}</span><span>{detail.release.env}</span><span>{primary.source}</span></div>
+      </details>
     </Panel>
     <Panel title="Evidence facts" right={<Badge variant={evidence.ready ? 'default' : 'destructive'}>{evidence.ready ? 'decision-ready' : 'blocked'}</Badge>}>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Fact label="Baseline" value={primary.baseline.value} sub={`${formatWindow(evidence.baseline_window)} · ${primary.baseline.actors} actors`} /><Fact label="Observed" value={primary.observed.value} sub={`${formatWindow(evidence.observed_window)} · ${primary.observed.actors} actors`} /><Fact label="Change" value={formatChange(primary.change.relative)} sub={primary.metric.purpose} /><Fact label="Measurement trust" value={evidence.trust.status} sub={`${Math.round(evidence.trust.distinct_id_coverage * 100)}% stable identity`} /></div>
@@ -72,8 +82,7 @@ function DecisionReview({ detail, onChanged }: { detail: DecisionDetail; onChang
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     </Panel>
     <DecisionAutomation detail={detail} onChanged={onChanged} />
-    <Panel title="Reproducible query"><pre className="overflow-x-auto rounded-panel bg-muted p-3 text-xs">{JSON.stringify(evidence.query_specs, null, 2)}</pre></Panel>
-    <Panel title={<>Revision history <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{detail.revisions.length}</span></>}><div className="space-y-3">{detail.revisions.map((revision) => <div key={revision.id} className="flex flex-wrap items-start justify-between gap-3 border-b pb-3 last:border-0 last:pb-0"><div><div className="text-sm font-medium">r{revision.revision} · {revision.action}</div><div className="mt-1 text-xs text-muted-foreground">{revision.rationale}</div></div><div className="text-right text-xs text-muted-foreground"><div>{revision.actor}</div><div>{new Date(revision.created_at).toLocaleString()}</div></div></div>)}</div></Panel>
+    <TechnicalDecisionRecord detail={detail} />
   </div>;
 }
 
@@ -82,11 +91,45 @@ function ContinuousLoopSummary({ inbox, history, deliveries }: {
   history: Awaited<ReturnType<NonNullable<ReturnType<typeof useStore>['client']>['decisionHistory']>>['items'];
   deliveries: Awaited<ReturnType<NonNullable<ReturnType<typeof useStore>['client']>['webhookDeliveries']>>;
 }) {
-  return <div className="grid gap-4 lg:grid-cols-3">
-    <Panel title="Decision inbox"><div className="space-y-2">{inbox.length === 0 ? <p className="text-sm text-muted-foreground">No decisions need attention.</p> : inbox.slice(0, 4).map((item) => <div key={item.decision_id} className="rounded-panel border bg-muted/20 p-3"><div className="flex items-center justify-between gap-2"><code className="text-xs">{item.impact.metric_key}</code><Badge variant={item.state === 'needs_attention' ? 'destructive' : item.state === 'resolved' ? 'default' : 'outline'}>{item.state.replaceAll('_', ' ')}</Badge></div><div className="mt-2 text-sm">{item.impact.metric_purpose}</div><div className="mt-1 text-xs text-muted-foreground">Impact {formatChange(item.impact.relative_change)} · requested: {item.requested_choice ?? 'none'}</div>{item.blocker && <div className="mt-2 text-xs text-destructive">{item.blocker.message}</div>}</div>)}</div></Panel>
-    <Panel title="Decision memory"><div className="space-y-2">{history.length === 0 ? <p className="text-sm text-muted-foreground">No reviewed history yet.</p> : history.slice(0, 4).map((item) => <div key={item.decision_id} className="rounded-panel border p-3 text-xs"><div className="flex items-center justify-between gap-2"><code>{item.contract_key}</code>{item.stale && <Badge variant="outline">stale context</Badge>}</div><div className="mt-2">{item.proposed_outcome} → {item.accepted_outcome ?? item.status}{item.proposal_disagreed && <span className="text-warning-foreground"> · human corrected</span>}</div><div className="mt-1 text-muted-foreground">{item.evidence_quality.sample_size} actors · {item.evidence_quality.trust}</div></div>)}</div></Panel>
-    <Panel title="Webhook delivery"><div className="space-y-2">{deliveries.length === 0 ? <p className="text-sm text-muted-foreground">No delivery has been queued.</p> : deliveries.slice(0, 4).map((delivery) => <div key={delivery.id} className="rounded-panel border p-3 text-xs"><div className="flex items-center justify-between gap-2"><span>{delivery.event_type}</span><Badge variant={delivery.status === 'delivered' ? 'default' : delivery.status === 'dead' ? 'destructive' : 'outline'}>{delivery.status}</Badge></div><div className="mt-1 text-muted-foreground">{delivery.attempt_count} attempts{delivery.last_error ? ` · ${delivery.last_error}` : ''}</div></div>)}</div></Panel>
-  </div>;
+  return <details className="rounded-panel border bg-muted/10">
+    <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-5">
+      <span>Decision operations &amp; audit</span>
+      <span className="text-xs font-normal text-muted-foreground">{inbox.length} inbox · {history.length} history · {deliveries.length} deliveries</span>
+    </summary>
+    <div className="grid border-t lg:grid-cols-3">
+      <section className="min-w-0 p-4 lg:border-r sm:p-5" aria-labelledby="decision-inbox-heading">
+        <h2 id="decision-inbox-heading" className="text-sm font-medium">Decision inbox</h2>
+        <div className="mt-3 divide-y">{inbox.length === 0 ? <p className="text-sm text-muted-foreground">No decisions need attention.</p> : inbox.slice(0, 4).map((item) => <div key={item.decision_id} className="py-3 first:pt-0"><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm">{item.impact.metric_purpose}</span><Badge variant={item.state === 'needs_attention' ? 'destructive' : item.state === 'resolved' ? 'default' : 'outline'}>{item.state.replaceAll('_', ' ')}</Badge></div><div className="mt-1 text-xs text-muted-foreground">Impact {formatChange(item.impact.relative_change)} · requested: {item.requested_choice ?? 'none'}</div>{item.blocker && <div className="mt-2 text-xs text-destructive">{item.blocker.message}</div>}<details className="mt-1"><summary className="cursor-pointer text-xs text-muted-foreground">Metric key</summary><code className="mt-1 block break-all text-xs">{item.impact.metric_key}</code></details></div>)}</div>
+      </section>
+      <section className="min-w-0 border-t p-4 lg:border-r lg:border-t-0 sm:p-5" aria-labelledby="decision-memory-heading">
+        <h2 id="decision-memory-heading" className="text-sm font-medium">Decision memory</h2>
+        <div className="mt-3 divide-y">{history.length === 0 ? <p className="text-sm text-muted-foreground">No reviewed history yet.</p> : history.slice(0, 4).map((item) => <div key={item.decision_id} className="py-3 text-xs first:pt-0"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{item.proposed_outcome} → {item.accepted_outcome ?? item.status}</span>{item.stale && <Badge variant="outline">stale context</Badge>}</div><div className="mt-1 text-muted-foreground">{item.evidence_quality.sample_size} actors · {item.evidence_quality.trust}{item.proposal_disagreed ? ' · human corrected' : ''}</div><details className="mt-1"><summary className="cursor-pointer text-muted-foreground">Contract key</summary><code className="mt-1 block break-all">{item.contract_key}</code></details></div>)}</div>
+      </section>
+      <section className="min-w-0 border-t p-4 lg:border-t-0 sm:p-5" aria-labelledby="webhook-delivery-heading">
+        <h2 id="webhook-delivery-heading" className="text-sm font-medium">Webhook delivery</h2>
+        <div className="mt-3 divide-y">{deliveries.length === 0 ? <p className="text-sm text-muted-foreground">No delivery has been queued.</p> : deliveries.slice(0, 4).map((delivery) => <div key={delivery.id} className="py-3 text-xs first:pt-0"><div className="flex flex-wrap items-center justify-between gap-2"><span>{delivery.event_type}</span><Badge variant={delivery.status === 'delivered' ? 'default' : delivery.status === 'dead' ? 'destructive' : 'outline'}>{delivery.status}</Badge></div><div className="mt-1 text-muted-foreground">{delivery.attempt_count} attempts{delivery.last_error ? ` · ${delivery.last_error}` : ''}</div></div>)}</div>
+      </section>
+    </div>
+  </details>;
+}
+
+function TechnicalDecisionRecord({ detail }: { detail: DecisionDetail }) {
+  return <details className="rounded-panel border bg-muted/10">
+    <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-5">
+      <span>Technical record</span>
+      <span className="text-xs font-normal text-muted-foreground">Query · {detail.revisions.length} revisions</span>
+    </summary>
+    <div className="space-y-5 border-t p-4 sm:p-5">
+      <section aria-labelledby="reproducible-query-heading">
+        <h2 id="reproducible-query-heading" className="text-sm font-medium">Reproducible query</h2>
+        <pre className="mt-2 max-w-full overflow-x-auto rounded-panel bg-muted p-3 text-xs">{JSON.stringify(detail.evidence.query_specs, null, 2)}</pre>
+      </section>
+      <section className="border-t pt-4" aria-labelledby="revision-history-heading">
+        <h2 id="revision-history-heading" className="text-sm font-medium">Revision history</h2>
+        <div className="mt-3 divide-y">{detail.revisions.map((revision) => <div key={revision.id} className="flex flex-wrap items-start justify-between gap-3 py-3 first:pt-0"><div className="min-w-0"><div className="text-sm font-medium">r{revision.revision} · {revision.action}</div><div className="mt-1 break-words text-xs text-muted-foreground">{revision.rationale}</div></div><div className="text-right text-xs text-muted-foreground"><div>{revision.actor}</div><div>{new Date(revision.created_at).toLocaleString()}</div></div></div>)}</div>
+      </section>
+    </div>
+  </details>;
 }
 
 function DecisionAutomation({ detail, onChanged }: { detail: DecisionDetail; onChanged: () => void }) {
@@ -144,7 +187,12 @@ function DecisionAutomation({ detail, onChanged }: { detail: DecisionDetail; onC
 }
 
 function Fact({ label, value, sub }: { label: string; value: string | number; sub: string }) { return <div className="rounded-panel border bg-muted/20 p-3"><div className="text-xs font-medium text-muted-foreground">{label}</div><div className="mt-1 text-xl font-medium tabular-nums">{value}</div><div className="mt-1 text-xs text-muted-foreground">{sub}</div></div>; }
-function DecisionStatus({ status }: { status: Decision['status'] }) { return <Badge variant={status === 'approved' ? 'default' : status === 'rejected' ? 'destructive' : 'outline'}>{status}</Badge>; }
 function OutcomeBadge({ outcome }: { outcome: DecisionOutcome }) { return <Badge variant={outcome === 'keep' ? 'default' : outcome === 'rollback' ? 'destructive' : 'outline'}>{outcome}</Badge>; }
+function decisionQueueTitle(decision: Decision) {
+  const outcome = (decision.accepted_outcome ?? decision.proposed_outcome).replaceAll('_', ' ');
+  if (decision.status === 'proposed') return `Review: ${outcome}`;
+  if (decision.status === 'rejected') return `Rejected: ${outcome}`;
+  return `Decided: ${outcome}`;
+}
 function formatChange(value: number | null) { return value === null ? 'not comparable' : `${value >= 0 ? '+' : ''}${Math.round(value * 100)}%`; }
 function formatWindow(window: { from: string; to: string }) { return `${new Date(window.from).toLocaleDateString()}–${new Date(window.to).toLocaleDateString()}`; }
