@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -169,9 +170,17 @@ export async function hostedAccessToken(
     }
     if (!current?.refresh_token) throw new Error('Your session expired. Sign in again.');
   } else {
-    current = callbackUser && !callbackUser.expired
-      ? callbackUser
-      : await manager.getUser();
+    // Prefer the UserManager store after the first callback. A StoreProvider
+    // may keep the original getToken function for the lifetime of the app, so
+    // its callbackUser can be older than a token produced by signinSilent().
+    // The callback value remains a bounded fallback for the short hand-off in
+    // which signinRedirectCallback() has returned but getUser() is not visible.
+    try {
+      current = await manager.getUser();
+    } catch {
+      current = null;
+    }
+    current ??= callbackUser && !callbackUser.expired ? callbackUser : null;
   }
   if ((request.forceRefresh || current?.expired) && current?.refresh_token) {
     try {
@@ -227,6 +236,8 @@ export function HostedAuthProvider({
     [providedManager],
   );
   const [user, setUser] = useState<User | null>(null);
+  const userRef = useRef<User | null>(null);
+  userRef.current = user;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -296,8 +307,8 @@ export function HostedAuthProvider({
     await signoutHostedUser();
   }, []);
   const getToken = useCallback(async (request?: AccessTokenRequest) => {
-    return hostedAccessToken(manager, user, hostedAuthConfig.audience!, request);
-  }, [manager, user]);
+    return hostedAccessToken(manager, userRef.current, hostedAuthConfig.audience!, request);
+  }, [manager]);
 
   return (
     <HostedAuthContext.Provider value={{

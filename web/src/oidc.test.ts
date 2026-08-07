@@ -226,6 +226,42 @@ describe('customer OIDC client policy', () => {
     expect(manager.signinSilent).toHaveBeenCalledOnce();
   });
 
+  it('uses the renewed stored token on the ordinary request after a forced refresh', async () => {
+    const rejectedUser = {
+      expired: false,
+      access_token: 'rejected-access-token',
+      refresh_token: 'refresh-secret',
+    } as User;
+    const renewedUser = {
+      expired: false,
+      access_token: 'renewed-access-token',
+      refresh_token: 'rotated-refresh-secret',
+    } as User;
+    let storedUser = rejectedUser;
+    const manager = {
+      getUser: vi.fn(async () => storedUser),
+      signinSilent: vi.fn(async () => {
+        storedUser = renewedUser;
+        return renewedUser;
+      }),
+    };
+
+    await expect(hostedAccessToken(
+      manager,
+      rejectedUser,
+      'https://api.poolstatis.xyz',
+      { forceRefresh: true },
+    )).resolves.toBe('renewed-access-token');
+    await expect(hostedAccessToken(
+      manager,
+      rejectedUser,
+      'https://api.poolstatis.xyz',
+    )).resolves.toBe('renewed-access-token');
+
+    expect(manager.getUser).toHaveBeenCalledTimes(2);
+    expect(manager.signinSilent).toHaveBeenCalledOnce();
+  });
+
   it('does not recreate a session after the OIDC user was really unloaded', async () => {
     const callbackUser = {
       expired: false,

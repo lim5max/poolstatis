@@ -100,10 +100,10 @@ export function Overview() {
 
   const { intent, product, website, schema } = homeData;
   const mode = intent?.project_mode ?? null;
-  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} project={project!} env={env} telemetryUserId={account?.user?.id} />;
+  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} project={project!} env={env} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} project={project!} env={env} telemetryUserId={account?.user?.id} />;
   if (mode === 'both' && intent) {
-    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} telemetryUserId={account?.user?.id} />;
+    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   }
 
   // A missing intent row is legacy/unset. Keep the project useful and never
@@ -119,13 +119,13 @@ export function Overview() {
         Legacy project · choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
       </div>
       {website.overview
-        ? <WebsiteAnswerCanvas answer={website} product={product} schema={schema} env={env} />
+        ? <WebsiteAnswerCanvas answer={website} product={product} schema={schema} env={env} onRetry={home.reload} />
         : <ProductAnswerCanvas answer={product} schema={schema} env={env} />}
     </div>
   );
 }
 
-function WebsiteHome({ answer, product, schema, project, env, telemetryUserId }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; project: string; env: string; telemetryUserId?: string | null }) {
+function WebsiteHome({ answer, product, schema, project, env, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; project: string; env: string; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = websiteLead(answer);
   const dashboard = useDashboardLayout(`${project}:${env}:website`, WEBSITE_KPIS);
   const ready = Boolean(answer.metric);
@@ -137,7 +137,7 @@ function WebsiteHome({ answer, product, schema, project, env, telemetryUserId }:
         action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to={ready ? '/analyze/web' : '/measurement'} onClick={() => trackHomeAction(ready ? 'open_web' : 'open_definitions', telemetryUserId)}>{ready ? 'Open Web' : 'Set up Web'} <ArrowRight className="size-4" /></Link></Button></div>}
       />
       {dashboard.open && <DashboardSettings ids={WEBSITE_KPIS} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
-      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} order={dashboard.order} />
+      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} order={dashboard.order} onRetry={onRetry} />
     </div>
   );
 }
@@ -168,6 +168,7 @@ function BothHome({
   schema,
   env,
   telemetryUserId,
+  onRetry,
 }: {
   answer: WebsiteAnswer | ProductAnswer;
   product: ProductAnswer;
@@ -175,6 +176,7 @@ function BothHome({
   schema: ProjectSchema | null;
   env: string;
   telemetryUserId?: string | null;
+  onRetry: () => void;
 }) {
   const identityState = schema === null
     ? 'unavailable'
@@ -206,7 +208,7 @@ function BothHome({
             : 'Add stable identity evidence before comparing acquisition with product outcomes.'}
       </div>
       {websiteFirst
-        ? <WebsiteAnswerCanvas answer={answer as WebsiteAnswer} product={product} schema={schema} env={env} />
+        ? <WebsiteAnswerCanvas answer={answer as WebsiteAnswer} product={product} schema={schema} env={env} onRetry={onRetry} />
         : <ProductAnswerCanvas answer={answer as ProductAnswer} schema={schema} env={env} />}
     </div>
   );
@@ -237,7 +239,7 @@ function productDashboardDefinitions(answer: ProductAnswer): DashboardDefinition
   return answer.revenueMetric ? [...PRODUCT_KPIS, REVENUE_KPI] : PRODUCT_KPIS;
 }
 
-function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPIS.slice(0, 4).map((item) => item.id) }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; order?: string[] }) {
+function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPIS.slice(0, 4).map((item) => item.id), onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; order?: string[]; onRetry: () => void }) {
   const activity = recentObservedEvents(schema);
   const lastEvent = activity?.[0] ?? null;
   const answerUnavailable = Boolean(answer.metric && !answer.overview);
@@ -249,7 +251,7 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPI
   }));
   if (!answer.metric || !answer.overview) {
     const nextAction = answerUnavailable
-      ? { title: 'Check recent activity', body: 'Open Events while the website answer retries.', href: '/data', label: 'Open events' }
+      ? { title: 'Retry website answers', body: 'The last request failed without changing your measurement setup.', onClick: onRetry, label: 'Try again' }
       : { title: 'Connect website measurement', body: 'Activate the canonical page-view definition, then open one real page.', href: '/measurement', label: 'Set up Web' };
     return (
       <>
@@ -281,7 +283,7 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPI
         funnel={product.funnel}
         funnelResult={product.funnelResult}
         activity={activity}
-        nextAction={nextHomeAction({ measurementReady: true, funnel: product.funnel, activity })}
+        nextAction={nextHomeAction({ measurementReady: true, funnel: product.funnel, funnelResult: product.funnelResult, activity })}
       />
     </>
   );
@@ -330,7 +332,7 @@ function ProductAnswerCanvas({ answer, schema, env, order = productDashboardDefi
         funnel={answer.funnel}
         funnelResult={answer.funnelResult}
         activity={activity}
-        nextAction={nextHomeAction({ measurementReady: true, funnel: answer.funnel, activity })}
+        nextAction={nextHomeAction({ measurementReady: true, funnel: answer.funnel, funnelResult: answer.funnelResult, activity })}
       />
     </>
   );
@@ -367,7 +369,8 @@ function HomeEvidence({ trust, eventCount, env }: { trust: EvidenceTrust; eventC
 interface HomeNextAction {
   title: string;
   body: string;
-  href: string;
+  href?: string;
+  onClick?: () => void;
   label: string;
 }
 
@@ -434,9 +437,15 @@ function HomeSummary({ funnel, funnelResult, activity, nextAction }: {
           <div className="text-sm font-semibold">Next action</div>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground"><span className="font-medium text-foreground">{nextAction.title}.</span> {nextAction.body}</p>
         </div>
-        <Button asChild variant="outline" className="h-11 self-start sm:self-auto">
-          <Link to={nextAction.href}>{nextAction.label} <ArrowRight className="size-4" /></Link>
-        </Button>
+        {nextAction.onClick ? (
+          <Button variant="outline" className="h-11 self-start sm:self-auto" onClick={nextAction.onClick}>
+            {nextAction.label}
+          </Button>
+        ) : (
+          <Button asChild variant="outline" className="h-11 self-start sm:self-auto">
+            <Link to={nextAction.href!}>{nextAction.label} <ArrowRight className="size-4" /></Link>
+          </Button>
+        )}
       </div>
     </AnswerCanvas>
   );
@@ -445,6 +454,7 @@ function HomeSummary({ funnel, funnelResult, activity, nextAction }: {
 function nextHomeAction(input: {
   measurementReady: boolean;
   funnel: Funnel | null;
+  funnelResult: FunnelQueryResult | null;
   activity: ObservedEvent[] | null;
 }): HomeNextAction {
   if (!input.measurementReady) {
@@ -458,6 +468,9 @@ function nextHomeAction(input: {
   }
   if (!input.funnel) {
     return { title: 'Define the first funnel', body: 'Connect recent activity to one measurable goal.', href: '/setup', label: 'Create with agent' };
+  }
+  if (!input.funnelResult) {
+    return { title: 'Check funnel data', body: 'The saved funnel result is unavailable right now.', href: '/analyze/funnels', label: 'Open funnel' };
   }
   return { title: 'Review the biggest drop-off', body: 'Open the saved funnel for the full step-by-step breakdown.', href: '/analyze/funnels', label: 'Review funnel' };
 }

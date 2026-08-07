@@ -183,7 +183,7 @@ describe('goal-aware Home', () => {
 
   it('keeps a temporary web answer failure distinct from missing measurement', async () => {
     const client = websiteClient();
-    client.operationalQuery.mockRejectedValue(new Error('temporary query failure'));
+    client.operationalQuery.mockRejectedValueOnce(new Error('temporary query failure'));
     setStore(client);
 
     render(<MemoryRouter><Overview /></MemoryRouter>);
@@ -194,6 +194,36 @@ describe('goal-aware Home', () => {
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
     expect(within(outcomes).getAllByText('Unavailable').length).toBeGreaterThan(0);
     expect(within(outcomes).queryByText('Not configured')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('8 people visited. organic brought the most measured traffic.')).toBeInTheDocument();
+    expect(client.operationalQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not claim a biggest funnel drop-off when the funnel result is unavailable', async () => {
+    const client = websiteClient();
+    client.funnels.mockResolvedValue([{
+      id: 'signup-funnel',
+      key: 'website_signup',
+      name: 'Visit to signup',
+      goal: 'See whether qualified visitors begin signup.',
+      steps: [
+        { metric_key: 'web_page_views', label: 'Visited' },
+        { metric_key: 'web_page_views', label: 'Started signup' },
+      ],
+      window_seconds: 86_400,
+    }]);
+    client.query.mockRejectedValue(new Error('funnel unavailable'));
+    client.schema.mockResolvedValue({
+      identity: { active_links: 0 },
+      observed_events_30d: [{ event: 'page.viewed', count: 20, registered_share: 1, last_seen: '2026-08-06T10:00:00Z' }],
+    });
+    setStore(client);
+
+    render(<MemoryRouter><Overview /></MemoryRouter>);
+
+    expect(await screen.findByText('Check funnel data.')).toBeInTheDocument();
+    expect(screen.getByText('The saved funnel result is unavailable right now.')).toBeInTheDocument();
+    expect(screen.queryByText('Review the biggest drop-off.')).not.toBeInTheDocument();
   });
 
   it('keeps null intent as a usable legacy project without assigning a mode', async () => {
