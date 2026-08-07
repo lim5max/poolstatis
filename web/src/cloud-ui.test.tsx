@@ -262,17 +262,58 @@ describe('hosted profile and personal token lifecycle', () => {
 
 describe('organization usage ledger', () => {
   const usage = vi.fn();
+  const usageActivity = vi.fn();
 
   function usageStore() {
     return {
       tokenKind: 'user',
       account: { membership: { role: 'owner' } },
-      client: { usage },
+      client: { usage, usageActivity },
     } as never;
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
+    usageActivity.mockResolvedValue({
+      meter: 'events_stored', date_from: '2026-07-01', date_to: '2026-07-30', quantity: '42',
+      source: 'usage_ledger', timezone: 'UTC', projects: [],
+    });
+  });
+
+  it('separates accepted-event activity ranges from the monthly quota ledger', async () => {
+    usage.mockResolvedValue({
+      meter: 'events_stored', period: '2026-07', quantity: 1200, hard_limit: 2000,
+      warning_thresholds: [], warnings: [], projects: [],
+    });
+    mockedStore.mockReturnValue(usageStore());
+    render(<Usage />);
+
+    expect(await screen.findByRole('heading', { name: 'Accepted-event activity' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Last 7 days' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Last 30 days' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Activity from')).toHaveAttribute('type', 'date');
+    expect(screen.getByLabelText('Activity to')).toHaveAttribute('type', 'date');
+    await waitFor(() => expect(usageActivity).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Last 7 days' }));
+    await waitFor(() => expect(usageActivity).toHaveBeenCalledTimes(2));
+    const [from, to] = usageActivity.mock.calls[1] as [string, string];
+    expect(Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)).toBe(6 * 24 * 60 * 60 * 1000);
+    expect(screen.getByText('Monthly quota')).toBeInTheDocument();
+  });
+
+  it('validates custom activity dates before making another request', async () => {
+    usage.mockResolvedValue({
+      meter: 'events_stored', period: '2026-07', quantity: 0, hard_limit: null,
+      warning_thresholds: [], warnings: [], projects: [],
+    });
+    mockedStore.mockReturnValue(usageStore());
+    render(<Usage />);
+    await waitFor(() => expect(usageActivity).toHaveBeenCalledOnce());
+
+    fireEvent.change(screen.getByLabelText('Activity from'), { target: { value: '' } });
+    expect(await screen.findByText('Choose both dates in YYYY-MM-DD format.')).toBeInTheDocument();
+    expect(usageActivity).toHaveBeenCalledOnce();
   });
 
   it('uses a strict UTC calendar month and renders the events_stored ledger with a mobile-safe breakdown', async () => {

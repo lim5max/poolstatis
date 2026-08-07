@@ -21,6 +21,7 @@ export const hostedSessionMarkerKey = 'poolstatis.customer.sso';
 export const hostedLogoutUrl = 'https://auth.poolstatis.xyz/login';
 const hostedRestoreMarkerKey = 'poolstatis.customer.restore';
 const callbackPromises = new WeakMap<UserManager, Promise<User>>();
+const refreshPromises = new WeakMap<object, Promise<User | null>>();
 export const hostedAuthEnabled = Boolean(
   hostedAuthConfig.authority === 'https://auth.poolstatis.xyz'
   && hostedAuthConfig.clientId
@@ -157,10 +158,24 @@ export async function hostedAccessToken(
   callbackUser: User | null,
   audience: string,
 ): Promise<string> {
-  let current = callbackUser ?? await manager.getUser();
+  let current = callbackUser && !callbackUser.expired
+    ? callbackUser
+    : await manager.getUser();
   if (current?.expired && current.refresh_token) {
     try {
-      current = await manager.signinSilent({ resource: audience });
+      const keyedManager = manager as object;
+      let refresh = refreshPromises.get(keyedManager);
+      if (!refresh) {
+        refresh = manager.signinSilent({ resource: audience });
+        refreshPromises.set(keyedManager, refresh);
+      }
+      try {
+        current = await refresh;
+      } finally {
+        if (refreshPromises.get(keyedManager) === refresh) {
+          refreshPromises.delete(keyedManager);
+        }
+      }
     } catch {
       throw new Error('Your session expired. Sign in again.');
     }

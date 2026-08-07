@@ -134,6 +134,8 @@ Browser Analytics добавляет atomic setup endpoint
 контракт: [13-browser-analytics.md](13-browser-analytics.md).
 
 ```
+GET    /api/v1/me/usage?period=YYYY-MM
+GET    /api/v1/me/usage/activity?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
 GET    /api/v1/projects
 GET    /api/v1/projects/{slug}/schema
 GET    /api/v1/projects/{slug}/onboarding/status?env=prod
@@ -232,6 +234,14 @@ GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+`/api/v1/me/usage` remains the monthly quota/projection contract. The additive
+`/api/v1/me/usage/activity` endpoint reads retained `usage_ledger` rows by their
+UTC `ingested_at` timestamp for an inclusive 1–93 day range. It reports exact
+bigint quantities as decimal strings by project/environment and does not prorate
+or reinterpret the monthly entitlement. Project deletion removes the owning
+project's ledger rows, so this activity view follows the current retention
+boundary rather than acting as an external billing archive.
 
 ### Project intent and setup task
 
@@ -604,7 +614,7 @@ GET /api/v1/projects/{slug}/data-quality?env=prod&limit=50&since_days=30
 - Формат ошибок единый: `{ "error": { "code": "metric_key_taken", "message": "…", "hint": "…" } }` — `hint` пишется для агента-читателя.
 Для privacy-bounded web traffic используйте Query DSL
 `kind: "web_analytics"` с registry metric key, периодом и bounded dimensions
-`route|device|browser|os|language|timezone|source|medium|campaign|country`.
+`route|device|browser|os|language|timezone|source|medium|campaign|term|content|country`.
 Недоступный trusted-контракт конкретного разреза не блокирует весь ответ:
 доступные headline-метрики и breakdowns возвращаются как обычно, а пропущенные
 разрезы перечисляются в `meta.unavailable_dimensions` с причиной и следующим

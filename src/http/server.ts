@@ -66,7 +66,7 @@ import {
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
 import type { OutboundPolicyOptions } from '../security/outbound.js';
-import { getOrganizationUsage } from '../services/usage.js';
+import { getOrganizationUsage, getOrganizationUsageActivity } from '../services/usage.js';
 import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
 import {
   acknowledgeOnboardingGate, getOnboardingStatus, recordAgentObservation, recordQueryRun,
@@ -80,7 +80,7 @@ import {
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
-  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usagePeriodSchema,
+  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usageDateSchema, usagePeriodSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -472,7 +472,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         const route = req.routeOptions.url;
         if (route === '/api/v1/me' || route === '/api/v1/onboarding') {
           requireKind(req.auth, 'user');
-        } else if (route === '/api/v1/me/usage') {
+        } else if (route === '/api/v1/me/usage' || route === '/api/v1/me/usage/activity') {
           requireUsageReadAccess(req.auth);
         } else if (route === '/api/v1/me/tokens' && req.method === 'POST') {
           requireTokenIssuanceAccess(req.auth);
@@ -740,6 +740,23 @@ function registerPlatformRoutes(
     // The organization comes only from the authenticated credential. Caller
     // query parameters never widen an organization-scoped usage read.
     return getOrganizationUsage(ctx.pool, req.auth.orgId, period);
+  });
+
+  app.get('/api/v1/me/usage/activity', async (req) => {
+    requireUsageReadAccess(req.auth);
+    const { date_from: dateFrom, date_to: dateTo } = req.query as { date_from?: string; date_to?: string };
+    const from = dateFrom ? usageDateSchema.safeParse(dateFrom) : null;
+    const to = dateTo ? usageDateSchema.safeParse(dateTo) : null;
+    if (!from?.success || !to?.success) {
+      throw badRequest('invalid_query_param', 'date_from and date_to must be valid UTC dates in YYYY-MM-DD format');
+    }
+    const fromMs = Date.parse(`${from.data}T00:00:00.000Z`);
+    const toMs = Date.parse(`${to.data}T00:00:00.000Z`);
+    const days = Math.floor((toMs - fromMs) / 86_400_000) + 1;
+    if (days < 1 || days > 93) {
+      throw badRequest('invalid_query_param', 'usage activity range must include between 1 and 93 UTC days');
+    }
+    return getOrganizationUsageActivity(ctx.pool, req.auth.orgId, from.data, to.data);
   });
 
   app.get('/api/v1/projects', async (req) => {

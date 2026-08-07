@@ -7,6 +7,8 @@ export type WebDimension =
   | 'source'
   | 'medium'
   | 'campaign'
+  | 'term'
+  | 'content'
   | 'device'
   | 'browser'
   | 'os'

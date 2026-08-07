@@ -120,6 +120,85 @@ describe('customer OIDC client policy', () => {
     )).rejects.toThrow('Your session expired. Sign in again.');
   });
 
+  it('shares one refresh across concurrent API token requests', async () => {
+    const expired = {
+      expired: true,
+      refresh_token: 'refresh-secret',
+    } as User;
+    const renewed = {
+      expired: false,
+      access_token: 'renewed-access-token',
+    } as User;
+    let finishRefresh!: (user: User) => void;
+    const refresh = new Promise<User>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const manager = {
+      getUser: vi.fn().mockResolvedValue(expired),
+      signinSilent: vi.fn().mockReturnValue(refresh),
+    };
+
+    const requests = [
+      hostedAccessToken(manager, expired, 'https://api.poolstatis.xyz'),
+      hostedAccessToken(manager, expired, 'https://api.poolstatis.xyz'),
+      hostedAccessToken(manager, expired, 'https://api.poolstatis.xyz'),
+    ];
+    await Promise.resolve();
+
+    expect(manager.signinSilent).toHaveBeenCalledOnce();
+    finishRefresh(renewed);
+    await expect(Promise.all(requests)).resolves.toEqual([
+      'renewed-access-token',
+      'renewed-access-token',
+      'renewed-access-token',
+    ]);
+  });
+
+  it('uses the renewed stored user when the provider callback still holds an expired user', async () => {
+    const callbackUser = {
+      expired: true,
+      refresh_token: 'spent-refresh-token',
+    } as User;
+    const storedUser = {
+      expired: false,
+      access_token: 'stored-renewed-token',
+    } as User;
+    const manager = {
+      getUser: vi.fn().mockResolvedValue(storedUser),
+      signinSilent: vi.fn(),
+    };
+
+    await expect(hostedAccessToken(
+      manager,
+      callbackUser,
+      'https://api.poolstatis.xyz',
+    )).resolves.toBe('stored-renewed-token');
+    expect(manager.signinSilent).not.toHaveBeenCalled();
+  });
+
+  it('clears a failed shared refresh so a later request can recover', async () => {
+    const expiredUser = {
+      expired: true,
+      refresh_token: 'expired-refresh-token',
+    } as User;
+    const renewedUser = {
+      expired: false,
+      access_token: 'recovered-access-token',
+    } as User;
+    const manager = {
+      getUser: vi.fn().mockResolvedValue(expiredUser),
+      signinSilent: vi.fn()
+        .mockRejectedValueOnce(new Error('temporary refresh failure'))
+        .mockResolvedValueOnce(renewedUser),
+    };
+
+    await expect(hostedAccessToken(manager, expiredUser, 'https://api.poolstatis.xyz'))
+      .rejects.toThrow('Your session expired. Sign in again.');
+    await expect(hostedAccessToken(manager, expiredUser, 'https://api.poolstatis.xyz'))
+      .resolves.toBe('recovered-access-token');
+    expect(manager.signinSilent).toHaveBeenCalledTimes(2);
+  });
+
   it('restores a connected browser through a fresh PKCE redirect without persisting tokens', async () => {
     const persistent = new Map<string, string>();
     const flow = new Map<string, string>();

@@ -646,9 +646,9 @@ describe('privacy-safe browser ingest and Web analytics', () => {
   });
 
   it('keeps acquisition source out of the default overview until explicitly requested', async () => {
-    await api(env, env.secretToken, 'PATCH', `${project()}/properties/event/$utm_source`, {
-      status: 'proposed',
-    });
+    await Promise.all(['$utm_source', '$utm_term'].map((key) => api(
+      env, env.secretToken, 'PATCH', `${project()}/properties/event/${key}`, { status: 'proposed' },
+    )));
     const result = await api(env, env.secretToken, 'POST', `${project()}/query`, {
       kind: 'web_analytics',
       metric: 'web_page_views',
@@ -660,17 +660,21 @@ describe('privacy-safe browser ingest and Web analytics', () => {
       kind: 'web_analytics',
       metric: 'web_page_views',
       date_from: '-1d',
-      dimensions: ['source', 'device'],
+      dimensions: ['source', 'term', 'device'],
     });
     expect(explicit.status).toBe(200);
     expect(explicit.body.breakdowns).not.toHaveProperty('source');
+    expect(explicit.body.breakdowns).not.toHaveProperty('term');
     expect(explicit.body.breakdowns).toHaveProperty('device');
     expect(explicit.body.meta.unavailable_dimensions.source).toMatchObject({
       code: 'acquisition_property_untrusted',
     });
-    await api(env, env.secretToken, 'PATCH', `${project()}/properties/event/$utm_source`, {
-      status: 'trusted',
+    expect(explicit.body.meta.unavailable_dimensions.term).toMatchObject({
+      code: 'acquisition_property_untrusted',
     });
+    await Promise.all(['$utm_source', '$utm_term'].map((key) => api(
+      env, env.secretToken, 'PATCH', `${project()}/properties/event/${key}`, { status: 'trusted' },
+    )));
   });
 
   it('does not report average duration from lifecycle-incomplete sessions', async () => {

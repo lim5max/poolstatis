@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -31,9 +31,48 @@ const metric = {
   deprecated_at: null,
 } as const;
 
+const property = (key: string, enumValues: string[] | null = null) => ({
+  id: `property-${key}`,
+  key,
+  scope: 'event' as const,
+  value_type: key === '$route_key' ? 'enum' as const : 'string' as const,
+  purpose: `Canonical purpose for ${key}.`,
+  status: 'trusted' as const,
+  source: 'native' as const,
+  source_connection_id: null,
+  enum_values: enumValues,
+  created_by: 'test',
+  created_at: '2026-07-01T00:00:00.000Z',
+  updated_at: '2026-07-01T00:00:00.000Z',
+});
+
+const trustedProperties = [
+  '$browser_context', '$page_view_id', '$device_class', '$browser_family', '$os_family',
+  '$language', '$timezone', '$viewport_bucket', '$screen_bucket', '$country',
+  '$utm_source', '$utm_medium', '$utm_campaign', '$utm_term', '$utm_content',
+].map((key) => property(key));
+trustedProperties.push(property('$route_key', ['home', 'pricing']));
+
 describe('Web analytics partial availability', () => {
+  const proposeBrowserAnalytics = vi.fn();
+  const proposeAcquisitionProperties = vi.fn();
+  const properties = vi.fn();
+  const trend = vi.fn();
+
   beforeEach(() => {
     vi.clearAllMocks();
+    proposeBrowserAnalytics.mockResolvedValue({ metrics: [metric], properties: [] });
+    proposeAcquisitionProperties.mockResolvedValue([]);
+    properties.mockResolvedValue(trustedProperties);
+    trend.mockResolvedValue({
+      kind: 'trend',
+      series: [
+        { bucket: '2026-07-31', value: 3, breakdown_value: 'launch' },
+        { bucket: '2026-07-30', value: 2, breakdown_value: 'launch' },
+        { bucket: '2026-07-31', value: 1, breakdown_value: 'retargeting' },
+      ],
+      meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null },
+    });
     const operationalQuery = vi.fn().mockImplementation((_project, query) => {
       if (query.kind === 'web_analytics') {
         return Promise.resolve({
@@ -67,6 +106,13 @@ describe('Web analytics partial availability', () => {
               sessions: 8,
               page_views: 15,
               percentage: 75,
+            }],
+            term: [{
+              value: 'launch',
+              visitors: 4,
+              sessions: 4,
+              page_views: 5,
+              percentage: 25,
             }],
             device: [],
             browser: [],
@@ -146,6 +192,7 @@ describe('Web analytics partial availability', () => {
       env: 'prod',
       client: {
         metrics: vi.fn().mockResolvedValue([metric]),
+        properties,
         operationalQuery,
         query: vi.fn().mockResolvedValue({
           kind: 'trend',
@@ -160,6 +207,9 @@ describe('Web analytics partial availability', () => {
             source: 'native',
           },
         }),
+        trend,
+        proposeBrowserAnalytics,
+        proposeAcquisitionProperties,
       },
     } as never);
   });
@@ -191,8 +241,91 @@ describe('Web analytics partial availability', () => {
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Countries' }), { key: 'Enter' });
     expect(screen.getByText('Countries unavailable')).toBeInTheDocument();
 
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Medium' }), { key: 'Enter' });
+    expect(screen.getByText('Medium unavailable')).toBeInTheDocument();
+
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Conversions' }), { key: 'Enter' });
     expect(screen.getByText('Choose a conversion to measure')).toBeInTheDocument();
     expect(screen.getByText(/will not display a zero/)).toBeInTheDocument();
+  });
+
+  it('repairs legacy route and UTM definitions from Web', async () => {
+    properties.mockResolvedValueOnce([]);
+    render(
+      <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
+    );
+
+    expect(await screen.findByText('Finish web setup')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Safe route keys'), { target: { value: 'pricing, home' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Repair web tracking' }));
+
+    await waitFor(() => expect(proposeBrowserAnalytics).toHaveBeenCalledWith('y1blin-com', ['home', 'pricing']));
+    expect(await screen.findByText('Tracking definitions ready')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review and activate' })).toHaveAttribute('href', '/registry');
+  });
+
+  it('shows trusted UTM term values from the canonical Web response', async () => {
+    render(
+      <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
+    );
+    await screen.findByText('telegram');
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'UTM term' }), { key: 'Enter' });
+    expect(await screen.findByText('launch')).toBeInTheDocument();
+    expect(trend).not.toHaveBeenCalled();
+    expect(screen.getByText('5')).toBeInTheDocument();
+  });
+
+  it('repairs a UTM-only gap without changing the trusted route vocabulary', async () => {
+    properties.mockResolvedValueOnce(trustedProperties.filter((item) => item.key !== '$utm_term'));
+    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByText('Finish web setup')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add UTM definitions' }));
+    await waitFor(() => expect(proposeAcquisitionProperties).toHaveBeenCalledWith('y1blin-com'));
+    expect(proposeBrowserAnalytics).not.toHaveBeenCalled();
+  });
+
+  it('creates the canonical website tracking plan without sending the user to Definitions first', async () => {
+    const proposedMetric = { ...metric, status: 'proposed' as const };
+    const metrics = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([proposedMetric]);
+    const proposeBrowserAnalytics = vi.fn().mockResolvedValue({
+      metrics: [proposedMetric],
+      properties: [],
+    });
+    mockedStore.mockReturnValue({
+      project: 'alpha',
+      env: 'prod',
+      client: { metrics, properties: vi.fn().mockResolvedValue([]), proposeBrowserAnalytics },
+    } as never);
+
+    render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <WebAnalytics />
+        </MemoryRouter>
+      </TooltipProvider>,
+    );
+
+    expect(await screen.findByText('Add website analytics')).toBeInTheDocument();
+    expect(screen.getByText('Visitors')).toBeInTheDocument();
+    expect(screen.getByText('Sessions')).toBeInTheDocument();
+    expect(screen.getByText('Sources & UTM')).toBeInTheDocument();
+    expect(screen.queryByText('Period')).not.toBeInTheDocument();
+    const create = screen.getByRole('button', { name: 'Create web tracking plan' });
+    expect(create).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Safe route keys'), {
+      target: { value: 'pricing, home, pricing, docs.article' },
+    });
+    fireEvent.click(create);
+
+    await waitFor(() => expect(proposeBrowserAnalytics).toHaveBeenCalledWith(
+      'alpha',
+      ['docs.article', 'home', 'pricing'],
+    ));
+    expect(await screen.findByText('Tracking plan ready')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review and activate' })).toHaveAttribute('href', '/registry');
   });
 });

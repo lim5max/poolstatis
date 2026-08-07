@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -25,8 +26,9 @@ import {
   type WebWorkspaceResult,
 } from '../analysis/operations';
 import type { VisualizationSpec } from '../analysis/visualization';
-import type { MeasurementTrust } from '../api/types';
+import type { MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 import { useAsync, useStore } from '../store';
+import { AcquisitionPanel } from './Measurement';
 
 const RANGE_OPTIONS: Array<{ value: AnalyticsRange; label: string }> = [
   { value: '7d', label: 'Last 7 days' },
@@ -36,22 +38,79 @@ const RANGE_OPTIONS: Array<{ value: AnalyticsRange; label: string }> = [
 type BreakdownView = WebDimension | 'conversion';
 const DIMENSIONS: Array<{ value: BreakdownView; label: string }> = [
   { value: 'source', label: 'Sources' },
+  { value: 'medium', label: 'Medium' },
   { value: 'route', label: 'Pages' },
   { value: 'campaign', label: 'Campaigns' },
+  { value: 'term', label: 'UTM term' },
+  { value: 'content', label: 'UTM content' },
   { value: 'conversion', label: 'Conversions' },
   { value: 'country', label: 'Countries' },
   { value: 'device', label: 'Devices' },
 ];
+
+type WebWorkspace =
+  | { state: 'setup'; metric: Metric | null }
+  | ({ state: 'active'; trust: WebTrustRead; properties: PropertyDefinition[]; metrics: Metric[] } & WebWorkspaceResult);
+
+const UTM_PROPERTY_KEYS = ['$utm_source', '$utm_medium', '$utm_campaign', '$utm_term', '$utm_content'] as const;
+const BROWSER_PROPERTY_KEYS = [
+  '$browser_context', '$route_key', '$page_view_id', '$device_class', '$browser_family',
+  '$os_family', '$language', '$timezone', '$viewport_bucket', '$screen_bucket', '$country',
+] as const;
+
+type WebDefinitionRepairState =
+  | { kind: 'ready' }
+  | { kind: 'review' }
+  | { kind: 'missing_route' }
+  | { kind: 'missing_browser'; routeKeys: string[] }
+  | { kind: 'missing_utm' };
+
+export function webDefinitionRepairState(properties: PropertyDefinition[]): WebDefinitionRepairState {
+  const definitions = new Map(
+    properties.filter((property) => property.scope === 'event').map((property) => [property.key, property]),
+  );
+  const reserved = [...BROWSER_PROPERTY_KEYS, ...UTM_PROPERTY_KEYS]
+    .map((key) => definitions.get(key))
+    .filter((property): property is PropertyDefinition => Boolean(property));
+  if (reserved.some((property) => property.status !== 'trusted')) return { kind: 'review' };
+  const route = definitions.get('$route_key');
+  if (!route) return { kind: 'missing_route' };
+  if (BROWSER_PROPERTY_KEYS.some((key) => !definitions.has(key))) {
+    const routeKeys = route.enum_values ?? [];
+    return routeKeys.length > 0 ? { kind: 'missing_browser', routeKeys } : { kind: 'review' };
+  }
+  if (UTM_PROPERTY_KEYS.some((key) => !definitions.has(key))) return { kind: 'missing_utm' };
+  return { kind: 'ready' };
+}
+
+const webRouteKeyPattern = /^[a-z][a-z0-9_.:-]{0,99}$/;
+
+export function parseWebRouteKeys(value: string): string[] {
+  const routeKeys = [...new Set(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean))].sort();
+  if (routeKeys.length === 0) throw new Error('Add at least one safe route key.');
+  if (routeKeys.length > 100) throw new Error('Use at most 100 safe route keys.');
+  const invalid = routeKeys.find((routeKey) => !webRouteKeyPattern.test(routeKey));
+  if (invalid) throw new Error(`Invalid route key: ${invalid}`);
+  return routeKeys;
+}
 
 export function WebAnalytics() {
   const { client, project, env } = useStore();
   const [range, setRange] = useState<AnalyticsRange>('30d');
   const [dimension, setDimension] = useState<BreakdownView>('source');
   const [selectedSession, setSelectedSession] = useState<WebSessionSummary | null>(null);
-  const workspace = useAsync<(WebWorkspaceResult & { trust: WebTrustRead }) | null>(async () => {
-    const metrics = await client!.metrics(project!, { status: 'active' });
+  const workspace = useAsync<WebWorkspace>(async () => {
+    const [metrics, properties] = await Promise.all([
+      client!.metrics(project!),
+      client!.properties(project!, { scope: 'event' }),
+    ]);
     const metric = webPageMetric(metrics);
-    if (!metric) return null;
+    if (!metric) {
+      return {
+        state: 'setup',
+        metric: metrics.find((item) => item.key === WEB_PAGE_VIEW_METRIC && item.status === 'proposed') ?? null,
+      };
+    }
     const base = {
       metric: metric.key,
       date_from: rangeDateFrom(range),
@@ -62,7 +121,7 @@ export function WebAnalytics() {
       client!.operationalQuery<WebAnalyticsResult>(project!, {
         kind: 'web_analytics',
         ...base,
-        dimensions: ['source', 'campaign', 'medium', 'route', 'device', 'browser', 'country'],
+        dimensions: ['source', 'campaign', 'medium', 'term', 'content', 'route', 'device', 'browser', 'country'],
       }),
       client!.operationalQuery<WebSessionsResult>(project!, {
         kind: 'web_sessions',
@@ -83,32 +142,31 @@ export function WebAnalytics() {
       }),
       readWebTrust(client!, project!, env, metric.key),
     ]);
-    return { metric, overview, sessions, trend, trust };
+    return { state: 'active', metric, overview, sessions, trend, trust, properties, metrics };
   }, [project, env, range]);
-
   if (workspace.loading) return <WebAnalyticsSkeleton />;
   if (workspace.error) return <ErrorNote>{workspace.error}</ErrorNote>;
-  if (!workspace.data) {
+  if (!workspace.data) return null;
+  if (workspace.data.state === 'setup') {
     return (
       <div className="space-y-5">
-        <ScreenHeader range={range} onRange={setRange} />
-        <Panel>
-          <EmptyState
-            headline="Web analytics is not configured"
-            lead={`Activate ${WEB_PAGE_VIEW_METRIC} before reading canonical web traffic.`}
-            action={<Button asChild variant="outline"><Link to="/measurement">Open measurement</Link></Button>}
-          />
-        </Panel>
+        <ScreenHeader range={range} onRange={setRange} showRange={false} />
+        <WebSetup metric={workspace.data.metric} onReady={workspace.reload} />
       </div>
     );
   }
 
-  const { metric, overview, sessions, trend, trust } = workspace.data;
+  const { metric, overview, sessions, trend, trust, properties, metrics } = workspace.data;
   const spec = webTrendSpec(project!, env, metric.name, metric.purpose, overview, trend, trust);
-  const breakdown = dimension === 'conversion' ? [] : overview.breakdowns[dimension] ?? [];
+  const operationalDimension = dimension !== 'conversion' ? dimension : null;
+  const breakdown = operationalDimension ? overview.breakdowns[operationalDimension] ?? [] : [];
   const unavailableDimensions = overview.meta.unavailable_dimensions ?? {};
-  const unavailable = dimension === 'conversion' ? null : unavailableDimensions[dimension];
+  const unavailable = operationalDimension ? unavailableDimensions[operationalDimension] : null;
   const routeAvailable = !unavailableDimensions.route;
+  const repairState = webDefinitionRepairState(properties);
+  const acquisitionTrusted = UTM_PROPERTY_KEYS.every((key) => properties.some(
+    (property) => property.key === key && property.scope === 'event' && property.status === 'trusted',
+  ));
 
   return (
     <div className="space-y-5">
@@ -128,6 +186,8 @@ export function WebAnalytics() {
       >
         The active <code>{metric.key}</code> definition counts accepted canonical page views. Visitors and sessions use the server's actor-safe web response for this exact period.
       </EvidenceLine>
+
+      {repairState.kind !== 'ready' && <WebRepair state={repairState} />}
 
       <div className="grid gap-3 border-y bg-card/45 px-4 py-3 text-sm sm:grid-cols-3">
         <Rate label="Measured coverage" value={overview.engagement.measured_session_coverage} />
@@ -265,18 +325,156 @@ export function WebAnalytics() {
           onClose={() => setSelectedSession(null)}
         />
       )}
+
+      <AcquisitionPanel metrics={metrics} env={env} trusted={acquisitionTrusted} />
     </div>
   );
 }
 
-function ScreenHeader({ range, onRange }: { range: AnalyticsRange; onRange: (range: AnalyticsRange) => void }) {
+function WebSetup({ metric, onReady }: { metric: Metric | null; onReady: () => void }) {
+  const { client, project } = useStore();
+  const [routeKeysInput, setRouteKeysInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const createPlan = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await client!.proposeBrowserAnalytics(project!, parseWebRouteKeys(routeKeysInput));
+      onReady();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not create the web tracking plan.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <KpiStrip items={[
+        { label: 'Visitors', value: null, fallback: '—', note: 'unique people' },
+        { label: 'Sessions', value: null, fallback: '—', note: 'visits over time' },
+        { label: 'Sources & UTM', value: null, fallback: '—', note: 'acquisition context' },
+        { label: 'Top pages', value: null, fallback: '—', note: 'safe route keys' },
+      ]} />
+      <AnswerCanvas>
+        {metric ? (
+          <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Tracking plan ready</h2>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                Review and activate <code>{WEB_PAGE_VIEW_METRIC}</code>, then open one real page to see visitors, sessions and acquisition.
+              </p>
+            </div>
+            <Button asChild className="h-11 shrink-0"><Link to="/registry">Review and activate</Link></Button>
+          </div>
+        ) : (
+          <div className="p-5">
+            <h2 className="text-lg font-semibold">Add website analytics</h2>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Name the safe route keys you want to compare. Poolstatis will create the page-view and UTM definitions for review.
+            </p>
+            <div className="mt-5 max-w-2xl">
+              <label htmlFor="web-route-keys" className="text-sm font-medium">Safe route keys</label>
+              <p className="mt-1 text-sm text-muted-foreground">Use stable names such as <code>home</code>, <code>pricing</code>, or <code>docs.article</code>. Do not paste full URLs.</p>
+              <Input
+                id="web-route-keys"
+                className="mt-3 h-11"
+                value={routeKeysInput}
+                onChange={(event) => setRouteKeysInput(event.target.value)}
+                placeholder="home, pricing, docs.article"
+              />
+              {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
+              <Button className="mt-4 h-11" onClick={createPlan} disabled={busy || routeKeysInput.trim().length === 0}>
+                {busy ? 'Creating plan…' : 'Create web tracking plan'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </AnswerCanvas>
+    </>
+  );
+}
+
+function WebRepair({ state }: { state: Exclude<WebDefinitionRepairState, { kind: 'ready' }> }) {
+  const { client, project } = useStore();
+  const [routeKeysInput, setRouteKeysInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const repair = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (state.kind === 'missing_utm') {
+        await client!.proposeAcquisitionProperties(project!);
+      } else {
+        const routeKeys = state.kind === 'missing_route'
+          ? parseWebRouteKeys(routeKeysInput)
+          : state.kind === 'missing_browser' ? state.routeKeys : [];
+        await client!.proposeBrowserAnalytics(project!, routeKeys);
+      }
+      setSubmitted(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not repair the web tracking plan.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AnswerCanvas>
+      <div className="p-5">
+        {submitted || state.kind === 'review' ? (
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Tracking definitions ready</h2>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Review the existing route and UTM definitions, then trust the ones this customer-facing report should use.</p>
+            </div>
+            <Button asChild className="h-11 shrink-0"><Link to="/registry">Review and activate</Link></Button>
+          </div>
+        ) : (
+          <>
+            <h2 className="text-lg font-semibold">Finish web setup</h2>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              {state.kind === 'missing_route'
+                ? 'Add the safe route vocabulary used by this website. Poolstatis will also propose any missing browser and UTM definitions.'
+                : state.kind === 'missing_browser'
+                  ? 'Add the missing browser definitions without changing the existing trusted route vocabulary.'
+                  : 'Add the five canonical UTM definitions without changing routes or the active page-view metric.'}
+            </p>
+            <div className="mt-4 flex max-w-2xl flex-col gap-3 sm:flex-row sm:items-end">
+              {state.kind === 'missing_route' && <label htmlFor="repair-web-route-keys" className="grid min-w-0 flex-1 gap-1.5 text-sm font-medium">
+                Safe route keys
+                <Input id="repair-web-route-keys" className="h-11" value={routeKeysInput} onChange={(event) => setRouteKeysInput(event.target.value)} placeholder="home, pricing, docs.article" />
+              </label>}
+              <Button className="h-11" onClick={repair} disabled={busy || (state.kind === 'missing_route' && routeKeysInput.trim().length === 0)}>
+                {busy ? 'Repairing…' : state.kind === 'missing_utm' ? 'Add UTM definitions' : 'Repair web tracking'}
+              </Button>
+            </div>
+            {state.kind === 'missing_route' && <p className="mt-2 text-sm text-muted-foreground">Use stable labels only. Full URLs, paths, query strings and user IDs are rejected.</p>}
+            {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
+          </>
+        )}
+      </div>
+    </AnswerCanvas>
+  );
+}
+
+function ScreenHeader({ range, onRange, showRange = true }: {
+  range: AnalyticsRange;
+  onRange: (range: AnalyticsRange) => void;
+  showRange?: boolean;
+}) {
   return (
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="serif text-3xl sm:text-4xl">Web</h1>
         <p className="mt-1 text-sm text-muted-foreground">Traffic, pages, sources and supported conversions from canonical browser events.</p>
       </div>
-      <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+      {showRange && <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
         Period
         <Select value={range} onValueChange={(value) => onRange(value as AnalyticsRange)}>
           <SelectTrigger className="!h-11 w-40"><SelectValue /></SelectTrigger>
@@ -284,7 +482,7 @@ function ScreenHeader({ range, onRange }: { range: AnalyticsRange; onRange: (ran
             {RANGE_OPTIONS.map((item) => <SelectItem className="min-h-11" key={item.value} value={item.value}>{item.label}</SelectItem>)}
           </SelectContent>
         </Select>
-      </label>
+      </label>}
     </header>
   );
 }

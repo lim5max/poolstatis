@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Experience } from './screens/Experience';
 import { Experiments } from './screens/Experiments';
-import { Measurement } from './screens/Measurement';
+import { AcquisitionPanel, Measurement, WebAnalyticsPanel } from './screens/Measurement';
 import { Registry } from './screens/Registry';
 import { useStore } from './store';
 import { TooltipProvider } from './components/ui/tooltip';
@@ -146,7 +146,7 @@ describe('live customer screen UX', () => {
       proposeBrowserAnalytics,
     }));
 
-    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><WebAnalyticsPanel metrics={[]} env="prod" onSetup={vi.fn()} /></MemoryRouter></TooltipProvider>);
 
     const propose = await screen.findByRole('button', { name: 'Propose browser analytics' });
     expect(propose).toBeDisabled();
@@ -176,7 +176,7 @@ describe('live customer screen UX', () => {
       }),
       trend, exportContracts: vi.fn(),
     }));
-    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><AcquisitionPanel metrics={[metric as never]} env="prod" /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Acquisition / UTM');
     fireEvent.click(screen.getByRole('button', { name: 'Run UTM report' }));
     await screen.findByText('google');
@@ -276,7 +276,7 @@ describe('live customer screen UX', () => {
       trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
       webAnalytics, webSessions, webSession,
     }));
-    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><WebAnalyticsPanel metrics={[webMetric as never]} env="prod" onSetup={vi.fn()} /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Web analytics');
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
     expect(await screen.findByText('Visitors')).toBeInTheDocument();
@@ -434,7 +434,7 @@ describe('live customer screen UX', () => {
         },
       }),
     }));
-    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><WebAnalyticsPanel metrics={[webMetric as never]} env="prod" onSetup={vi.fn()} /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Web analytics');
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
     expect(await screen.findByText('home')).toBeInTheDocument();
@@ -502,7 +502,7 @@ describe('live customer screen UX', () => {
       trend: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: {} }),
       webAnalytics,
     }));
-    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><WebAnalyticsPanel metrics={[webMetric as never]} env="prod" onSetup={vi.fn()} /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Web analytics');
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
     const period = screen.getByRole('combobox', { name: 'Web analytics period' });
@@ -612,7 +612,7 @@ describe('live customer screen UX', () => {
         },
       }),
     }));
-    render(<TooltipProvider><MemoryRouter><Measurement /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter><WebAnalyticsPanel metrics={[webMetric as never]} env="prod" onSetup={vi.fn()} /></MemoryRouter></TooltipProvider>);
     await screen.findByText('Web analytics');
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic summary' }));
     expect(await screen.findByText('home')).toBeInTheDocument();

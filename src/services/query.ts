@@ -46,6 +46,8 @@ const WEB_DIMENSIONS = {
   source: { property: '$utm_source', missingValue: 'direct / unknown' },
   medium: { property: '$utm_medium', missingValue: 'none / unknown' },
   campaign: { property: '$utm_campaign', missingValue: 'none / unknown' },
+  term: { property: '$utm_term', missingValue: 'none / unknown' },
+  content: { property: '$utm_content', missingValue: 'none / unknown' },
   country: { property: '$country', missingValue: 'unknown' },
   device: { property: '$device_class', missingValue: 'unknown' },
   browser: { property: '$browser_family', missingValue: 'unknown' },
@@ -582,7 +584,7 @@ export class QueryService {
         });
         continue;
       }
-      if (['source', 'medium', 'campaign'].includes(key)) {
+      if (['source', 'medium', 'campaign', 'term', 'content'].includes(key)) {
         try {
           await assertTrustedAcquisitionProperties(
             this.pool,
@@ -663,6 +665,8 @@ export class QueryService {
           source: 'Session landing attribution; this is not causal campaign credit.',
           medium: 'Session landing medium; this is not causal campaign credit.',
           campaign: 'Session landing campaign; this is not causal campaign credit.',
+          term: 'Session landing term; this is not causal campaign credit.',
+          content: 'Session landing creative or placement; this is not causal campaign credit.',
         },
         accepted_event_accounting: 'Each accepted page.viewed, page.engagement and key-metric event remains one stored event; reads create no synthetic events.',
         privacy: 'Returns bounded coarse dimensions and only trusted safe route keys. Unavailable dimensions stay explicit; raw IP, URL, query, hash, user agent, DOM and text are forbidden.',

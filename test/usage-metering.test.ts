@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgresEventStore } from '../src/stores/postgresEventStore.js';
 import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
 import { createProject } from '../src/services/projects.js';
+import { getOrganizationUsageActivity } from '../src/services/usage.js';
 
 let env: TestEnv;
 
@@ -51,6 +52,29 @@ describe('accepted-event metering', () => {
       meter: 'events_stored', period: month, quantity: 4,
       projects: [expect.objectContaining({ slug: env.projectSlug, environments: [expect.objectContaining({ env: 'prod', quantity: 4 })] })],
     }));
+    const today = new Date().toISOString().slice(0, 10);
+    const activity = await api(env, env.personalToken, 'GET', `/api/v1/me/usage/activity?date_from=${today}&date_to=${today}`);
+    expect(activity.status).toBe(200);
+    expect(activity.body).toEqual(expect.objectContaining({
+      meter: 'events_stored', date_from: today, date_to: today, quantity: '4',
+      source: 'usage_ledger', timezone: 'UTC',
+      projects: [expect.objectContaining({ slug: env.projectSlug, environments: [expect.objectContaining({ env: 'prod', quantity: '4' })] })],
+    }));
+    const reversedRange = await api(env, env.personalToken, 'GET', `/api/v1/me/usage/activity?date_from=${today}&date_to=2026-01-01`);
+    expect(reversedRange.status).toBe(400);
+    expect(reversedRange.body.error.code).toBe('invalid_query_param');
+    const missingDate = await api(env, env.personalToken, 'GET', `/api/v1/me/usage/activity?date_from=${today}`);
+    expect(missingDate.status).toBe(400);
+    const impossibleDate = await api(env, env.personalToken, 'GET', '/api/v1/me/usage/activity?date_from=2026-02-30&date_to=2026-03-01');
+    expect(impossibleDate.status).toBe(400);
+    const yearZero = await api(env, env.personalToken, 'GET', '/api/v1/me/usage/activity?date_from=0000-01-01&date_to=0000-01-01');
+    expect(yearZero.status).toBe(400);
+    const day = 86_400_000;
+    const todayMs = Date.parse(`${today}T00:00:00.000Z`);
+    const ninetyThreeDaysAgo = new Date(todayMs - (92 * day)).toISOString().slice(0, 10);
+    const ninetyFourDaysAgo = new Date(todayMs - (93 * day)).toISOString().slice(0, 10);
+    expect((await api(env, env.personalToken, 'GET', `/api/v1/me/usage/activity?date_from=${ninetyThreeDaysAgo}&date_to=${today}`)).status).toBe(200);
+    expect((await api(env, env.personalToken, 'GET', `/api/v1/me/usage/activity?date_from=${ninetyFourDaysAgo}&date_to=${today}`)).status).toBe(400);
     const invalidPeriod = await api(env, env.personalToken, 'GET', '/api/v1/me/usage?period=2026-7');
     expect(invalidPeriod.status).toBe(400);
     expect(invalidPeriod.body.error.code).toBe('invalid_query_param');
@@ -69,6 +93,18 @@ describe('accepted-event metering', () => {
     );
     await expect(env.pool.query('UPDATE usage_ledger SET quantity = 99 WHERE id = $1', [row.rows[0]?.id])).rejects.toThrow();
     await expect(env.pool.query('DELETE FROM usage_ledger WHERE id = $1', [row.rows[0]?.id])).rejects.toThrow();
+  });
+
+  it('bounds activity by the existing organization-period index prefix', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    await getOrganizationUsageActivity(
+      { query } as never,
+      '11111111-1111-4111-8111-111111111111',
+      '2026-01-31',
+      '2026-02-01',
+    );
+    expect(query.mock.calls[0]?.[0]).toContain("l.period_start >= date_trunc('month', $2::date)::date");
+    expect(query.mock.calls[0]?.[0]).toContain("l.period_start <= date_trunc('month', $3::date)::date");
   });
 
   it('cannot write a ledger fact whose organization and project belong to different tenants', async () => {

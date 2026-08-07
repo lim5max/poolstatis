@@ -73,6 +73,9 @@ describe('generic hard quota', () => {
   it('rejects project-scoped secret credentials from the organization usage read', async () => {
     const secret = await api(env, env.secretToken, 'GET', `/api/v1/me/usage?period=${new Date().toISOString().slice(0, 7)}`);
     expect(secret.status).toBe(403);
+    const today = new Date().toISOString().slice(0, 10);
+    const activity = await api(env, env.secretToken, 'GET', `/api/v1/me/usage/activity?date_from=${today}&date_to=${today}`);
+    expect(activity.status).toBe(403);
   });
 
   it('does not meter an ingest request rejected with 429 before storage', async () => {

@@ -359,6 +359,8 @@ export type WebAnalyticsDimension =
   | 'source'
   | 'medium'
   | 'campaign'
+  | 'term'
+  | 'content'
   | 'device'
   | 'browser'
   | 'os'
@@ -1064,6 +1066,22 @@ export interface OrganizationUsage {
     name: string;
     quantity: number;
     environments: Array<{ env: string; quantity: number }>;
+  }>;
+}
+
+export interface OrganizationUsageActivity {
+  meter: 'events_stored';
+  date_from: string;
+  date_to: string;
+  quantity: string;
+  source: 'usage_ledger';
+  timezone: 'UTC';
+  projects: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    quantity: string;
+    environments: Array<{ env: string; quantity: string }>;
   }>;
 }
 

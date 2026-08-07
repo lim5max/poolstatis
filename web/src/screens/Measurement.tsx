@@ -29,8 +29,6 @@ interface PropertyCoverageRow {
 
 export function Measurement() {
   const { client, project, env } = useStore();
-  const [proposingAttribution, setProposingAttribution] = useState(false);
-  const [attributionError, setAttributionError] = useState<string | null>(null);
   const audit = useAsync(async () => {
     const [properties, identity, sources, metrics, contracts] = await Promise.all([
       client!.properties(project!),
@@ -79,12 +77,6 @@ export function Measurement() {
   if (audit.error) return <RecoverableError onRetry={audit.reload}>{audit.error}</RecoverableError>;
   if (!audit.data) return null;
   const { properties, identity, sources, trust, contracts, propertyCoverage } = audit.data;
-  const proposeAttribution = async () => {
-    setProposingAttribution(true); setAttributionError(null);
-    try { await client!.proposeAcquisitionProperties(project!); await audit.reload(); }
-    catch (error) { setAttributionError(error instanceof Error ? error.message : 'could not propose acquisition properties'); }
-    finally { setProposingAttribution(false); }
-  };
 
   const trusted = trust.filter((row) => row.trust?.status === 'trusted').length;
   const activeLinks = identity.links.filter((link) => link.status === 'active').length;
@@ -102,9 +94,8 @@ export function Measurement() {
       </DefinitionGroup>
 
       <DefinitionGroup title="Properties" summary={`${properties.length} defined`} action="Open">
-        <Panel title={<>Property meanings <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{properties.length}</span></>} right={<Button variant="outline" size="sm" onClick={proposeAttribution} disabled={proposingAttribution}>{proposingAttribution ? 'Proposing…' : 'Propose acquisition UTM properties'}</Button>}>
-      <p className="mb-4 max-w-3xl text-sm text-muted-foreground">Browser acquisition setup adds only the five canonical UTM definitions as proposed. Session landing attribution is an association, not causal campaign credit.</p>
-      {attributionError && <div className="mb-4"><ErrorNote>{attributionError}</ErrorNote></div>}
+        <Panel title={<>Property meanings <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{properties.length}</span></>}>
+      <p className="mb-4 max-w-3xl text-sm text-muted-foreground">Registered property meanings, value types, trust and observed coverage for this project.</p>
       {properties.length === 0 ? <p className="text-sm text-muted-foreground">No decision properties are registered yet.</p> : <div className="overflow-x-auto">
         <Table data-testid="property-meanings-table" className="min-w-6xl table-fixed"><TableHeader><TableRow><TableHead className="w-56">Property</TableHead><TableHead className="w-96">Meaning</TableHead><TableHead className="w-28">Type</TableHead><TableHead className="w-32">Trust</TableHead><TableHead className="w-64">Coverage</TableHead><TableHead className="w-28">Source</TableHead></TableRow></TableHeader>
           <TableBody>{properties.map((property) => <TableRow key={`${property.scope}:${property.key}`}>
@@ -150,16 +141,6 @@ export function Measurement() {
       </DefinitionGroup>
     </AnswerCanvas>
 
-    <details className="group rounded-panel border bg-card">
-      <DisclosureSummary className="flex min-h-14 cursor-pointer items-center gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
-        Advanced web reporting
-        <span className="ml-auto text-xs font-normal text-muted-foreground group-open:hidden">Traffic definitions and acquisition breakdowns</span>
-      </DisclosureSummary>
-      <div className="space-y-4 border-t p-4 sm:p-5 [&_[data-slot=card]]:rounded-none [&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-none">
-        <WebAnalyticsPanel metrics={trust.map((row) => row.metric)} env={env} onSetup={audit.reload} />
-        <AcquisitionPanel metrics={trust.map((row) => row.metric)} env={env} />
-      </div>
-    </details>
   </div>;
 }
 
@@ -197,6 +178,8 @@ const webDimensionLabels: Record<WebAnalyticsDimension, string> = {
   source: 'Source',
   medium: 'Medium',
   campaign: 'Campaign',
+  term: 'UTM term',
+  content: 'UTM content',
   device: 'Device',
   browser: 'Browser',
   os: 'OS',
@@ -217,7 +200,7 @@ export function parseBrowserRouteKeys(value: string): string[] {
   return routeKeys;
 }
 
-function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: string; onSetup: () => void }) {
+export function WebAnalyticsPanel({ metrics, env, onSetup }: { metrics: Metric[]; env: string; onSetup: () => void }) {
   const { client, project } = useStore();
   const metric = metrics.find((item) => item.key === 'web_page_views' && item.type === 'count');
   const [period, setPeriod] = useState('30');
@@ -728,7 +711,7 @@ function TrustOverview({ rows, properties, activeLinks, onRefresh }: {
 type AcquisitionDimension = '$utm_source' | '$utm_medium' | '$utm_campaign' | '$utm_term' | '$utm_content';
 type AcquisitionResult = Record<AcquisitionDimension, TrendResponse>;
 
-function AcquisitionPanel({ metrics, env }: { metrics: Metric[]; env: string }) {
+export function AcquisitionPanel({ metrics, env, trusted = true }: { metrics: Metric[]; env: string; trusted?: boolean }) {
   const { client, project } = useStore();
   const eligible = useMemo(() => metrics.filter((metric) => metric.status === 'active' && metric.type === 'count'), [metrics]);
   const preferred = eligible.find((metric) => metric.category === 'acquisition') ?? eligible[0];
@@ -740,7 +723,7 @@ function AcquisitionPanel({ metrics, env }: { metrics: Metric[]; env: string }) 
   const [error, setError] = useState<string | null>(null);
   const selected = eligible.find((metric) => metric.key === metricKey) ?? preferred;
   const run = async () => {
-    if (!selected) return;
+    if (!selected || !trusted) return;
     setBusy(true); setError(null); setResult(null);
     try {
       const base = { metric: selected.key, date_from: `-${period}d`, interval: 'day' as const, env };
@@ -758,13 +741,14 @@ function AcquisitionPanel({ metrics, env }: { metrics: Metric[]; env: string }) 
     <div className="flex flex-wrap items-end gap-2">
       <div className="min-w-52 flex-1 space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Count metric</label><Select value={selected?.key ?? ''} onValueChange={(value) => { setMetricKey(value); setResult(null); }} disabled={eligible.length === 0}><SelectTrigger aria-label="Acquisition metric"><SelectValue placeholder="Choose an active count metric" /></SelectTrigger><SelectContent>{eligible.map((metric) => <SelectItem key={metric.key} value={metric.key}>{metric.name} · {metric.key}</SelectItem>)}</SelectContent></Select></div>
       <div className="space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Period</label><Select value={period} onValueChange={(value) => { setPeriod(value); setResult(null); }}><SelectTrigger aria-label="Acquisition period" className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent></Select></div>
-      <Button onClick={run} disabled={!selected || busy}>{busy && <Loader2 className="size-4 animate-spin" />}Run UTM report</Button>
+      <Button onClick={run} disabled={!selected || !trusted || busy}>{busy && <Loader2 className="size-4 animate-spin" />}Run UTM report</Button>
     </div>
     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
       <button className="underline underline-offset-2 hover:text-foreground" aria-expanded={details} onClick={() => { setDetails((value) => !value); setResult(null); }}>{details ? 'Hide term and content' : 'Include term and content'}</button>
       {event && <Button variant="link" size="sm" asChild className="h-auto p-0"><Link to={`/data?tab=events&event=${encodeURIComponent(event)}`}>Open raw events</Link></Button>}
     </div>
-    {eligible.length === 0 && <div className="mt-4"><EmptyState headline="No reportable count metric" lead="activate a count metric whose source event carries canonical UTM properties" /></div>}
+    {!trusted && <div className="mt-4"><EmptyState headline="UTM definitions need review" lead="Trust all five canonical UTM definitions in Registry before using this customer-facing report." /></div>}
+    {trusted && eligible.length === 0 && <div className="mt-4"><EmptyState headline="No reportable count metric" lead="activate a count metric whose source event carries canonical UTM properties" /></div>}
     {busy && <div className="mt-4" role="status" aria-live="polite">Loading canonical UTM breakdowns…</div>}
     {error && <div className="mt-4"><ErrorNote>{error}. Check that the metric uses native events and that landing ingest is not blocked by CORS.</ErrorNote></div>}
     {result && <AcquisitionResults result={result} />}

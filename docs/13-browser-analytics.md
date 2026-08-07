@@ -163,7 +163,8 @@ and bounded retry, so a conflict cannot leave a partial bundle.
 `kind: "web_analytics"`) references the page-view count metric and returns the
 three headline counts, measured engagement coverage and count/page-view
 percentage breakdowns for route, device, browser, OS, language, timezone,
-source, medium and campaign. Availability is evaluated per requested
+source, medium, campaign, term and content. All five UTM dimensions use the
+strict trusted-property guard for this customer-facing response. Availability is evaluated per requested
 dimension: missing trusted route, acquisition or country contracts are omitted
 from `breakdowns` and reported in `meta.unavailable_dimensions` without hiding
 headline traffic, engagement or other available dimensions. Filters remain
