@@ -964,6 +964,13 @@ export type EventRevisionPatch = z.infer<typeof eventRevisionPatchSchema>;
 /** UTC calendar month used by the server-side accepted-event meter. */
 export const usagePeriodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 
+/** Bounded range months must also map to PostgreSQL calendar years. */
+export const usageRangePeriodSchema = usagePeriodSchema.refine((value) => !value.startsWith('0000-'));
+export const usageMonthRangeSchema = z.object({
+  from: usageRangePeriodSchema,
+  to: usageRangePeriodSchema,
+});
+
 /** Strict UTC calendar date used for retained usage-ledger activity ranges. */
 export const usageDateSchema = z.string()
   .regex(/^(?!0000)\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/)

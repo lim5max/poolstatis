@@ -263,12 +263,13 @@ describe('hosted profile and personal token lifecycle', () => {
 describe('organization usage ledger', () => {
   const usage = vi.fn();
   const usageActivity = vi.fn();
+  const usageRange = vi.fn();
 
   function usageStore() {
     return {
       tokenKind: 'user',
       account: { membership: { role: 'owner' } },
-      client: { usage, usageActivity },
+      client: { usage, usageActivity, usageRange },
     } as never;
   }
 
@@ -277,6 +278,16 @@ describe('organization usage ledger', () => {
     usageActivity.mockResolvedValue({
       meter: 'events_stored', date_from: '2026-07-01', date_to: '2026-07-30', quantity: '42',
       source: 'usage_ledger', timezone: 'UTC', projects: [],
+    });
+    const month = new Date().toISOString().slice(0, 7);
+    usageRange.mockResolvedValue({
+      meter: 'events_stored', from: month, to: month, timezone: 'UTC', granularity: 'month',
+      usage_basis: 'ingest_time', quantity: '0', periods: [{
+        period: month, quantity: '0', unattributed_quantity: '0', warnings: [], projects: [],
+      }],
+      current_entitlement: {
+        period: month, hard_limit: null, warning_thresholds: [], basis: 'current_configuration',
+      },
     });
   });
 
@@ -299,7 +310,7 @@ describe('organization usage ledger', () => {
     await waitFor(() => expect(usageActivity).toHaveBeenCalledTimes(2));
     const [from, to] = usageActivity.mock.calls[1] as [string, string];
     expect(Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)).toBe(6 * 24 * 60 * 60 * 1000);
-    expect(screen.getByText('Monthly quota')).toBeInTheDocument();
+    expect(screen.getByText('Current monthly quota')).toBeInTheDocument();
   });
 
   it('validates custom activity dates before making another request', async () => {
@@ -326,7 +337,7 @@ describe('organization usage ledger', () => {
     render(<Usage />);
     const expectedMonth = new Date().toISOString().slice(0, 7);
     await waitFor(() => expect(usage).toHaveBeenCalledWith(expectedMonth));
-    expect(screen.getByLabelText('UTC month')).toHaveValue(expectedMonth);
+    expect(screen.getByText(`${expectedMonth} UTC`)).toBeInTheDocument();
     expect(screen.getByText('events_stored')).toBeInTheDocument();
     expect(screen.getByText(/Warning threshold reached: 1,000 events\./)).toBeInTheDocument();
     expect(screen.getByTestId('usage-ledger-rail')).toBeInTheDocument();

@@ -135,6 +135,7 @@ Browser Analytics добавляет atomic setup endpoint
 
 ```
 GET    /api/v1/me/usage?period=YYYY-MM
+GET    /api/v1/me/usage/range?from=YYYY-MM&to=YYYY-MM
 GET    /api/v1/me/usage/activity?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
 GET    /api/v1/projects
 GET    /api/v1/projects/{slug}/schema
@@ -236,6 +237,18 @@ POST   /api/v1/projects/{slug}/insights
 ```
 
 `/api/v1/me/usage` remains the monthly quota/projection contract. The additive
+`/api/v1/me/usage/range` endpoint returns an inclusive range of 1–12 UTC ingest
+months without changing that legacy response. Its top-level and per-period
+quantities come from `organization_usage`; each period's project/environment
+breakdown comes from retained `usage_ledger` rows, read with the projection from
+one repeatable database snapshot. `unattributed_quantity` is
+the exact difference between those sources, which stays visible after project
+deletion removes ledger attribution. `current_entitlement` is explicitly the
+current configuration and must not be presented as a historical limit. Range
+quantities are decimal strings so summing multiple safe monthly bigint values
+does not lose JavaScript precision.
+
+Separately, the additive
 `/api/v1/me/usage/activity` endpoint reads retained `usage_ledger` rows by their
 UTC `ingested_at` timestamp for an inclusive 1–93 day range. It reports exact
 bigint quantities as decimal strings by project/environment and does not prorate
