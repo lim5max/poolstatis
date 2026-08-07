@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { ErrorNote, Meter, WarningNote } from './ui';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Table, TableBody, TableRow } from './ui/table';
 import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
@@ -33,6 +34,20 @@ describe('button contrast', () => {
 
     expect(button).toHaveClass('hover:bg-muted', 'hover:text-foreground');
     expect(button).not.toHaveClass('hover:bg-accent', 'hover:text-accent-foreground');
+  });
+
+  it('keeps link actions persistently visible without green text', () => {
+    render(
+      <>
+        <Button variant="link">Clear filters</Button>
+        <Badge variant="link">Open metric</Badge>
+      </>,
+    );
+
+    for (const action of [screen.getByRole('button', { name: 'Clear filters' }), screen.getByText('Open metric')]) {
+      expect(action).toHaveClass('text-foreground', 'underline', 'decoration-muted-foreground/60');
+      expect(action.className).not.toMatch(/text-(?:brand|success)(?:\s|$|\/)/);
+    }
   });
 });
 

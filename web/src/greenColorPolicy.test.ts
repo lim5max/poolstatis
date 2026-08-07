@@ -19,7 +19,7 @@ const TRANSLUCENT_FOCUS_RING = /(?:focus-visible|has-focus-visible):ring-ring\/\
 const HEX_COLOR = /#[\da-f]{3,8}\b/gi;
 const RAW_COLOR_FUNCTION = /(?:rgba?|hsla?|oklch|oklab)\s*\(/gi;
 const RAW_NAMED_GREEN = new RegExp(`(?:color|background(?:-color|Color)?|border(?:-color|Color)?|fill|stroke)\\s*:\\s*['"]?${GREEN_NAME}\\b['"]?`, 'gi');
-const GREEN_TEXT_TOKEN = /\btext-(?:brand-strong|success)(?:\/\d{1,3})?\b/g;
+const GREEN_TEXT_TOKEN = /(?:^|[^\w-])text-(?:brand(?:-strong)?|primary|success)(?:\/\d{1,3})?(?=$|[^\w-])/g;
 
 // These colors are content rather than interface state. Keep the allowlist exact:
 // a new literal or a second occurrence still fails the policy.
@@ -167,13 +167,22 @@ describe('green color policy', () => {
     const violations: string[] = [];
     for (const path of sourceFiles(resolve(ROOT, 'src'))) {
       const file = relative(ROOT, path);
-      if (extname(path) !== '.tsx' || file.endsWith('.test.tsx')) continue;
+      if (file === POLICY_FILE || /\.(?:test|spec)\.[^.]+$/.test(file)) continue;
       const source = readFileSync(path, 'utf8');
       for (const match of source.matchAll(GREEN_TEXT_TOKEN)) {
-        violations.push(`${file}: green text token ${match[0]}`);
+        violations.push(`${file}: green text token ${match[0].trim()}`);
       }
     }
     expect(violations, violations.join('\n')).toEqual([]);
+  });
+
+  it('recognizes green text tokens without rejecting foreground pair tokens', () => {
+    for (const source of ['text-brand', 'text-brand-strong', 'text-brand/80', 'text-primary', 'hover:text-primary/80', 'text-success', 'text-success/75']) {
+      expect(source).toMatch(GREEN_TEXT_TOKEN);
+    }
+    for (const source of ['text-success-foreground', 'text-brand-foreground', 'text-primary-foreground', 'text-muted-foreground']) {
+      expect(source).not.toMatch(GREEN_TEXT_TOKEN);
+    }
   });
 
   it('derives success from the primary lime hue with AA contrast in both themes', () => {

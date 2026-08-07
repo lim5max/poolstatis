@@ -196,7 +196,7 @@ export function FilterChips({ chips, onRemove, onClear }: { chips: Chip[]; onRem
           </button>
         </Badge>
       ))}
-      <button className="text-sm text-foreground hover:underline" onClick={onClear}>clear all</button>
+      <button className="text-sm text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground" onClick={onClear}>clear all</button>
     </div>
   );
 }
