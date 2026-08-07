@@ -19,6 +19,7 @@ const TRANSLUCENT_FOCUS_RING = /(?:focus-visible|has-focus-visible):ring-ring\/\
 const HEX_COLOR = /#[\da-f]{3,8}\b/gi;
 const RAW_COLOR_FUNCTION = /(?:rgba?|hsla?|oklch|oklab)\s*\(/gi;
 const RAW_NAMED_GREEN = new RegExp(`(?:color|background(?:-color|Color)?|border(?:-color|Color)?|fill|stroke)\\s*:\\s*['"]?${GREEN_NAME}\\b['"]?`, 'gi');
+const GREEN_TEXT_TOKEN = /\btext-(?:brand-strong|success)(?:\/\d{1,3})?\b/g;
 
 // These colors are content rather than interface state. Keep the allowlist exact:
 // a new literal or a second occurrence still fails the policy.
@@ -160,6 +161,19 @@ describe('green color policy', () => {
     expect("style={{ backgroundColor: 'forestgreen' }}").toMatch(RAW_NAMED_GREEN);
     expect("style={{ backgroundColor: 'mediumaquamarine' }}").toMatch(RAW_NAMED_GREEN);
     expect("style={{ borderColor: 'aquamarine' }}").toMatch(RAW_NAMED_GREEN);
+  });
+
+  it('keeps brand and success lime out of body text', () => {
+    const violations: string[] = [];
+    for (const path of sourceFiles(resolve(ROOT, 'src'))) {
+      const file = relative(ROOT, path);
+      if (extname(path) !== '.tsx' || file.endsWith('.test.tsx')) continue;
+      const source = readFileSync(path, 'utf8');
+      for (const match of source.matchAll(GREEN_TEXT_TOKEN)) {
+        violations.push(`${file}: green text token ${match[0]}`);
+      }
+    }
+    expect(violations, violations.join('\n')).toEqual([]);
   });
 
   it('derives success from the primary lime hue with AA contrast in both themes', () => {

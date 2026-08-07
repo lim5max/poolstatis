@@ -698,7 +698,7 @@ function TrustOverview({ rows, properties, activeLinks, onRefresh }: {
               <div><div className="text-xs font-medium text-muted-foreground">Purpose</div><p className="mt-1 text-sm">{metric.purpose}</p></div>
               <div>
                 <div className="text-xs font-medium text-muted-foreground">{error ? 'Error' : finding ? 'Next action' : 'Status'}</div>
-                {error ? <p className="mt-1 text-sm text-destructive">{error}</p> : finding ? <><p className="mt-1 text-sm">{finding.message}</p><p className="mt-1 text-xs text-muted-foreground">Next: {finding.next_action}</p></> : <p className="mt-1 text-sm text-success">No trust blockers in this window.</p>}
+                {error ? <p className="mt-1 text-sm text-destructive">{error}</p> : finding ? <><p className="mt-1 text-sm">{finding.message}</p><p className="mt-1 text-xs text-muted-foreground">Next: {finding.next_action}</p></> : <p className="mt-1 text-sm text-foreground">No trust blockers in this window.</p>}
               </div>
             </div>}
           </section>;

@@ -51,7 +51,7 @@ export function Person() {
             <IdentityBadge status={data.identity.status} />
           </div>
           <button
-            className="mt-1 flex max-w-full items-center gap-1 font-mono text-xs text-muted-foreground hover:text-brand-strong"
+            className="mt-1 flex max-w-full items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
             onClick={() => navigator.clipboard?.writeText(data.distinct_id)}
           >
             <span className="truncate">{data.distinct_id}</span>

@@ -58,7 +58,10 @@ describe('Better Auth portal', () => {
 
     expect(screen.getByRole('region', { name: 'Why Poolstatis' })).toHaveClass('bg-primary', 'text-primary-foreground');
     expect(screen.getByText('See the signals behind every product decision.')).toBeInTheDocument();
-    expect(screen.getByText('Poolstatis Cloud · beta')).toHaveClass('text-brand-strong');
+    const cloudBeta = screen.getByText('Poolstatis Cloud · beta');
+    expect(cloudBeta).toHaveClass('text-foreground');
+    expect(cloudBeta).not.toHaveClass('text-brand-strong');
+    expect(cloudBeta.querySelector('.bg-brand')).not.toBeNull();
     expect(screen.getByText('See the signals behind every product decision.')).toHaveClass('auth-display');
     expect(screen.getByRole('heading', { name: 'Create your account' })).toHaveClass('auth-display');
     expect(screen.getByRole('heading', { name: 'Create your account' })).not.toHaveClass('serif');
@@ -255,7 +258,7 @@ describe('Better Auth portal', () => {
 
     expect(await screen.findByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
     expect(screen.getByLabelText('Email')).toHaveValue('owner@gmail.com');
-    expect(screen.getByText('Password updated. Sign in with the new password.')).toHaveClass('text-success');
+    expect(screen.getByText('Password updated. Sign in with the new password.')).toHaveClass('text-foreground', 'bg-primary/10');
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -391,7 +394,7 @@ describe('Better Auth portal', () => {
     expect(result).toHaveTextContent(
       'If an unverified account exists, a new verification email is on its way.',
     );
-    expect(result).toHaveClass('text-success');
+    expect(result).toHaveClass('text-foreground', 'bg-primary/10');
     expect(result).toHaveFocus();
     expect(email).toHaveValue('');
     expect(fetchMock).toHaveBeenCalledWith(

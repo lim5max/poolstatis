@@ -399,7 +399,7 @@ function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, o
         <TableRow key={m.id} className="group">
           <TableCell>
             {metricEvent(m)
-              ? <button className="font-medium text-left hover:text-brand-strong hover:underline underline-offset-2" title="See this metric's events" onClick={() => onOpenEvents(metricEvent(m)!)}>{m.name}</button>
+              ? <button className="font-medium text-left hover:text-foreground hover:underline underline-offset-2" title="See this metric's events" onClick={() => onOpenEvents(metricEvent(m)!)}>{m.name}</button>
               : <div className="font-medium">{m.name}</div>}
             {!isRedundantKey(m.name, m.key) && <div className="text-xs text-muted-foreground">{m.key}</div>}
             {(m.tags ?? []).length > 0 && (

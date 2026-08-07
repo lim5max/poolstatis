@@ -282,7 +282,10 @@ function AuthCard({
 }) {
   return (
     <section>
-      <p className="text-sm font-medium text-brand-strong">Poolstatis Cloud · beta</p>
+      <p className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
+        <span aria-hidden="true" className="size-2 rounded-full bg-brand" />
+        Poolstatis Cloud · beta
+      </p>
       <h1
         ref={titleRef}
         tabIndex={titleRef ? -1 : undefined}
@@ -302,7 +305,9 @@ function FormMessage({ error, message }: { error: string; message: string }) {
     <p
       role={error ? 'alert' : 'status'}
       aria-live={error ? 'assertive' : 'polite'}
-      className={error ? 'text-sm text-destructive' : 'text-sm font-medium text-success'}
+      className={error
+        ? 'text-sm text-destructive'
+        : 'rounded-control border border-brand-strong/30 bg-primary/10 px-3 py-2 text-sm font-medium text-foreground'}
     >
       {error || message}
     </p>
@@ -683,7 +688,7 @@ function ResendVerification() {
           className={outcome === 'error'
             ? 'text-sm text-destructive outline-none'
             : outcome === 'accepted'
-              ? 'text-sm text-success outline-none'
+              ? 'rounded-control border border-brand-strong/30 bg-primary/10 px-3 py-2 text-sm text-foreground outline-none'
               : 'text-sm text-muted-foreground outline-none'}
         >
           {message}

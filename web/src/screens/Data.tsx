@@ -219,7 +219,7 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
           {actorFilter && <Chip label={`actor: ${actorFilter}`} onRemove={() => setActorFilter(undefined)} />}
           {range && <Chip label={DATE_PRESETS.find((d) => d.v === range)?.label ?? range} onRemove={() => setRange('')} />}
           {props.map((p, i) => <Chip key={i} label={`${p.property} ${OP_LABEL[p.op]}${p.value !== undefined ? ` ${p.value}` : ''}`} onRemove={() => setProps((arr) => arr.filter((_, j) => j !== i))} />)}
-          <button className="text-xs text-brand-strong hover:underline" onClick={() => { setEventFilter(''); setActorFilter(undefined); setRange(''); setProps([]); }}>clear all</button>
+          <button className="text-sm text-foreground hover:underline" onClick={() => { setEventFilter(''); setActorFilter(undefined); setRange(''); setProps([]); }}>clear all</button>
         </div>
       )}
 
@@ -233,7 +233,7 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
               {rows.map((e) => (
                 <TableRow key={e.id}>
                   <TableCell className="font-medium">{e.event}</TableCell>
-                  <TableCell><Link to={`/data/person/${encodeURIComponent(e.distinct_id)}`} className="text-xs font-mono text-brand-strong hover:underline">{e.distinct_id}</Link></TableCell>
+                  <TableCell><Link to={`/data/person/${encodeURIComponent(e.distinct_id)}`} className="text-xs font-mono text-foreground hover:underline">{e.distinct_id}</Link></TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-sm truncate" title={JSON.stringify(e.properties)}>{JSON.stringify(e.properties)}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{new Date(e.timestamp).toLocaleString()}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">
@@ -520,7 +520,7 @@ function BackfillManager() {
             </div>
           )}
           {error && <ErrorNote>{error}</ErrorNote>}
-          {result && <div className="text-sm text-success">{result}</div>}
+          {result && <div className="rounded-control border border-brand-strong/30 bg-primary/10 px-3 py-2 text-sm text-foreground">{result}</div>}
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={runPreview} disabled={busy}>Preview</Button>
             <Button
@@ -657,7 +657,7 @@ function Entities({ types }: { types: string[] }) {
                 <TableRow key={e.entity_id}>
                   <TableCell className="font-medium">
                     {identity
-                      ? <Link to={`/data/person/${encodeURIComponent(e.entity_id)}`} className="text-brand-strong hover:underline">{e.entity_id}</Link>
+                      ? <Link to={`/data/person/${encodeURIComponent(e.entity_id)}`} className="text-foreground hover:underline">{e.entity_id}</Link>
                       : e.entity_id}
                   </TableCell>
                   {propKeys.map((k) => <TableCell key={k} className="text-xs text-muted-foreground">{fmtVal(e.properties[k])}</TableCell>)}

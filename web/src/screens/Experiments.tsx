@@ -98,7 +98,7 @@ export function Experiments() {
               <span className="text-sm font-medium">{option.title}</span>
               <span className="mt-2 block text-sm leading-relaxed text-muted-foreground">{option.body}</span>
               <span className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
-                <Add className="size-4 text-brand-strong" />{option.action}
+                <Add className="size-4 text-foreground" />{option.action}
               </span>
             </button>
           ))}
@@ -552,7 +552,7 @@ function LaunchDialog({
         <div className="space-y-2">
           {readiness.checks.map((check) => (
             <div key={check.key} className="flex items-start gap-2 rounded-md border p-3 text-sm">
-              <span className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border ${check.ready ? 'border-success/40 bg-success/10 text-success' : 'text-destructive'}`}>
+              <span className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border ${check.ready ? 'border-brand-strong/40 bg-primary/10 text-foreground' : 'text-destructive'}`}>
                 {check.ready ? <Check className="size-3.5" /> : '!'}
               </span>
               <span>{check.message}</span>

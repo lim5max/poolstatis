@@ -120,7 +120,7 @@ export function Users() {
         {search && (
           <div className="col-span-full flex items-center gap-2 text-xs text-muted-foreground">
             Exact match: <code>{search}</code>
-            <button className="text-brand-strong hover:underline" onClick={() => { setSearch(''); setSearchInput(''); }}>Clear</button>
+            <button className="text-foreground hover:underline" onClick={() => { setSearch(''); setSearchInput(''); }}>Clear</button>
           </div>
         )}
         </div>
