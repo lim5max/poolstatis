@@ -186,6 +186,22 @@ describe('live customer screen UX', () => {
     expect(screen.getByRole('link', { name: 'Open raw events' })).toHaveAttribute('href', expect.stringContaining('landing.page_viewed'));
   });
 
+  it('locks UTM report controls while one semantic snapshot is loading', async () => {
+    let resolveTrend!: (value: { kind: 'trend'; series: never[]; meta: object }) => void;
+    const pending = new Promise<{ kind: 'trend'; series: never[]; meta: object }>((resolve) => { resolveTrend = resolve; });
+    const trend = vi.fn().mockReturnValue(pending);
+    mockedStore.mockReturnValue(store({ trend }));
+    render(<TooltipProvider><MemoryRouter><AcquisitionPanel metrics={[metric as never]} env="prod" /></MemoryRouter></TooltipProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run UTM report' }));
+    expect(screen.getByRole('combobox', { name: 'Acquisition metric' })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: 'Acquisition period' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Include term and content' })).toBeDisabled();
+
+    await act(async () => { resolveTrend({ kind: 'trend', series: [], meta: {} }); });
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Acquisition period' })).toBeEnabled());
+  });
+
   it('keeps visitors, sessions and page views distinct with responsive count-and-percentage breakdowns', async () => {
     const webMetric = {
       ...metric,
