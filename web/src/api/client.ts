@@ -11,55 +11,115 @@ export class ApiError extends Error {
   }
 }
 
+export interface AccessTokenRequest {
+  forceRefresh?: boolean;
+}
+
+export type AccessTokenProvider = (request?: AccessTokenRequest) => Promise<string>;
+
+type ApiErrorDetails = { code?: string; message?: string; hint?: string };
+
+function apiErrorDetails(json: unknown): ApiErrorDetails | null {
+  if (!json || typeof json !== 'object') return null;
+  const record = json as Record<string, unknown>;
+  const nested = record.error;
+  const candidate = nested && typeof nested === 'object'
+    ? nested as Record<string, unknown>
+    : record;
+  const code = typeof candidate.code === 'string'
+    ? candidate.code
+    : typeof nested === 'string' ? nested : undefined;
+  const message = typeof candidate.message === 'string'
+    ? candidate.message
+    : typeof record.message === 'string'
+      ? record.message
+      : typeof record.error_description === 'string' ? record.error_description : undefined;
+  const hint = typeof candidate.hint === 'string' ? candidate.hint : undefined;
+  return { ...(code ? { code } : {}), ...(message ? { message } : {}), ...(hint ? { hint } : {}) };
+}
+
+function isSessionNotFound(status: number, details: ApiErrorDetails | null): boolean {
+  if (status !== 401) return false;
+  const code = details?.code?.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const message = details?.message?.trim().toLowerCase();
+  return code === 'session_not_found' || message === 'session not found';
+}
+
+function sessionRecoveryFailed(): ApiError {
+  return new ApiError(
+    'session_recovery_failed',
+    'Your sign-in session could not be restored. Sign in again.',
+    'sign out, then start a fresh hosted sign-in',
+    401,
+  );
+}
+
 /** Thin typed wrapper over the Platform REST API (the admin console talks only to this). */
 export class PoolstatisClient {
-  constructor(private baseUrl: string, private token: string | (() => Promise<string>)) {}
+  constructor(private baseUrl: string, private token: string | AccessTokenProvider) {}
 
-  private async bearer(): Promise<string> {
-    return typeof this.token === 'function' ? this.token() : this.token;
+  private async bearer(forceRefresh = false): Promise<string> {
+    if (typeof this.token !== 'function') return this.token;
+    return forceRefresh ? this.token({ forceRefresh: true }) : this.token();
+  }
+
+  private async authorizedFetch(
+    path: string,
+    request: (token: string) => RequestInit,
+  ): Promise<Response> {
+    const send = async (token: string) => {
+      try {
+        return await fetch(`${this.baseUrl}${path}`, request(token));
+      } catch {
+        throw new ApiError('network', `cannot reach ${this.baseUrl || 'the server'} — is it running?`);
+      }
+    };
+
+    const response = await send(await this.bearer());
+    if (typeof this.token !== 'function' || response.status !== 401) return response;
+    const details = apiErrorDetails(await response.clone().json().catch(() => null));
+    if (!isSessionNotFound(response.status, details)) return response;
+
+    let renewedToken: string;
+    try {
+      renewedToken = await this.bearer(true);
+    } catch {
+      throw sessionRecoveryFailed();
+    }
+    const retried = await send(renewedToken);
+    if (retried.status === 401) throw sessionRecoveryFailed();
+    return retried;
   }
 
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const token = await this.bearer();
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}${path}`, {
-        method,
-        headers: {
-          authorization: `Bearer ${token}`,
-          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        },
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      });
-    } catch {
-      throw new ApiError('network', `cannot reach ${this.baseUrl || 'the server'} — is it running?`);
-    }
+    const res = await this.authorizedFetch(path, (token) => ({
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    }));
     const json = await res.json().catch(() => null);
     if (!res.ok) {
-      const e = (json as { error?: { code: string; message: string; hint?: string } } | null)?.error;
+      const e = apiErrorDetails(json);
       throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
     }
     return json as T;
   }
 
   private async raw(method: string, path: string, body?: Blob): Promise<Response> {
-    const token = await this.bearer();
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}${path}`, {
-        method,
-        headers: {
-          authorization: `Bearer ${token}`,
-          ...(body ? { 'content-type': body.type } : {}),
-        },
-        ...(body ? { body } : {}),
-      });
-    } catch {
-      throw new ApiError('network', `cannot reach ${this.baseUrl || 'the server'} — is it running?`);
-    }
+    const res = await this.authorizedFetch(path, (token) => ({
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(body ? { 'content-type': body.type } : {}),
+      },
+      ...(body ? { body } : {}),
+    }));
     if (!res.ok) {
       const json = await res.json().catch(() => null);
-      const e = (json as { error?: { code: string; message: string; hint?: string } } | null)?.error;
+      const e = apiErrorDetails(json);
       throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
     }
     return res;

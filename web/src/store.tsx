@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { PoolstatisClient } from './api/client';
+import { PoolstatisClient, type AccessTokenProvider } from './api/client';
 import type { AccountMe, KeyKind, ProjectWithStats } from './api/types';
 import { markHostedSessionConnected } from './oidc';
 
@@ -12,7 +12,7 @@ interface Conn {
 
 interface HostedConn {
   baseUrl: string;
-  getToken: () => Promise<string>;
+  getToken: AccessTokenProvider;
 }
 
 interface Store {

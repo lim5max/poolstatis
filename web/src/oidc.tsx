@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import type { AccessTokenProvider, AccessTokenRequest } from './api/client';
 
 export const hostedAuthConfig = {
   authority: (import.meta.env.VITE_OIDC_AUTHORITY as string | undefined)?.replace(/\/$/, ''),
@@ -157,11 +158,22 @@ export async function hostedAccessToken(
   manager: Pick<UserManager, 'getUser' | 'signinSilent'>,
   callbackUser: User | null,
   audience: string,
+  request: AccessTokenRequest = {},
 ): Promise<string> {
-  let current = callbackUser && !callbackUser.expired
-    ? callbackUser
-    : await manager.getUser();
-  if (current?.expired && current.refresh_token) {
+  let current: User | null;
+  if (request.forceRefresh) {
+    try {
+      current = await manager.getUser();
+    } catch {
+      throw new Error('Your session expired. Sign in again.');
+    }
+    if (!current?.refresh_token) throw new Error('Your session expired. Sign in again.');
+  } else {
+    current = callbackUser && !callbackUser.expired
+      ? callbackUser
+      : await manager.getUser();
+  }
+  if ((request.forceRefresh || current?.expired) && current?.refresh_token) {
     try {
       const keyedManager = manager as object;
       let refresh = refreshPromises.get(keyedManager);
@@ -172,9 +184,7 @@ export async function hostedAccessToken(
       try {
         current = await refresh;
       } finally {
-        if (refreshPromises.get(keyedManager) === refresh) {
-          refreshPromises.delete(keyedManager);
-        }
+        if (refreshPromises.get(keyedManager) === refresh) refreshPromises.delete(keyedManager);
       }
     } catch {
       throw new Error('Your session expired. Sign in again.');
@@ -191,7 +201,7 @@ type HostedAuthState = {
   error: Error | null;
   login(): Promise<void>;
   logout(): Promise<void>;
-  getToken(): Promise<string>;
+  getToken: AccessTokenProvider;
 };
 
 const disabledState: HostedAuthState = {
@@ -285,8 +295,8 @@ export function HostedAuthProvider({
     clearHostedSessionMarkers(window.localStorage, window.sessionStorage);
     await signoutHostedUser();
   }, []);
-  const getToken = useCallback(async () => {
-    return hostedAccessToken(manager, user, hostedAuthConfig.audience!);
+  const getToken = useCallback(async (request?: AccessTokenRequest) => {
+    return hostedAccessToken(manager, user, hostedAuthConfig.audience!, request);
   }, [manager, user]);
 
   return (
@@ -318,5 +328,5 @@ export function useHostedAuth() {
 
 export function useHostedToken() {
   const { getToken } = useHostedAuth();
-  return useCallback(() => getToken(), [getToken]);
+  return useCallback((request?: AccessTokenRequest) => getToken(request), [getToken]);
 }
