@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import type { OrganizationUsage, OrganizationUsageActivity } from '../api/types';
+import type { OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange } from '../api/types';
 
 function currentUtcMonth(): string {
   return new Date().toISOString().slice(0, 7);
@@ -26,7 +26,40 @@ function activityRange(days: number): { from: string; to: string } {
   return { from: utcDate(days - 1), to: utcDate() };
 }
 
-type UsageProject = OrganizationUsage['projects'][number] | OrganizationUsageActivity['projects'][number];
+type MonthRangePreset = 'current' | 'last' | 'last-3' | 'last-6';
+
+function offsetUtcMonth(period: string, offset: number): string {
+  const [year, month] = period.split('-').map(Number) as [number, number];
+  const index = year * 12 + month - 1 + offset;
+  return `${String(Math.floor(index / 12)).padStart(4, '0')}-${String(index % 12 + 1).padStart(2, '0')}`;
+}
+
+export function usageMonthPresetRange(preset: MonthRangePreset, current = currentUtcMonth()): { from: string; to: string } {
+  if (preset === 'last') {
+    const last = offsetUtcMonth(current, -1);
+    return { from: last, to: last };
+  }
+  if (preset === 'last-3') return { from: offsetUtcMonth(current, -2), to: current };
+  if (preset === 'last-6') return { from: offsetUtcMonth(current, -5), to: current };
+  return { from: current, to: current };
+}
+
+export function validateUsageMonthRange(range: { from: string; to: string }): string | null {
+  const pattern = /^(?!0000)\d{4}-(0[1-9]|1[0-2])$/;
+  if (!pattern.test(range.from) || !pattern.test(range.to)) return 'Choose both months in YYYY-MM format.';
+  const index = (period: string) => {
+    const [year, month] = period.split('-').map(Number) as [number, number];
+    return year * 12 + month - 1;
+  };
+  const months = index(range.to) - index(range.from) + 1;
+  if (months < 1) return 'The start month must not be after the end month.';
+  if (months > 12) return 'Choose a range of 12 months or fewer.';
+  return null;
+}
+
+type UsageProject = OrganizationUsage['projects'][number]
+  | OrganizationUsageActivity['projects'][number]
+  | OrganizationUsageRange['periods'][number]['projects'][number];
 
 function UsageBreakdown({ projects, testId }: {
   projects: UsageProject[];
@@ -120,6 +153,93 @@ function ActivityPanel({ activity, loading, error, reload, range, preset, onPres
   );
 }
 
+const MONTH_PRESETS: Array<{ key: MonthRangePreset; label: string }> = [
+  { key: 'current', label: 'Current month' },
+  { key: 'last', label: 'Last month' },
+  { key: 'last-3', label: 'Last 3 months' },
+  { key: 'last-6', label: 'Last 6 months' },
+];
+
+function MonthRangePanel({ usage, loading, error, reload, range, preset, onPreset, onRange }: {
+  usage: OrganizationUsageRange | null | undefined;
+  loading: boolean;
+  error: string | null;
+  reload: () => void;
+  range: { from: string; to: string };
+  preset: MonthRangePreset | null;
+  onPreset: (preset: MonthRangePreset) => void;
+  onRange: (range: { from: string; to: string }) => void;
+}) {
+  return (
+    <Panel title={<h2>Monthly usage history</h2>}>
+      <div className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex flex-wrap gap-2">
+          {MONTH_PRESETS.map((option) => (
+            <Button
+              key={option.key}
+              variant={preset === option.key ? 'default' : 'outline'}
+              aria-pressed={preset === option.key}
+              onClick={() => onPreset(option.key)}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Label className="grid gap-1.5 text-sm text-muted-foreground">
+            Month from
+            <Input aria-label="Usage month from" type="month" value={range.from} onChange={(event) => onRange({ ...range, from: event.target.value })} />
+          </Label>
+          <Label className="grid gap-1.5 text-sm text-muted-foreground">
+            Month to
+            <Input aria-label="Usage month to" type="month" value={range.to} onChange={(event) => onRange({ ...range, to: event.target.value })} />
+          </Label>
+        </div>
+      </div>
+      <div className="pt-5">
+        {loading || (!usage && !error) ? <Loading what="Loading monthly usage…" />
+          : error ? error.startsWith('Choose ') || error.startsWith('The start month')
+            ? <ErrorNote>{error}</ErrorNote>
+            : <RecoverableError onRetry={reload}>{error}</RecoverableError>
+            : usage && <>
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-muted-foreground">Accepted events stored</div>
+                  <div className="mono mt-1 text-3xl tabular-nums">{whole(usage.quantity)}</div>
+                </div>
+                <p className="max-w-lg text-sm text-muted-foreground">
+                  Grouped by UTC ingest month. Historical backfills count when stored; the current entitlement below is not historical.
+                </p>
+              </div>
+              <div className="mt-5 divide-y rounded-panel border">
+                {usage.periods.map((period) => (
+                  <section key={period.period} className="p-4" aria-label={`Usage for ${period.period}`}>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <h3 className="font-medium">{period.period}</h3>
+                      <span className="mono text-sm tabular-nums">{whole(period.quantity)} events</span>
+                    </div>
+                    {BigInt(period.unattributed_quantity) !== 0n && (
+                      <WarningNote>{whole(period.unattributed_quantity)} events without retained project attribution</WarningNote>
+                    )}
+                    {period.warnings.map((warning) => (
+                      <WarningNote key={warning.threshold}>
+                        {whole(warning.threshold)} event threshold reached at {whole(warning.quantity)} events
+                      </WarningNote>
+                    ))}
+                    <div className="mt-3">
+                      {period.projects.length === 0
+                        ? <p className="text-sm text-muted-foreground">No retained project breakdown for this month.</p>
+                        : <UsageBreakdown projects={period.projects} testId={`usage-range-breakdown-${period.period}`} />}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </>}
+      </div>
+    </Panel>
+  );
+}
+
 function LedgerRail({ usage }: { usage: OrganizationUsage }) {
   const finite = (value: number) => Number.isFinite(value) ? value : 0;
   const hardLimit = usage.hard_limit === null ? null : finite(usage.hard_limit);
@@ -152,13 +272,23 @@ function LedgerRail({ usage }: { usage: OrganizationUsage }) {
 
 export function Usage() {
   const { client, tokenKind, account } = useStore();
-  const [period, setPeriod] = useState(currentUtcMonth);
-  const [range, setRange] = useState(() => activityRange(30));
-  const [preset, setPreset] = useState<number | null>(30);
+  const currentPeriod = currentUtcMonth();
+  const [activitySelection, setActivitySelection] = useState(() => activityRange(30));
+  const [activityPreset, setActivityPreset] = useState<number | null>(30);
+  const [monthSelection, setMonthSelection] = useState(() => usageMonthPresetRange('current', currentPeriod));
+  const [monthPreset, setMonthPreset] = useState<MonthRangePreset | null>('current');
   const allowed = tokenKind === 'personal' || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
-  const result = useAsync(() => client && allowed ? client.usage(period) : Promise.resolve(null), [client, allowed, period]);
-  const rangeError = validateUsageActivityRange(range);
-  const activity = useAsync(() => client && allowed && !rangeError ? client.usageActivity(range.from, range.to) : Promise.resolve(null), [client, allowed, range.from, range.to, rangeError]);
+  const result = useAsync(() => client && allowed ? client.usage(currentPeriod) : Promise.resolve(null), [client, allowed, currentPeriod]);
+  const activityError = validateUsageActivityRange(activitySelection);
+  const activity = useAsync(
+    () => client && allowed && !activityError ? client.usageActivity(activitySelection.from, activitySelection.to) : Promise.resolve(null),
+    [client, allowed, activitySelection.from, activitySelection.to, activityError],
+  );
+  const monthError = validateUsageMonthRange(monthSelection);
+  const monthly = useAsync(
+    () => client && allowed && !monthError ? client.usageRange(monthSelection.from, monthSelection.to) : Promise.resolve(null),
+    [client, allowed, monthSelection.from, monthSelection.to, monthError],
+  );
 
   if (!allowed || !client) {
     return <Panel title="Usage"><EmptyState headline="Usage unavailable" lead="An organization owner or admin can read the workspace usage ledger." /></Panel>;
@@ -174,18 +304,31 @@ export function Usage() {
       <ActivityPanel
         activity={activity.data}
         loading={activity.loading}
-        error={rangeError ?? activity.error}
+        error={activityError ?? activity.error}
         reload={activity.reload}
-        range={range}
-        preset={preset}
-        onPreset={(days) => { setPreset(days); setRange(activityRange(days)); }}
-        onRange={(next) => { setPreset(null); setRange(next); }}
+        range={activitySelection}
+        preset={activityPreset}
+        onPreset={(days) => { setActivityPreset(days); setActivitySelection(activityRange(days)); }}
+        onRange={(next) => { setActivityPreset(null); setActivitySelection(next); }}
       />
-      <Panel title={<h2>Monthly quota</h2>} right={<div className="space-y-1"><Label htmlFor="usage-period" className="text-sm text-muted-foreground">UTC month</Label><Input id="usage-period" aria-label="UTC month" type="month" value={period} onChange={(event) => setPeriod(event.target.value)} /></div>}>
+      <MonthRangePanel
+        usage={monthly.data}
+        loading={monthly.loading}
+        error={monthError ?? monthly.error}
+        reload={monthly.reload}
+        range={monthSelection}
+        preset={monthPreset}
+        onPreset={(next) => {
+          setMonthPreset(next);
+          setMonthSelection(usageMonthPresetRange(next, currentPeriod));
+        }}
+        onRange={(next) => { setMonthPreset(null); setMonthSelection(next); }}
+      />
+      <Panel title={<h2>Current monthly quota</h2>} right={<span className="mono text-sm text-muted-foreground">{currentPeriod} UTC</span>}>
         {result.loading || (!usage && !result.error) ? <Loading what="Loading usage ledger…" /> : result.error ? <RecoverableError onRetry={result.reload}>{result.error}</RecoverableError> : usage && <LedgerRail usage={usage} />}
       </Panel>
       {usage?.warnings.map((warning) => <WarningNote key={warning.threshold}>Warning threshold reached: {whole(warning.threshold)} events.</WarningNote>)}
-      {usage && (usage.projects.length === 0 ? <Panel title="Monthly breakdown"><EmptyState headline={`No stored events in ${usage.period}`} lead="Accepted events will appear here after durable ingest." /></Panel> : <Panel title="Monthly breakdown" right={<span className="mono text-sm text-muted-foreground">{usage.meter}</span>}>
+      {usage && (usage.projects.length === 0 ? <Panel title="Current-month breakdown"><EmptyState headline={`No stored events in ${usage.period}`} lead="Accepted events will appear here after durable ingest." /></Panel> : <Panel title="Current-month breakdown" right={<span className="mono text-sm text-muted-foreground">{usage.meter}</span>}>
         <UsageBreakdown projects={usage.projects} testId="usage-breakdown-scroll" />
       </Panel>)}
     </div>

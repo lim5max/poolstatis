@@ -66,7 +66,7 @@ import {
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
 import type { OutboundPolicyOptions } from '../security/outbound.js';
-import { getOrganizationUsage, getOrganizationUsageActivity } from '../services/usage.js';
+import { getOrganizationUsage, getOrganizationUsageActivity, getOrganizationUsageRange } from '../services/usage.js';
 import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
 import {
   acknowledgeOnboardingGate, getOnboardingStatus, recordAgentObservation, recordQueryRun,
@@ -80,7 +80,7 @@ import {
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
-  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usageDateSchema, usagePeriodSchema,
+  browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usageDateSchema, usageMonthRangeSchema, usagePeriodSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -472,7 +472,9 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         const route = req.routeOptions.url;
         if (route === '/api/v1/me' || route === '/api/v1/onboarding') {
           requireKind(req.auth, 'user');
-        } else if (route === '/api/v1/me/usage' || route === '/api/v1/me/usage/activity') {
+        } else if (route === '/api/v1/me/usage'
+          || route === '/api/v1/me/usage/activity'
+          || route === '/api/v1/me/usage/range') {
           requireUsageReadAccess(req.auth);
         } else if (route === '/api/v1/me/tokens' && req.method === 'POST') {
           requireTokenIssuanceAccess(req.auth);
@@ -740,6 +742,24 @@ function registerPlatformRoutes(
     // The organization comes only from the authenticated credential. Caller
     // query parameters never widen an organization-scoped usage read.
     return getOrganizationUsage(ctx.pool, req.auth.orgId, period);
+  });
+
+  app.get('/api/v1/me/usage/range', async (req) => {
+    requireUsageReadAccess(req.auth);
+    const parsed = usageMonthRangeSchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw badRequest('invalid_query_param', 'from and to must be UTC months in YYYY-MM format');
+    }
+    const index = (period: string) => {
+      const [year, month] = period.split('-').map(Number) as [number, number];
+      return year * 12 + month - 1;
+    };
+    const months = index(parsed.data.to) - index(parsed.data.from) + 1;
+    if (months < 1 || months > 12) {
+      throw badRequest('invalid_query_param', 'usage range must include between 1 and 12 UTC months');
+    }
+    // As with the legacy month read, organization scope comes only from auth.
+    return getOrganizationUsageRange(ctx.pool, req.auth.orgId, parsed.data.from, parsed.data.to);
   });
 
   app.get('/api/v1/me/usage/activity', async (req) => {

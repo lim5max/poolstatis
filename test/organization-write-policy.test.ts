@@ -30,7 +30,7 @@ describe('organization write policy inventory', () => {
       source.matchAll(/app\.(post|put|patch|delete)\('([^']+)'/g),
       (match) => `${match[1]!.toUpperCase()} ${match[2]!}`,
     );
-    expect(allRoutes).toHaveLength(128);
+    expect(allRoutes).toHaveLength(129);
     expect(new Set(allRoutes).size).toBe(allRoutes.length);
     expect(routes).toHaveLength(78);
     expect(routes.every((route) =>
@@ -43,7 +43,7 @@ describe('organization write policy inventory', () => {
       });
     const allowed = allRoutes.filter((route) => !blocked.includes(route));
     expect(blocked).toHaveLength(67);
-    expect(allowed).toHaveLength(61);
+    expect(allowed).toHaveLength(62);
 
     const exemptions = routes
       .filter((route) => {

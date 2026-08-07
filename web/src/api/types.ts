@@ -1085,6 +1085,39 @@ export interface OrganizationUsageActivity {
   }>;
 }
 
+export interface OrganizationUsageRangeProject {
+  id: string;
+  slug: string;
+  name: string;
+  quantity: string;
+  environments: Array<{ env: string; quantity: string }>;
+}
+
+export interface OrganizationUsageRangePeriod {
+  period: string;
+  quantity: string;
+  unattributed_quantity: string;
+  warnings: Array<{ threshold: number; quantity: number }>;
+  projects: OrganizationUsageRangeProject[];
+}
+
+export interface OrganizationUsageRange {
+  meter: 'events_stored';
+  from: string;
+  to: string;
+  timezone: 'UTC';
+  granularity: 'month';
+  usage_basis: 'ingest_time';
+  quantity: string;
+  current_entitlement: {
+    period: string;
+    hard_limit: number | null;
+    warning_thresholds: number[];
+    basis: 'current_configuration';
+  };
+  periods: OrganizationUsageRangePeriod[];
+}
+
 export interface HostedOnboardingResult {
   organization: { id: string; name: string };
   project: { slug: string; name: string; timezone: string };
