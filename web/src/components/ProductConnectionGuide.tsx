@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Check, Copy, Loader2 } from '@/components/icons';
+import { ArrowLeft, Check, Copy, Loader2 } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { CodexLogo } from '@/components/logos/codex';
@@ -91,6 +91,7 @@ export function ProductConnectionGuide({
 }: ProductConnectionGuideProps) {
   const hasKey = Boolean(ingestKey) || keyReady === true;
   const [keySaved, setKeySaved] = useState(!ingestKey && hasKey);
+  const [keyCopied, setKeyCopied] = useState(false);
   const [agentId, setAgentId] = useState<AgentId>('codex');
   const [taskCopied, setTaskCopied] = useState(false);
   const [taskResponse, setTaskResponse] = useState<SetupTaskResponse | null>(null);
@@ -170,9 +171,12 @@ export function ProductConnectionGuide({
     return (
       <div className="space-y-4">
         {showProgress && <ConnectionProgress current={3} complete />}
-        <section className="rounded-lg border border-emerald-500/35 bg-emerald-500/5 p-4 sm:p-5" aria-live="polite">
+        <section className="rounded-lg border border-primary/50 bg-primary/10 p-4 sm:p-5" aria-live="polite">
           <div className="flex items-start gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
+            <span
+              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground"
+              data-slot="received-event-icon"
+            >
               <Check className="size-4" aria-hidden="true" />
             </span>
             <div className="min-w-0 flex-1">
@@ -228,15 +232,17 @@ export function ProductConnectionGuide({
           {ingestKey ? (
             <>
               <div className="mt-4 rounded-md border bg-muted/15 p-3">
-                <code className="block max-w-full truncate text-xs text-muted-foreground">{envName}=pk_••••••••••••</code>
+                <code className="block max-w-full truncate text-sm text-muted-foreground">{envName}=pk_••••••••••••</code>
               </div>
-              <p className="mt-3 text-sm text-muted-foreground">Save this line to your local .env. Never paste the key into an AI chat.</p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                Open or create .env.local in your project root, next to package.json. Paste the copied line there and save the file. Never paste the key into an AI chat.
+              </p>
               <div className="mt-4">
                 <CopyButton
                   value={envLine}
                   showFallback
                   onCopied={() => {
-                    setKeySaved(true);
+                    setKeyCopied(true);
                     captureProductTelemetry('onboarding.key_copied', {
                       environment: telemetryEnvironment(telemetryEnvironmentName),
                       method: 'clipboard',
@@ -254,6 +260,13 @@ export function ProductConnectionGuide({
                   Copy .env line
                 </CopyButton>
               </div>
+              {keyCopied && (
+                <div className="mt-4 rounded-md border border-primary/50 bg-primary/10 p-3" role="status">
+                  <div className="text-sm font-medium">Next: save the key locally</div>
+                  <p className="mt-1 text-sm text-muted-foreground">Paste the copied line into .env.local, save the file, then confirm below.</p>
+                  <Button className="mt-3" size="sm" onClick={() => setKeySaved(true)}>I saved .env.local</Button>
+                </div>
+              )}
             </>
           ) : (
             <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -280,6 +293,12 @@ export function ProductConnectionGuide({
       <div className="space-y-4">
         {showProgress && <ConnectionProgress current={2} />}
         <section className="rounded-lg border bg-card p-4 sm:p-5" aria-labelledby="agent-title">
+          {ingestKey && (
+            <Button className="-ml-2 mb-3" size="sm" variant="ghost" onClick={() => setKeySaved(false)}>
+              <ArrowLeft className="size-4" aria-hidden="true" />
+              Back to product key
+            </Button>
+          )}
           <h2 id="agent-title" className="text-lg font-semibold">Which agent edits your code?</h2>
           <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup" aria-labelledby="agent-title">
             {AGENTS.map((agent) => (

@@ -221,6 +221,7 @@ describe('Product Experience V2 onboarding', () => {
     expect(telemetryEvents('onboarding.key_copied')).toEqual([
       ['onboarding.key_copied', { environment: 'prod', method: 'clipboard' }, { distinctId: 'user-2' }],
     ]);
+    fireEvent.click(await screen.findByRole('button', { name: 'I saved .env.local' }));
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('docs', { agent_id: 'codex', prefer_llm: false }));
     fireEvent.click(screen.getByRole('radio', { name: 'Claude Code' }));
@@ -282,11 +283,41 @@ describe('Product Experience V2 onboarding', () => {
     ]));
     expect(JSON.stringify(telemetryCapture.mock.calls)).not.toContain('Understand successful workspace activation');
     fireEvent.click(await screen.findByRole('button', { name: 'Copy .env line' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'I saved .env.local' }));
 
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('custom-project', {
       agent_id: 'codex',
       prefer_llm: true,
     }));
+  });
+
+  it('explains where to save the copied key and lets the user reopen that step', async () => {
+    const requestTask = vi.fn().mockResolvedValue(setupTask());
+    render(
+      <ProductConnectionGuide
+        ingestKey="pk_private_value"
+        serverUrl="https://api.poolstatis.test"
+        projectName="Alpha"
+        projectSlug="alpha"
+        projectMode="product"
+        eventSeen={false}
+        getSetupTask={requestTask}
+        onCheck={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy .env line' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('VITE_POOLSTATIS_INGEST_KEY=pk_private_value'));
+
+    expect(screen.getByText(/Open or create .env.local in your project root/)).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Codex' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'I saved .env.local' }));
+    expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to product key' }));
+    expect(screen.getByRole('heading', { name: 'Save your product key' })).toBeInTheDocument();
+    expect(screen.getByText(/Open or create .env.local in your project root/)).toBeInTheDocument();
   });
 
   it('shows a selectable fallback when clipboard permission is denied and does not regenerate on rerender', async () => {
@@ -353,6 +384,32 @@ describe('Product Experience V2 onboarding', () => {
     expect(review).toHaveBeenCalledOnce();
     expect(screen.getByText('Let your agent answer questions')).toBeInTheDocument();
     expect(screen.getByText('Optional')).toBeInTheDocument();
+  });
+
+  it('uses the brand primary palette for the received-event success state', () => {
+    const { container } = render(
+      <ProductConnectionGuide
+        ingestKey={null}
+        keyReady
+        serverUrl="https://api.poolstatis.test"
+        projectName="Alpha"
+        projectSlug="alpha"
+        projectMode="product"
+        eventSeen
+        eventName="checkout.finished"
+        eventEnvironment="prod"
+        eventRegistered
+        onCheck={vi.fn()}
+        onOpenProject={vi.fn()}
+      />,
+    );
+
+    const successPanel = screen.getByText('Event received').closest('section');
+    const successIcon = container.querySelector('[data-slot="received-event-icon"]');
+
+    expect(successPanel).toHaveClass('border-primary/50', 'bg-primary/10');
+    expect(successPanel?.className).not.toContain('emerald');
+    expect(successIcon).toHaveClass('bg-primary', 'text-primary-foreground');
   });
 });
 
