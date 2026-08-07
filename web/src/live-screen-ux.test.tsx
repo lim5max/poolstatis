@@ -685,7 +685,7 @@ describe('live customer screen UX', () => {
     const remoteConfig = screen.getByRole('button', { name: /Remote config/ });
     fireEvent.click(remoteConfig);
     expect(remoteConfig).toHaveAttribute('aria-pressed', 'true');
-    expect(remoteConfig).toHaveClass('border-primary', 'bg-primary/10', 'text-foreground');
+    expect(remoteConfig).toHaveClass('border-brand-strong', 'bg-primary/10', 'text-foreground');
     expect(within(remoteConfig).getByText('Create config')).toHaveClass('text-foreground');
     expect(within(remoteConfig).getByText('Create config')).not.toHaveClass('text-primary');
     fireEvent.click(remoteConfig);

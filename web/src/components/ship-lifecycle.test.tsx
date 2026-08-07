@@ -261,6 +261,7 @@ describe('Ship lifecycle', () => {
     render(<MemoryRouter><Decisions /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Decision review' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Decided: keep/ })).toHaveClass('border-brand-strong', 'bg-primary/10'));
     expect(screen.queryByRole('navigation', { name: 'Ship views' })).not.toBeInTheDocument();
     expect(listDecisions).toHaveBeenCalledWith('alpha', { env: 'prod' });
     expect(screen.getByLabelText("Current environment prod")).toBeInTheDocument();

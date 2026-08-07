@@ -30,6 +30,7 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-brand: var(--brand-lime);
+  --color-brand-strong: var(--brand-lime-strong);
   --color-brand-foreground: var(--brand-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
@@ -73,6 +74,7 @@
   --auth-display-leading: 0.96;
   --auth-display-tracking: -0.045em;
   --brand-lime: #b9f542;
+  --brand-lime-strong: #4f720f;
   --brand-foreground: #172019;
   --background: #f6f8f5;
   --foreground: #172019;
@@ -90,7 +92,7 @@
   --accent-foreground: #26351c;
   --destructive: #b95443;
   --destructive-foreground: #ffffff;
-  --success: #2e6a42;
+  --success: var(--brand-lime-strong);
   --success-foreground: #ffffff;
   --warning: #b97a2f;
   --warning-foreground: #ffffff;
@@ -98,7 +100,7 @@
   --info-foreground: #ffffff;
   --border: #dde3dc;
   --input: #ccd5cb;
-  --ring: var(--brand-lime);
+  --ring: var(--brand-lime-strong);
   --chart-1: var(--brand-lime);
   --chart-1-stroke: #6f971e;
   --chart-2: #2e6a42;
@@ -112,12 +114,13 @@
   --sidebar-accent: var(--brand-lime);
   --sidebar-accent-foreground: var(--brand-foreground);
   --sidebar-border: #dde3dc;
-  --sidebar-ring: var(--brand-lime);
+  --sidebar-ring: var(--brand-lime-strong);
 }
 
 .dark {
   color-scheme: dark;
   --brand-lime: #cdfa4f;
+  --brand-lime-strong: #a4ca38;
   --brand-foreground: #10130b;
   --background: #0b0c0e;
   --foreground: #f5f6f2;
@@ -133,8 +136,8 @@
   --accent-foreground: #efffc3;
   --destructive: #e56b59;
   --destructive-foreground: #160705;
-  --success: #75c77b;
-  --success-foreground: #071408;
+  --success: var(--brand-lime-strong);
+  --success-foreground: #10130b;
   --warning: #d5a84f;
   --warning-foreground: #171004;
   --info: #72a5df;

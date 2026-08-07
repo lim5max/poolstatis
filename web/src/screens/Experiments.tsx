@@ -87,9 +87,9 @@ export function Experiments() {
               key={option.id}
               type="button"
               className={cn(
-                'rounded-lg border p-4 text-left text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50',
+                'rounded-lg border p-4 text-left text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
                 intent === option.id
-                  ? 'border-primary bg-primary/10'
+                  ? 'border-brand-strong bg-primary/10'
                   : 'bg-background hover:border-primary/60 hover:bg-primary/5',
               )}
               aria-pressed={intent === option.id}
@@ -98,7 +98,7 @@ export function Experiments() {
               <span className="text-sm font-medium">{option.title}</span>
               <span className="mt-2 block text-sm leading-relaxed text-muted-foreground">{option.body}</span>
               <span className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
-                <Add className="size-4 text-primary" />{option.action}
+                <Add className="size-4 text-brand-strong" />{option.action}
               </span>
             </button>
           ))}
@@ -148,7 +148,7 @@ function TabButton({ selected, onClick, children }: { selected: boolean; onClick
       role="tab"
       aria-selected={selected}
       onClick={onClick}
-      className={`flex min-h-10 flex-1 items-center justify-center rounded-md px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${selected ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+      className={`flex min-h-10 flex-1 items-center justify-center rounded-md border px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-brand-strong bg-primary/10 font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
     >
       {children}
     </button>
@@ -235,7 +235,7 @@ function PrepareExperimentForm({
               value={hypothesis}
               onChange={(event) => setHypothesis(event.target.value)}
               placeholder="A shorter signup will increase completed activation."
-              className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
             />
           </Field>
         </div>
@@ -504,7 +504,7 @@ function ExperimentCard({
         />
       )}
       <details className="mt-2 min-w-0">
-        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</DisclosureSummary>
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8">Technical details</DisclosureSummary>
         <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-sm text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
           <span>Experiment <code className="break-all">{experiment.key}</code></span>
           <span>Raw status <code>{experiment.status}</code></span>
@@ -552,7 +552,7 @@ function LaunchDialog({
         <div className="space-y-2">
           {readiness.checks.map((check) => (
             <div key={check.key} className="flex items-start gap-2 rounded-md border p-3 text-sm">
-              <span className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border ${check.ready ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600' : 'text-destructive'}`}>
+              <span className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border ${check.ready ? 'border-success/40 bg-success/10 text-success' : 'text-destructive'}`}>
                 {check.ready ? <Check className="size-3.5" /> : '!'}
               </span>
               <span>{check.message}</span>
@@ -634,7 +634,7 @@ function DecisionDialog({
             </Field>
           )}
           <Field label="Why?">
-            <textarea aria-label="Experiment rationale" value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="State what the evidence supports and what remains uncertain." className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50" />
+            <textarea aria-label="Experiment rationale" value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="State what the evidence supports and what remains uncertain." className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring" />
           </Field>
           {outcome === 'ship' && shipVariant !== 'none' && (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
@@ -754,7 +754,7 @@ function FlagCard({ flag, env, onChanged }: { flag: FeatureFlag; env: string; on
       <div className="min-w-0 xl:col-span-2">
         <p className="break-words text-sm leading-relaxed">{flag.purpose}</p>
         <details className="mt-2 min-w-0">
-          <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Allocation &amp; technical details</DisclosureSummary>
+          <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8">Allocation &amp; technical details</DisclosureSummary>
           <div className="min-w-0 border-l pl-3 text-sm text-muted-foreground">
             <div>Flag <code className="break-all">{flag.key}</code> · environment <code>{flag.env ?? 'legacy-all'}</code> · {allocation}% allocated</div>
             <div className="mt-2 flex flex-wrap gap-1">{flag.variants.map((variant) => <Badge key={variant.key} variant="outline" className="font-mono text-sm">{variant.key} {variant.rollout_percentage}%</Badge>)}</div>

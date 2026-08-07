@@ -34,7 +34,7 @@ export function Decisions() {
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Approve, correct, or reject an agent proposal against immutable evidence.</p>
     </header>
     {list.data.length === 0 ? <Panel><EmptyState headline="No proposed decisions" lead="evaluate an eligible release to create evidence" /></Panel> : <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
-      <Panel title={<>Queue <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{list.data.length}</span></>}><div className="-m-2 space-y-1">{list.data.map((decision) => <button key={decision.id} type="button" onClick={() => setSelectedId(decision.id)} aria-pressed={selectedId === decision.id} className={`w-full rounded-control p-3 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 ${selectedId === decision.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'}`}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{decisionQueueTitle(decision)}</span><ShipStageBadge stage={deriveDecisionStage(decision)} /></div><div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{decision.accepted_rationale ?? decision.proposed_rationale}</div></button>)}</div></Panel>
+      <Panel title={<>Queue <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{list.data.length}</span></>}><div className="-m-2 space-y-1">{list.data.map((decision) => <button key={decision.id} type="button" onClick={() => setSelectedId(decision.id)} aria-pressed={selectedId === decision.id} className={`w-full rounded-control border-l-2 p-3 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${selectedId === decision.id ? 'border-brand-strong bg-primary/10 text-foreground' : 'border-transparent hover:bg-muted/50'}`}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{decisionQueueTitle(decision)}</span><ShipStageBadge stage={deriveDecisionStage(decision)} /></div><div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{decision.accepted_rationale ?? decision.proposed_rationale}</div></button>)}</div></Panel>
       {detail.loading ? <Panel><Loading what="reproducing evidence…" /></Panel> : detail.error ? <ErrorNote>{detail.error}</ErrorNote> : detail.data ? <DecisionReview detail={detail.data} env={env} onChanged={() => { list.reload(); detail.reload(); loop.reload(); }} /> : null}
     </div>}
     {loop.error ? <ErrorNote>{loop.error}</ErrorNote> : loop.data && <ContinuousLoopSummary {...loop.data} />}
@@ -67,7 +67,7 @@ function DecisionReview({ detail, env, onChanged }: { detail: DecisionDetail; en
       <p className="mt-2 text-sm text-muted-foreground">{detail.decision.accepted_rationale ?? detail.decision.proposed_rationale}</p>
       <p className="mt-3 border-t pt-3 text-sm">{detail.contract.business_hypothesis}</p>
       <details className="mt-2">
-        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</DisclosureSummary>
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8">Technical details</DisclosureSummary>
         <div className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 border-l pl-3 text-xs text-muted-foreground"><span>Decision <code className="break-all">{detail.decision.id}</code></span><span>Raw status <code>{detail.decision.status}</code></span><span>Release <code>{detail.release.commit_sha.slice(0, 10)}</code></span><span>Contract r{detail.release.contract_revision}</span><span>{detail.release.env}</span><span>{primary.source}</span></div>
       </details>
     </Panel>
@@ -94,7 +94,7 @@ function ContinuousLoopSummary({ inbox, history, deliveries }: {
   deliveries: Awaited<ReturnType<NonNullable<ReturnType<typeof useStore>['client']>['webhookDeliveries']>>;
 }) {
   return <details className="rounded-panel border bg-muted/10">
-    <DisclosureSummary className="flex min-h-11 cursor-pointer items-center gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-5">
+    <DisclosureSummary className="flex min-h-11 cursor-pointer items-center gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
       <span>Decision operations &amp; audit</span>
       <span className="ml-auto text-xs font-normal text-muted-foreground">{inbox.length} inbox · {history.length} history · {deliveries.length} deliveries</span>
     </DisclosureSummary>
@@ -117,7 +117,7 @@ function ContinuousLoopSummary({ inbox, history, deliveries }: {
 
 function TechnicalDecisionRecord({ detail }: { detail: DecisionDetail }) {
   return <details className="rounded-panel border bg-muted/10">
-    <DisclosureSummary className="flex min-h-11 cursor-pointer items-center gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-5">
+    <DisclosureSummary className="flex min-h-11 cursor-pointer items-center gap-3 px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
       <span>Technical record</span>
       <span className="ml-auto text-xs font-normal text-muted-foreground">Query · {detail.revisions.length} revisions</span>
     </DisclosureSummary>

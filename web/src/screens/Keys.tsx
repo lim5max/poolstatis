@@ -337,7 +337,7 @@ function CreateKey({
               aria-pressed={kind === option.kind}
               className={`h-9 rounded-md border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                 kind === option.kind
-                  ? 'border-foreground/20 bg-accent text-accent-foreground'
+                  ? 'border-brand-strong bg-primary/10 text-foreground'
                   : 'text-muted-foreground hover:bg-muted hover:text-foreground'
               }`}
               onClick={() => setKind(option.kind)}

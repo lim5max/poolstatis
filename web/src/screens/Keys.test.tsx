@@ -73,6 +73,7 @@ describe('Keys', () => {
     expect(await screen.findByRole('heading', { name: 'Create a key' })).toBeInTheDocument();
     expect(screen.getAllByRole('heading', { name: /Create/ })).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Ingest · pk_' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Ingest · pk_' })).toHaveClass('border-brand-strong', 'bg-primary/10');
     expect(screen.getByRole('button', { name: 'Project MCP · sk_' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Workspace MCP · pt_' })).toBeInTheDocument();
   });

@@ -404,7 +404,7 @@ function DashboardSettings({ ids, order, onChange, onReset }: {
             Card {slot + 1}
             <select
               aria-label={`Card ${slot + 1}`}
-              className="h-11 rounded-field border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="h-11 rounded-field border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
               value={id}
               onChange={(event) => onChange(slot, event.target.value)}
             >

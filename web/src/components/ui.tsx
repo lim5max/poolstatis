@@ -153,8 +153,7 @@ export function TableScroll({ children, testId }: { children: ReactNode; testId?
 export function Meter({ value }: { value: number }) {
   const safe = Number.isFinite(value) ? value : 0; // never render width: NaN%
   const pct = Math.max(0, Math.min(1, safe)) * 100;
-  const color = safe >= 0.99 ? 'bg-emerald-500' : safe >= 0.6 ? 'bg-amber-500' : 'bg-destructive';
-  return <div className="h-1.5 rounded-full bg-muted overflow-hidden"><div className={cn('h-full rounded-full', color)} style={{ width: `${pct}%` }} /></div>;
+  return <div className="h-1.5 rounded-full bg-muted overflow-hidden"><div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} /></div>;
 }
 
 // ===== toolbar / search / filters =====
@@ -197,7 +196,7 @@ export function FilterChips({ chips, onRemove, onClear }: { chips: Chip[]; onRem
           </button>
         </Badge>
       ))}
-      <button className="text-xs text-primary hover:underline" onClick={onClear}>clear all</button>
+      <button className="text-xs text-brand-strong hover:underline" onClick={onClear}>clear all</button>
     </div>
   );
 }
@@ -276,7 +275,7 @@ export function DangerConfirm({ title, blastRadius, willDelete, willKeep, error,
             <ul className="space-y-1 text-muted-foreground">{willDelete.map((x, i) => <li key={i}>− {x}</li>)}</ul>
           </div>
           <div className="rounded-md border p-3">
-            <div className="text-xs font-medium text-emerald-500 mb-1.5">Will keep</div>
+            <div className="mb-1.5 text-xs font-medium text-success">Will keep</div>
             <ul className="space-y-1 text-muted-foreground">{willKeep.map((x, i) => <li key={i}>✓ {x}</li>)}</ul>
           </div>
         </div>
@@ -284,7 +283,7 @@ export function DangerConfirm({ title, blastRadius, willDelete, willKeep, error,
         <p className="text-destructive text-xs">This cannot be undone.</p>
         <div className="space-y-1.5">
           <label className="text-xs text-muted-foreground flex items-center gap-2">{matchLabel}
-            <code className="cursor-pointer rounded bg-muted px-1.5 py-0.5 text-primary" onClick={() => navigator.clipboard?.writeText(matchValue)}>{matchValue}</code>
+            <code className="cursor-pointer rounded bg-muted px-1.5 py-0.5 text-brand-strong" onClick={() => navigator.clipboard?.writeText(matchValue)}>{matchValue}</code>
           </label>
           <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={matchValue} autoFocus />
         </div>
@@ -363,7 +362,7 @@ export function NumberedStepChips({ steps, max = 3 }: { steps: FunnelStep[]; max
     <span className="inline-flex items-center gap-1.5 flex-wrap">
       {shown.map((s, i) => (
         <span key={i} className="inline-flex items-center gap-1.5">
-          {i > 0 && <span className="text-primary/50">→</span>}
+          {i > 0 && <span className="text-brand-strong/60">→</span>}
           <span className="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded border text-xs text-muted-foreground">{i + 1}</span>
           <span className="text-xs text-muted-foreground">{s.label}</span>
         </span>
@@ -381,7 +380,7 @@ export function VerticalStepper({ steps }: { steps: FunnelStep[] }) {
         return (
           <div key={i} className="flex gap-3 items-start">
             <div className="flex flex-col items-center">
-              <span className={cn('size-6 rounded-full border flex items-center justify-center text-xs bg-card', last ? 'ring-2 ring-primary/40 text-primary' : 'text-muted-foreground')}>{i + 1}</span>
+              <span className={cn('size-6 rounded-full border flex items-center justify-center text-xs bg-card', last ? 'ring-2 ring-primary/40 text-brand-strong' : 'text-muted-foreground')}>{i + 1}</span>
               {!last && <span className="w-px flex-1 min-h-4 bg-border" />}
             </div>
             <div className="pb-4">

@@ -157,7 +157,7 @@ function ReleaseLifecycleRow({ release, detail, busy, onEvaluate }: {
         {release.experiment_key && <Button asChild size="sm" variant="outline"><Link to="/experiments">Open experiment</Link></Button>}
       </div>
       <details className="group/disclosure min-w-0 lg:col-span-3">
-        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8">
           Technical details
         </DisclosureSummary>
         <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
@@ -194,7 +194,7 @@ function ExperimentLifecycleRow({ experiment }: { experiment: Experiment }) {
       </div>
       <div className="flex items-start lg:justify-end"><Button asChild size="sm" variant="outline"><Link to="/experiments">Open experiment</Link></Button></div>
       <details className="group/disclosure min-w-0 lg:col-span-3">
-        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:min-h-8">Technical details</DisclosureSummary>
+        <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8">Technical details</DisclosureSummary>
         <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
           <span>Experiment <code className="break-all">{experiment.id}</code></span>
           <span>Raw status <code>{experiment.status}</code></span>
@@ -214,7 +214,7 @@ function MetricChange({ detail }: { detail: DecisionDetail }) {
   return (
     <p>
       {metric.metric.name}: {metric.baseline.value} → {metric.observed.value}
-      {relative !== null && <span className={relative >= 0 ? 'text-emerald-600' : 'text-destructive'}> ({relative >= 0 ? '+' : ''}{Math.round(relative * 100)}%)</span>}
+      {relative !== null && <span className="text-muted-foreground"> ({relative >= 0 ? '+' : ''}{Math.round(relative * 100)}%)</span>}
     </p>
   );
 }

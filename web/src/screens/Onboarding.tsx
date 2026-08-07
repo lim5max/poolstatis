@@ -321,8 +321,8 @@ export function Onboarding() {
                 <label
                   key={item.id}
                   className={cn(
-                    'relative min-h-28 cursor-pointer rounded-md border p-3 outline-none transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring/50',
-                    selected ? 'border-primary bg-primary/10 text-foreground' : 'bg-muted/10 hover:border-primary/60 hover:bg-primary/5',
+                    'relative min-h-28 cursor-pointer rounded-md border p-3 outline-none transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring',
+                    selected ? 'border-brand-strong bg-primary/10 text-foreground' : 'bg-muted/10 hover:border-primary/60 hover:bg-primary/5',
                   )}
                 >
                   <input
@@ -377,7 +377,7 @@ export function Onboarding() {
           </div>
 
           <details className="group/disclosure mt-4 border-t pt-3">
-            <DisclosureSummary className="inline-flex cursor-pointer items-center text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">Advanced</DisclosureSummary>
+            <DisclosureSummary className="inline-flex cursor-pointer items-center text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">Advanced</DisclosureSummary>
             <div className="mt-3 max-w-sm space-y-1.5">
               <Label htmlFor="project-slug">Project slug</Label>
               <Input id="project-slug" value={projectSlug} onChange={(event) => setProjectSlug(slugify(event.target.value))} />
@@ -406,8 +406,8 @@ export function Onboarding() {
                 <label
                   key={goal.id}
                   className={cn(
-                    'flex min-h-11 cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 outline-none transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring/50',
-                    selected ? 'border-primary bg-primary/10 text-foreground' : 'bg-muted/10 hover:border-primary/60 hover:bg-primary/5',
+                    'flex min-h-11 cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 outline-none transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring',
+                    selected ? 'border-brand-strong bg-primary/10 text-foreground' : 'bg-muted/10 hover:border-primary/60 hover:bg-primary/5',
                     disabled && 'cursor-not-allowed opacity-50',
                   )}
                 >

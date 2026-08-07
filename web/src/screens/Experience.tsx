@@ -805,7 +805,7 @@ function SurfaceForm({ onCreated }: { onCreated: () => void }) {
             value={purpose}
             onChange={(event) => setPurpose(event.target.value)}
             placeholder="Find which landing sections lose qualified visitors."
-            className="min-h-20 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="min-h-20 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
           />
         </Field>
       </div>

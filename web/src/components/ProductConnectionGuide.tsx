@@ -305,8 +305,8 @@ export function ProductConnectionGuide({
               <label
                 key={agent.id}
                 className={cn(
-                  'flex min-h-12 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-left text-sm outline-none transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring/50',
-                  agentId === agent.id ? 'border-primary bg-primary/5 text-foreground' : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground',
+                  'flex min-h-12 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-left text-sm outline-none transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring',
+                  agentId === agent.id ? 'border-brand-strong bg-primary/5 text-foreground' : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground',
                 )}
               >
                 <input
@@ -460,7 +460,7 @@ function ManualInstall({
 }) {
   return (
     <details className="group/disclosure mt-5 border-t pt-3">
-      <DisclosureSummary className="inline-flex cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">Install manually</DisclosureSummary>
+      <DisclosureSummary className="inline-flex cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">Install manually</DisclosureSummary>
       <div className="mt-4 space-y-4">
         <div className="flex flex-wrap gap-2" role="group" aria-label="Runtime">
           <Button variant={runtime === 'browser' ? 'default' : 'outline'} size="sm" onClick={() => onRuntimeChange('browser')}>React / Vite</Button>

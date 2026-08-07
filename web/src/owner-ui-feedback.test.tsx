@@ -265,7 +265,9 @@ describe('owner UI feedback regressions', () => {
     } as never);
     render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
 
-    fireEvent.click(await screen.findByRole('tab', { name: /Feature flags/ }));
+    const featureFlagsTab = await screen.findByRole('tab', { name: /Feature flags/ });
+    fireEvent.click(featureFlagsTab);
+    expect(featureFlagsTab).toHaveClass('border-brand-strong', 'bg-primary/10');
     const card = await screen.findByRole('article', { name: 'Landing waitlist CTA copy' });
     expect(card).toHaveClass('grid');
     expect(within(card).getByText(/proof-oriented CTA copy/)).toHaveClass('break-words');

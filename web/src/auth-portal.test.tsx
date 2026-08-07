@@ -58,7 +58,7 @@ describe('Better Auth portal', () => {
 
     expect(screen.getByRole('region', { name: 'Why Poolstatis' })).toHaveClass('bg-primary', 'text-primary-foreground');
     expect(screen.getByText('See the signals behind every product decision.')).toBeInTheDocument();
-    expect(screen.getByText('Poolstatis Cloud · beta')).toHaveClass('text-success');
+    expect(screen.getByText('Poolstatis Cloud · beta')).toHaveClass('text-brand-strong');
     expect(screen.getByText('See the signals behind every product decision.')).toHaveClass('auth-display');
     expect(screen.getByRole('heading', { name: 'Create your account' })).toHaveClass('auth-display');
     expect(screen.getByRole('heading', { name: 'Create your account' })).not.toHaveClass('serif');
@@ -256,7 +256,6 @@ describe('Better Auth portal', () => {
     expect(await screen.findByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
     expect(screen.getByLabelText('Email')).toHaveValue('owner@gmail.com');
     expect(screen.getByText('Password updated. Sign in with the new password.')).toHaveClass('text-success');
-    expect(screen.getByText('Password updated. Sign in with the new password.')).not.toHaveClass('text-emerald-400');
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -392,6 +391,7 @@ describe('Better Auth portal', () => {
     expect(result).toHaveTextContent(
       'If an unverified account exists, a new verification email is on its way.',
     );
+    expect(result).toHaveClass('text-success');
     expect(result).toHaveFocus();
     expect(email).toHaveValue('');
     expect(fetchMock).toHaveBeenCalledWith(
@@ -419,6 +419,8 @@ describe('Better Auth portal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send a new verification email' }));
     const result = await screen.findByRole('status');
     expect(result).toHaveTextContent('Please wait before requesting another verification email.');
+    expect(result).toHaveClass('text-muted-foreground');
+    expect(result).not.toHaveClass('text-success');
     await waitFor(() => expect(result).toHaveFocus());
     expect(document.body.textContent).not.toContain('unknown@example.test');
   });
