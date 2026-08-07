@@ -17,7 +17,7 @@ import authEvidenceInstrument from '@/assets/auth-evidence-instrument-lime.jpg';
 const authOrigin = 'https://auth.poolstatis.xyz';
 const customerAppUrl = 'https://app.poolstatis.xyz/';
 const neutralFailure = 'The request could not be completed. Check the details and try again.';
-const loginAfterVerificationPath = '/login?verified=1&reauth=1';
+const loginAfterVerificationPath = '/login?verified=1';
 export const verificationContinueUrl = `${authOrigin}${loginAfterVerificationPath}`;
 
 type EmailProvider = {
@@ -313,20 +313,32 @@ function useSubmission() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const run = async (operation: () => Promise<void>) => {
+  const run = async (
+    operation: () => Promise<void>,
+    errorMessage: (error: unknown) => string = () => neutralFailure,
+  ) => {
     if (pending) return;
     setPending(true);
     setError('');
     setMessage('');
     try {
       await operation();
-    } catch {
-      setError(neutralFailure);
+    } catch (error) {
+      setError(errorMessage(error));
     } finally {
       setPending(false);
     }
   };
   return { pending, error, message, setMessage, run };
+}
+
+function signInFailure(error: unknown): string {
+  if (!(error instanceof AuthRequestError)) return neutralFailure;
+  if (error.status === 401) return 'Email or password is incorrect.';
+  if (error.status === 403) return 'Verify your email before signing in. We sent a new verification link.';
+  if (error.status === 429) return 'Sign-in is busy. Wait a moment and try again.';
+  if (error.status >= 500) return 'Sign-in is temporarily unavailable. Try again in a moment.';
+  return neutralFailure;
 }
 
 function oauthBody(search: string): { oauth_query?: string } {
@@ -400,7 +412,7 @@ function Login() {
       if (!redirectResult(result)) {
         window.location.assign(customerAppUrl);
       }
-    });
+    }, signInFailure);
   };
 
   if (!sessionChecked) {
@@ -736,7 +748,7 @@ function VerificationResult() {
     headingRef.current?.focus();
     if (state !== 'verified' && state !== 'email_changed') return;
     const timer = window.setTimeout(() => {
-      window.location.assign(verificationContinueUrl);
+      window.location.assign(customerAppUrl);
     }, 2_000);
     return () => window.clearTimeout(timer);
   }, [state]);
@@ -744,7 +756,7 @@ function VerificationResult() {
   const content = {
     verified: {
       title: 'Email verified',
-      description: 'Your identity is confirmed. Redirecting you to sign in…',
+      description: 'Your identity is confirmed. Redirecting you to Poolstatis…',
     },
     email_change_confirmed: {
       title: 'Email change confirmed',
@@ -752,7 +764,7 @@ function VerificationResult() {
     },
     email_changed: {
       title: 'Email updated',
-      description: 'Your new address is verified. Redirecting you to sign in…',
+      description: 'Your new address is verified. Redirecting you to Poolstatis…',
     },
     already_verified: {
       title: 'Email already verified',
@@ -785,7 +797,9 @@ function VerificationResult() {
       ) : (
         <div className="grid gap-4">
           <Button asChild>
-            <a href={verificationContinueUrl}>Continue and sign in</a>
+            <a href={state === 'verified' || state === 'email_changed' ? customerAppUrl : verificationContinueUrl}>
+              {state === 'verified' || state === 'email_changed' ? 'Continue to Poolstatis' : 'Continue and sign in'}
+            </a>
           </Button>
           {state === 'temporarily_unavailable' && (
             <Button type="button" variant="outline" onClick={exchangeVerification}>

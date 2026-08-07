@@ -101,7 +101,7 @@ describe('Better Auth portal', () => {
     expect(screen.getByRole('link', { name: 'Open Yandex Mail' }))
       .toHaveAttribute('href', 'https://mail.yandex.ru/');
     expect(screen.getByRole('link', { name: 'Already verified? Sign in' }))
-      .toHaveAttribute('href', '/login?verified=1&reauth=1');
+      .toHaveAttribute('href', '/login?verified=1');
     expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain('correct horse battery');
   });
@@ -134,24 +134,40 @@ describe('Better Auth portal', () => {
     expect(password).toHaveValue('correct horse battery');
   });
 
-  it('clears a saved identity before showing the post-verification sign-in form', async () => {
+  it('turns an invalid sign-in into a specific actionable error', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ user: null, session: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'INVALID_EMAIL_OR_PASSWORD' }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      }));
+    renderPortal('/login');
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'owner@example.test' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'incorrect password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Email or password is incorrect.');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not destroy the verified session when the login fallback opens', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ success: true }), {
+      new Response(JSON.stringify({ user: null, session: null }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       }),
     );
 
-    renderPortal(
-      '/login?verified=1&reauth=1&sig=signed'
-      + '&ba_param=client_id&ba_param=ba_param&client_id=customer',
-    );
+    renderPortal('/login?verified=1');
 
     expect(await screen.findByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/auth/sign-out',
-      expect.objectContaining({ credentials: 'include', method: 'POST' }),
+      '/api/auth/get-session',
+      expect.objectContaining({ credentials: 'include' }),
     );
     expect(screen.getByText('Email verified. You can sign in now.')).toBeInTheDocument();
   });
@@ -263,8 +279,10 @@ describe('Better Auth portal', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     renderPortal(`/verify?state=${state}`);
     expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Continue and sign in' }))
-      .toHaveAttribute('href', verificationContinueUrl);
+    const completed = state === 'verified' || state === 'email_changed';
+    expect(screen.getByRole('link', {
+      name: completed ? 'Continue to Poolstatis' : 'Continue and sign in',
+    })).toHaveAttribute('href', completed ? 'https://app.poolstatis.xyz/' : verificationContinueUrl);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
