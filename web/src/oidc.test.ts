@@ -199,6 +199,54 @@ describe('customer OIDC client policy', () => {
     expect(manager.signinSilent).toHaveBeenCalledTimes(2);
   });
 
+  it('forces one silent refresh when the API rejects an otherwise current token', async () => {
+    const currentUser = {
+      expired: false,
+      access_token: 'rejected-access-token',
+      refresh_token: 'refresh-secret',
+    } as User;
+    const renewedUser = {
+      expired: false,
+      access_token: 'renewed-access-token',
+      refresh_token: 'rotated-refresh-secret',
+    } as User;
+    const manager = {
+      getUser: vi.fn().mockResolvedValue(currentUser),
+      signinSilent: vi.fn().mockResolvedValue(renewedUser),
+    };
+
+    await expect(hostedAccessToken(
+      manager,
+      currentUser,
+      'https://api.poolstatis.xyz',
+      { forceRefresh: true },
+    )).resolves.toBe('renewed-access-token');
+
+    expect(manager.getUser).toHaveBeenCalledOnce();
+    expect(manager.signinSilent).toHaveBeenCalledOnce();
+  });
+
+  it('does not recreate a session after the OIDC user was really unloaded', async () => {
+    const callbackUser = {
+      expired: false,
+      access_token: 'stale-callback-token',
+      refresh_token: 'stale-refresh-secret',
+    } as User;
+    const manager = {
+      getUser: vi.fn().mockResolvedValue(null),
+      signinSilent: vi.fn(),
+    };
+
+    await expect(hostedAccessToken(
+      manager,
+      callbackUser,
+      'https://api.poolstatis.xyz',
+      { forceRefresh: true },
+    )).rejects.toThrow('Your session expired. Sign in again.');
+
+    expect(manager.signinSilent).not.toHaveBeenCalled();
+  });
+
   it('restores a connected browser through a fresh PKCE redirect without persisting tokens', async () => {
     const persistent = new Map<string, string>();
     const flow = new Map<string, string>();
