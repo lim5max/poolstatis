@@ -88,6 +88,12 @@ function safeAuthCallback(path: string, search = ''): string {
   return url.toString();
 }
 
+function resetEmailFromSearch(search: string): string {
+  const email = new URLSearchParams(search).get('reset_email')?.trim().toLowerCase() ?? '';
+  if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return '';
+  return email;
+}
+
 export function approvedOAuthRedirect(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   try {
@@ -167,7 +173,7 @@ function AuthShell({ children }: { children: ReactNode }) {
           </a>
           <div className="max-w-xl pb-4">
             <p className="text-sm font-medium text-primary-foreground/75">Product decisions, backed by real signals</p>
-            <p className="mt-4 text-5xl font-semibold leading-tight xl:text-6xl">
+            <p className="auth-display mt-4 text-5xl xl:text-6xl">
               See the signals behind every product decision.
             </p>
             <p className="mt-5 max-w-lg text-lg text-primary-foreground/70">
@@ -280,7 +286,7 @@ function AuthCard({
       <h1
         ref={titleRef}
         tabIndex={titleRef ? -1 : undefined}
-        className="serif mt-3 text-4xl font-normal leading-tight outline-none"
+        className="auth-display mt-3 text-4xl outline-none sm:text-5xl"
       >
         {title}
       </h1>
@@ -296,7 +302,7 @@ function FormMessage({ error, message }: { error: string; message: string }) {
     <p
       role={error ? 'alert' : 'status'}
       aria-live={error ? 'assertive' : 'polite'}
-      className={error ? 'text-sm text-destructive' : 'text-sm text-emerald-400'}
+      className={error ? 'text-sm text-destructive' : 'text-sm font-medium text-success'}
     >
       {error || message}
     </p>
@@ -340,7 +346,7 @@ function Login() {
   const query = useMemo(() => new URLSearchParams(search), [search]);
   const oauthQuery = useMemo(() => signedOAuthQuery(search), [search]);
   const forceReauthentication = query.get('reauth') === '1';
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => resetEmailFromSearch(search));
   const [password, setPassword] = useState('');
   const [sessionChecked, setSessionChecked] = useState(
     Boolean(oauthQuery) && !forceReauthentication,
@@ -497,18 +503,50 @@ function Signup() {
 }
 
 function ForgotPassword() {
+  const { search } = useLocation();
   const [email, setEmail] = useState('');
+  const [completedEmail, setCompletedEmail] = useState('');
   const submission = useSubmission();
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void submission.run(async () => {
+      const resetEmail = email.trim().toLowerCase();
+      const callbackParams = new URLSearchParams(signedOAuthQuery(search));
+      callbackParams.set('reset_email', resetEmail);
       await authPost('/request-password-reset', {
-        email,
-        redirectTo: safeAuthCallback('/reset'),
+        email: resetEmail,
+        redirectTo: safeAuthCallback('/reset', `?${callbackParams.toString()}`),
       });
-      submission.setMessage('If the account exists, a reset link is on its way.');
+      setCompletedEmail(resetEmail);
     });
   };
+  if (completedEmail) {
+    const provider = emailProviderForAddress(completedEmail);
+    return (
+      <AuthCard title="Check your inbox" description="If the account exists, a reset link is on its way.">
+        <div className="grid gap-3">
+          {provider && (
+            <Button asChild>
+              <a href={provider.href} target="_blank" rel="noreferrer">{provider.label}</a>
+            </Button>
+          )}
+          {!provider && (
+            <p className="text-sm text-muted-foreground">Open your email provider to find the reset message.</p>
+          )}
+          <Button asChild variant="outline">
+            <Link to={`/login${search}`}>Back to sign in</Link>
+          </Button>
+          <button
+            type="button"
+            className="mt-1 text-sm text-muted-foreground hover:text-foreground"
+            onClick={() => setCompletedEmail('')}
+          >
+            Use a different email
+          </button>
+        </div>
+      </AuthCard>
+    );
+  }
   return (
     <AuthCard title="Reset your password" description="Enter your email. The response is the same for every account.">
       <form className="grid gap-4" onSubmit={submit}>
@@ -525,14 +563,36 @@ function ResetPassword() {
   const { search } = useLocation();
   const navigate = useNavigate();
   const token = useMemo(() => new URLSearchParams(search).get('token') ?? '', [search]);
+  const resetEmail = useMemo(() => resetEmailFromSearch(search), [search]);
   const invalid = Boolean(new URLSearchParams(search).get('error')) || token.length < 8;
   const [password, setPassword] = useState('');
   const submission = useSubmission();
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void submission.run(async () => {
-      await authPost('/reset-password', { newPassword: password, token });
+      const newPassword = password;
+      await authPost('/reset-password', { newPassword, token });
       setPassword('');
+      if (resetEmail) {
+        try {
+          const oauthQuery = signedOAuthQuery(search);
+          const result = await authPost('/sign-in/email', {
+            email: resetEmail,
+            password: newPassword,
+            rememberMe: true,
+            callbackURL: safeAuthCallback('/login', oauthQuery ? `?${oauthQuery}` : ''),
+            ...oauthBody(search),
+          });
+          if (!redirectResult(result)) window.location.assign(customerAppUrl);
+          return;
+        } catch {
+          const fallbackParams = new URLSearchParams(signedOAuthQuery(search));
+          fallbackParams.set('reset', '1');
+          fallbackParams.set('reset_email', resetEmail);
+          navigate(`/login?${fallbackParams.toString()}`, { replace: true });
+          return;
+        }
+      }
       navigate('/login?reset=1', { replace: true });
     });
   };

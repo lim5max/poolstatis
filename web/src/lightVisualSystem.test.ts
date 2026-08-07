@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -21,6 +21,13 @@ describe('Core light-first visual system', () => {
     expect(css).toContain('--font-sans: "Geist"');
     expect(css).toContain('--font-mono: "Geist Mono"');
     expect(css).toContain('--font-serif: "STIX Two Text"');
+    expect(css).toContain('font-family: "Google Sans Flex"');
+    expect(css).toContain('.auth-display');
+    expect(css).toContain('--auth-display-tracking: -0.045em');
+    expect(css).toContain('--auth-display-leading: 0.96');
+    expect(css).toContain('letter-spacing: var(--auth-display-tracking)');
+    expect(css).toContain('line-height: var(--auth-display-leading)');
+    expect(existsSync(resolve(process.cwd(), 'public/fonts/google-sans-flex-latin.woff2'))).toBe(true);
     expect(css).toContain('--text-xs: 0.875rem');
     expect(css).toContain('--text-xs--line-height: 1.25rem');
     expect(card).toContain('bg-card');

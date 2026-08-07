@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Decision, Experiment, Release } from '../api/types';
 import { useStore } from '../store';
@@ -7,7 +7,6 @@ import { Changes } from '../screens/Changes';
 import { Decisions } from '../screens/Decisions';
 import {
   ShipLifecycleRail,
-  ShipSectionNav,
   deriveDecisionStage,
   deriveExperimentStage,
   deriveReleaseStage,
@@ -180,27 +179,13 @@ describe('Ship lifecycle', () => {
     });
   });
 
-  it('provides compact accessible navigation and a non-overflowing responsive lifecycle rail', () => {
-    render(<MemoryRouter initialEntries={['/changes']}><Routes>
-      <Route path="/changes" element={<>
-        <ShipSectionNav current="lifecycle" />
-        <ShipLifecycleRail counts={{ preparing: 1, running: 2, waiting_for_evidence: 1, ready_to_decide: 1, decided: 3, concluded_without_decision: 1 }} />
-      </>} />
-      <Route path="/experiments" element={<p>Experiments route opened</p>} />
-    </Routes></MemoryRouter>);
-    const navigation = screen.getByRole('navigation', { name: 'Ship views' });
-    expect(navigation).toHaveClass('grid-cols-3', 'w-full');
-    const links = within(navigation).getAllByRole('link');
-    expect(links).toHaveLength(3);
-    expect(links.every((link) => link.classList.contains('min-h-11'))).toBe(true);
-    expect(within(navigation).getByRole('link', { name: 'Lifecycle' })).toHaveAttribute('aria-current', 'page');
-    expect(within(navigation).getByRole('link', { name: 'Experiments & flags' })).toHaveAttribute('href', '/experiments');
+  it('provides a non-overflowing responsive lifecycle rail without duplicate Ship navigation', () => {
+    render(<ShipLifecycleRail counts={{ preparing: 1, running: 2, waiting_for_evidence: 1, ready_to_decide: 1, decided: 3, concluded_without_decision: 1 }} />);
+    expect(screen.queryByRole('navigation', { name: 'Ship views' })).not.toBeInTheDocument();
     const rail = screen.getByRole('list', { name: 'Ship lifecycle' });
     expect(rail).toHaveClass('grid-cols-2', 'md:grid-cols-6');
-    expect(within(rail).getAllByRole('listitem')).toHaveLength(6);
-    expect(within(rail).getByText('Concluded')).toBeInTheDocument();
-    fireEvent.click(within(navigation).getByRole('link', { name: 'Experiments & flags' }));
-    expect(screen.getByText('Experiments route opened')).toBeInTheDocument();
+    expect(screen.getAllByRole('listitem')).toHaveLength(6);
+    expect(screen.getByText('Concluded')).toBeInTheDocument();
   });
 
   it('uses typed releases, experiments, and decisions on the primary Ship landing', async () => {
@@ -216,6 +201,7 @@ describe('Ship lifecycle', () => {
     render(<MemoryRouter><Changes /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Ship' })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Ship views' })).not.toBeInTheDocument();
     expect(releases).toHaveBeenCalledWith('alpha', { env: 'prod' });
     expect(decisions).toHaveBeenCalledWith('alpha', { env: 'prod' });
     expect(experiments).toHaveBeenCalledWith('alpha');
@@ -275,6 +261,7 @@ describe('Ship lifecycle', () => {
     render(<MemoryRouter><Decisions /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Decision review' })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Ship views' })).not.toBeInTheDocument();
     expect(listDecisions).toHaveBeenCalledWith('alpha', { env: 'prod' });
     expect(screen.getByLabelText("Current environment prod")).toBeInTheDocument();
     expect(await screen.findAllByText('Decided: keep')).not.toHaveLength(0);

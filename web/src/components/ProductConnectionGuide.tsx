@@ -501,13 +501,21 @@ export function CopyButton({
 }) {
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+  }, []);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(value);
       setFailed(false);
       setCopied(true);
       onCopied?.();
-      window.setTimeout(() => setCopied(false), 1400);
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => {
+        copiedTimer.current = null;
+        setCopied(false);
+      }, 1400);
     } catch {
       setFailed(true);
     }

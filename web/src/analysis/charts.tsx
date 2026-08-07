@@ -294,21 +294,23 @@ export function ManualVisualizationRenderer({ spec, result }: { spec: Visualizat
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3 sm:px-5">
+      <div role="group" aria-label="Visualization actions" className="flex items-center justify-end border-t px-4 py-3 sm:px-5">
         <Button asChild variant="outline" size="sm" className="h-11"><Link to="/registry">Open definition</Link></Button>
-        <details className="group min-w-0 flex-1">
-          <DisclosureSummary className="flex min-h-11 cursor-pointer items-center justify-end text-xs font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Table fallback &amp; reproducible query</DisclosureSummary>
-          <div className="mt-3 space-y-4">
-            <ResultTable result={result} />
-            {'query' in spec.source && (
-              <div>
-                <div className="mb-2 text-xs font-medium text-muted-foreground">Query DSL</div>
-                <pre className="max-h-80 overflow-auto rounded-panel bg-muted p-3 text-xs">{JSON.stringify(spec.source.query, null, 2)}</pre>
-              </div>
-            )}
-          </div>
-        </details>
       </div>
+      <details className="group border-t bg-muted/20">
+        <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-4 py-3 text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5">
+          Table fallback &amp; reproducible query
+        </DisclosureSummary>
+        <div className="space-y-4 border-t bg-card px-4 py-4 sm:px-5">
+          <div className="overflow-x-auto"><ResultTable result={result} /></div>
+          {'query' in spec.source && (
+            <div>
+              <div className="mb-2 text-sm font-medium text-muted-foreground">Query DSL</div>
+              <pre className="max-h-80 overflow-auto rounded-panel bg-muted p-3 text-xs">{JSON.stringify(spec.source.query, null, 2)}</pre>
+            </div>
+          )}
+        </div>
+      </details>
     </section>
   );
 }

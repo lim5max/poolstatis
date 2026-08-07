@@ -229,6 +229,9 @@ describe('Web analytics partial availability', () => {
     expect(within(screen.getByText('accepted canonical views').parentElement!).getByText('20')).toBeInTheDocument();
     expect(screen.getByText('telegram')).toBeInTheDocument();
     expect(screen.getByText('Route setup required')).toBeInTheDocument();
+    const actorLink = screen.getByRole('link', { name: 'actor-1' });
+    expect(actorLink).toHaveClass('text-foreground', 'hover:bg-muted');
+    expect(actorLink).not.toHaveClass('text-primary');
 
     expect(screen.getByText(/Observed · Unavailable · 20 events ·/)).toBeInTheDocument();
 
@@ -327,5 +330,32 @@ describe('Web analytics partial availability', () => {
     ));
     expect(await screen.findByText('Tracking plan ready')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Review and activate' })).toHaveAttribute('href', '/registry');
+  });
+
+  it('keeps the UTM workspace available before canonical page views are activated', async () => {
+    const acquisitionMetric = {
+      ...metric,
+      id: 'landing-visits',
+      key: 'landing_visits',
+      name: 'Landing visits',
+      source: { event: 'landing.page_viewed' },
+    };
+    mockedStore.mockReturnValue({
+      project: 'alpha',
+      env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([acquisitionMetric]),
+        properties: vi.fn().mockResolvedValue(trustedProperties),
+        trend,
+        proposeBrowserAnalytics,
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByText('Add website analytics')).toBeInTheDocument();
+    expect(screen.getByText('Acquisition / UTM')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run UTM report' })).toBeEnabled();
+    expect(screen.getByRole('combobox', { name: 'Acquisition metric' })).toHaveTextContent('Landing visits');
   });
 });

@@ -115,7 +115,9 @@ const saveSidebarState = (value: boolean) => {
 };
 
 export function App() {
-  if (window.location.hostname === 'auth.poolstatis.xyz') return <AuthPortal />;
+  const authPortalHost = window.location.hostname === 'auth.poolstatis.xyz'
+    || (import.meta.env.DEV && window.location.hostname === 'auth.localhost');
+  if (authPortalHost) return <AuthPortal />;
   return <AdminApp />;
 }
 

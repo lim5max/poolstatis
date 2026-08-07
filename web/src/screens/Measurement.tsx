@@ -722,8 +722,21 @@ export function AcquisitionPanel({ metrics, env, trusted = true }: { metrics: Me
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selected = eligible.find((metric) => metric.key === metricKey) ?? preferred;
+  const requestVersion = useRef(0);
+  const scopeSignature = `${project ?? ''}:${env}:${selected?.key ?? ''}:${period}:${details ? 'extended' : 'core'}`;
+  const scopeRef = useRef(scopeSignature);
+  scopeRef.current = scopeSignature;
+  useEffect(() => {
+    requestVersion.current += 1;
+    setBusy(false);
+    setError(null);
+    setResult(null);
+  }, [scopeSignature]);
   const run = async () => {
     if (!selected || !trusted) return;
+    const version = ++requestVersion.current;
+    const requestedScope = scopeSignature;
+    const isCurrent = () => requestVersion.current === version && scopeRef.current === requestedScope;
     setBusy(true); setError(null); setResult(null);
     try {
       const base = { metric: selected.key, date_from: `-${period}d`, interval: 'day' as const, env };
@@ -731,10 +744,14 @@ export function AcquisitionPanel({ metrics, env, trusted = true }: { metrics: Me
         ? ['$utm_source', '$utm_medium', '$utm_campaign', '$utm_term', '$utm_content']
         : ['$utm_source', '$utm_medium', '$utm_campaign'];
       const responses = await Promise.all(dimensions.map((property) => client!.trend(project!, { ...base, breakdown: { property } })));
+      if (!isCurrent()) return;
       setResult(Object.fromEntries(dimensions.map((dimension, index) => [dimension, responses[index]])) as AcquisitionResult);
     } catch (caught) {
+      if (!isCurrent()) return;
       setError(caught instanceof Error ? caught.message : 'could not query acquisition breakdowns');
-    } finally { setBusy(false); }
+    } finally {
+      if (isCurrent()) setBusy(false);
+    }
   };
   const event = selected ? String((selected.source as Record<string, unknown>).event ?? '') : '';
   return <Panel title="Acquisition / UTM" right={<span className="text-xs text-muted-foreground">registered metric query · {env}</span>}>

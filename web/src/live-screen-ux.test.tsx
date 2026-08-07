@@ -202,6 +202,23 @@ describe('live customer screen UX', () => {
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Acquisition period' })).toBeEnabled());
   });
 
+  it('discards a UTM response when the environment changes mid-request', async () => {
+    let resolveTrend!: (value: { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value: string }>; meta: object }) => void;
+    const pending = new Promise<{ kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value: string }>; meta: object }>((resolve) => { resolveTrend = resolve; });
+    const trend = vi.fn().mockReturnValue(pending);
+    mockedStore.mockReturnValue(store({ trend }));
+    const view = render(<TooltipProvider><MemoryRouter><AcquisitionPanel metrics={[metric as never]} env="prod" /></MemoryRouter></TooltipProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run UTM report' }));
+    view.rerender(<TooltipProvider><MemoryRouter><AcquisitionPanel metrics={[metric as never]} env="staging" /></MemoryRouter></TooltipProvider>);
+    await act(async () => {
+      resolveTrend({ kind: 'trend', series: [{ bucket: '2026-07-01', value: 8, breakdown_value: 'stale-google' }], meta: {} });
+    });
+
+    expect(screen.queryByText('stale-google')).not.toBeInTheDocument();
+    expect(screen.getByText('registered metric query · staging')).toBeInTheDocument();
+  });
+
   it('keeps visitors, sessions and page views distinct with responsive count-and-percentage breakdowns', async () => {
     const webMetric = {
       ...metric,
@@ -659,6 +676,7 @@ describe('live customer screen UX', () => {
     }));
     render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
     expect(await screen.findByRole('heading', { name: 'Experiments & flags' })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Ship views' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Safe rollout/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /A\/B experiment/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Remote config/ })).toBeInTheDocument();

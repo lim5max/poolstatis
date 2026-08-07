@@ -59,7 +59,9 @@ describe('Better Auth portal', () => {
     expect(screen.getByRole('region', { name: 'Why Poolstatis' })).toHaveClass('bg-primary', 'text-primary-foreground');
     expect(screen.getByText('See the signals behind every product decision.')).toBeInTheDocument();
     expect(screen.getByText('Poolstatis Cloud · beta')).toHaveClass('text-success');
-    expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
+    expect(screen.getByText('See the signals behind every product decision.')).toHaveClass('auth-display');
+    expect(screen.getByRole('heading', { name: 'Create your account' })).toHaveClass('auth-display');
+    expect(screen.getByRole('heading', { name: 'Create your account' })).not.toHaveClass('serif');
   });
 
   it('offers a known mailbox without guessing a destination for custom email domains', () => {
@@ -154,7 +156,7 @@ describe('Better Auth portal', () => {
     expect(screen.getByText('Email verified. You can sign in now.')).toBeInTheDocument();
   });
 
-  it('uses the same forgot-password result for every account', async () => {
+  it('uses the same forgot-password result and opens a known mailbox', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ status: true }), {
         status: 200,
@@ -162,13 +164,84 @@ describe('Better Auth portal', () => {
       }),
     );
     renderPortal('/forgot');
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'unknown@example.test' } });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@gmail.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send reset link' }));
-    await screen.findByText('If the account exists, a reset link is on its way.');
+    await screen.findByRole('heading', { name: 'Check your inbox' });
+    expect(screen.getByText('If the account exists, a reset link is on its way.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Gmail' }))
+      .toHaveAttribute('href', 'https://mail.google.com/');
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/auth/request-password-reset',
-      expect.objectContaining({ credentials: 'include' }),
+      expect.objectContaining({
+        body: JSON.stringify({
+          email: 'owner@gmail.com',
+          redirectTo: 'https://auth.poolstatis.xyz/reset?reset_email=owner%40gmail.com',
+        }),
+        credentials: 'include',
+      }),
     );
+  });
+
+  it('keeps the forgot-password inbox step useful for custom mail domains', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ status: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    renderPortal('/forgot');
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@company.example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send reset link' }));
+    await screen.findByRole('heading', { name: 'Check your inbox' });
+    expect(screen.getByText('Open your email provider to find the reset message.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Open .*Mail/ })).not.toBeInTheDocument();
+  });
+
+  it('signs in automatically after a successful password reset', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }))
+      .mockReturnValueOnce(new Promise(() => undefined));
+    renderPortal('/reset?reset_email=owner%40gmail.com&token=one-time-reset-token');
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'correct horse battery' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update password' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/auth/reset-password');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/auth/sign-in/email');
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      email: 'owner@gmail.com',
+      password: 'correct horse battery',
+      rememberMe: true,
+    });
+  });
+
+  it('falls back to a prefilled readable sign-in form if reset succeeds but auto-login fails', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'invalid' }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ user: null, session: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+    renderPortal('/reset?reset_email=owner%40gmail.com&token=one-time-reset-token');
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'correct horse battery' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update password' }));
+
+    expect(await screen.findByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Email')).toHaveValue('owner@gmail.com');
+    expect(screen.getByText('Password updated. Sign in with the new password.')).toHaveClass('text-success');
+    expect(screen.getByText('Password updated. Sign in with the new password.')).not.toHaveClass('text-emerald-400');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('rejects invalid reset links before sending a password', () => {

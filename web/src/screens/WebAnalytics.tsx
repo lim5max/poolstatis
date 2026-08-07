@@ -49,7 +49,7 @@ const DIMENSIONS: Array<{ value: BreakdownView; label: string }> = [
 ];
 
 type WebWorkspace =
-  | { state: 'setup'; metric: Metric | null }
+  | { state: 'setup'; metric: Metric | null; properties: PropertyDefinition[]; metrics: Metric[] }
   | ({ state: 'active'; trust: WebTrustRead; properties: PropertyDefinition[]; metrics: Metric[] } & WebWorkspaceResult);
 
 const UTM_PROPERTY_KEYS = ['$utm_source', '$utm_medium', '$utm_campaign', '$utm_term', '$utm_content'] as const;
@@ -109,6 +109,8 @@ export function WebAnalytics() {
       return {
         state: 'setup',
         metric: metrics.find((item) => item.key === WEB_PAGE_VIEW_METRIC && item.status === 'proposed') ?? null,
+        properties,
+        metrics,
       };
     }
     const base = {
@@ -148,10 +150,24 @@ export function WebAnalytics() {
   if (workspace.error) return <ErrorNote>{workspace.error}</ErrorNote>;
   if (!workspace.data) return null;
   if (workspace.data.state === 'setup') {
+    const setupData = workspace.data;
+    const acquisitionTrusted = UTM_PROPERTY_KEYS.every((key) => setupData.properties.some(
+      (property) => property.key === key && property.scope === 'event' && property.status === 'trusted',
+    ));
+    const hasAcquisitionMetric = setupData.metrics.some(
+      (metric) => metric.status === 'active' && metric.type === 'count',
+    );
     return (
       <div className="space-y-5">
         <ScreenHeader range={range} onRange={setRange} showRange={false} />
-        <WebSetup metric={workspace.data.metric} onReady={workspace.reload} />
+        <WebSetup metric={setupData.metric} onReady={workspace.reload} />
+        {hasAcquisitionMetric && (
+          <AcquisitionPanel
+            metrics={setupData.metrics}
+            env={env}
+            trusted={acquisitionTrusted}
+          />
+        )}
       </div>
     );
   }
@@ -280,7 +296,7 @@ export function WebAnalytics() {
                     <TableCell>
                       <Link
                         to={`/analyze/users/${encodeURIComponent(session.actor_id)}`}
-                        className="font-mono text-xs text-primary hover:underline"
+                        className="inline-flex max-w-full break-all rounded-control px-1 py-0.5 font-mono text-xs text-foreground underline-offset-4 hover:bg-muted hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {session.actor_id}
                       </Link>

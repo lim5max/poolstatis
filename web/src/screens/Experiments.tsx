@@ -13,7 +13,6 @@ import { cn } from '@/lib/utils';
 import {
   SHIP_STAGES,
   SHIP_STAGE_LABELS,
-  ShipSectionNav,
   ShipStageBadge,
   deriveExperimentStage,
   experimentOutcome,
@@ -74,7 +73,6 @@ export function Experiments() {
 
   return (
     <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
-      <ShipSectionNav current="experiments" />
       <header className="max-w-2xl">
         <h1 className="serif text-3xl text-balance">Experiments &amp; flags</h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">

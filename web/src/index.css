@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@font-face {
+  font-family: "Google Sans Flex";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/google-sans-flex-latin.woff2") format("woff2");
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -62,6 +70,8 @@
 
 :root {
   color-scheme: light;
+  --auth-display-leading: 0.96;
+  --auth-display-tracking: -0.045em;
   --brand-lime: #b9f542;
   --brand-foreground: #172019;
   --background: #f6f8f5;
@@ -171,6 +181,14 @@
   }
   .serif {
     font-family: var(--font-serif);
+    text-wrap: balance;
+  }
+  .auth-display {
+    font-family: "Google Sans Flex", var(--font-sans);
+    font-optical-sizing: auto;
+    font-weight: 650;
+    line-height: var(--auth-display-leading);
+    letter-spacing: var(--auth-display-tracking);
     text-wrap: balance;
   }
   .mono {

@@ -10,7 +10,6 @@ import {
   SHIP_STAGES,
   SHIP_STAGE_LABELS,
   ShipLifecycleRail,
-  ShipSectionNav,
   ShipStageBadge,
   deriveExperimentStage,
   deriveReleaseStage,
@@ -79,7 +78,6 @@ export function Changes() {
 
   return (
     <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
-      <ShipSectionNav current="lifecycle" />
       <header className="max-w-3xl">
         <h1 className="serif text-3xl text-balance">Ship</h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">

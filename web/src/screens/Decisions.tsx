@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { DisclosureSummary } from '@/components/disclosure';
-import { ShipSectionNav, ShipStageBadge, deriveDecisionStage } from '../components/ship-lifecycle';
+import { ShipStageBadge, deriveDecisionStage } from '../components/ship-lifecycle';
 import type { Decision, DecisionAction, DecisionActionType, DecisionDetail, DecisionOutcome } from '../api/types';
 
 export function Decisions() {
@@ -29,7 +29,6 @@ export function Decisions() {
   if (list.error) return <RecoverableError onRetry={list.reload}>{list.error}</RecoverableError>;
   if (!list.data) return null;
   return <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
-    <ShipSectionNav current="decisions" />
     <header className="max-w-3xl">
       <div className="flex flex-wrap items-center gap-3"><h1 className="serif text-3xl text-balance">Decision review</h1><Badge variant="outline" aria-label={`Current environment ${env}`}>Environment <code>{env}</code></Badge></div>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Approve, correct, or reject an agent proposal against immutable evidence.</p>

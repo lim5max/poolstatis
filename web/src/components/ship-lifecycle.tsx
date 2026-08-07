@@ -1,6 +1,4 @@
 import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
-import { Link } from 'react-router-dom';
 import type { Decision, DecisionDetail, Experiment, Release } from '../api/types';
 
 export const SHIP_STAGES = [
@@ -125,32 +123,6 @@ export function experimentOutcome(experiment: Experiment): ShipOutcome {
       : 'The experiment has not started.',
     available: false,
   };
-}
-
-const SHIP_VIEWS = [
-  { id: 'lifecycle', label: 'Lifecycle', href: '/changes' },
-  { id: 'experiments', label: 'Experiments & flags', href: '/experiments' },
-  { id: 'decisions', label: 'Decision review', href: '/decisions' },
-] as const;
-
-export function ShipSectionNav({ current }: { current: typeof SHIP_VIEWS[number]['id'] }) {
-  return (
-    <nav aria-label="Ship views" className="grid w-full grid-cols-3 gap-1 rounded-panel border bg-muted/20 p-1 sm:w-fit sm:min-w-xl">
-      {SHIP_VIEWS.map((view) => (
-        <Link
-          key={view.id}
-          to={view.href}
-          aria-current={current === view.id ? 'page' : undefined}
-          className={cn(
-            'flex min-h-11 min-w-0 items-center justify-center rounded-control px-2 text-center text-xs leading-tight outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-4 sm:text-sm',
-            current === view.id ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {view.label}
-        </Link>
-      ))}
-    </nav>
-  );
 }
 
 export function ShipLifecycleRail({ counts }: { counts: Record<ShipStage, number> }) {
