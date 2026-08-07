@@ -2,11 +2,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Button } from '@/components/ui/button';
-import { EmptyState, ErrorNote, Loading, fmtNum } from '@/components/ui';
-import { AnswerCanvas, EvidenceLine, KpiStrip, RankedRows, type EvidenceTrust, type KpiItem } from '@/components/analytics';
-import { TrendChart } from '../analysis/charts';
+import { ErrorNote, Loading, fmtNum, fmtRelative } from '@/components/ui';
+import { AnswerCanvas, type EvidenceTrust, type KpiItem } from '@/components/analytics';
 import { formatDurationMs, webPageMetric, type WebAnalyticsResult } from '../analysis/operations';
-import type { Funnel, MeasurementTrust, Metric, ProjectSchema } from '../api/types';
+import type { Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
 import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
 import type { ProjectMode } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
@@ -41,7 +40,7 @@ interface ProductAnswer {
 interface WebsiteAnswer {
   metric: Metric | null;
   overview: WebAnalyticsResult | null;
-  trend: TrendQueryResult | null;
+  overviewUnavailable: boolean;
   trust: MeasurementTrust | null;
   trustUnavailable: boolean;
 }
@@ -60,9 +59,21 @@ export function Overview() {
       const primaryMetric = pickPrimaryMetric(metrics, intent?.primary_goal_id ?? null);
       const revenueMetric = metrics.find((metric) => metric.category === 'revenue') ?? null;
       const pageMetric = webPageMetric(metrics);
+      const funnelAnchor = intent?.project_mode === 'website'
+        || (intent?.project_mode === 'both' && prefersWebsite(intent.primary_goal_id))
+        ? pageMetric
+        : primaryMetric;
+      const homeFunnel = pickHomeFunnel(funnels, intent?.primary_goal_id ?? null, funnelAnchor?.key ?? null);
+      const productAnswersEnabled = intent?.project_mode !== 'website';
+      const websiteAnswersEnabled = intent?.project_mode !== 'product';
       const [product, website] = await Promise.all([
-        readProductAnswer(client!, project!, env, primaryMetric, revenueMetric, funnels[0] ?? null),
-        readWebsiteAnswer(client!, project!, env, pageMetric),
+        readProductAnswer(
+          client!, project!, env,
+          productAnswersEnabled ? primaryMetric : null,
+          productAnswersEnabled ? revenueMetric : null,
+          homeFunnel,
+        ),
+        readWebsiteAnswer(client!, project!, env, websiteAnswersEnabled ? pageMetric : null),
       ]);
       return { scope: homeScope, value: { intent, product, website, schema }, error: null as string | null };
     } catch (caught) {
@@ -89,10 +100,10 @@ export function Overview() {
 
   const { intent, product, website, schema } = homeData;
   const mode = intent?.project_mode ?? null;
-  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} project={project!} env={env} telemetryUserId={account?.user?.id} />;
-  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} project={project!} env={env} telemetryUserId={account?.user?.id} />;
+  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} project={project!} env={env} telemetryUserId={account?.user?.id} />;
+  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} project={project!} env={env} telemetryUserId={account?.user?.id} />;
   if (mode === 'both' && intent) {
-    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} telemetryUserId={account?.user?.id} />;
+    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} telemetryUserId={account?.user?.id} />;
   }
 
   // A missing intent row is legacy/unset. Keep the project useful and never
@@ -108,33 +119,35 @@ export function Overview() {
         Legacy project · choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
       </div>
       {website.overview
-        ? <WebsiteAnswerCanvas answer={website} env={env} />
-        : <ProductAnswerCanvas answer={product} env={env} />}
+        ? <WebsiteAnswerCanvas answer={website} product={product} schema={schema} env={env} />
+        : <ProductAnswerCanvas answer={product} schema={schema} env={env} />}
     </div>
   );
 }
 
-function WebsiteHome({ answer, project, env, telemetryUserId }: { answer: WebsiteAnswer; project: string; env: string; telemetryUserId?: string | null }) {
+function WebsiteHome({ answer, product, schema, project, env, telemetryUserId }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; project: string; env: string; telemetryUserId?: string | null }) {
   const lead = websiteLead(answer);
   const dashboard = useDashboardLayout(`${project}:${env}:website`, WEBSITE_KPIS);
+  const ready = Boolean(answer.metric);
   return (
     <div className="space-y-5">
       <PageHeader
         title="Home"
         answer={lead}
-        action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to="/analyze/web" onClick={() => trackHomeAction('open_web', telemetryUserId)}>Open Web <ArrowRight className="size-4" /></Link></Button></div>}
+        action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to={ready ? '/analyze/web' : '/measurement'} onClick={() => trackHomeAction(ready ? 'open_web' : 'open_definitions', telemetryUserId)}>{ready ? 'Open Web' : 'Set up Web'} <ArrowRight className="size-4" /></Link></Button></div>}
       />
       {dashboard.open && <DashboardSettings ids={WEBSITE_KPIS} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
-      <WebsiteAnswerCanvas answer={answer} env={env} order={dashboard.order} />
+      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} order={dashboard.order} />
     </div>
   );
 }
 
-function ProductHome({ answer, project, env, telemetryUserId }: { answer: ProductAnswer; project: string; env: string; telemetryUserId?: string | null }) {
+function ProductHome({ answer, schema, project, env, telemetryUserId }: { answer: ProductAnswer; schema: ProjectSchema | null; project: string; env: string; telemetryUserId?: string | null }) {
   const lead = answer.metric
     ? `${answer.metric.name} is the clearest active outcome available for this project.`
     : 'Events may be arriving, but no active outcome is defined yet.';
-  const dashboard = useDashboardLayout(`${project}:${env}:product`, PRODUCT_KPIS);
+  const definitions = productDashboardDefinitions(answer);
+  const dashboard = useDashboardLayout(`${project}:${env}:product`, definitions);
   return (
     <div className="space-y-5">
       <PageHeader
@@ -142,20 +155,22 @@ function ProductHome({ answer, project, env, telemetryUserId }: { answer: Produc
         answer={lead}
         action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to={answer.metric ? '/analyze/product' : '/registry'} onClick={() => trackHomeAction(answer.metric ? 'explore_product' : 'review_outcomes', telemetryUserId)}>{answer.metric ? 'Explore Product' : 'Review outcomes'} <ArrowRight className="size-4" /></Link></Button></div>}
       />
-      {dashboard.open && <DashboardSettings ids={PRODUCT_KPIS} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
-      <ProductAnswerCanvas answer={answer} env={env} order={dashboard.order} />
+      {dashboard.open && <DashboardSettings ids={definitions} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
+      <ProductAnswerCanvas answer={answer} schema={schema} env={env} order={dashboard.order} />
     </div>
   );
 }
 
 function BothHome({
   answer,
+  product,
   websiteFirst,
   schema,
   env,
   telemetryUserId,
 }: {
   answer: WebsiteAnswer | ProductAnswer;
+  product: ProductAnswer;
   websiteFirst: boolean;
   schema: ProjectSchema | null;
   env: string;
@@ -191,8 +206,8 @@ function BothHome({
             : 'Add stable identity evidence before comparing acquisition with product outcomes.'}
       </div>
       {websiteFirst
-        ? <WebsiteAnswerCanvas answer={answer as WebsiteAnswer} env={env} />
-        : <ProductAnswerCanvas answer={answer as ProductAnswer} env={env} />}
+        ? <WebsiteAnswerCanvas answer={answer as WebsiteAnswer} product={product} schema={schema} env={env} />
+        : <ProductAnswerCanvas answer={answer as ProductAnswer} schema={schema} env={env} />}
     </div>
   );
 }
@@ -201,6 +216,7 @@ const WEBSITE_KPIS = [
   { id: 'visitors', label: 'Visitors' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'page_views', label: 'Page views' },
+  { id: 'last_event', label: 'Last event' },
   { id: 'average_duration', label: 'Average duration' },
   { id: 'engaged_rate', label: 'Engagement rate' },
   { id: 'bounce_rate', label: 'Bounce rate' },
@@ -210,88 +226,87 @@ const PRODUCT_KPIS = [
   { id: 'outcome', label: 'Primary outcome' },
   { id: 'people', label: 'Observed people' },
   { id: 'activation', label: 'Activation' },
-  { id: 'retention', label: 'Retention' },
+  { id: 'last_event', label: 'Last event' },
   { id: 'events', label: 'Event volume' },
-  { id: 'revenue', label: 'Revenue' },
 ] as const;
+const REVENUE_KPI = { id: 'revenue', label: 'Revenue' } as const;
 
 type DashboardDefinition = ReadonlyArray<{ id: string; label: string }>;
 
-function WebsiteAnswerCanvas({ answer, env, order = WEBSITE_KPIS.map((item) => item.id) }: { answer: WebsiteAnswer; env: string; order?: string[] }) {
+function productDashboardDefinitions(answer: ProductAnswer): DashboardDefinition {
+  return answer.revenueMetric ? [...PRODUCT_KPIS, REVENUE_KPI] : PRODUCT_KPIS;
+}
+
+function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPIS.slice(0, 4).map((item) => item.id) }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; order?: string[] }) {
+  const activity = recentObservedEvents(schema);
+  const lastEvent = activity?.[0] ?? null;
+  const answerUnavailable = Boolean(answer.metric && !answer.overview);
   const emptyItems: Array<KpiItem & { id: string }> = WEBSITE_KPIS.map((item) => ({
     ...item,
-    value: null,
-    fallback: 'Not configured',
-    note: 'Connect website measurement',
+    value: item.id === 'last_event' && lastEvent ? fmtRelative(lastEvent.last_seen) : null,
+    fallback: item.id === 'last_event' ? activityFallback(activity) : answerUnavailable ? 'Unavailable' : 'Not configured',
+    note: item.id === 'last_event' ? lastEvent?.event ?? activityNote(activity) : answerUnavailable ? 'Website answer unavailable' : 'Connect website measurement',
   }));
   if (!answer.metric || !answer.overview) {
+    const nextAction = answerUnavailable
+      ? { title: 'Check recent activity', body: 'Open Events while the website answer retries.', href: '/data', label: 'Open events' }
+      : { title: 'Connect website measurement', body: 'Activate the canonical page-view definition, then open one real page.', href: '/measurement', label: 'Set up Web' };
     return (
       <>
-        <KpiStrip items={orderDashboardItems(emptyItems, order)} />
-        <AnswerCanvas className="mt-5">
-          <EmptyState
-            headline="Website traffic is not configured"
-            lead="Activate the canonical web page-view definition, then open one real page."
-            action={<Button asChild><Link to="/measurement">Open Definitions</Link></Button>}
-          />
-        </AnswerCanvas>
+        <HomeKpiStrip items={orderDashboardItems(emptyItems, order)} />
+        <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} />
+        <HomeSummary
+          funnel={product.funnel}
+          funnelResult={product.funnelResult}
+          activity={activity}
+          nextAction={nextAction}
+        />
       </>
     );
   }
-  const { overview, trend } = answer;
-  const sources = overview.breakdowns.source ?? [];
-  const pages = overview.breakdowns.route ?? [];
+  const { overview } = answer;
   return (
     <>
-      <KpiStrip items={orderDashboardItems([
+      <HomeKpiStrip items={orderDashboardItems([
         { id: 'visitors', label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved people' },
         { id: 'sessions', label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'canonical sessions' },
         { id: 'page_views', label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted views' },
+        { id: 'last_event', label: 'Last event', value: lastEvent ? fmtRelative(lastEvent.last_seen) : null, fallback: activityFallback(activity), note: lastEvent?.event ?? activityNote(activity) },
         { id: 'average_duration', label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? null : formatDurationMs(overview.summary.average_session_duration_ms), note: 'complete sessions' },
         { id: 'engaged_rate', label: 'Engagement rate', value: answer.overview.engagement.engaged_rate == null ? null : `${Math.round(answer.overview.engagement.engaged_rate * 100)}%`, note: 'measured sessions' },
         { id: 'bounce_rate', label: 'Bounce rate', value: answer.overview.engagement.bounce_rate == null ? null : `${Math.round(answer.overview.engagement.bounce_rate * 100)}%`, note: 'measured sessions' },
       ], order)} />
-      <EvidenceLine
-        className="mt-3"
-        trust={evidenceTrust(answer.trust, answer.trustUnavailable)}
-        eventCount={answer.trust?.primary_metric.observed_events ?? overview.summary.page_views}
-        env={env}
-      >
-        Canonical page views are counted from the active <code>{answer.metric.key}</code> definition for the current 30-day window. Visitor and session rules come from the server response.
-      </EvidenceLine>
-      <AnswerCanvas className="mt-5">
-        <div className="grid min-w-0 gap-5 p-4 sm:p-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(17rem,1fr)]">
-          <section className="min-w-0" aria-labelledby="website-trend-title">
-            <h2 id="website-trend-title" className="text-sm font-semibold">Traffic trend</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Page views · last 30 days · {env}</p>
-            <div className="mt-3">
-              {trend && trend.series.length > 0
-                ? <TrendChart result={trend} label="Page views" />
-                : <EmptyState headline="No traffic in this period" lead="Open a real page after tracking is installed." />}
-            </div>
-          </section>
-          <div className="grid content-start gap-5 border-t pt-5 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
-            <RankedRows title="Top sources" rows={sources.slice(0, 5).map((row) => ({ key: row.value, label: row.value, value: fmtNum(row.visitors) }))} empty="No source values are available for this period." />
-            <RankedRows title="Top pages" rows={pages.slice(0, 5).map((row) => ({ key: row.value, label: row.value, value: fmtNum(row.page_views) }))} empty="No page values are available for this period." />
-          </div>
-        </div>
-      </AnswerCanvas>
+      <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? overview.summary.page_views} env={env} />
+      <HomeSummary
+        funnel={product.funnel}
+        funnelResult={product.funnelResult}
+        activity={activity}
+        nextAction={nextHomeAction({ measurementReady: true, funnel: product.funnel, activity })}
+      />
     </>
   );
 }
 
-function ProductAnswerCanvas({ answer, env, order = PRODUCT_KPIS.map((item) => item.id) }: { answer: ProductAnswer; env: string; order?: string[] }) {
+function ProductAnswerCanvas({ answer, schema, env, order = productDashboardDefinitions(answer).slice(0, 4).map((item) => item.id) }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; order?: string[] }) {
+  const activity = recentObservedEvents(schema);
+  const lastEvent = activity?.[0] ?? null;
+  const definitions = productDashboardDefinitions(answer);
   if (!answer.metric) {
     return (
       <>
-        <KpiStrip items={orderDashboardItems(PRODUCT_KPIS.map((item) => ({ ...item, value: null, fallback: 'Not configured', note: 'Define a measurable outcome' })), order)} />
-        <AnswerCanvas className="mt-5">
-          <EmptyState
-            headline="No active product outcome"
-            lead="Approve an outcome with a clear purpose before Poolstatis shows a product answer."
-            action={<Button asChild><Link to="/registry">Review outcomes</Link></Button>}
-          />
-        </AnswerCanvas>
+        <HomeKpiStrip items={orderDashboardItems(definitions.map((item) => ({
+          ...item,
+          value: item.id === 'last_event' && lastEvent ? fmtRelative(lastEvent.last_seen) : null,
+          fallback: item.id === 'last_event' ? activityFallback(activity) : 'Not configured',
+          note: item.id === 'last_event' ? lastEvent?.event ?? activityNote(activity) : 'Define a measurable outcome',
+        })), order)} />
+        <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} />
+        <HomeSummary
+          funnel={answer.funnel}
+          funnelResult={answer.funnelResult}
+          activity={activity}
+          nextAction={{ title: 'Define a product outcome', body: 'Activate one metric that represents meaningful product value.', href: '/registry', label: 'Review outcomes' }}
+        />
       </>
     );
   }
@@ -302,49 +317,173 @@ function ProductAnswerCanvas({ answer, env, order = PRODUCT_KPIS.map((item) => i
   const finalStep = answer.funnelResult?.steps.at(-1) ?? null;
   return (
     <>
-      <KpiStrip items={orderDashboardItems([
+      <HomeKpiStrip items={orderDashboardItems([
         { id: 'outcome', label: answer.metric.name, value: metricValue, note: 'current 30-day outcome' },
         { id: 'people', label: 'Observed people', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_actors) : null, note: 'resolved actors' },
         { id: 'activation', label: 'Activation', value: finalStep?.conversion_from_start === null || finalStep?.conversion_from_start === undefined ? null : `${Math.round(finalStep.conversion_from_start * 100)}%`, note: answer.funnel?.name ?? 'saved funnel required' },
-        { id: 'retention', label: 'Retention', value: null, note: 'choose a return outcome' },
+        { id: 'last_event', label: 'Last event', value: lastEvent ? fmtRelative(lastEvent.last_seen) : null, fallback: activityFallback(activity), note: lastEvent?.event ?? activityNote(activity) },
         { id: 'events', label: 'Event volume', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_events) : null, note: 'accepted observations' },
-        { id: 'revenue', label: answer.revenueMetric?.name ?? 'Revenue', value: revenueValue, fallback: 'Not configured', note: answer.revenueMetric ? 'active revenue outcome' : 'activate a revenue metric' },
+        ...(answer.revenueMetric ? [{ id: 'revenue', label: answer.revenueMetric.name, value: revenueValue, fallback: 'Unavailable', note: 'active revenue outcome' }] : []),
       ], order)} />
-      <EvidenceLine
-        className="mt-3"
-        trust={evidenceTrust(answer.trust, answer.trustUnavailable)}
-        eventCount={answer.trust?.primary_metric.observed_events ?? null}
-        env={env}
-      >
-        <code>{answer.metric.key}</code> is an active registry metric. Its purpose is “{answer.metric.purpose}”. Trust and event count come from the server measurement check.
-      </EvidenceLine>
-      <AnswerCanvas className="mt-5">
-        <div className="grid min-w-0 gap-5 p-4 sm:p-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(17rem,1fr)]">
-          <section className="min-w-0" aria-labelledby="product-trend-title">
-            <h2 id="product-trend-title" className="text-sm font-semibold">{answer.metric.name} trend</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Last 30 days · {env}</p>
-            <div className="mt-3">
-              {answer.trend && answer.trend.series.length > 0
-                ? <TrendChart result={answer.trend} label={answer.metric.name} />
-                : <EmptyState headline="No observations in this period" lead="Perform the registered outcome or review its definition." />}
-            </div>
-          </section>
-          <div className="border-t pt-5 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
-            <RankedRows
-              title={answer.funnel?.name ?? 'Activation funnel'}
-              rows={(answer.funnelResult?.steps ?? []).map((step) => ({
-                key: step.metric_key,
-                label: step.label,
-                value: fmtNum(step.actors),
-                note: step.conversion_from_start === null ? 'Starting step' : `${Math.round(step.conversion_from_start * 100)}% from start`,
-              }))}
-              empty="No saved goal-bearing funnel is available."
-            />
-          </div>
-        </div>
-      </AnswerCanvas>
+      <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? null} env={env} />
+      <HomeSummary
+        funnel={answer.funnel}
+        funnelResult={answer.funnelResult}
+        activity={activity}
+        nextAction={nextHomeAction({ measurementReady: true, funnel: answer.funnel, activity })}
+      />
     </>
   );
+}
+
+function HomeKpiStrip({ items }: { items: KpiItem[] }) {
+  return (
+    <dl className="grid grid-cols-2 overflow-hidden rounded-panel border bg-card lg:grid-cols-4" aria-label="Key outcomes" role="group">
+      {items.map((item, index) => (
+        <div
+          key={`${item.label}:${index}`}
+          className={`min-w-0 p-4 ${index % 2 === 1 ? 'border-l' : ''} ${index < 2 ? 'border-b' : ''} ${index > 0 ? 'lg:border-l' : 'lg:border-l-0'} lg:border-b-0`}
+        >
+          <dt className="text-sm font-medium text-muted-foreground">{item.label}</dt>
+          <dd className={`mt-1 min-w-0 truncate text-2xl font-semibold tabular-nums sm:text-3xl ${item.value === null ? 'text-muted-foreground' : ''}`}>
+            {item.value ?? item.fallback ?? 'Unavailable'}
+          </dd>
+          {item.note && <div className="mt-1 min-w-0 truncate text-sm text-muted-foreground" title={item.note}>{item.note}</div>}
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function HomeEvidence({ trust, eventCount, env }: { trust: EvidenceTrust; eventCount: number | null; env: string }) {
+  const trustLabel = trust === 'trusted' ? 'Trusted' : trust === 'partial' ? 'Partial' : 'Unavailable';
+  return (
+    <div className="mt-3 text-sm text-muted-foreground">
+      Observed · Last 30 days · {trustLabel} · {eventCount === null ? 'event count unavailable' : `${eventCount.toLocaleString()} events`} · <code>{env}</code>
+    </div>
+  );
+}
+
+interface HomeNextAction {
+  title: string;
+  body: string;
+  href: string;
+  label: string;
+}
+
+function HomeSummary({ funnel, funnelResult, activity, nextAction }: {
+  funnel: Funnel | null;
+  funnelResult: FunnelQueryResult | null;
+  activity: ObservedEvent[] | null;
+  nextAction: HomeNextAction;
+}) {
+  return (
+    <AnswerCanvas className="mt-5">
+      <div className="grid min-w-0 lg:grid-cols-2">
+        <section className="min-w-0 p-4 sm:p-5" aria-labelledby="home-funnel-title">
+          <h2 id="home-funnel-title" className="text-sm font-semibold">Funnel snapshot</h2>
+          {funnel ? (
+            <>
+              <div className="mt-3 text-lg font-semibold">{funnel.name}</div>
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{funnel.goal}</p>
+              <ol className="mt-4 grid gap-3">
+                {funnel.steps.map((step, index) => {
+                  const result = funnelResult?.steps[index];
+                  return (
+                    <li key={`${step.metric_key}:${index}`} className="grid min-w-0 grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-2 text-sm">
+                      <span className="font-mono text-muted-foreground">{index + 1}</span>
+                      <span className="min-w-0 truncate" title={step.label}>{step.label}</span>
+                      <span className="text-right font-mono tabular-nums text-muted-foreground">
+                        {result ? funnelStepValue(result.actors, result.conversion_from_start) : 'Unavailable'}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+            </>
+          ) : (
+            <div className="mt-3">
+              <div className="font-medium">No funnel saved</div>
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Define the shortest path to a meaningful outcome.</p>
+            </div>
+          )}
+        </section>
+
+        <section className="min-w-0 border-t p-4 sm:p-5 lg:border-l lg:border-t-0" aria-labelledby="home-activity-title">
+          <h2 id="home-activity-title" className="text-sm font-semibold">Recent activity</h2>
+          {activity === null ? (
+            <p className="mt-3 text-sm leading-relaxed text-muted-foreground">Event activity is unavailable right now.</p>
+          ) : activity.length === 0 ? (
+            <p className="mt-3 text-sm leading-relaxed text-muted-foreground">No events were observed in the last 30 days.</p>
+          ) : (
+            <ol className="mt-2 divide-y">
+              {activity.slice(0, 4).map((event) => (
+                <li key={event.event} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 py-3 text-sm">
+                  <code className="min-w-0 truncate" title={event.event}>{event.event}</code>
+                  <span className="font-mono tabular-nums">{fmtNum(event.count)} events</span>
+                  <span className="col-span-2 mt-1 text-muted-foreground">Last seen {fmtRelative(event.last_seen)}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      </div>
+
+      <div className="flex flex-col gap-3 border-t px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">Next action</div>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground"><span className="font-medium text-foreground">{nextAction.title}.</span> {nextAction.body}</p>
+        </div>
+        <Button asChild variant="outline" className="h-11 self-start sm:self-auto">
+          <Link to={nextAction.href}>{nextAction.label} <ArrowRight className="size-4" /></Link>
+        </Button>
+      </div>
+    </AnswerCanvas>
+  );
+}
+
+function nextHomeAction(input: {
+  measurementReady: boolean;
+  funnel: Funnel | null;
+  activity: ObservedEvent[] | null;
+}): HomeNextAction {
+  if (!input.measurementReady) {
+    return { title: 'Connect measurement', body: 'Register one meaningful outcome before reading results.', href: '/setup', label: 'Open Setup' };
+  }
+  if (input.activity === null) {
+    return { title: 'Check project data', body: 'Open Setup to verify the current environment and connection.', href: '/setup', label: 'Open Setup' };
+  }
+  if (input.activity.length === 0) {
+    return { title: 'Send one real event', body: 'Run the product once and confirm that Poolstatis receives it.', href: '/setup', label: 'Open Setup' };
+  }
+  if (!input.funnel) {
+    return { title: 'Define the first funnel', body: 'Connect recent activity to one measurable goal.', href: '/setup', label: 'Create with agent' };
+  }
+  return { title: 'Review the biggest drop-off', body: 'Open the saved funnel for the full step-by-step breakdown.', href: '/analyze/funnels', label: 'Review funnel' };
+}
+
+function recentObservedEvents(schema: ProjectSchema | null): ObservedEvent[] | null {
+  if (schema === null) return null;
+  return [...(schema.observed_events_30d ?? [])]
+    .sort((left, right) => timestampValue(right.last_seen) - timestampValue(left.last_seen));
+}
+
+function timestampValue(value: string) {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function activityFallback(activity: ObservedEvent[] | null) {
+  return activity === null ? 'Unavailable' : 'No events';
+}
+
+function activityNote(activity: ObservedEvent[] | null) {
+  return activity === null ? 'Event feed unavailable' : 'No events in 30 days';
+}
+
+function funnelStepValue(actors: number, conversionFromStart: number | null) {
+  if (conversionFromStart === null) return `${fmtNum(actors)} people`;
+  return `${Math.round(conversionFromStart * 1_000) / 10}% from start`;
 }
 
 function useDashboardLayout(scope: string, definitions: DashboardDefinition) {
@@ -472,16 +611,23 @@ async function readWebsiteAnswer(
   env: string,
   metric: Metric | null,
 ): Promise<WebsiteAnswer> {
-  if (!metric) return { metric: null, overview: null, trend: null, trust: null, trustUnavailable: false };
+  if (!metric) return { metric: null, overview: null, overviewUnavailable: false, trust: null, trustUnavailable: false };
   const base = { metric: metric.key, date_from: '-30d', filters: [], env };
-  const [overview, trend, trustResult] = await Promise.all([
-    client.operationalQuery<WebAnalyticsResult>(project, { kind: 'web_analytics', ...base, dimensions: ['source', 'route', 'campaign'] }).catch(() => null),
-    client.query(project, { kind: 'trend', ...base, date_to: null, interval: 'day' }).then((result) => result.kind === 'trend' ? result : null).catch(() => null),
+  const [overviewResult, trustResult] = await Promise.all([
+    client.operationalQuery<WebAnalyticsResult>(project, { kind: 'web_analytics', ...base, dimensions: ['source', 'route', 'campaign'] })
+      .then((overview) => ({ overview, unavailable: false }))
+      .catch(() => ({ overview: null, unavailable: true })),
     client.measurementTrust(project, { metric_key: metric.key, env, since_days: 30, target_filters: [] })
       .then((trust) => ({ trust, unavailable: false }))
       .catch(() => ({ trust: null, unavailable: true })),
   ]);
-  return { metric, overview, trend, trust: trustResult.trust, trustUnavailable: trustResult.unavailable };
+  return {
+    metric,
+    overview: overviewResult.overview,
+    overviewUnavailable: overviewResult.unavailable,
+    trust: trustResult.trust,
+    trustUnavailable: trustResult.unavailable,
+  };
 }
 
 async function readProductAnswer(
@@ -523,6 +669,19 @@ function pickPrimaryMetric(metrics: Metric[], primaryGoal: string | null): Metri
   }) ?? metrics.find((metric) => metric.type === 'unique_actors') ?? metrics[0] ?? null;
 }
 
+function pickHomeFunnel(funnels: Funnel[], primaryGoal: string | null, anchorMetricKey: string | null): Funnel | null {
+  const ordered = [...funnels].sort((left, right) => left.key.localeCompare(right.key));
+  if (primaryGoal) {
+    const exactGoalFunnel = ordered.find((funnel) => funnel.key === primaryGoal);
+    if (exactGoalFunnel) return exactGoalFunnel;
+  }
+  if (anchorMetricKey) {
+    const anchoredFunnel = ordered.find((funnel) => funnel.steps.some((step) => step.metric_key === anchorMetricKey));
+    if (anchoredFunnel) return anchoredFunnel;
+  }
+  return ordered[0] ?? null;
+}
+
 function prefersWebsite(primaryGoal: string) {
   return /(website|traffic|page|campaign|referral|content|conversion)/i.test(primaryGoal);
 }
@@ -539,7 +698,8 @@ function evidenceTrust(trust: MeasurementTrust | null, unavailable: boolean): Ev
 }
 
 function websiteLead(answer: WebsiteAnswer) {
-  if (!answer.overview) return 'Traffic needs one canonical page-view definition before Poolstatis can answer.';
+  if (!answer.metric) return 'Traffic needs one canonical page-view definition before Poolstatis can answer.';
+  if (answer.overviewUnavailable || !answer.overview) return 'Website answers are temporarily unavailable.';
   const source = answer.overview.breakdowns.source?.[0];
   return `${fmtNum(answer.overview.summary.visitors)} people visited.${source ? ` ${source.value} brought the most measured traffic.` : ''}`;
 }

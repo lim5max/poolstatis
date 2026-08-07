@@ -79,18 +79,63 @@ describe('goal-aware Home', () => {
   });
 
   it('renders a website answer from server facts with trust and responsive structure', async () => {
-    setStore(websiteClient());
+    const client = websiteClient() as Record<string, any>;
+    client.schema.mockResolvedValue({
+      identity: { active_links: 0 },
+      observed_events_30d: [
+        { event: 'page.viewed', count: 20, registered_share: 1, last_seen: new Date().toISOString() },
+        { event: 'signup.started', count: 5, registered_share: 1, last_seen: '2026-08-05T10:00:00Z' },
+      ],
+    });
+    client.funnels.mockResolvedValue([{
+      id: 'signup-funnel',
+      key: 'website_signup',
+      name: 'Visit to signup',
+      goal: 'See whether qualified visitors begin signup.',
+      steps: [
+        { metric_key: 'web_page_views', label: 'Visited' },
+        { metric_key: 'web_page_views', label: 'Started signup' },
+      ],
+      window_seconds: 86_400,
+    }]);
+    client.query.mockImplementation((_slug: string, query: { kind: string }) => query.kind === 'funnel'
+      ? Promise.resolve({
+        kind: 'funnel',
+        steps: [
+          { label: 'Visited', metric_key: 'web_page_views', purpose: 'Count accepted visits.', category: 'acquisition', actors: 8, conversion_from_prev: null, conversion_from_start: null },
+          { label: 'Started signup', metric_key: 'web_page_views', purpose: 'Count signup starts.', category: 'activation', actors: 3, conversion_from_prev: 0.375, conversion_from_start: 0.375 },
+        ],
+        meta: { computed_at: '2026-08-06T00:00:00Z', date_range: { from: '2026-07-07T00:00:00Z', to: '2026-08-06T00:00:00Z' }, sampling: null, source: 'native' },
+      })
+      : Promise.resolve({
+        kind: 'trend', series: [{ bucket: '2026-08-05T00:00:00Z', value: 20 }],
+        meta: { computed_at: '2026-08-06T00:00:00Z', date_range: { from: '2026-07-07T00:00:00Z', to: '2026-08-06T00:00:00Z' }, sampling: null, source: 'native' },
+      }));
+    setStore(client);
     const view = render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Customize dashboard' })).toBeInTheDocument();
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
     expect(outcomes).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
+    expect(outcomes.children).toHaveLength(4);
     expect(within(outcomes).getByText('8')).toBeInTheDocument();
-    expect(screen.getByText(/Observed · Trusted · 20 events ·/)).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'Trend chart' })).toHaveTextContent('Day 1: 4');
-    expect(screen.getByText('organic')).toBeInTheDocument();
-    expect(screen.getByText('home')).toBeInTheDocument();
+    expect(within(outcomes).getByText('Last event')).toBeInTheDocument();
+    expect(within(outcomes).getByText('page.viewed')).toBeInTheDocument();
+    expect(screen.getByText(/Observed · Last 30 days · Trusted · 20 events ·/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Funnel snapshot' })).toBeInTheDocument();
+    expect(screen.getByText('Visit to signup')).toBeInTheDocument();
+    expect(screen.getByText('8 people')).toBeInTheDocument();
+    expect(screen.getByText('37.5% from start')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Recent activity' })).toBeInTheDocument();
+    expect(screen.getByText('20 events')).toBeInTheDocument();
+    expect(screen.getByText('Next action')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Trend chart' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Top sources' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Top pages' })).not.toBeInTheDocument();
+    expect(view.container.querySelector('.text-xs')).toBeNull();
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(client.query).toHaveBeenCalledWith('alpha', expect.objectContaining({ kind: 'funnel' }));
     await waitFor(() => expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toEqual([
       ['home.answer_viewed', { template_id: 'website_overview', trust: 'trusted' }, { distinctId: 'home-user' }],
     ]));
@@ -125,14 +170,30 @@ describe('goal-aware Home', () => {
     expect(within(outcomes).getByText('Visitors')).toBeInTheDocument();
     expect(within(outcomes).getByText('Sessions')).toBeInTheDocument();
     expect(within(outcomes).getByText('Page views')).toBeInTheDocument();
-    expect(within(outcomes).getByText('Average duration')).toBeInTheDocument();
-    expect(within(outcomes).getAllByText('Not configured')).toHaveLength(4);
+    expect(within(outcomes).getByText('Last event')).toBeInTheDocument();
+    expect(within(outcomes).getAllByText('Not configured')).toHaveLength(3);
+    expect(within(outcomes).getByText('No events')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Customize dashboard' }));
     expect(await screen.findByRole('region', { name: 'Dashboard settings' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Card 1'), { target: { value: 'engaged_rate' } });
     expect(within(outcomes).getByText('Engagement rate')).toBeInTheDocument();
     expect(within(outcomes).queryByText('Visitors')).not.toBeInTheDocument();
     expect(localStorage.getItem('poolstatis.home.cards.alpha:prod:website')).toContain('engaged_rate');
+  });
+
+  it('keeps a temporary web answer failure distinct from missing measurement', async () => {
+    const client = websiteClient();
+    client.operationalQuery.mockRejectedValue(new Error('temporary query failure'));
+    setStore(client);
+
+    render(<MemoryRouter><Overview /></MemoryRouter>);
+
+    expect(await screen.findByText('Website answers are temporarily unavailable.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open Web/ })).toHaveAttribute('href', '/analyze/web');
+    expect(screen.queryByRole('link', { name: /Set up Web/ })).not.toBeInTheDocument();
+    const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
+    expect(within(outcomes).getAllByText('Unavailable').length).toBeGreaterThan(0);
+    expect(within(outcomes).queryByText('Not configured')).not.toBeInTheDocument();
   });
 
   it('keeps null intent as a usable legacy project without assigning a mode', async () => {
@@ -163,8 +224,11 @@ describe('goal-aware Home', () => {
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.getByText(/Observed · Unavailable · event count unavailable ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Observed · Last 30 days · Unavailable · event count unavailable ·/)).toBeInTheDocument();
     expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0);
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Customize dashboard' }));
+    expect(screen.queryByRole('option', { name: 'Revenue' })).not.toBeInTheDocument();
   });
 });
