@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -418,7 +418,7 @@ describe('Better Auth portal', () => {
       'If an unverified account exists, a new verification email is on its way.',
     );
     expect(result).toHaveClass('text-foreground', 'bg-primary/10');
-    expect(result).toHaveFocus();
+    await waitFor(() => expect(result).toHaveFocus());
     expect(email).toHaveValue('');
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/auth/send-verification-email',
@@ -429,6 +429,35 @@ describe('Better Auth portal', () => {
         }),
       }),
     );
+  });
+
+  it('restores focus to the resend result after a delayed verification-heading focus', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ status: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    renderPortal('/verify?state=invalid_or_expired');
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'unknown@example.test' },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send a new verification email' }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const result = screen.getByRole('status');
+    screen.getByRole('heading', { name: 'Verification link expired or invalid' }).focus();
+    expect(result).not.toHaveFocus();
+
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(result).toHaveFocus();
   });
 
   it('distinguishes a throttled resend without exposing account existence', async () => {

@@ -671,7 +671,9 @@ function ResendVerification() {
   const [outcome, setOutcome] = useState<'idle' | 'accepted' | 'throttled' | 'error'>('idle');
   const outcomeRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
-    if (outcome !== 'idle') outcomeRef.current?.focus();
+    if (outcome === 'idle') return;
+    const timer = window.setTimeout(() => outcomeRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
   }, [outcome]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
