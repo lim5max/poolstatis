@@ -1,6 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Check, Loader2 } from '@/components/icons';
+import {
+  ArrowLeft,
+  Browser,
+  Catalogue,
+  ChartAnalysis,
+  Check,
+  DashboardSpeed,
+  Funnel,
+  GitCommit,
+  Globe,
+  LayoutGrid,
+  Loader2,
+  Target,
+  UserGroup,
+  type PoolstatisIcon,
+} from '@/components/icons';
 import { useStore } from '../store';
 import type { DecisionLoopOnboardingStatus, HostedOnboardingResult } from '../api/types';
 import {
@@ -20,6 +35,11 @@ import {
   telemetryElapsedBucket,
   telemetryLengthBucket,
 } from '../productTelemetry';
+import {
+  buildInstallationPack,
+  onboardingGoalsForMode,
+  type OnboardingGoalIcon,
+} from '../onboardingGoals';
 
 type ProjectMode = 'website' | 'product' | 'both';
 type ProjectSurface = Exclude<ProjectMode, 'both'>;
@@ -52,29 +72,24 @@ const SURFACES: Array<{ id: ProjectSurface; title: string; body: string }> = [
   { id: 'product', title: 'A product', body: 'Activation, features, retention, and releases.' },
 ];
 
-const GOALS: Record<ProjectMode, Array<{ id: GoalId; title: string }>> = {
-  website: [
-    { id: 'website_traffic', title: 'See who visits my website' },
-    { id: 'website_pages', title: 'Know which pages work' },
-    { id: 'website_conversion', title: 'Improve signup or lead conversion' },
-    { id: 'campaigns_referrals', title: 'Understand campaigns and referrals' },
-    { id: 'content_engagement', title: 'Measure content engagement' },
-  ],
-  product: [
-    { id: 'activation', title: 'Find where users get stuck' },
-    { id: 'feature_adoption', title: 'Know which features matter' },
-    { id: 'retention', title: 'Understand retention' },
-    { id: 'release', title: 'Measure a release or experiment' },
-    { id: 'reliability_performance', title: 'Track reliability or performance' },
-  ],
-  both: [
-    { id: 'website_traffic', title: 'Understand website traffic' },
-    { id: 'website_conversion', title: 'Improve website conversion' },
-    { id: 'activation', title: 'Find where users get stuck' },
-    { id: 'feature_adoption', title: 'Know which features matter' },
-    { id: 'retention', title: 'Understand retention' },
-    { id: 'release', title: 'Measure a release or experiment' },
-  ],
+const GOAL_ICONS: Record<OnboardingGoalIcon, PoolstatisIcon> = {
+  journey: Funnel,
+  traffic: Globe,
+  usage: ChartAnalysis,
+  outcome: Target,
+  release: GitCommit,
+  quality: DashboardSpeed,
+};
+
+const SECTION_ICONS: Record<string, PoolstatisIcon> = {
+  Home: LayoutGrid,
+  Web: Globe,
+  Product: ChartAnalysis,
+  Funnels: Funnel,
+  People: UserGroup,
+  Ship: GitCommit,
+  Registry: Catalogue,
+  Experience: Browser,
 };
 
 function slugify(value: string): string {
@@ -201,7 +216,8 @@ export function Onboarding() {
     }, telemetryOptions);
   }, [account?.user?.id, eventSeen, goalIds, result, selectedMode]);
 
-  const availableGoals = useMemo(() => mode ? GOALS[mode] : [], [mode]);
+  const availableGoals = useMemo(() => mode ? onboardingGoalsForMode(mode) : [], [mode]);
+  const installationPack = useMemo(() => buildInstallationPack(goalIds), [goalIds]);
 
   const toggleGoal = (goalId: GoalId) => {
     const next = goalIds.includes(goalId)
@@ -226,8 +242,10 @@ export function Onboarding() {
     setCustomGoal('');
   };
 
-  const submit = async () => {
-    if (!onboardingClient || !mode || !canCreate) return;
+  const submit = async (submittedGoalIds: GoalId[] = goalIds) => {
+    const submittedCustom = submittedGoalIds.includes('custom');
+    const submittedCustomError = submittedCustom && customGoal.trim().length < 10;
+    if (!onboardingClient || !mode || submittedGoalIds.length < 1 || submittedGoalIds.length > 3 || submittedCustomError) return;
     setBusy(true);
     setErr(null);
     try {
@@ -237,12 +255,12 @@ export function Onboarding() {
         project_slug: projectSlug.trim(),
         issue_personal_token: false,
         project_mode: mode,
-        goal_ids: goalIds,
-        custom_goal: customSelected ? customGoal.trim() : null,
-        primary_goal_id: goalIds[0]!,
+        goal_ids: submittedGoalIds,
+        custom_goal: submittedCustom ? customGoal.trim() : null,
+        primary_goal_id: submittedGoalIds[0]!,
         website_domain: mode === 'product' ? null : normalizedDomain(domain),
       });
-      if (customSelected) {
+      if (submittedCustom) {
         captureProductTelemetry('onboarding.custom_goal_submitted', {
           length_bucket: telemetryLengthBucket(customGoal.trim().length),
         }, { distinctId: account?.user?.id });
@@ -280,6 +298,7 @@ export function Onboarding() {
           projectName={result.project.name}
           projectSlug={result.project.slug}
           projectMode={selectedMode}
+          installationPack={installationPack}
           eventSeen={eventSeen}
           lastSeen={lastSeen}
           eventName={eventName}
@@ -413,39 +432,73 @@ export function Onboarding() {
         </section>
       ) : (
         <section aria-labelledby="goals-title" className="rounded-lg border bg-card p-4 sm:p-5">
-          <h2 ref={headingRef} tabIndex={-1} id="goals-title" className="text-lg font-semibold outline-none">What do you want to understand?</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Choose up to three. Your agent will turn them into a tracking plan.</p>
+          <h2 ref={headingRef} tabIndex={-1} id="goals-title" className="text-lg font-semibold outline-none">What do you want to understand first?</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Choose up to 3. We’ll prepare the right setup.</p>
 
-          <div className="mt-4 space-y-2" role="group" aria-labelledby="goals-title">
-            {[...availableGoals, { id: 'custom' as const, title: 'Something else' }].map((goal) => {
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3" role="group" aria-label="Analytics goals">
+            {availableGoals.map((goal) => {
               const selected = goalIds.includes(goal.id);
               const disabled = !selected && goalIds.length >= 3;
+              const GoalIcon = GOAL_ICONS[goal.icon];
               return (
                 <label
                   key={goal.id}
+                  aria-pressed={selected}
                   className={cn(
-                    'flex min-h-11 cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 outline-none transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring',
+                    'flex min-h-32 cursor-pointer flex-col rounded-md border p-3 outline-none transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring',
                     selected ? 'border-brand-strong bg-primary/10 text-foreground' : 'bg-muted/10 hover:border-primary/60 hover:bg-primary/5',
                     disabled && 'cursor-not-allowed opacity-50',
                   )}
                 >
-                  <input
-                    type="checkbox"
-                    className="size-4 accent-primary"
-                    checked={selected}
-                    disabled={disabled}
-                    onChange={() => toggleGoal(goal.id)}
-                  />
-                  <span className="flex-1 text-sm">{goal.title}</span>
-                  {selected && <Check className="size-4 text-foreground" aria-hidden="true" />}
+                  <span className="flex w-full items-start justify-between gap-3">
+                    <GoalIcon className="size-5 text-foreground" aria-hidden="true" />
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-primary"
+                      aria-label={goal.title}
+                      checked={selected}
+                      disabled={disabled}
+                      onChange={() => toggleGoal(goal.id)}
+                    />
+                  </span>
+                  <span className="mt-3 block text-sm font-medium leading-snug">{goal.title}</span>
+                  <span className="mt-auto flex flex-wrap gap-1.5 pt-3" aria-hidden="true">
+                    {goal.sections.map((section) => {
+                      const SectionIcon = SECTION_ICONS[section] ?? Catalogue;
+                      return (
+                        <span key={section} className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-1 text-xs text-muted-foreground">
+                          <SectionIcon className="size-3" aria-hidden="true" />
+                          {section}
+                        </span>
+                      );
+                    })}
+                  </span>
                 </label>
               );
             })}
           </div>
 
-          {goalIds.length > 0 && (
-            <p className="mt-2 text-sm text-muted-foreground" aria-live="polite">{goalIds.length} of 3 selected</p>
-          )}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+            <p aria-live="polite">{goalIds.length} {goalIds.length === 1 ? 'goal' : 'goals'} selected</p>
+            <p>You can add more tracking later.</p>
+          </div>
+
+          <label
+            aria-pressed={customSelected}
+            className={cn(
+              'mt-3 flex cursor-pointer items-center gap-2 text-sm text-muted-foreground outline-none has-focus-visible:ring-2 has-focus-visible:ring-ring',
+              !customSelected && goalIds.length >= 3 && 'cursor-not-allowed opacity-50',
+            )}
+          >
+            <input
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={customSelected}
+              disabled={!customSelected && goalIds.length >= 3}
+              onChange={() => toggleGoal('custom')}
+            />
+            Something else
+          </label>
 
           {customSelected && (
             <div className="mt-4 space-y-1.5">
@@ -470,14 +523,28 @@ export function Onboarding() {
 
           {err && <div className="mt-4"><ErrorNote>{err}</ErrorNote></div>}
 
-          <div className="mt-5 flex items-center justify-between gap-3">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
             <Button variant="ghost" onClick={() => setStage('mode')}>
               <ArrowLeft className="size-4" aria-hidden="true" /> Back
             </Button>
-            <Button onClick={() => void submit()} disabled={busy || !canCreate}>
-              {busy && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-              {busy ? 'Creating…' : 'Create project'}
-            </Button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  const starterGoal: GoalId = mode === 'website' ? 'website_traffic' : 'activation';
+                  setGoalIds([starterGoal]);
+                  captureProductTelemetry('onboarding.goals_selected', { goal_ids: [starterGoal] }, { distinctId: account?.user?.id });
+                  void submit([starterGoal]);
+                }}
+              >
+                I’m not sure yet
+              </Button>
+              <Button onClick={() => void submit()} disabled={busy || !canCreate}>
+                {busy && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+                {busy ? 'Creating…' : `Continue with ${goalIds.length} ${goalIds.length === 1 ? 'goal' : 'goals'}`}
+              </Button>
+            </div>
           </div>
         </section>
       )}
