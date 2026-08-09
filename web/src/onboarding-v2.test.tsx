@@ -377,6 +377,46 @@ describe('Product Experience V2 onboarding', () => {
     expect(vi.mocked(navigator.clipboard.writeText).mock.calls[1]?.[0]).toBe(setupTask().task);
   });
 
+  it('shows deliberate manual-check progress and an explicit no-event result', async () => {
+    const onCheck = vi.fn().mockResolvedValue(undefined);
+    const props = {
+      ingestKey: null,
+      keyReady: true,
+      serverUrl: 'https://api.poolstatis.test',
+      projectName: 'Alpha',
+      projectSlug: 'alpha',
+      projectMode: 'product' as const,
+      eventSeen: false,
+      getSetupTask: vi.fn().mockResolvedValue(setupTask()),
+      onCheck,
+    };
+    const view = render(<ProductConnectionGuide {...props} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy setup task' }));
+    view.rerender(<ProductConnectionGuide {...props} checking />);
+    const checkButton = await screen.findByRole('button', { name: 'Check now' });
+    expect(checkButton).toBeEnabled();
+    expect(screen.queryByText('Checking…')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No events yet/)).not.toBeInTheDocument();
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(checkButton);
+      expect(onCheck).toHaveBeenCalledOnce();
+      expect(screen.getByRole('button', { name: 'Checking…' })).toBeDisabled();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(screen.getByRole('button', { name: 'Checking…' })).toBeDisabled();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(screen.getByRole('button', { name: 'Check now' })).toBeEnabled();
+      expect(screen.getByRole('status')).toHaveTextContent('No events yet');
+      expect(screen.getByRole('status')).toHaveTextContent('Run the action above, then check again.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows a selectable fallback when clipboard permission is denied and does not regenerate on rerender', async () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('blocked')) } });
     const requestTask = vi.fn().mockResolvedValue(setupTask());

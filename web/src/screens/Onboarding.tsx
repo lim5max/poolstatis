@@ -288,7 +288,7 @@ export function Onboarding() {
           checking={checking}
           error={err}
           getSetupTask={getSetupTask}
-          onCheck={() => void checkStatus()}
+          onCheck={checkStatus}
           onOpenProject={() => navigate(successRoute, { replace: true })}
           onReviewMetrics={() => navigate('/registry', { replace: true })}
           onConnectMcp={() => navigate('/setup#agent-access', { replace: true })}

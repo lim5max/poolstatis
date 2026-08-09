@@ -28,6 +28,7 @@ export interface SetupTaskResponse {
 }
 
 const DEFAULT_SDK_PACKAGE = '@poolstatis/sdk@0.3.0';
+const MINIMUM_MANUAL_CHECK_MS = 800;
 
 const AGENTS: Array<{ id: AgentId; name: string }> = [
   { id: 'codex', name: 'Codex' },
@@ -48,12 +49,13 @@ export interface ProductConnectionGuideProps {
   eventName?: string | null;
   eventEnvironment?: string | null;
   eventRegistered?: boolean | null;
+  /** Background refresh state. Manual check feedback is intentionally owned by this component. */
   checking?: boolean;
   creatingKey?: boolean;
   error?: string | null;
   onCreateKey?: () => void;
   getSetupTask?: (agentId: AgentId) => Promise<SetupTaskResponse>;
-  onCheck: () => void;
+  onCheck: () => void | Promise<void>;
   onOpenProject?: () => void;
   onReviewMetrics?: () => void;
   onConnectMcp?: () => void;
@@ -75,7 +77,6 @@ export function ProductConnectionGuide({
   eventName,
   eventEnvironment = 'prod',
   eventRegistered,
-  checking = false,
   creatingKey = false,
   error,
   onCreateKey,
@@ -99,6 +100,8 @@ export function ProductConnectionGuide({
   const [taskError, setTaskError] = useState<string | null>(null);
   const [taskRequestNonce, setTaskRequestNonce] = useState(0);
   const [manualRuntime, setManualRuntime] = useState<ManualRuntime>('browser');
+  const [manualChecking, setManualChecking] = useState(false);
+  const [manualCheckResult, setManualCheckResult] = useState<'no-events' | 'failed' | null>(null);
   const selectedAgentsTracked = useRef(new Set<AgentId>());
   const selectedAgent = AGENTS.find((agent) => agent.id === agentId) ?? AGENTS[0]!;
   const normalizedServerUrl = serverUrl.replace(/\/$/, '');
@@ -155,6 +158,25 @@ export function ProductConnectionGuide({
     () => buildManualCode(normalizedServerUrl, manualRuntime),
     [manualRuntime, normalizedServerUrl],
   );
+
+  const checkForFirstEvent = async () => {
+    if (manualChecking) return;
+    const startedAt = Date.now();
+    setManualChecking(true);
+    setManualCheckResult(null);
+    let result: 'no-events' | 'failed' = 'no-events';
+    try {
+      await onCheck();
+    } catch {
+      result = 'failed';
+    }
+    const remaining = MINIMUM_MANUAL_CHECK_MS - (Date.now() - startedAt);
+    if (remaining > 0) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
+    }
+    setManualChecking(false);
+    setManualCheckResult(result);
+  };
 
   if (eventSeen) {
     const successCopy = projectMode === 'website'
@@ -406,10 +428,20 @@ export function ProductConnectionGuide({
               Run {projectName} and perform the action your agent asked you to test. This status updates from server data.
             </p>
             {plan?.smoke_action && <p className="mt-3 text-xs text-muted-foreground">Try now: <span className="text-foreground">{plan.smoke_action}</span></p>}
-            <Button className="mt-4" variant="outline" onClick={onCheck} disabled={checking}>
-              {checking && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-              {checking ? 'Checking…' : 'Check now'}
+            <Button className="mt-4" variant="outline" onClick={() => void checkForFirstEvent()} disabled={manualChecking}>
+              {manualChecking && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+              {manualChecking ? 'Checking…' : 'Check now'}
             </Button>
+            {manualCheckResult === 'no-events' && (
+              <p className="mt-3 text-sm text-muted-foreground" role="status" aria-live="polite">
+                No events yet. We checked just now. Run the action above, then check again.
+              </p>
+            )}
+            {manualCheckResult === 'failed' && !error && (
+              <p className="mt-3 text-sm text-destructive" role="alert">
+                We could not check right now. Try again in a moment.
+              </p>
+            )}
             {error && <p role="alert" className="mt-3 text-xs text-destructive">{error}</p>}
           </div>
         </div>
