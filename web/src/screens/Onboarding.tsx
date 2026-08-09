@@ -115,6 +115,7 @@ export function Onboarding() {
   const [surfaces, setSurfaces] = useState<ProjectSurface[]>([]);
   const [projectName, setProjectName] = useState('My project');
   const [projectSlug, setProjectSlug] = useState('my-project');
+  const [slugCustomized, setSlugCustomized] = useState(false);
   const [domain, setDomain] = useState('');
   const [goalIds, setGoalIds] = useState<GoalId[]>([]);
   const [customGoal, setCustomGoal] = useState('');
@@ -146,6 +147,13 @@ export function Onboarding() {
   const domainError = domain.trim() && !normalizedDomain(domain)
     ? 'Enter a hostname only, for example example.com.'
     : null;
+  const slugError = !projectSlug
+    ? 'Enter a project slug.'
+    : projectSlug.endsWith('-')
+      ? 'Project slug must end with a letter or number.'
+      : !/^[a-z][a-z0-9-]*$/.test(projectSlug)
+        ? 'Use lowercase letters, numbers, and hyphens; start with a letter.'
+        : null;
   const canCreate = goalIds.length >= 1 && goalIds.length <= 3 && !customError;
 
   useEffect(() => {
@@ -355,7 +363,7 @@ export function Onboarding() {
                 value={projectName}
                 onChange={(event) => {
                   setProjectName(event.target.value);
-                  setProjectSlug(slugify(event.target.value));
+                  if (!slugCustomized) setProjectSlug(slugify(event.target.value));
                 }}
               />
             </div>
@@ -380,14 +388,24 @@ export function Onboarding() {
             <DisclosureSummary className="inline-flex cursor-pointer items-center text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">Advanced</DisclosureSummary>
             <div className="mt-3 max-w-sm space-y-1.5">
               <Label htmlFor="project-slug">Project slug</Label>
-              <Input id="project-slug" value={projectSlug} onChange={(event) => setProjectSlug(slugify(event.target.value))} />
+              <Input
+                id="project-slug"
+                value={projectSlug}
+                aria-invalid={Boolean(slugError)}
+                aria-describedby={slugError ? 'project-slug-error' : undefined}
+                onChange={(event) => {
+                  setSlugCustomized(true);
+                  setProjectSlug(event.target.value.toLowerCase());
+                }}
+              />
+              {slugError && <p id="project-slug-error" role="alert" className="text-sm text-destructive">{slugError}</p>}
             </div>
           </details>
 
           <div className="mt-5 flex justify-end">
             <Button
               onClick={() => setStage('goals')}
-              disabled={!mode || !projectName.trim() || !projectSlug.trim() || Boolean(domainError)}
+              disabled={!mode || !projectName.trim() || Boolean(slugError) || Boolean(domainError)}
             >
               Continue
             </Button>

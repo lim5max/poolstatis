@@ -204,4 +204,18 @@ describe('green color policy', () => {
       expect(contrast(success, background)).toBeGreaterThanOrEqual(4.5);
     }
   });
+
+  it('keeps keyboard focus neutral instead of spending the brand color on every field', () => {
+    const css = readFileSync(resolve(ROOT, 'src/index.css'), 'utf8');
+
+    for (const selector of [':root', '.dark'] as const) {
+      const block = themeBlock(css, selector);
+      const ring = token(block, 'ring');
+      const background = token(block, 'background');
+
+      expect(isRawGreen(ring), `${selector} ring should be neutral`).toBe(false);
+      expect(contrast(ring, background), `${selector} ring contrast`).toBeGreaterThanOrEqual(3);
+      expect(token(block, 'sidebar-ring')).toBe(ring);
+    }
+  });
 });

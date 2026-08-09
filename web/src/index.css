@@ -100,7 +100,7 @@
   --info-foreground: #ffffff;
   --border: #dde3dc;
   --input: #ccd5cb;
-  --ring: var(--brand-lime-strong);
+  --ring: #687169;
   --chart-1: var(--brand-lime);
   --chart-1-stroke: #6f971e;
   --chart-2: #2e6a42;
@@ -114,7 +114,7 @@
   --sidebar-accent: var(--brand-lime);
   --sidebar-accent-foreground: var(--brand-foreground);
   --sidebar-border: #dde3dc;
-  --sidebar-ring: var(--brand-lime-strong);
+  --sidebar-ring: #687169;
 }
 
 .dark {
@@ -144,6 +144,7 @@
   --info-foreground: #07101a;
   --border: rgb(255 255 255 / 12%);
   --input: rgb(255 255 255 / 18%);
+  --ring: #a8adb5;
   --chart-1: var(--brand-lime);
   --chart-1-stroke: #a8d233;
   --chart-2: #75c77b;
@@ -153,6 +154,7 @@
   --sidebar: #101113;
   --sidebar-foreground: #eef0eb;
   --sidebar-border: rgb(255 255 255 / 12%);
+  --sidebar-ring: #a8adb5;
 }
 
 /* Metric-category accent tokens (the neutral preset has no category hues, so
@@ -202,8 +204,8 @@
     font-variant-numeric: tabular-nums;
   }
   ::selection {
-    color: var(--accent-foreground);
-    background: var(--accent);
+    color: var(--foreground);
+    background: var(--muted);
   }
   details[open] > summary [data-slot="disclosure-chevron"] {
     transform: rotate(90deg);

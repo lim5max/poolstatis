@@ -3,7 +3,8 @@
 Poolstatis Web uses one lime brand family for interactive green states.
 
 - `primary` / `brand` is the bright lime used for CTA fills, progress, selected tints, and the completed connection flow.
-- `brand-strong` is the accessible darker (light theme) or lighter (dark theme) member of the same hue family. It is used for text links, focus rings, and selected borders/markers, where bright lime would not meet contrast requirements.
+- `brand-strong` is the accessible darker (light theme) or lighter (dark theme) member of the same hue family. It is reserved for semantic status and selected borders/markers, where bright lime would not meet contrast requirements.
+- Keyboard focus, text selection, neutral links, and generic status messages use neutral gray tokens. Brand lime is not a default interaction chrome color.
 - `success` aliases `brand-lime-strong`. Success may be quieter than a CTA, but it must not introduce another green hue.
 - `accent` remains a low-emphasis hover surface. It does not represent success.
 - `info` remains blue so informational messages are not confused with success.

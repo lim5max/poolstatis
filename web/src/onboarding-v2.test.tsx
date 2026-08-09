@@ -161,6 +161,33 @@ describe('Product Experience V2 onboarding', () => {
     }));
   });
 
+  it('keeps a manually cleared slug editable and does not overwrite it from the project name', () => {
+    mockedStore.mockReturnValue({
+      account: { organization: { name: 'Acme' }, user: { id: 'user-slug' } },
+      client: {},
+      baseUrl: 'https://api.poolstatis.test',
+      refreshProjects: vi.fn(),
+      setProject: vi.fn(),
+    } as never);
+
+    render(<MemoryRouter><Onboarding /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('checkbox', { name: /^A product/ }));
+    fireEvent.click(screen.getByText('Advanced'));
+
+    const slug = screen.getByLabelText('Project slug');
+    fireEvent.change(slug, { target: { value: '' } });
+    fireEvent.change(slug, { target: { value: 'custom-' } });
+    expect(slug).toHaveValue('custom-');
+    expect(slug).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('alert')).toHaveTextContent('end with a letter or number');
+
+    fireEvent.change(slug, { target: { value: 'custom-slug' } });
+    expect(slug).toHaveValue('custom-slug');
+    expect(slug).toHaveAttribute('aria-invalid', 'false');
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Renamed project' } });
+    expect(slug).toHaveValue('custom-slug');
+  });
+
   it('creates website intent atomically, separates the key from the server task, and routes on server proof', async () => {
     let connected = false;
     const completeOnboarding = vi.fn().mockResolvedValue({

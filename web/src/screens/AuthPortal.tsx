@@ -307,9 +307,22 @@ function FormMessage({ error, message }: { error: string; message: string }) {
       aria-live={error ? 'assertive' : 'polite'}
       className={error
         ? 'text-sm text-destructive'
-        : 'rounded-control border border-brand-strong/30 bg-primary/10 px-3 py-2 text-sm font-medium text-foreground'}
+        : 'rounded-control border border-border bg-muted px-3 py-2 text-sm font-medium text-foreground'}
     >
       {error || message}
+    </p>
+  );
+}
+
+function PasswordRequirements({ password }: { password: string }) {
+  if (!password) return null;
+  const longEnough = password.length >= 8;
+  return (
+    <p className="flex items-center gap-2 text-sm text-muted-foreground" aria-live="polite">
+      <span aria-hidden="true" className="w-4 text-center text-foreground">{longEnough ? '✓' : '·'}</span>
+      <span data-valid={String(longEnough)} className={longEnough ? 'text-foreground' : undefined}>
+        8 or more characters
+      </span>
     </p>
   );
 }
@@ -428,7 +441,7 @@ function Login() {
     <AuthCard title="Welcome back" description="Sign in to continue to your Poolstatis workspace.">
       <form className="grid gap-4" onSubmit={submit}>
         <Field id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />
-        <Field id="password" label="Password" type="password" autoComplete="current-password" value={password} onChange={setPassword} minLength={12} />
+        <Field id="password" label="Password" type="password" autoComplete="current-password" value={password} onChange={setPassword} minLength={8} />
         <FormMessage
           error={submission.error || sessionError || (query.has('error') ? neutralFailure : '')}
           message={
@@ -479,7 +492,7 @@ function Signup() {
     return (
       <AuthCard
         title="Check your inbox"
-        description={`We sent a verification link to ${completedEmail}. Open it before signing in.`}
+        description={`New account? Open the verification link sent to ${completedEmail}. Already registered? Sign in or reset your password.`}
       >
         <div className="grid gap-3">
           {provider && (
@@ -492,6 +505,9 @@ function Signup() {
           )}
           <Button asChild variant="outline">
             <Link to={loginAfterVerificationPath}>Already verified? Sign in</Link>
+          </Button>
+          <Button asChild variant="ghost">
+            <Link to="/forgot">Reset password</Link>
           </Button>
           <button
             type="button"
@@ -509,10 +525,15 @@ function Signup() {
       <form className="grid gap-4" onSubmit={submit}>
         <Field id="name" label="Name" autoComplete="name" value={name} onChange={setName} />
         <Field id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />
-        <Field id="password" label="Password" type="password" autoComplete="new-password" value={password} onChange={setPassword} minLength={12} />
-        <p className="text-xs text-muted-foreground">Use at least 12 characters.</p>
+        <Field id="password" label="Password" type="password" autoComplete="new-password" value={password} onChange={setPassword} minLength={8} />
+        <PasswordRequirements password={password} />
         <FormMessage error={submission.error} message={submission.message} />
-        <Button disabled={submission.pending} type="submit">{submission.pending ? 'Creating…' : 'Create account'}</Button>
+        <Button
+          disabled={submission.pending || !name.trim() || !email.trim() || password.length < 8}
+          type="submit"
+        >
+          {submission.pending ? 'Creating…' : 'Create account'}
+        </Button>
         <Link className="text-center text-sm text-muted-foreground hover:text-foreground" to={`/login${search}`}>Already have an account?</Link>
       </form>
     </AuthCard>
@@ -622,9 +643,10 @@ function ResetPassword() {
         </div>
       ) : (
         <form className="grid gap-4" onSubmit={submit}>
-          <Field id="password" label="New password" type="password" autoComplete="new-password" value={password} onChange={setPassword} minLength={12} />
+          <Field id="password" label="New password" type="password" autoComplete="new-password" value={password} onChange={setPassword} minLength={8} />
+          <PasswordRequirements password={password} />
           <FormMessage error={submission.error} message={submission.message} />
-          <Button disabled={submission.pending} type="submit">{submission.pending ? 'Updating…' : 'Update password'}</Button>
+          <Button disabled={submission.pending || password.length < 8} type="submit">{submission.pending ? 'Updating…' : 'Update password'}</Button>
         </form>
       )}
     </AuthCard>
@@ -940,8 +962,8 @@ function AccountProfile() {
             password.setMessage('Password updated. Other sessions were signed out.');
           });
         }}>
-          <Field id="current-password" label="Current password" type="password" autoComplete="current-password" value={currentPassword} onChange={setCurrentPassword} minLength={12} />
-          <Field id="new-password" label="New password" type="password" autoComplete="new-password" value={newPassword} onChange={setNewPassword} minLength={12} />
+          <Field id="current-password" label="Current password" type="password" autoComplete="current-password" value={currentPassword} onChange={setCurrentPassword} minLength={8} />
+          <Field id="new-password" label="New password" type="password" autoComplete="new-password" value={newPassword} onChange={setNewPassword} minLength={8} />
           <FormMessage error={password.error} message={password.message} />
           <Button variant="outline" disabled={password.pending} type="submit">Change password</Button>
         </form>

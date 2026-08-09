@@ -75,6 +75,26 @@ describe('Better Auth portal', () => {
     expect(emailProviderForAddress('owner@company.example')).toBeNull();
   });
 
+  it('uses an eight-character password rule with a live requirement hint', () => {
+    renderPortal('/signup');
+
+    const password = screen.getByLabelText('Password');
+    const submit = screen.getByRole('button', { name: 'Create account' });
+
+    expect(password).toHaveAttribute('minlength', '8');
+    expect(screen.queryByText('8 or more characters')).not.toBeInTheDocument();
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Mira' } });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'new-user@example.test' } });
+    fireEvent.change(password, { target: { value: 'short' } });
+    expect(screen.getByText('8 or more characters')).toHaveAttribute('data-valid', 'false');
+    expect(submit).toBeDisabled();
+    fireEvent.change(password, { target: { value: 'long-enough' } });
+    expect(screen.getByText('8 or more characters')).toHaveAttribute('data-valid', 'true');
+    expect(submit).toBeEnabled();
+  });
+
   it('ends an existing session, creates an unverified account, and opens a dedicated inbox step', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({ success: true }), {
@@ -101,10 +121,13 @@ describe('Better Auth portal', () => {
       password: 'correct horse battery',
       oauth_query: expect.stringContaining('sig=signed'),
     });
+    expect(screen.getByText(/Already registered\?/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Yandex Mail' }))
       .toHaveAttribute('href', 'https://mail.yandex.ru/');
     expect(screen.getByRole('link', { name: 'Already verified? Sign in' }))
       .toHaveAttribute('href', '/login?verified=1');
+    expect(screen.getByRole('link', { name: 'Reset password' }))
+      .toHaveAttribute('href', '/forgot');
     expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain('correct horse battery');
   });
@@ -258,7 +281,7 @@ describe('Better Auth portal', () => {
 
     expect(await screen.findByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
     expect(screen.getByLabelText('Email')).toHaveValue('owner@gmail.com');
-    expect(screen.getByText('Password updated. Sign in with the new password.')).toHaveClass('text-foreground', 'bg-primary/10');
+    expect(screen.getByText('Password updated. Sign in with the new password.')).toHaveClass('text-foreground', 'bg-muted');
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
