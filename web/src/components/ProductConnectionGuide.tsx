@@ -394,6 +394,10 @@ export function ProductConnectionGuide({
     <div className="space-y-4">
       {showProgress && <ConnectionProgress current={3} />}
       <section className="rounded-lg border bg-card p-4 sm:p-5" aria-labelledby="waiting-title">
+        <Button className="-ml-2 mb-3" size="sm" variant="ghost" onClick={() => setTaskCopied(false)}>
+          <ArrowLeft className="size-4" aria-hidden="true" />
+          Back to agent task
+        </Button>
         <div className="flex items-start gap-3">
           <span className="mt-1 size-2.5 shrink-0 animate-pulse rounded-full bg-primary motion-reduce:animate-none" aria-hidden="true" />
           <div className="min-w-0 flex-1">

@@ -347,6 +347,36 @@ describe('Product Experience V2 onboarding', () => {
     expect(screen.getByText(/Open or create .env.local in your project root/)).toBeInTheDocument();
   });
 
+  it('lets the user return from first-event waiting and copy the same agent task again', async () => {
+    const requestTask = vi.fn().mockResolvedValue(setupTask());
+    render(
+      <ProductConnectionGuide
+        ingestKey={null}
+        keyReady
+        serverUrl="https://api.poolstatis.test"
+        projectName="Alpha"
+        projectSlug="alpha"
+        projectMode="product"
+        eventSeen={false}
+        getSetupTask={requestTask}
+        onCheck={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole('button', { name: 'Copy setup task' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy setup task' }));
+    expect(await screen.findByText('Waiting for your first event…')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to agent task' }));
+    expect(await screen.findByRole('button', { name: 'Copy setup task' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy setup task' }));
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(2));
+    expect(requestTask).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(navigator.clipboard.writeText).mock.calls[0]?.[0]).toBe(setupTask().task);
+    expect(vi.mocked(navigator.clipboard.writeText).mock.calls[1]?.[0]).toBe(setupTask().task);
+  });
+
   it('shows a selectable fallback when clipboard permission is denied and does not regenerate on rerender', async () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('blocked')) } });
     const requestTask = vi.fn().mockResolvedValue(setupTask());
