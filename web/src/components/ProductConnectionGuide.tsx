@@ -12,6 +12,7 @@ import {
   telemetryEnvironment,
   telemetryLatencyBucket,
 } from '../productTelemetry';
+import type { InstallationPack } from '../onboardingGoals';
 
 export type AgentId = 'codex' | 'claude-code' | 'cursor' | 'other';
 type ProjectMode = 'website' | 'product' | 'both';
@@ -44,6 +45,7 @@ export interface ProductConnectionGuideProps {
   projectName: string;
   projectSlug: string;
   projectMode?: ProjectMode;
+  installationPack?: InstallationPack;
   eventSeen: boolean;
   lastSeen?: string | null;
   eventName?: string | null;
@@ -72,6 +74,7 @@ export function ProductConnectionGuide({
   projectName,
   projectSlug,
   projectMode = 'product',
+  installationPack,
   eventSeen,
   lastSeen,
   eventName,
@@ -204,6 +207,7 @@ export function ProductConnectionGuide({
             <div className="min-w-0 flex-1">
               <h2 className="text-lg font-semibold">Event received</h2>
               <p className="mt-1 text-sm text-muted-foreground">{successCopy}</p>
+              <InstallationPackSummary pack={installationPack} />
               <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
                 {eventName && <div className="flex gap-1"><dt>Event</dt><dd className="font-mono text-foreground">{eventName}</dd></div>}
                 <div className="flex gap-1"><dt>Environment</dt><dd className="font-mono text-foreground">{eventEnvironment}</dd></div>
@@ -321,7 +325,9 @@ export function ProductConnectionGuide({
               Back to product key
             </Button>
           )}
-          <h2 id="agent-title" className="text-lg font-semibold">Which agent edits your code?</h2>
+          <p className="text-sm font-medium">Copy two things. Your coding agent handles the rest.</p>
+          <InstallationPackSummary pack={installationPack} />
+          <h2 id="agent-title" className="mt-5 text-lg font-semibold">Which agent edits your code?</h2>
           <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup" aria-labelledby="agent-title">
             {AGENTS.map((agent) => (
               <label
@@ -446,6 +452,21 @@ export function ProductConnectionGuide({
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function InstallationPackSummary({ pack }: { pack?: InstallationPack }) {
+  if (!pack || pack.goals.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-md border bg-muted/10 p-3" aria-label="Installation pack">
+      <div className="text-sm font-medium">Your setup</div>
+      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+        {pack.goals.map((goal) => <li key={goal}>• {goal}</li>)}
+      </ul>
+      <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Included sections">
+        {pack.sections.map((section) => <Badge key={section} variant="outline">{section}</Badge>)}
+      </div>
     </div>
   );
 }

@@ -72,7 +72,7 @@ describe('Product Experience V2 onboarding', () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
-  it('uses native multi-select surfaces and validates bounded multi-select goals', () => {
+  it('presents six clear goal cards and keeps multi-select bounded and reversible', () => {
     mockedStore.mockReturnValue({
       account: { organization: { name: 'Acme' }, user: { id: 'user-1' } },
       client: {},
@@ -99,24 +99,70 @@ describe('Product Experience V2 onboarding', () => {
     expect(screen.getByLabelText(/Domain/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
-    const custom = screen.getByRole('checkbox', { name: 'Something else' });
-    expect(custom).toHaveAttribute('type', 'checkbox');
-    fireEvent.click(custom);
-    expect(custom).toBeChecked();
-    expect(screen.getByRole('button', { name: 'Create project' })).toBeDisabled();
-    expect(screen.getByRole('alert')).toHaveTextContent('at least 10 characters');
+    expect(screen.getByRole('heading', { name: 'What do you want to understand first?' })).toBeInTheDocument();
+    expect(screen.getByText('Choose up to 3. We’ll prepare the right setup.')).toBeInTheDocument();
+    const goalGrid = screen.getByRole('group', { name: 'Analytics goals' });
+    expect(within(goalGrid).getAllByRole('checkbox')).toHaveLength(6);
+    expect(screen.getByText('You can add more tracking later.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue with 0 goals' })).toBeDisabled();
 
-    const customGoal = screen.getByLabelText('Describe the decision you want to make.');
-    expect(customGoal).toHaveAttribute('maxlength', '500');
-    fireEvent.change(customGoal, { target: { value: 'Understand docs activation' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Find where users get stuck' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Know which features matter' }));
-    expect(screen.getByText('3 of 3 selected')).toHaveAttribute('aria-live', 'polite');
-    expect(screen.getByRole('checkbox', { name: 'Understand retention' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Create project' })).toBeEnabled();
+    const journey = screen.getByRole('checkbox', { name: 'Track a customer journey' });
+    const traffic = screen.getByRole('checkbox', { name: 'Understand website traffic' });
+    const usage = screen.getByRole('checkbox', { name: 'See what people use' });
+    const outcome = screen.getByRole('checkbox', { name: 'Track a key outcome' });
+    expect(journey).toHaveAttribute('type', 'checkbox');
+    expect(journey.closest('label')).toHaveAttribute('aria-pressed', 'false');
+    journey.focus();
+    expect(journey).toHaveFocus();
+
+    fireEvent.click(journey);
+    fireEvent.click(traffic);
+    fireEvent.click(usage);
+    expect(journey.closest('label')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('3 goals selected')).toHaveAttribute('aria-live', 'polite');
+    expect(outcome).toBeDisabled();
+
+    fireEvent.click(journey);
+    expect(journey).not.toBeChecked();
+    expect(outcome).toBeEnabled();
+    expect(screen.getByText('2 goals selected')).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByRole('button', { name: 'Continue with 2 goals' })).toBeEnabled();
     expect(telemetryEvents('onboarding.goals_selected').at(-1)?.[1]).toEqual({
-      goal_ids: ['custom', 'activation', 'feature_adoption'],
+      goal_ids: ['website_traffic', 'feature_adoption'],
     });
+  });
+
+  it('creates a minimal starter intent when the user is not sure yet', async () => {
+    const completeOnboarding = vi.fn().mockResolvedValue({
+      organization: { id: 'org-1', name: 'Acme' },
+      project: { slug: 'starter', name: 'Starter', timezone: 'UTC' },
+      tokens: { personal: null, ingest_prod: 'pk_starter_private' },
+      mcp: { command: 'pnpm', args: [], package_status: 'published', note: '', env: {} },
+    });
+    mockedStore.mockReturnValue({
+      account: { organization: { name: 'Acme' }, user: { id: 'user-starter' } },
+      client: {
+        completeOnboarding,
+        onboardingStatus: vi.fn().mockResolvedValue(pendingProof),
+        setupTask: vi.fn().mockResolvedValue(setupTask()),
+      },
+      baseUrl: 'https://api.poolstatis.test',
+      refreshProjects: vi.fn().mockResolvedValue(undefined),
+      setProject: vi.fn(),
+    } as never);
+
+    render(<MemoryRouter><Onboarding /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('checkbox', { name: /^A product/ }));
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Starter' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'I’m not sure yet' }));
+
+    await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith(expect.objectContaining({
+      project_mode: 'product',
+      goal_ids: ['activation'],
+      primary_goal_id: 'activation',
+      custom_goal: null,
+    })));
   });
 
   it('derives the backwards-compatible both mode from two checked surfaces', async () => {
@@ -145,8 +191,8 @@ describe('Product Experience V2 onboarding', () => {
     fireEvent.change(screen.getByLabelText(/Domain/), { target: { value: 'combined.example' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Understand website traffic' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Find where users get stuck' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Track a customer journey' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with 2 goals' }));
 
     await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith({
       workspace_name: 'Acme',
@@ -224,9 +270,9 @@ describe('Product Experience V2 onboarding', () => {
     fireEvent.change(screen.getByLabelText(/Domain/), { target: { value: 'Docs.Example.com' } });
     fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Docs' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'See who visits my website' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Improve signup or lead conversion' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Understand website traffic' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Track a customer journey' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with 2 goals' }));
 
     await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith({
       workspace_name: 'Acme',
@@ -250,6 +296,12 @@ describe('Product Experience V2 onboarding', () => {
     ]);
     fireEvent.click(await screen.findByRole('button', { name: 'I saved .env.local' }));
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
+    const installationPack = screen.getByLabelText('Installation pack');
+    expect(within(installationPack).getByRole('list')).toHaveTextContent('Understand website traffic');
+    expect(within(installationPack).getByRole('list')).toHaveTextContent('Track a customer journey');
+    expect(within(installationPack).getAllByText('People')).toHaveLength(1);
+    expect(within(installationPack).getByText('Web')).toBeInTheDocument();
+    expect(within(installationPack).getByText('Funnels')).toBeInTheDocument();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('docs', { agent_id: 'codex', prefer_llm: false }));
     fireEvent.click(screen.getByRole('radio', { name: 'Claude Code' }));
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('docs', { agent_id: 'claude-code', prefer_llm: false }));
@@ -268,6 +320,8 @@ describe('Product Experience V2 onboarding', () => {
     connected = true;
     fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
     expect(await screen.findByText('Event received')).toBeInTheDocument();
+    expect(screen.getByLabelText('Installation pack')).toHaveTextContent('Understand website traffic');
+    expect(screen.getByLabelText('Installation pack')).toHaveTextContent('Track a customer journey');
     await waitFor(() => expect(telemetryEvents('onboarding.first_event_received')).toHaveLength(1));
     expect(telemetryEvents('onboarding.completed')).toHaveLength(1);
     expect(screen.getByText('Let your agent answer questions')).toBeInTheDocument();
@@ -304,7 +358,7 @@ describe('Product Experience V2 onboarding', () => {
     fireEvent.change(screen.getByLabelText('Describe the decision you want to make.'), {
       target: { value: 'Understand successful workspace activation' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with 1 goal' }));
     await waitFor(() => expect(telemetryEvents('onboarding.custom_goal_submitted')).toEqual([
       ['onboarding.custom_goal_submitted', { length_bucket: '10_to_49' }, { distinctId: 'user-3' }],
     ]));

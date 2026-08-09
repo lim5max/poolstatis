@@ -22,6 +22,8 @@ import {
   telemetryEnvironment,
   telemetryLatencyBucket,
 } from '../productTelemetry';
+import { buildInstallationPack } from '../onboardingGoals';
+import type { ProjectGoalId } from '../api/types';
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -40,7 +42,7 @@ const TOOLS = [
 
 interface SetupIntent {
   project_mode: 'website' | 'product' | 'both';
-  goal_ids: string[];
+  goal_ids: ProjectGoalId[];
   custom_goal: string | null;
 }
 
@@ -204,6 +206,7 @@ export function Setup() {
       ? 'Copy one setup task to your agent'
       : 'Send one real event';
   const projectMode = intentData?.intent?.project_mode;
+  const installationPack = buildInstallationPack(intentData?.intent?.goal_ids ?? []);
   const reviewBlocker = serverBlocker ? needsRegistryReview(serverBlocker.key) : false;
   const blocker = proof.loading && !proofData
     ? { kind: 'loading' as const, title: 'Checking connection', why: 'Reading the latest server proof for this project.' }
@@ -246,6 +249,7 @@ export function Setup() {
           projectName={projectName}
           projectSlug={project}
           projectMode={projectMode ?? 'product'}
+          installationPack={installationPack}
           eventSeen={eventSeen}
           lastSeen={lastSeen}
           eventName={eventName}
