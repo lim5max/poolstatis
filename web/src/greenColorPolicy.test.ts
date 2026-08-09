@@ -25,6 +25,7 @@ const GREEN_TEXT_TOKEN = /(?:^|[^\w-])text-(?:brand(?:-strong)?|primary|success)
 // a new literal or a second occurrence still fails the policy.
 const RAW_GREEN_EXCEPTIONS: Record<string, Record<string, number>> = {
   'public/poolstatis-logo.svg': { '#B9F542': 1 },
+  'src/components/logos/google.tsx': { '#34A853': 1 },
   'src/components/logos/windsurf.tsx': { '#34E8BB': 1 },
   'src/lightVisualSystem.test.ts': { '#b9f542': 1 },
   'src/metric-taxonomy.test.tsx': { '#16A34A': 1 },

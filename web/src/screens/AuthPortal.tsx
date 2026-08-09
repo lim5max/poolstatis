@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ArrowLeft, Eye, EyeOff } from '@/components/icons';
+import { GoogleLogo } from '@/components/logos/google';
 import authEvidenceInstrument from '@/assets/auth-evidence-instrument-lime.jpg';
 
 const authOrigin = 'https://auth.poolstatis.xyz';
@@ -104,6 +105,36 @@ export function approvedOAuthRedirect(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+export function approvedGoogleRedirect(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    if (url.origin !== 'https://accounts.google.com') return null;
+    if (url.pathname !== '/o/oauth2/v2/auth') return null;
+    if (url.username || url.password || url.hash) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function lastSignInMethod(
+  cookieHeader = typeof document === 'undefined' ? '' : document.cookie,
+): 'google' | 'email' | null {
+  for (const part of cookieHeader.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() !== 'poolstatis.last_sign_in_method') continue;
+    try {
+      const value = decodeURIComponent(part.slice(separator + 1).trim());
+      return value === 'google' || value === 'email' ? value : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export function authenticatedAppRedirect(result: ApiResult, search: string): string | null {
@@ -364,6 +395,84 @@ function oauthBody(search: string): { oauth_query?: string } {
   return oauthQuery ? { oauth_query: oauthQuery } : {};
 }
 
+function socialCallback(search: string, result: 'social' | 'error'): string {
+  const params = new URLSearchParams(signedOAuthQuery(search));
+  params.set(result, 'google');
+  return safeAuthCallback('/login', `?${params.toString()}`);
+}
+
+function LastUsed() {
+  return (
+    <span className="rounded-full border bg-muted/50 px-2 py-0.5 text-xs font-normal text-muted-foreground">
+      Last used
+    </span>
+  );
+}
+
+function GoogleAuthButton({
+  search,
+  intent,
+  lastUsed,
+}: {
+  search: string;
+  intent: 'login' | 'signup';
+  lastUsed: boolean;
+}) {
+  const active = useRef(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+
+  const start = () => {
+    if (active.current) return;
+    active.current = true;
+    setPending(true);
+    setError('');
+    void authPost('/sign-in/social', {
+      provider: 'google',
+      requestSignUp: intent === 'signup',
+      callbackURL: socialCallback(search, 'social'),
+      errorCallbackURL: socialCallback(search, 'error'),
+      ...oauthBody(search),
+    }).then((result) => {
+      const redirect = approvedGoogleRedirect(result.url);
+      if (!redirect) throw new Error(neutralFailure);
+      window.location.assign(redirect);
+    }).catch(() => {
+      setError(neutralFailure);
+    }).finally(() => {
+      active.current = false;
+      setPending(false);
+    });
+  };
+
+  return (
+    <div className="grid gap-3">
+      <Button
+        type="button"
+        variant="outline"
+        disabled={pending}
+        aria-label={`${pending ? 'Connecting…' : 'Continue with Google'}${lastUsed && !pending ? ', last used' : ''}`}
+        onClick={start}
+      >
+        <GoogleLogo className="size-4" />
+        <span>{pending ? 'Connecting…' : 'Continue with Google'}</span>
+        {lastUsed && !pending && <LastUsed />}
+      </Button>
+      <FormMessage error={error} message="" />
+    </div>
+  );
+}
+
+function AuthMethodDivider() {
+  return (
+    <div className="flex items-center gap-3 py-1 text-xs text-muted-foreground">
+      <span className="h-px flex-1 bg-border" />
+      <span>or</span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
 function redirectResult(result: ApiResult): boolean {
   const redirect = approvedOAuthRedirect(result.redirect_uri ?? result.url);
   if (!redirect) return false;
@@ -384,6 +493,7 @@ function Login() {
   const [sessionError, setSessionError] = useState('');
   const submission = useSubmission();
   const callbackURL = safeAuthCallback('/login', search);
+  const lastMethod = lastSignInMethod();
 
   useEffect(() => {
     let live = true;
@@ -439,6 +549,12 @@ function Login() {
 
   return (
     <AuthCard title="Welcome back" description="Sign in to continue to your Poolstatis workspace.">
+      <GoogleAuthButton search={search} intent="login" lastUsed={lastMethod === 'google'} />
+      <AuthMethodDivider />
+      <div className="mb-3 flex items-center justify-between gap-3 text-sm font-medium">
+        <span>Email and password</span>
+        {lastMethod === 'email' && <LastUsed />}
+      </div>
       <form className="grid gap-4" onSubmit={submit}>
         <Field id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />
         <Field id="password" label="Password" type="password" autoComplete="current-password" value={password} onChange={setPassword} minLength={8} />
@@ -522,6 +638,8 @@ function Signup() {
   }
   return (
     <AuthCard title="Create your account" description="Verify your email before creating a Poolstatis workspace.">
+      <GoogleAuthButton search={search} intent="signup" lastUsed={false} />
+      <AuthMethodDivider />
       <form className="grid gap-4" onSubmit={submit}>
         <Field id="name" label="Name" autoComplete="name" value={name} onChange={setName} />
         <Field id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />

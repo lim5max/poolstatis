@@ -3,10 +3,12 @@ import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  approvedGoogleRedirect,
   approvedOAuthRedirect,
   AuthPortal,
   authenticatedAppRedirect,
   emailProviderForAddress,
+  lastSignInMethod,
   signedOAuthQuery,
   verificationContinueUrl,
 } from './screens/AuthPortal';
@@ -23,6 +25,7 @@ describe('Better Auth portal', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    document.cookie = 'poolstatis.last_sign_in_method=; Max-Age=0; path=/';
   });
 
   it('forwards only provider-signed OAuth parameters', () => {
@@ -41,6 +44,22 @@ describe('Better Auth portal', () => {
     expect(approvedOAuthRedirect('https://app.poolstatis.xyz/operator/')).toBe('https://app.poolstatis.xyz/operator/');
     expect(approvedOAuthRedirect('https://app.poolstatis.xyz/operator/extra')).toBeNull();
     expect(approvedOAuthRedirect('https://evil.test/')).toBeNull();
+  });
+
+  it('accepts only the exact Google authorization origin', () => {
+    expect(approvedGoogleRedirect(
+      'https://accounts.google.com/o/oauth2/v2/auth?client_id=public-client',
+    )).toContain('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(approvedGoogleRedirect('https://accounts.google.com.evil.test/oauth')).toBeNull();
+    expect(approvedGoogleRedirect('http://accounts.google.com/oauth')).toBeNull();
+    expect(approvedGoogleRedirect('https://evil.test/oauth')).toBeNull();
+  });
+
+  it('reads only supported successful sign-in methods from the browser cookie', () => {
+    expect(lastSignInMethod('theme=light; poolstatis.last_sign_in_method=google')).toBe('google');
+    expect(lastSignInMethod('poolstatis.last_sign_in_method=email')).toBe('email');
+    expect(lastSignInMethod('poolstatis.last_sign_in_method=github')).toBeNull();
+    expect(lastSignInMethod('poolstatis.last_sign_in_method=%E0%A4%A')).toBeNull();
   });
 
   it('continues a saved direct session to the customer app but preserves signed OAuth', () => {
@@ -65,6 +84,84 @@ describe('Better Auth portal', () => {
     expect(screen.getByText('See the signals behind every product decision.')).toHaveClass('auth-display');
     expect(screen.getByRole('heading', { name: 'Create your account' })).toHaveClass('auth-display');
     expect(screen.getByRole('heading', { name: 'Create your account' })).not.toHaveClass('serif');
+    expect(screen.getByRole('button', { name: 'Continue with Google' })).toBeInTheDocument();
+  });
+
+  it('puts Google before the email form and marks the successful browser method', async () => {
+    document.cookie = 'poolstatis.last_sign_in_method=google; path=/';
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ user: null, session: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    renderPortal('/login');
+
+    const google = await screen.findByRole('button', {
+      name: 'Continue with Google, last used',
+    });
+    const email = screen.getByLabelText('Email');
+    expect(google.compareDocumentPosition(email) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('Last used')).toBeInTheDocument();
+    expect(screen.getByText('Email and password')).toBeInTheDocument();
+  });
+
+  it('marks email and password when that was the last successful method', async () => {
+    document.cookie = 'poolstatis.last_sign_in_method=email; path=/';
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ user: null, session: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    renderPortal('/login');
+
+    await screen.findByRole('button', { name: 'Continue with Google' });
+    const emailMethod = screen.getByText('Email and password').parentElement;
+    expect(emailMethod).toHaveTextContent('Email and passwordLast used');
+  });
+
+  it('starts one signed Google flow and preserves the outer OAuth transaction', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockReturnValue(new Promise(() => undefined));
+    renderPortal(
+      '/login?sig=signed&ba_iat=123&ba_param=client_id&ba_param=ba_iat'
+      + '&ba_param=ba_param&client_id=customer&attacker=drop-me',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    const pending = await screen.findByRole('button', { name: 'Connecting…' });
+    expect(pending).toBeDisabled();
+    fireEvent.click(pending);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, request] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/auth/sign-in/social');
+    const body = JSON.parse(String(request?.body));
+    expect(body).toMatchObject({
+      provider: 'google',
+      requestSignUp: false,
+      callbackURL: expect.stringContaining('https://auth.poolstatis.xyz/login?'),
+      errorCallbackURL: expect.stringContaining('https://auth.poolstatis.xyz/login?'),
+      oauth_query: expect.stringContaining('sig=signed'),
+    });
+    expect(body.callbackURL).not.toContain('attacker');
+    expect(body.errorCallbackURL).not.toContain('attacker');
+  });
+
+  it('uses the explicit signup intent for Google account creation', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockReturnValue(new Promise(() => undefined));
+    renderPortal('/signup');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      provider: 'google',
+      requestSignUp: true,
+    });
   });
 
   it('offers a known mailbox without guessing a destination for custom email domains', () => {
