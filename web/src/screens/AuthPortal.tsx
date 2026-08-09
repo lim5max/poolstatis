@@ -494,6 +494,17 @@ function Login() {
   const submission = useSubmission();
   const callbackURL = safeAuthCallback('/login', search);
   const lastMethod = lastSignInMethod();
+  const providerFailure = query.has('error');
+
+  useEffect(() => {
+    if (!providerFailure) return;
+    const oauthQuery = signedOAuthQuery(search);
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `/login${oauthQuery ? `?${oauthQuery}` : ''}`,
+    );
+  }, [providerFailure, search]);
 
   useEffect(() => {
     let live = true;
@@ -559,7 +570,7 @@ function Login() {
         <Field id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />
         <Field id="password" label="Password" type="password" autoComplete="current-password" value={password} onChange={setPassword} minLength={8} />
         <FormMessage
-          error={submission.error || sessionError || (query.has('error') ? neutralFailure : '')}
+          error={submission.error || sessionError || (providerFailure ? neutralFailure : '')}
           message={
             submission.message
             || (query.has('verified') ? 'Email verified. You can sign in now.' : '')
@@ -578,6 +589,7 @@ function Login() {
 
 function Signup() {
   const { search } = useLocation();
+  const lastMethod = lastSignInMethod();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -638,8 +650,12 @@ function Signup() {
   }
   return (
     <AuthCard title="Create your account" description="Verify your email before creating a Poolstatis workspace.">
-      <GoogleAuthButton search={search} intent="signup" lastUsed={false} />
+      <GoogleAuthButton search={search} intent="signup" lastUsed={lastMethod === 'google'} />
       <AuthMethodDivider />
+      <div className="mb-3 flex items-center justify-between gap-3 text-sm font-medium">
+        <span>Email and password</span>
+        {lastMethod === 'email' && <LastUsed />}
+      </div>
       <form className="grid gap-4" onSubmit={submit}>
         <Field id="name" label="Name" autoComplete="name" value={name} onChange={setName} />
         <Field id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />

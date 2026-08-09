@@ -123,6 +123,45 @@ describe('Better Auth portal', () => {
     expect(emailMethod).toHaveTextContent('Email and passwordLast used');
   });
 
+  it('shows the last successful method on account creation too', () => {
+    document.cookie = 'poolstatis.last_sign_in_method=google; path=/';
+    renderPortal('/signup');
+
+    expect(screen.getByRole('button', {
+      name: 'Continue with Google, last used',
+    })).toBeInTheDocument();
+    expect(screen.getByText('Email and password')).toBeInTheDocument();
+  });
+
+  it('keeps provider failures neutral, keyboard reachable, and out of browser history', async () => {
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ user: null, session: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    renderPortal(
+      '/login?error=access_denied&error_description=provider-detail'
+      + '&sig=signed&ba_iat=123&ba_param=client_id&ba_param=ba_iat'
+      + '&ba_param=ba_param&client_id=customer&attacker=drop-me',
+    );
+
+    const google = await screen.findByRole('button', { name: 'Continue with Google' });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The request could not be completed. Check the details and try again.',
+    );
+    await waitFor(() => expect(replaceState).toHaveBeenCalledOnce());
+    const cleanURL = String(replaceState.mock.calls.at(-1)?.[2]);
+    expect(cleanURL).toMatch(/^\/login\?[^#]+$/);
+    expect(cleanURL).toContain('sig=signed');
+    expect(cleanURL).not.toContain('error');
+    expect(cleanURL).not.toContain('provider-detail');
+    expect(cleanURL).not.toContain('attacker');
+    google.focus();
+    expect(google).toHaveFocus();
+  });
+
   it('starts one signed Google flow and preserves the outer OAuth transaction', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockReturnValue(new Promise(() => undefined));
