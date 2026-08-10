@@ -495,6 +495,7 @@ function Login() {
   const callbackURL = safeAuthCallback('/login', search);
   const lastMethod = lastSignInMethod();
   const providerFailure = query.has('error');
+  const googleAuthEnabled = import.meta.env.VITE_GOOGLE_AUTH_ENABLED !== 'false';
 
   useEffect(() => {
     if (!providerFailure) return;
@@ -560,8 +561,12 @@ function Login() {
 
   return (
     <AuthCard title="Welcome back" description="Sign in to continue to your Poolstatis workspace.">
-      <GoogleAuthButton search={search} intent="login" lastUsed={lastMethod === 'google'} />
-      <AuthMethodDivider />
+      {googleAuthEnabled && (
+        <>
+          <GoogleAuthButton search={search} intent="login" lastUsed={lastMethod === 'google'} />
+          <AuthMethodDivider />
+        </>
+      )}
       <div className="mb-3 flex items-center justify-between gap-3 text-sm font-medium">
         <span>Email and password</span>
         {lastMethod === 'email' && <LastUsed />}
@@ -595,6 +600,7 @@ function Signup() {
   const [password, setPassword] = useState('');
   const [completedEmail, setCompletedEmail] = useState('');
   const submission = useSubmission();
+  const googleAuthEnabled = import.meta.env.VITE_GOOGLE_AUTH_ENABLED !== 'false';
   const callbackParams = new URLSearchParams(signedOAuthQuery(search));
   callbackParams.set('verified', '1');
   callbackParams.set('reauth', '1');
@@ -650,8 +656,12 @@ function Signup() {
   }
   return (
     <AuthCard title="Create your account" description="Verify your email before creating a Poolstatis workspace.">
-      <GoogleAuthButton search={search} intent="signup" lastUsed={lastMethod === 'google'} />
-      <AuthMethodDivider />
+      {googleAuthEnabled && (
+        <>
+          <GoogleAuthButton search={search} intent="signup" lastUsed={lastMethod === 'google'} />
+          <AuthMethodDivider />
+        </>
+      )}
       <div className="mb-3 flex items-center justify-between gap-3 text-sm font-medium">
         <span>Email and password</span>
         {lastMethod === 'email' && <LastUsed />}
