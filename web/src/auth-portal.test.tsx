@@ -24,6 +24,8 @@ function renderPortal(path: string) {
 describe('Better Auth portal', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.stubEnv('VITE_GOOGLE_AUTH_ENABLED', 'true');
     vi.useRealTimers();
     document.cookie = 'poolstatis.last_sign_in_method=; Max-Age=0; path=/';
   });
@@ -85,6 +87,17 @@ describe('Better Auth portal', () => {
     expect(screen.getByRole('heading', { name: 'Create your account' })).toHaveClass('auth-display');
     expect(screen.getByRole('heading', { name: 'Create your account' })).not.toHaveClass('serif');
     expect(screen.getByRole('button', { name: 'Continue with Google' })).toBeInTheDocument();
+  });
+
+  it('hides unavailable social authentication without breaking email signup', async () => {
+    vi.stubEnv('VITE_GOOGLE_AUTH_ENABLED', 'false');
+
+    renderPortal('/signup');
+
+    expect(screen.queryByRole('button', { name: /Continue with Google/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('or')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Email')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument();
   });
 
   it('puts Google before the email form and marks the successful browser method', async () => {
