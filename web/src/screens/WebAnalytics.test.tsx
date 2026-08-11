@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import type { Metric } from '../api/types';
 import { useStore } from '../store';
-import { WebAnalytics } from './WebAnalytics';
+import { WebAnalytics, hasAcceptedCanonicalPageViews, hasWebOutcome } from './WebAnalytics';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -58,6 +59,7 @@ describe('Web analytics partial availability', () => {
   const proposeAcquisitionProperties = vi.fn();
   const properties = vi.fn();
   const trend = vi.fn();
+  const operationalQuery = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -73,7 +75,7 @@ describe('Web analytics partial availability', () => {
       ],
       meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null },
     });
-    const operationalQuery = vi.fn().mockImplementation((_project, query) => {
+    operationalQuery.mockImplementation((_project, query) => {
       if (query.kind === 'web_analytics') {
         return Promise.resolve({
           kind: 'web_analytics',
@@ -228,28 +230,56 @@ describe('Web analytics partial availability', () => {
     expect(within(screen.getByText('actor + session ID').parentElement!).getByText('11')).toBeInTheDocument();
     expect(within(screen.getByText('accepted canonical views').parentElement!).getByText('20')).toBeInTheDocument();
     expect(screen.getByText('telegram')).toBeInTheDocument();
-    expect(screen.getByText('Route setup required')).toBeInTheDocument();
+    expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_sessions')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));
+    await screen.findByRole('link', { name: 'actor-1' });
     const actorLink = screen.getByRole('link', { name: 'actor-1' });
     expect(actorLink).toHaveClass('text-foreground', 'hover:bg-muted');
     expect(actorLink).not.toHaveClass('text-primary');
 
     expect(screen.getByText(/Observed · Unavailable · 20 events ·/)).toBeInTheDocument();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Pages' }), { key: 'Enter' });
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Pages' }), { button: 0, ctrlKey: false });
 
-    expect(screen.getByText('Pages unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Pages unavailable')).toBeInTheDocument();
     expect(screen.getAllByText('Visitors').length).toBeGreaterThan(0);
     expect(screen.queryByText('telegram')).not.toBeInTheDocument();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Countries' }), { key: 'Enter' });
-    expect(screen.getByText('Countries unavailable')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Countries' }), { button: 0, ctrlKey: false });
+    expect(await screen.findByText('Countries unavailable')).toBeInTheDocument();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Medium' }), { key: 'Enter' });
-    expect(screen.getByText('Medium unavailable')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Medium' }), { button: 0, ctrlKey: false });
+    expect(await screen.findByText('Medium unavailable')).toBeInTheDocument();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Conversions' }), { key: 'Enter' });
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Conversions' }), { button: 0, ctrlKey: false });
     expect(screen.getByText('Choose a conversion to measure')).toBeInTheDocument();
     expect(screen.getByText(/will not display a zero/)).toBeInTheDocument();
+  });
+
+  it('does not keep prior-scope KPI data visible while a new project registry is loading', async () => {
+    const view = render(
+      <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
+    );
+
+    await screen.findByText('telegram');
+    mockedStore.mockReturnValue({
+      project: 'beta',
+      env: 'prod',
+      client: {
+        metrics: vi.fn(() => new Promise(() => undefined)),
+        properties: vi.fn().mockResolvedValue(trustedProperties),
+        operationalQuery,
+        query: vi.fn(),
+      },
+    } as never);
+
+    await act(async () => {
+      view.rerender(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    });
+
+    expect(screen.getByLabelText('Loading web analytics')).toBeInTheDocument();
+    expect(screen.queryByText('telegram')).not.toBeInTheDocument();
+    expect(screen.queryByText('20')).not.toBeInTheDocument();
   });
 
   it('repairs legacy route and UTM definitions from Web', async () => {
@@ -332,7 +362,7 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByRole('link', { name: 'Review and activate' })).toHaveAttribute('href', '/registry');
   });
 
-  it('keeps the UTM workspace available before canonical page views are activated', async () => {
+  it('keeps acquisition secondary until canonical page views are activated', async () => {
     const acquisitionMetric = {
       ...metric,
       id: 'landing-visits',
@@ -354,8 +384,27 @@ describe('Web analytics partial availability', () => {
     render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('Add website analytics')).toBeInTheDocument();
-    expect(screen.getByText('Acquisition / UTM')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Run UTM report' })).toBeEnabled();
-    expect(screen.getByRole('combobox', { name: 'Acquisition metric' })).toHaveTextContent('Landing visits');
+    expect(screen.getByText('Web setup order')).toBeInTheDocument();
+    expect(screen.getByText('1. Canonical page views')).toBeInTheDocument();
+    expect(screen.queryByText('Acquisition / UTM')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run UTM report' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Web setup readiness', () => {
+  it('requires accepted page views in the selected period for canonical readiness', () => {
+    expect(hasAcceptedCanonicalPageViews(0)).toBe(false);
+    expect(hasAcceptedCanonicalPageViews(1)).toBe(true);
+  });
+
+  it('requires an active outcome explicitly mapped to the web surface', () => {
+    const canonical = { ...metric, tags: [...metric.tags] } satisfies Metric;
+    const unrelated = { ...canonical, id: 'revenue', key: 'revenue', type: 'value' as const, tags: ['surface:bot'] } satisfies Metric;
+    const webOutcome = { ...unrelated, tags: ['surface:web'] } satisfies Metric;
+    const webConversion = { ...webOutcome, type: 'conversion' as const } satisfies Metric;
+
+    expect(hasWebOutcome([canonical, unrelated])).toBe(false);
+    expect(hasWebOutcome([canonical, webOutcome])).toBe(true);
+    expect(hasWebOutcome([canonical, webConversion])).toBe(true);
   });
 });

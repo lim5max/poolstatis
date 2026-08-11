@@ -27,7 +27,7 @@ const pendingProof = {
     { key: 'data_source_connected', complete: true, required: true, evidence: {}, blocker: null, next_action: null },
     { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: 'No event.', next_action: 'Send one event.' },
   ],
-  next_blocker: null,
+  next_blocker: { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: 'No event.', next_action: 'Send one event.' },
   final_result: null,
 };
 
@@ -579,7 +579,7 @@ describe('condensed Setup', () => {
         { key: 'data_source_connected', complete: false, required: true, evidence: {}, blocker: 'No key.', next_action: 'Create a key.' },
         { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: 'No event.', next_action: 'Send one event.' },
       ],
-      next_blocker: null,
+      next_blocker: { key: 'data_source_connected', complete: false, required: true, evidence: {}, blocker: 'No key.', next_action: 'Create a key.' },
       final_result: null,
     };
     mockedStore.mockReturnValue({
@@ -597,10 +597,14 @@ describe('condensed Setup', () => {
     render(<MemoryRouter><Setup /></MemoryRouter>);
 
     const progress = await screen.findByRole('list', { name: 'Connection progress' });
+    expect(screen.queryByRole('heading', { name: 'Create a product key' })).not.toBeInTheDocument();
+    expect(document.querySelectorAll('button[data-variant="default"]:not(:disabled)')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Open connection' }));
     const keyStep = await screen.findByRole('heading', { name: 'Create a product key' });
     const status = screen.getByLabelText('Setup status');
     expect(screen.getByText('Next: Create and save a product key')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Continue setup' })).not.toBeInTheDocument();
+    expect(document.querySelectorAll('button[data-variant="default"]:not(:disabled)')).toHaveLength(1);
     expect(progress.compareDocumentPosition(keyStep) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(keyStep.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -622,6 +626,7 @@ describe('condensed Setup', () => {
 
     render(<MemoryRouter><Setup /></MemoryRouter>);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Send first event' }));
     expect(await screen.findByText('Next: Copy one setup task to your agent')).toBeInTheDocument();
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', {
@@ -666,9 +671,9 @@ describe('condensed Setup', () => {
 
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
-    expect(await screen.findByText('Metrics need review')).toBeInTheDocument();
+    expect(await screen.findByText('Activate the key outcome')).toBeInTheDocument();
     expect(screen.getByText('No active metric has verified source evidence.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Review proposed metrics' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review metrics' })).toBeInTheDocument();
     expect(screen.queryByText('No product key yet')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy fix task' })).not.toBeInTheDocument();
     await waitFor(() => expect(telemetryEvents('onboarding.blocked')).toHaveLength(1));
@@ -714,7 +719,7 @@ describe('condensed Setup', () => {
     } as never);
 
     render(<MemoryRouter><Setup /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy answer task' }));
 
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', {
       agent_id: 'codex',
@@ -756,7 +761,7 @@ describe('condensed Setup', () => {
     } as never);
 
     render(<MemoryRouter><Setup /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy answer task' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('credential-like text');
     expect(screen.queryByText(/pk_live_secret_value/)).not.toBeInTheDocument();
@@ -788,7 +793,7 @@ describe('condensed Setup', () => {
     } as never);
 
     render(<MemoryRouter><Setup /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy decision task' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Select the task below');
     expect(screen.getByText(setupTask().task)).toHaveAttribute('tabindex', '0');
@@ -920,13 +925,13 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('alpha') as never);
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy answer task' }));
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', expect.any(Object)));
 
     mockedStore.mockReturnValue(storeFor('beta') as never);
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Beta · prod')).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Copy fix task' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Copy answer task' })).toBeInTheDocument();
 
     await act(async () => {
       resolveAlpha(setupTask('codex', 'first_query_produced'));
@@ -937,7 +942,7 @@ describe('condensed Setup', () => {
     expect(feedback).not.toHaveBeenCalled();
     expect(telemetryEvents('onboarding.task_generated')).toHaveLength(0);
     expect(telemetryEvents('onboarding.task_copied')).toHaveLength(0);
-    expect(screen.queryByText('Fix task copied')).not.toBeInTheDocument();
+    expect(screen.queryByText('Task copied')).not.toBeInTheDocument();
   });
 
   it('clears one-time key and error state when project or environment changes', async () => {
@@ -947,7 +952,10 @@ describe('condensed Setup', () => {
         { key: 'data_source_connected', complete: false, required: true, evidence: {}, blocker: null, next_action: null },
         { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: null, next_action: null },
       ],
-      next_blocker: null,
+      next_blocker: {
+        key: 'data_source_connected', complete: false, required: true, evidence: {},
+        blocker: 'No product key.', next_action: 'Create a product key.',
+      },
       final_result: null,
     };
     const issueKey = vi.fn()
@@ -970,6 +978,7 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('alpha') as never);
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Open connection' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Create product key' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Alpha key failed');
 
@@ -977,12 +986,14 @@ describe('condensed Setup', () => {
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Beta · prod')).toBeInTheDocument();
     expect(screen.queryByText('Alpha key failed')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open connection' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Create product key' }));
     expect(await screen.findByRole('button', { name: 'Copy .env line' })).toBeInTheDocument();
 
     mockedStore.mockReturnValue(storeFor('alpha', 'dev') as never);
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Alpha · dev')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open connection' }));
     expect(await screen.findByRole('button', { name: 'Create product key' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy .env line' })).not.toBeInTheDocument();
   });
@@ -1008,6 +1019,7 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('alpha') as never);
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Send first event' }));
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', { agent_id: 'codex', prefer_llm: false, env: 'prod' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Claude Code' }));
@@ -1016,6 +1028,7 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('beta', 'dev') as never);
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Beta · dev')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Send first event' }));
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('beta', { agent_id: 'codex', prefer_llm: false, env: 'dev' }));
   });

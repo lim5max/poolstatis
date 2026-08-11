@@ -90,10 +90,10 @@ describe('customer admin shell', () => {
 
   it('keeps answer jobs primary and control surfaces behind Data & settings', () => {
     render(<MemoryRouter><App /></MemoryRouter>);
-    expect(screen.getAllByText('Home').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('Attention').length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText('Answers')).not.toBeInTheDocument();
     expect(screen.getByText('Data & settings')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /^(Home|Web|Product|Funnels|People|Ship|Setup)$/ })).toHaveLength(7);
+    expect(screen.getAllByRole('link', { name: /^(Attention|Web|Product|Funnels|People|Ship|Usage|Setup)$/ })).toHaveLength(8);
     expect(screen.getByRole('link', { name: 'Funnels' })).toHaveAttribute('href', '/analyze/funnels');
   });
 
@@ -129,7 +129,7 @@ describe('customer admin shell', () => {
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Product' })).not.toBeInTheDocument());
     expect(screen.getByRole('link', { name: 'Web' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Funnels' })).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /^(Home|Web|Funnels|People|Ship|Setup)$/ })).toHaveLength(6);
+    expect(screen.getAllByRole('link', { name: /^(Attention|Web|Funnels|People|Ship|Usage|Setup)$/ })).toHaveLength(7);
   });
 
   it('uses semantic Hugeicons and readable neutral hover text', () => {

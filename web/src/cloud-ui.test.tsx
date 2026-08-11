@@ -299,6 +299,7 @@ describe('organization usage ledger', () => {
     mockedStore.mockReturnValue(usageStore());
     render(<Usage />);
 
+    fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     expect(await screen.findByRole('heading', { name: 'Accepted-event activity' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Last 7 days' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Last 30 days' })).toHaveAttribute('aria-pressed', 'true');
@@ -310,7 +311,7 @@ describe('organization usage ledger', () => {
     await waitFor(() => expect(usageActivity).toHaveBeenCalledTimes(2));
     const [from, to] = usageActivity.mock.calls[1] as [string, string];
     expect(Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)).toBe(6 * 24 * 60 * 60 * 1000);
-    expect(screen.getByText('Current monthly quota')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Monthly usage history' })).toBeInTheDocument();
   });
 
   it('validates custom activity dates before making another request', async () => {
@@ -320,6 +321,7 @@ describe('organization usage ledger', () => {
     });
     mockedStore.mockReturnValue(usageStore());
     render(<Usage />);
+    fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageActivity).toHaveBeenCalledOnce());
 
     fireEvent.change(screen.getByLabelText('Activity from'), { target: { value: '' } });
@@ -328,20 +330,20 @@ describe('organization usage ledger', () => {
   });
 
   it('uses a strict UTC calendar month and renders the events_stored ledger with a mobile-safe breakdown', async () => {
+    const expectedMonth = new Date().toISOString().slice(0, 7);
     usage.mockResolvedValue({
-      meter: 'events_stored', period: '2026-07', quantity: 1200, hard_limit: 2000,
+      meter: 'events_stored', period: expectedMonth, quantity: 1200, hard_limit: 2000,
       warning_thresholds: [1000, 1800], warnings: [{ threshold: 1000, quantity: 1200 }],
       projects: [{ id: 'project-1', slug: 'alpha', name: 'Alpha', quantity: 1200, environments: [{ env: 'prod', quantity: 1100 }, { env: 'staging', quantity: 100 }] }],
     });
     mockedStore.mockReturnValue(usageStore());
     render(<Usage />);
-    const expectedMonth = new Date().toISOString().slice(0, 7);
     await waitFor(() => expect(usage).toHaveBeenCalledWith(expectedMonth));
     expect(screen.getByText(`${expectedMonth} UTC`)).toBeInTheDocument();
-    expect(screen.getByText('events_stored')).toBeInTheDocument();
+    expect(screen.getByText(/Accepted events stored/)).toBeInTheDocument();
     expect(screen.getByText(/Warning threshold reached: 1,000 events\./)).toBeInTheDocument();
-    expect(screen.getByTestId('usage-ledger-rail')).toBeInTheDocument();
     expect(screen.getByTestId('usage-breakdown-scroll')).toHaveClass('overflow-x-auto');
+    expect(screen.getByRole('img', { name: '60 percent of the configured hard limit used' })).toBeInTheDocument();
     expect(screen.queryByText(/MTU|price|seat/i)).not.toBeInTheDocument();
   });
 
@@ -364,8 +366,9 @@ describe('organization usage ledger', () => {
     usage.mockResolvedValue({ meter: 'events_stored', period: '2026-07', quantity: 0, hard_limit: 0, warning_thresholds: [], warnings: [], projects: [] });
     mockedStore.mockReturnValue(usageStore());
     render(<Usage />);
-    await screen.findByText('Hard limit reached — 0 event limit');
-    expect(screen.getByTestId('usage-ledger-rail').innerHTML).not.toContain('NaN');
-    expect(screen.getByLabelText('Hard limit 0')).toHaveStyle({ left: '0%' });
+    await screen.findByText('Hard limit reached');
+    const meter = screen.getByRole('img', { name: '0 percent of the configured hard limit used' });
+    expect(meter.innerHTML).not.toContain('NaN');
+    expect(screen.getByText('At 0 events, a batch that would exceed the limit is rejected.')).toBeInTheDocument();
   });
 });

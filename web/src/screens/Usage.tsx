@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { EmptyState, ErrorNote, FieldLabel, Loading, Panel, RecoverableError, TableScroll, WarningNote } from '../components/ui';
+import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, TableScroll, WarningNote } from '../components/ui';
 import { useAsync, useStore } from '../store';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { DisclosureSummary } from '@/components/disclosure';
 import type { OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange } from '../api/types';
 
 function currentUtcMonth(): string {
@@ -240,33 +241,109 @@ function MonthRangePanel({ usage, loading, error, reload, range, preset, onPrese
   );
 }
 
-function LedgerRail({ usage }: { usage: OrganizationUsage }) {
-  const finite = (value: number) => Number.isFinite(value) ? value : 0;
-  const hardLimit = usage.hard_limit === null ? null : finite(usage.hard_limit);
-  const highestThreshold = finite(usage.warning_thresholds.at(-1) ?? 0);
-  const scale = Math.max(hardLimit ?? 0, finite(usage.quantity), highestThreshold, 1);
-  const progress = Math.max(0, Math.min(1, finite(usage.quantity) / scale));
-  const hardLimitPosition = hardLimit === null ? null : Math.max(0, Math.min(1, hardLimit / scale));
+export interface UsageForecast {
+  daysElapsed: number;
+  daysInCycle: number;
+  dailyPace: number;
+  projectedEndOfCycle: number;
+  hardLimitDate: string | null;
+  remaining: number | null;
+}
+
+export function usageForecast(usage: Pick<OrganizationUsage, 'period' | 'quantity' | 'hard_limit'>, now = new Date()): UsageForecast {
+  const [year, month] = usage.period.split('-').map(Number) as [number, number];
+  const daysInCycle = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const currentPeriod = now.toISOString().slice(0, 7);
+  const daysElapsed = currentPeriod === usage.period
+    ? Math.max(1, Math.min(daysInCycle, now.getUTCDate()))
+    : daysInCycle;
+  const dailyPace = usage.quantity / daysElapsed;
+  const projectedEndOfCycle = Math.round(dailyPace * daysInCycle);
+  const remaining = usage.hard_limit === null ? null : Math.max(0, usage.hard_limit - usage.quantity);
+  let hardLimitDate: string | null = null;
+  if (usage.hard_limit !== null && dailyPace > 0) {
+    const day = Math.ceil(usage.hard_limit / dailyPace);
+    if (day <= daysInCycle) hardLimitDate = `${usage.period}-${String(Math.max(1, day)).padStart(2, '0')}`;
+  }
+  return { daysElapsed, daysInCycle, dailyPace, projectedEndOfCycle, hardLimitDate, remaining };
+}
+
+function UsageHero({ usage, planName, onReviewContributors }: { usage: OrganizationUsage; planName: string | null; onReviewContributors: () => void }) {
+  const forecast = usageForecast(usage);
+  const capped = usage.hard_limit !== null;
+  const progress = capped && usage.hard_limit! > 0 ? Math.max(0, Math.min(1, usage.quantity / usage.hard_limit!)) : null;
+  const status = capped
+    ? usage.quantity >= usage.hard_limit! ? 'Hard limit reached' : `${whole(forecast.remaining!)} events remaining`
+    : 'No hard cap configured';
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div><FieldLabel>Accepted events stored</FieldLabel><div className="mono mt-1 text-2xl tabular-nums">{whole(usage.quantity)}</div></div>
-        <div className="text-right text-xs text-muted-foreground">{usage.hard_limit === null ? 'No hard limit configured' : usage.quantity >= usage.hard_limit ? `Hard limit reached — ${whole(usage.hard_limit)} event limit` : `${whole(usage.hard_limit)} event limit`}</div>
+    <Panel title={<h2>Current cycle</h2>} right={<span className="font-mono text-sm text-muted-foreground">{usage.period} UTC</span>}>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div className="min-w-0">
+          <div className="text-sm text-muted-foreground">{planName ? `${planName} plan` : 'Workspace entitlement'} · Accepted events stored</div>
+          <div className="mt-2 flex flex-wrap items-end gap-x-3 gap-y-1">
+            <div className="font-mono text-4xl font-semibold tabular-nums">{whole(usage.quantity)}</div>
+            <div className="pb-1 text-sm text-muted-foreground">of {capped ? whole(usage.hard_limit!) : 'no enforced maximum'}</div>
+          </div>
+          <div className="mt-4" {...(capped ? { role: 'img', 'aria-label': `${Math.round(progress! * 100)} percent of the configured hard limit used` } : {})}>
+            {progress !== null && <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all motion-reduce:transition-none" style={{ width: `${progress * 100}%` }} /></div>}
+            <div className="mt-2 text-sm font-medium">{status}</div>
+            {!capped && <p className="mt-1 text-sm text-muted-foreground">This is not shown as unlimited and no full progress state is implied.</p>}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-1">
+          <UsageFact label="Current pace" value={`${whole(Math.round(forecast.dailyPace))} / day`} note={`${forecast.daysElapsed} observed UTC days`} />
+          <UsageFact label="Projected month-end" value={whole(forecast.projectedEndOfCycle)} note={forecast.hardLimitDate ? `Hard limit projected ${forecast.hardLimitDate}` : capped ? 'No in-cycle breach at current pace' : 'Volume forecast, not exhaustion'} />
+        </div>
       </div>
-      <div className="relative h-8" data-testid="usage-ledger-rail" role="img" aria-label={`Usage ledger: ${whole(usage.quantity)} accepted events stored`}>
-        <div className="absolute inset-x-0 top-3 h-2 rounded-full bg-muted" />
-        <div className="absolute left-0 top-3 h-2 rounded-full bg-primary transition-all motion-reduce:transition-none" style={{ width: `${progress * 100}%` }} />
-        {usage.warning_thresholds.map((threshold) => {
-          const position = Math.min(1, threshold / scale);
-          const crossed = usage.quantity >= threshold;
-          return <span key={threshold} className="absolute top-1 flex -translate-x-1/2 flex-col items-center gap-1" style={{ left: `${position * 100}%` }} aria-label={`Warning threshold ${whole(threshold)}${crossed ? ', reached' : ''}`}>
-            <span className={crossed ? 'size-2 rounded-full bg-amber-500' : 'size-2 rounded-full border bg-background'} />
-            <span className="mono whitespace-nowrap text-xs text-muted-foreground">{whole(threshold)}</span>
-          </span>;
-        })}
-        {hardLimitPosition !== null && <span className="absolute top-1 flex -translate-x-1/2 flex-col items-center gap-1" style={{ left: `${hardLimitPosition * 100}%` }} aria-label={`Hard limit ${whole(hardLimit!)}`}><span className="h-4 w-px bg-destructive" /><span className="mono whitespace-nowrap text-xs text-muted-foreground">limit</span></span>}
+      <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <p className="max-w-2xl text-sm text-muted-foreground">{capped ? 'A batch that would exceed the configured hard limit is rejected by ingest.' : 'Accepted events continue to be metered; configure an entitlement server-side if enforcement is required.'}</p>
+        <Button className="h-11 shrink-0" onClick={onReviewContributors}>Review contributors</Button>
       </div>
-    </div>
+    </Panel>
+  );
+}
+
+function UsageFact({ label, value, note }: { label: string; value: string; note: string }) {
+  return <div className="rounded-control border bg-muted/20 p-3"><div className="text-sm text-muted-foreground">{label}</div><div className="mt-1 font-mono text-xl tabular-nums">{value}</div><div className="mt-1 text-sm text-muted-foreground">{note}</div></div>;
+}
+
+function CurrentContributors({ usage }: { usage: OrganizationUsage }) {
+  return (
+    <Panel title={<h2 id="usage-contributors-title">Current contributors</h2>} right={<span className="text-sm text-muted-foreground">Share of accepted events</span>}>
+      {usage.projects.length === 0 ? <EmptyState headline={`No stored events in ${usage.period}`} lead="Accepted events will appear here after durable ingest." /> : (
+        <TableScroll testId="usage-breakdown-scroll"><Table>
+          <TableHeader><TableRow><TableHead>Project</TableHead><TableHead>Environments</TableHead><TableHead className="text-right">Accepted</TableHead><TableHead className="text-right">Share</TableHead></TableRow></TableHeader>
+          <TableBody>{[...usage.projects].sort((left, right) => right.quantity - left.quantity).map((project) => (
+            <TableRow key={project.id}>
+              <TableCell><div className="font-medium">{project.name}</div><code className="text-sm text-muted-foreground">{project.slug}</code></TableCell>
+              <TableCell>{project.environments.map((item) => item.env).join(', ')}</TableCell>
+              <TableCell className="text-right font-mono tabular-nums">{whole(project.quantity)}</TableCell>
+              <TableCell className="text-right font-mono tabular-nums">{usage.quantity === 0 ? 'Unavailable' : `${Math.round((project.quantity / usage.quantity) * 1_000) / 10}%`}</TableCell>
+            </TableRow>
+          ))}</TableBody>
+        </Table></TableScroll>
+      )}
+    </Panel>
+  );
+}
+
+function UsageThresholds({ usage }: { usage: OrganizationUsage }) {
+  return (
+    <Panel title={<h2>Thresholds and consequence</h2>}>
+      {usage.warning_thresholds.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No warning thresholds are configured. Poolstatis will not invent 50%, 75%, or 90% alerts.</p>
+      ) : (
+        <div className="divide-y rounded-panel border">
+          {usage.warning_thresholds.map((threshold) => (
+            <div key={threshold} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">
+              <span className="font-mono tabular-nums">{whole(threshold)} events</span>
+              <span className={usage.quantity >= threshold ? 'font-medium text-warning' : 'text-muted-foreground'}>{usage.quantity >= threshold ? 'Reached' : `${whole(threshold - usage.quantity)} remaining`}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="mt-4 text-sm text-muted-foreground">{usage.hard_limit === null ? 'Hard-limit consequence is not configured.' : `At ${whole(usage.hard_limit)} events, a batch that would exceed the limit is rejected.`}</p>
+    </Panel>
   );
 }
 
@@ -277,17 +354,18 @@ export function Usage() {
   const [activityPreset, setActivityPreset] = useState<number | null>(30);
   const [monthSelection, setMonthSelection] = useState(() => usageMonthPresetRange('current', currentPeriod));
   const [monthPreset, setMonthPreset] = useState<MonthRangePreset | null>('current');
+  const [historyOpen, setHistoryOpen] = useState(false);
   const allowed = tokenKind === 'personal' || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
   const result = useAsync(() => client && allowed ? client.usage(currentPeriod) : Promise.resolve(null), [client, allowed, currentPeriod]);
   const activityError = validateUsageActivityRange(activitySelection);
   const activity = useAsync(
-    () => client && allowed && !activityError ? client.usageActivity(activitySelection.from, activitySelection.to) : Promise.resolve(null),
-    [client, allowed, activitySelection.from, activitySelection.to, activityError],
+    () => client && allowed && historyOpen && !activityError ? client.usageActivity(activitySelection.from, activitySelection.to) : Promise.resolve(null),
+    [client, allowed, historyOpen, activitySelection.from, activitySelection.to, activityError],
   );
   const monthError = validateUsageMonthRange(monthSelection);
   const monthly = useAsync(
-    () => client && allowed && !monthError ? client.usageRange(monthSelection.from, monthSelection.to) : Promise.resolve(null),
-    [client, allowed, monthSelection.from, monthSelection.to, monthError],
+    () => client && allowed && historyOpen && !monthError ? client.usageRange(monthSelection.from, monthSelection.to) : Promise.resolve(null),
+    [client, allowed, historyOpen, monthSelection.from, monthSelection.to, monthError],
   );
 
   if (!allowed || !client) {
@@ -299,38 +377,48 @@ export function Usage() {
     <div className="space-y-4">
       <header>
         <h1 className="serif text-3xl sm:text-4xl">Usage</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Accepted-event activity and the separate monthly workspace quota.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Plan, current pace, forecast, contributors, and enforced consequences.</p>
       </header>
-      <ActivityPanel
-        activity={activity.data}
-        loading={activity.loading}
-        error={activityError ?? activity.error}
-        reload={activity.reload}
-        range={activitySelection}
-        preset={activityPreset}
-        onPreset={(days) => { setActivityPreset(days); setActivitySelection(activityRange(days)); }}
-        onRange={(next) => { setActivityPreset(null); setActivitySelection(next); }}
-      />
-      <MonthRangePanel
-        usage={monthly.data}
-        loading={monthly.loading}
-        error={monthError ?? monthly.error}
-        reload={monthly.reload}
-        range={monthSelection}
-        preset={monthPreset}
-        onPreset={(next) => {
-          setMonthPreset(next);
-          setMonthSelection(usageMonthPresetRange(next, currentPeriod));
-        }}
-        onRange={(next) => { setMonthPreset(null); setMonthSelection(next); }}
-      />
-      <Panel title={<h2>Current monthly quota</h2>} right={<span className="mono text-sm text-muted-foreground">{currentPeriod} UTC</span>}>
-        {result.loading || (!usage && !result.error) ? <Loading what="Loading usage ledger…" /> : result.error ? <RecoverableError onRetry={result.reload}>{result.error}</RecoverableError> : usage && <LedgerRail usage={usage} />}
-      </Panel>
-      {usage?.warnings.map((warning) => <WarningNote key={warning.threshold}>Warning threshold reached: {whole(warning.threshold)} events.</WarningNote>)}
-      {usage && (usage.projects.length === 0 ? <Panel title="Current-month breakdown"><EmptyState headline={`No stored events in ${usage.period}`} lead="Accepted events will appear here after durable ingest." /></Panel> : <Panel title="Current-month breakdown" right={<span className="mono text-sm text-muted-foreground">{usage.meter}</span>}>
-        <UsageBreakdown projects={usage.projects} testId="usage-breakdown-scroll" />
-      </Panel>)}
+      {result.loading || (!usage && !result.error) ? <Loading what="Loading usage ledger…" /> : result.error ? <RecoverableError onRetry={result.reload}>{result.error}</RecoverableError> : usage && (
+        <>
+          <UsageHero
+            usage={usage}
+            planName={account?.billing?.plan?.name ?? null}
+            onReviewContributors={() => document.getElementById('usage-contributors-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          />
+          {usage.warnings.map((warning) => <WarningNote key={warning.threshold}>Warning threshold reached: {whole(warning.threshold)} events.</WarningNote>)}
+          <div aria-labelledby="usage-contributors-title"><CurrentContributors usage={usage} /></div>
+          <UsageThresholds usage={usage} />
+        </>
+      )}
+      <details className="rounded-panel border bg-card" onToggle={(event) => setHistoryOpen(event.currentTarget.open)}>
+        <DisclosureSummary className="flex min-h-14 cursor-pointer items-center px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">Historical ledger and custom ranges</DisclosureSummary>
+        <div className="space-y-4 border-t p-4 sm:p-5">
+          <ActivityPanel
+            activity={activity.data}
+            loading={activity.loading}
+            error={activityError ?? activity.error}
+            reload={activity.reload}
+            range={activitySelection}
+            preset={activityPreset}
+            onPreset={(days) => { setActivityPreset(days); setActivitySelection(activityRange(days)); }}
+            onRange={(next) => { setActivityPreset(null); setActivitySelection(next); }}
+          />
+          <MonthRangePanel
+            usage={monthly.data}
+            loading={monthly.loading}
+            error={monthError ?? monthly.error}
+            reload={monthly.reload}
+            range={monthSelection}
+            preset={monthPreset}
+            onPreset={(next) => {
+              setMonthPreset(next);
+              setMonthSelection(usageMonthPresetRange(next, currentPeriod));
+            }}
+            onRange={(next) => { setMonthPreset(null); setMonthSelection(next); }}
+          />
+        </div>
+      </details>
     </div>
   );
 }

@@ -55,6 +55,7 @@ import { Usage } from './screens/Usage';
 import { AuthPortal } from './screens/AuthPortal';
 
 export const NAV_ICONS: Record<string, PoolstatisIcon> = {
+  Attention: LayoutGrid,
   Home: LayoutGrid,
   Product: ChartAnalysis,
   Funnels: Funnel,
@@ -81,7 +82,7 @@ export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Profile: UserCircle,
 };
 const TITLES: Record<string, string> = {
-  '/': 'Home',
+  '/': 'Attention',
   '/projects': 'Projects',
   '/analyze/product': 'Product',
   '/analyze/funnels': 'Funnels',
@@ -260,7 +261,6 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
 }) {
   const items = [
     ...navigation.secondary,
-    { label: 'Usage', to: '/usage', availability: 'available' as const },
     { label: 'Profile', to: '/profile', availability: 'available' as const },
   ];
   if (collapsed) {
