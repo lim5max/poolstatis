@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange } from '../api/types';
+import type { OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, UsageControlResult } from '../api/types';
 
 function currentUtcMonth(): string {
   return new Date().toISOString().slice(0, 7);
@@ -241,48 +241,41 @@ function MonthRangePanel({ usage, loading, error, reload, range, preset, onPrese
   );
 }
 
-export interface UsageForecast {
-  daysElapsed: number;
-  daysInCycle: number;
-  dailyPace: number;
-  projectedEndOfCycle: number;
-  hardLimitDate: string | null;
-  remaining: number | null;
+function formatForecastDate(value: string | null): string | null {
+  if (!value) return null;
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+    .format(new Date(value));
 }
 
-export function usageForecast(usage: Pick<OrganizationUsage, 'period' | 'quantity' | 'hard_limit'>, now = new Date()): UsageForecast {
-  const [year, month] = usage.period.split('-').map(Number) as [number, number];
-  const daysInCycle = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const currentPeriod = now.toISOString().slice(0, 7);
-  const daysElapsed = currentPeriod === usage.period
-    ? Math.max(1, Math.min(daysInCycle, now.getUTCDate()))
-    : daysInCycle;
-  const dailyPace = usage.quantity / daysElapsed;
-  const projectedEndOfCycle = Math.round(dailyPace * daysInCycle);
-  const remaining = usage.hard_limit === null ? null : Math.max(0, usage.hard_limit - usage.quantity);
-  let hardLimitDate: string | null = null;
-  if (usage.hard_limit !== null && dailyPace > 0) {
-    const day = Math.ceil(usage.hard_limit / dailyPace);
-    if (day <= daysInCycle) hardLimitDate = `${usage.period}-${String(Math.max(1, day)).padStart(2, '0')}`;
-  }
-  return { daysElapsed, daysInCycle, dailyPace, projectedEndOfCycle, hardLimitDate, remaining };
-}
-
-function UsageHero({ usage, planName, onReviewContributors }: { usage: OrganizationUsage; planName: string | null; onReviewContributors: () => void }) {
-  const forecast = usageForecast(usage);
-  const capped = usage.hard_limit !== null;
-  const progress = capped && usage.hard_limit! > 0 ? Math.max(0, Math.min(1, usage.quantity / usage.hard_limit!)) : null;
+function UsageHero({ usage, planName, onReviewContributors }: { usage: UsageControlResult; planName: string | null; onReviewContributors: () => void }) {
+  const capped = usage.cap.state === 'finite' && usage.cap.value !== null;
+  const quantity = typeof usage.answer.primary_value?.value === 'number' ? usage.answer.primary_value.value : null;
+  const progress = capped && quantity !== null && usage.cap.value! > 0
+    ? Math.max(0, Math.min(1, quantity / usage.cap.value!))
+    : null;
   const status = capped
-    ? usage.quantity >= usage.hard_limit! ? 'Hard limit reached' : `${whole(forecast.remaining!)} events remaining`
+    ? usage.cap.remaining === 0 ? 'Hard limit reached' : `${whole(usage.cap.remaining ?? 0)} events remaining`
     : 'No hard cap configured';
+  const hardLimitForecast = usage.threshold_forecasts.find((threshold) => threshold.percent === 100);
+  const hardLimitDate = hardLimitForecast?.state === 'projected'
+    ? formatForecastDate(hardLimitForecast.reached_or_projected_at)
+    : null;
+  const forecastNote = usage.pace.confidence === 'insufficient'
+    ? `Forecast unavailable · ${usage.pace.observed_days} observed days`
+    : hardLimitDate
+      ? `Projected ${hardLimitDate}`
+      : capped
+        ? 'No in-cycle breach projected'
+        : 'Volume forecast, not exhaustion';
   return (
-    <Panel title={<h2>Current cycle</h2>} right={<span className="font-mono text-sm text-muted-foreground">{usage.period} UTC</span>}>
+    <Panel title={<h2>Current cycle</h2>} right={<span className="font-mono text-sm text-muted-foreground">{usage.cycle.from.slice(0, 7)} UTC</span>}>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div className="min-w-0">
-          <div className="text-sm text-muted-foreground">{planName ? `${planName} plan` : 'Workspace entitlement'} · Accepted events stored</div>
+          <div className="text-sm text-muted-foreground">{planName ? `${planName} plan` : 'Workspace entitlement'} · {usage.meter}</div>
+          <h2 className="mt-2 text-xl font-semibold">{usage.answer.headline}</h2>
           <div className="mt-2 flex flex-wrap items-end gap-x-3 gap-y-1">
-            <div className="font-mono text-4xl font-semibold tabular-nums">{whole(usage.quantity)}</div>
-            <div className="pb-1 text-sm text-muted-foreground">of {capped ? whole(usage.hard_limit!) : 'no enforced maximum'}</div>
+            <div className="font-mono text-4xl font-semibold tabular-nums">{usage.answer.primary_value?.formatted ?? 'Unavailable'}</div>
+            <div className="pb-1 text-sm text-muted-foreground">of {capped ? whole(usage.cap.value!) : 'no enforced maximum'}</div>
           </div>
           <div className="mt-4" {...(capped ? { role: 'img', 'aria-label': `${Math.round(progress! * 100)} percent of the configured hard limit used` } : {})}>
             {progress !== null && <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all motion-reduce:transition-none" style={{ width: `${progress * 100}%` }} /></div>}
@@ -291,12 +284,12 @@ function UsageHero({ usage, planName, onReviewContributors }: { usage: Organizat
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-1">
-          <UsageFact label="Current pace" value={`${whole(Math.round(forecast.dailyPace))} / day`} note={`${forecast.daysElapsed} observed UTC days`} />
-          <UsageFact label="Projected month-end" value={whole(forecast.projectedEndOfCycle)} note={forecast.hardLimitDate ? `Hard limit projected ${forecast.hardLimitDate}` : capped ? 'No in-cycle breach at current pace' : 'Volume forecast, not exhaustion'} />
+          <UsageFact label="Current pace" value={usage.pace.events_per_day_7d === null ? 'Unavailable' : `${whole(Math.round(usage.pace.events_per_day_7d))} / day`} note={`${usage.pace.observed_days} observed ingest days`} />
+          <UsageFact label="Projected cycle end" value={usage.pace.projected_cycle_end === null ? 'Unavailable' : whole(Math.round(usage.pace.projected_cycle_end))} note={forecastNote} />
         </div>
       </div>
       <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
-        <p className="max-w-2xl text-sm text-muted-foreground">{capped ? 'A batch that would exceed the configured hard limit is rejected by ingest.' : 'Accepted events continue to be metered; configure an entitlement server-side if enforcement is required.'}</p>
+        <p className="max-w-2xl text-sm text-muted-foreground">{usage.cap.consequence_at_100_percent ?? 'Accepted events continue to be metered; configure an entitlement server-side if enforcement is required.'}</p>
         <Button className="h-11 shrink-0" onClick={onReviewContributors}>Review contributors</Button>
       </div>
     </Panel>
@@ -307,18 +300,20 @@ function UsageFact({ label, value, note }: { label: string; value: string; note:
   return <div className="rounded-control border bg-muted/20 p-3"><div className="text-sm text-muted-foreground">{label}</div><div className="mt-1 font-mono text-xl tabular-nums">{value}</div><div className="mt-1 text-sm text-muted-foreground">{note}</div></div>;
 }
 
-function CurrentContributors({ usage }: { usage: OrganizationUsage }) {
+function CurrentContributors({ usage }: { usage: UsageControlResult }) {
   return (
-    <Panel title={<h2 id="usage-contributors-title">Current contributors</h2>} right={<span className="text-sm text-muted-foreground">Share of accepted events</span>}>
-      {usage.projects.length === 0 ? <EmptyState headline={`No stored events in ${usage.period}`} lead="Accepted events will appear here after durable ingest." /> : (
+    <Panel title={<h2 id="usage-contributors-title">Current contributors</h2>} right={<span className="text-sm text-muted-foreground">Current UTC cycle</span>}>
+      {usage.contributors.length === 0 ? <EmptyState headline={`No stored events in ${usage.cycle.from.slice(0, 7)}`} lead="Accepted events will appear here after durable ingest." /> : (
         <TableScroll testId="usage-breakdown-scroll"><Table>
-          <TableHeader><TableRow><TableHead>Project</TableHead><TableHead>Environments</TableHead><TableHead className="text-right">Accepted</TableHead><TableHead className="text-right">Share</TableHead></TableRow></TableHeader>
-          <TableBody>{[...usage.projects].sort((left, right) => right.quantity - left.quantity).map((project) => (
-            <TableRow key={project.id}>
-              <TableCell><div className="font-medium">{project.name}</div><code className="text-sm text-muted-foreground">{project.slug}</code></TableCell>
-              <TableCell>{project.environments.map((item) => item.env).join(', ')}</TableCell>
-              <TableCell className="text-right font-mono tabular-nums">{whole(project.quantity)}</TableCell>
-              <TableCell className="text-right font-mono tabular-nums">{usage.quantity === 0 ? 'Unavailable' : `${Math.round((project.quantity / usage.quantity) * 1_000) / 10}%`}</TableCell>
+          <TableHeader><TableRow><TableHead>Project</TableHead><TableHead>Environment</TableHead><TableHead className="text-right">Accepted</TableHead><TableHead className="text-right">Share</TableHead><TableHead className="text-right">7-day change</TableHead><TableHead>Last ingest</TableHead></TableRow></TableHeader>
+          <TableBody>{usage.contributors.map((project) => (
+            <TableRow key={`${project.project_slug}:${project.environment}`}>
+              <TableCell><div className="font-medium">{project.project_name}</div><code className="text-sm text-muted-foreground">{project.project_slug}</code></TableCell>
+              <TableCell><code className="text-sm">{project.environment}</code></TableCell>
+              <TableCell className="text-right font-mono tabular-nums">{whole(project.accepted_events)}</TableCell>
+              <TableCell className="text-right font-mono tabular-nums">{project.share === null ? 'Unavailable' : `${Math.round(project.share * 1_000) / 10}%`}</TableCell>
+              <TableCell className="text-right font-mono tabular-nums">{project.change_7d === null ? 'Unavailable' : `${project.change_7d >= 0 ? '+' : ''}${Math.round(project.change_7d * 1_000) / 10}%`}</TableCell>
+              <TableCell>{project.last_ingest_at ? fmtUsageRelative(project.last_ingest_at) : 'Unavailable'}</TableCell>
             </TableRow>
           ))}</TableBody>
         </Table></TableScroll>
@@ -327,22 +322,39 @@ function CurrentContributors({ usage }: { usage: OrganizationUsage }) {
   );
 }
 
-function UsageThresholds({ usage }: { usage: OrganizationUsage }) {
+function fmtUsageRelative(value: string): string {
+  const delta = Date.now() - Date.parse(value);
+  if (!Number.isFinite(delta)) return 'Unavailable';
+  const minutes = Math.max(0, Math.round(delta / 60_000));
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+const THRESHOLD_MEANING = {
+  50: 'Information',
+  75: 'Attention',
+  90: 'Action recommended',
+  100: 'Enforced consequence',
+} as const;
+
+function UsageThresholds({ usage }: { usage: UsageControlResult }) {
   return (
     <Panel title={<h2>Thresholds and consequence</h2>}>
-      {usage.warning_thresholds.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No warning thresholds are configured. Poolstatis will not invent 50%, 75%, or 90% alerts.</p>
-      ) : (
-        <div className="divide-y rounded-panel border">
-          {usage.warning_thresholds.map((threshold) => (
-            <div key={threshold} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">
-              <span className="font-mono tabular-nums">{whole(threshold)} events</span>
-              <span className={usage.quantity >= threshold ? 'font-medium text-warning' : 'text-muted-foreground'}>{usage.quantity >= threshold ? 'Reached' : `${whole(threshold - usage.quantity)} remaining`}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      <p className="mt-4 text-sm text-muted-foreground">{usage.hard_limit === null ? 'Hard-limit consequence is not configured.' : `At ${whole(usage.hard_limit)} events, a batch that would exceed the limit is rejected.`}</p>
+      <div className="divide-y rounded-panel border">
+        {usage.threshold_forecasts.map((threshold) => (
+          <div key={threshold.percent} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
+            <div><span className="font-mono tabular-nums">{threshold.percent}%</span><span className="ml-2 text-muted-foreground">{THRESHOLD_MEANING[threshold.percent]}</span></div>
+            <span className={threshold.state === 'reached' || threshold.state === 'projected' ? 'font-medium text-warning' : 'text-muted-foreground'}>
+              {threshold.state === 'reached' ? `Reached${formatForecastDate(threshold.reached_or_projected_at) ? ` ${formatForecastDate(threshold.reached_or_projected_at)}` : ''}`
+                : threshold.state === 'projected' ? `Projected ${formatForecastDate(threshold.reached_or_projected_at)}`
+                  : threshold.state === 'not_applicable' ? 'Not applicable without a cap' : 'Not projected'}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-4 text-sm text-muted-foreground">{usage.cap.consequence_at_100_percent ?? 'Hard-limit consequence is not configured.'}</p>
     </Panel>
   );
 }
@@ -356,7 +368,7 @@ export function Usage() {
   const [monthPreset, setMonthPreset] = useState<MonthRangePreset | null>('current');
   const [historyOpen, setHistoryOpen] = useState(false);
   const allowed = tokenKind === 'personal' || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
-  const result = useAsync(() => client && allowed ? client.usage(currentPeriod) : Promise.resolve(null), [client, allowed, currentPeriod]);
+  const result = useAsync(() => client && allowed ? client.usageControl(currentPeriod) : Promise.resolve(null), [client, allowed, currentPeriod]);
   const activityError = validateUsageActivityRange(activitySelection);
   const activity = useAsync(
     () => client && allowed && historyOpen && !activityError ? client.usageActivity(activitySelection.from, activitySelection.to) : Promise.resolve(null),
@@ -386,7 +398,7 @@ export function Usage() {
             planName={account?.billing?.plan?.name ?? null}
             onReviewContributors={() => document.getElementById('usage-contributors-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
           />
-          {usage.warnings.map((warning) => <WarningNote key={warning.threshold}>Warning threshold reached: {whole(warning.threshold)} events.</WarningNote>)}
+          {usage.attention.map((item) => <WarningNote key={item.id}>{item.title}: {item.impact}</WarningNote>)}
           <div aria-labelledby="usage-contributors-title"><CurrentContributors usage={usage} /></div>
           <UsageThresholds usage={usage} />
         </>

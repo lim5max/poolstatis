@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { api, createTestEnv, type TestEnv } from './helpers.js';
+import { activeMetric, api, createTestEnv, hoursAgo, type TestEnv } from './helpers.js';
 import { createProject } from '../src/services/projects.js';
 import { recordWarnings } from '../src/services/warnings.js';
 import { controlTowerResultSchema } from '../src/services/controlTower.js';
@@ -86,6 +86,70 @@ describe('project control tower', () => {
     expect(forbidden.status).toBe(403);
     const invalid = await api(env, env.secretToken, 'GET', `/api/v1/projects/${env.projectSlug}/control-tower?range=365d`);
     expect(invalid.status).toBe(400);
+  });
+
+  it('adds the saved funnel biggest loss to the server-owned attention order', async () => {
+    const funnelEnv = await createTestEnv({ ingestBuffer: false });
+    try {
+      await activeMetric(funnelEnv, { key: 'tower_entered', source: { event: 'tower.entered' } });
+      await activeMetric(funnelEnv, { key: 'tower_completed', source: { event: 'tower.completed' } });
+      const funnel = await api(funnelEnv, funnelEnv.secretToken, 'POST', `/api/v1/projects/${funnelEnv.projectSlug}/funnels`, {
+        key: 'tower_activation',
+        name: 'Tower activation',
+        goal: 'See whether people who enter the control tower complete activation.',
+        steps: [
+          { metric_key: 'tower_entered', label: 'Entered' },
+          { metric_key: 'tower_completed', label: 'Completed' },
+        ],
+        window_seconds: 86_400,
+      });
+      expect(funnel.status).toBe(201);
+      const ingested = await api(funnelEnv, funnelEnv.ingestToken, 'POST', '/i/v1/events', {
+        batch_id: 'control-tower-funnel-loss',
+        events: [
+          { event: 'tower.entered', distinct_id: 'tower-a', timestamp: hoursAgo(4) },
+          { event: 'tower.completed', distinct_id: 'tower-a', timestamp: hoursAgo(3) },
+          { event: 'tower.entered', distinct_id: 'tower-b', timestamp: hoursAgo(2) },
+          { event: 'tower.entered', distinct_id: 'tower-c', timestamp: hoursAgo(1) },
+        ],
+      });
+      expect(ingested.body.accepted).toBe(4);
+
+      const result = await api(
+        funnelEnv,
+        funnelEnv.secretToken,
+        'GET',
+        `/api/v1/projects/${funnelEnv.projectSlug}/control-tower?env=prod&range=30d`,
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.body.attention).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'funnel.biggest_loss.tower_activation',
+          rule_id: 'funnel.biggest_loss',
+          rule_version: 1,
+          title: 'Biggest loss: Entered -> Completed',
+          reason: '2 actors were lost at this step (66.7%).',
+          impact: 'See whether people who enter the control tower complete activation.',
+          affected: [{ kind: 'funnel', ref: 'tower_activation' }],
+          evidence: expect.objectContaining({
+            state: 'trusted',
+            source_refs: [{
+              kind: 'funnel',
+              key: 'tower_activation',
+              goal: 'See whether people who enter the control tower complete activation.',
+            }],
+          }),
+          primary_action: expect.objectContaining({
+            id: 'investigate_funnel_step.tower_activation.0.1',
+            kind: 'navigate',
+            href: '/analyze/funnels?funnel=tower_activation&env=prod&from_step=0&to_step=1',
+          }),
+        }),
+      ]));
+    } finally {
+      await funnelEnv.close();
+    }
   });
 });
 

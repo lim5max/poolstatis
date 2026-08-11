@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
-import { Usage, usageForecast, usageMonthPresetRange } from './Usage';
+import { Usage, usageMonthPresetRange } from './Usage';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -10,6 +10,7 @@ vi.mock('../store', async (importOriginal) => ({
 
 const mockedStore = vi.mocked(useStore);
 const usage = vi.fn();
+const usageControl = vi.fn();
 const usageActivity = vi.fn();
 const usageRange = vi.fn();
 
@@ -34,6 +35,48 @@ function rangeResponse(from: string, to: string) {
 describe('Usage month range', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    usageControl.mockResolvedValue({
+      schema_version: 1,
+      request_id: 'usage-control-request',
+      generated_at: '2026-08-10T12:00:00.000Z',
+      scope: {
+        organization_id: 'org-1',
+        window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-31T23:59:59.999Z', timezone: 'UTC' },
+      },
+      answer: {
+        state: 'partial',
+        headline: '620 accepted events this UTC cycle',
+        takeaway: '380 events remain before the configured hard limit.',
+        primary_value: { value: 620, unit: 'count', formatted: '620' },
+        why_it_matters: 'Accepted-event continuity determines whether product answers remain complete.',
+      },
+      attention: [],
+      evidence: {
+        state: 'trusted',
+        as_of: '2026-08-10T12:00:00.000Z',
+        freshness: 'fresh',
+        source_refs: [{ kind: 'usage_ledger', meter: 'events_stored' }],
+        sample: { eligible: 7, observed: 3, coverage: 3 / 7 },
+        warnings: [],
+        unavailable_reasons: [],
+      },
+      primary_action: { id: 'review_usage_contributors', kind: 'navigate', label: 'Review usage contributors', href: '/usage' },
+      secondary_actions: [],
+      meter: 'events_stored',
+      cycle: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-31T23:59:59.999Z', timezone: 'UTC' },
+      cap: { state: 'finite', value: 1_000, remaining: 380, consequence_at_100_percent: 'New accepted-event writes are rejected.' },
+      pace: { observed_days: 3, events_per_day_7d: 62, projected_cycle_end: 1_922, confidence: 'sufficient' },
+      threshold_forecasts: [
+        { percent: 50, state: 'reached', reached_or_projected_at: '2026-08-09T00:00:00.000Z' },
+        { percent: 75, state: 'projected', reached_or_projected_at: '2026-08-13T00:00:00.000Z' },
+        { percent: 90, state: 'projected', reached_or_projected_at: '2026-08-15T00:00:00.000Z' },
+        { percent: 100, state: 'projected', reached_or_projected_at: '2026-08-17T00:00:00.000Z' },
+      ],
+      contributors: [{
+        project_slug: 'alpha', project_name: 'Alpha', environment: 'prod', accepted_events: 620,
+        share: 1, change_7d: 0.25, last_ingest_at: '2026-08-10T11:00:00.000Z',
+      }],
+    });
     usage.mockResolvedValue({
       meter: 'events_stored', period: monthOffset(0), quantity: 7, hard_limit: 100,
       warning_thresholds: [80], warnings: [], projects: [],
@@ -45,8 +88,21 @@ describe('Usage month range', () => {
     usageRange.mockImplementation(async (from: string, to: string) => rangeResponse(from, to));
     mockedStore.mockReturnValue({
       tokenKind: 'user', account: { membership: { role: 'owner' } },
-      client: { usage, usageActivity, usageRange },
+      client: { usage, usageControl, usageActivity, usageRange },
     } as never);
+  });
+
+  it('renders pace, forecast and contributors from the server-owned usage contract', async () => {
+    render(<Usage />);
+
+    expect(await screen.findByText('620 accepted events this UTC cycle')).toBeInTheDocument();
+    expect(screen.getByText('62 / day')).toBeInTheDocument();
+    expect(screen.getByText('1,922')).toBeInTheDocument();
+    expect(screen.getByText('+25%')).toBeInTheDocument();
+    expect(screen.getAllByText('Projected Aug 17, 2026')).toHaveLength(2);
+    expect(usageControl).toHaveBeenCalledOnce();
+    expect(usageControl).toHaveBeenCalledWith(monthOffset(0));
+    expect(usage).not.toHaveBeenCalled();
   });
 
   it('keeps UTC presets correct across a year boundary', () => {
@@ -55,24 +111,22 @@ describe('Usage month range', () => {
     expect(usageMonthPresetRange('last-6', '2026-01')).toEqual({ from: '2025-08', to: '2026-01' });
   });
 
-  it('projects pace from the server ledger without inventing a quota', () => {
-    expect(usageForecast(
-      { period: '2026-08', quantity: 620, hard_limit: 1_000 },
-      new Date('2026-08-10T12:00:00.000Z'),
-    )).toEqual({
-      daysElapsed: 10,
-      daysInCycle: 31,
-      dailyPace: 62,
-      projectedEndOfCycle: 1_922,
-      hardLimitDate: '2026-08-17',
-      remaining: 380,
-    });
-  });
-
   it('shows an honest no-cap state instead of a full or unlimited meter', async () => {
-    usage.mockResolvedValue({
-      meter: 'events_stored', period: monthOffset(0), quantity: 7, hard_limit: null,
-      warning_thresholds: [], warnings: [], projects: [],
+    const base = await usageControl();
+    usageControl.mockClear();
+    usageControl.mockResolvedValue({
+      ...base,
+      answer: {
+        ...base.answer,
+        headline: '620 accepted events this UTC cycle',
+        takeaway: 'No Core hard limit is configured for this organization.',
+      },
+      cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
+      threshold_forecasts: base.threshold_forecasts.map((threshold: { percent: number }) => ({
+        percent: threshold.percent,
+        state: 'not_applicable',
+        reached_or_projected_at: null,
+      })),
     });
 
     render(<Usage />);

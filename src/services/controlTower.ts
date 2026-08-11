@@ -3,7 +3,9 @@ import type pg from 'pg';
 import { z } from 'zod';
 import type { FunnelQueryInput, TrendQueryInput } from '../schemas.js';
 import type { EventStore } from '../stores/eventStore.js';
-import type { Metric } from './registry.js';
+import { getProjectIntent } from './projectIntents.js';
+import type { QueryService } from './query.js';
+import { listFunnels, type Funnel, type Metric } from './registry.js';
 import { listDataQualityIssues } from './dataQuality.js';
 import { listDecisions } from './decisions.js';
 import { getOnboardingStatus } from './onboarding.js';
@@ -128,6 +130,97 @@ export type ControlTowerAction = z.infer<typeof controlTowerActionSchema>;
 export type AttentionItem = z.infer<typeof attentionItemSchema>;
 export type ControlTowerResult = z.infer<typeof controlTowerResultSchema>;
 
+function selectHomeFunnel(funnels: Funnel[], primaryGoal: string | null): Funnel | null {
+  const ordered = [...funnels].sort((left, right) => left.key.localeCompare(right.key));
+  return (primaryGoal ? ordered.find((funnel) => funnel.key === primaryGoal) : null)
+    ?? ordered[0]
+    ?? null;
+}
+
+async function funnelAttention(
+  pool: pg.Pool,
+  queryService: QueryService,
+  project: { id: string; slug: string },
+  env: string,
+  from: Date,
+  now: Date,
+): Promise<AttentionItem | null> {
+  const [funnels, intent] = await Promise.all([
+    listFunnels(pool, project.id),
+    getProjectIntent(pool, project.id),
+  ]);
+  const funnel = selectHomeFunnel(funnels, intent?.primary_goal_id ?? null);
+  if (!funnel) return null;
+  const href = `/analyze/funnels?funnel=${encodeURIComponent(funnel.key)}&env=${encodeURIComponent(env)}`;
+  try {
+    const result = await queryService.run(project.id, {
+      kind: 'funnel',
+      funnel: funnel.key,
+      date_from: from.toISOString(),
+      date_to: now.toISOString(),
+      env,
+    }, now);
+    if (result.kind !== 'funnel') return null;
+    const loss = result.summary.biggest_absolute_loss;
+    if (!loss || loss.lost_actors <= 0) return null;
+    const fromStep = result.steps[loss.from_step];
+    const toStep = result.steps[loss.to_step];
+    if (!fromStep || !toStep) return null;
+    const rate = loss.drop_rate === null
+      ? 'rate unavailable'
+      : `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(loss.drop_rate * 100)}%`;
+    const actionHref = `${href}&from_step=${loss.from_step}&to_step=${loss.to_step}`;
+    return {
+      id: `funnel.biggest_loss.${funnel.key}`,
+      rule_id: 'funnel.biggest_loss',
+      rule_version: 1,
+      severity: 'info',
+      state: 'open',
+      title: `Biggest loss: ${fromStep.label} -> ${toStep.label}`,
+      reason: `${loss.lost_actors} actors were lost at this step (${rate}).`,
+      impact: funnel.goal,
+      affected: [{ kind: 'funnel', ref: funnel.key }],
+      evidence: result.evidence,
+      primary_action: {
+        id: `investigate_funnel_step.${funnel.key}.${loss.from_step}.${loss.to_step}`,
+        kind: 'navigate',
+        label: `Investigate ${fromStep.label} -> ${toStep.label}`,
+        href: actionHref,
+      },
+    };
+  } catch {
+    return {
+      id: `funnel.biggest_loss.${funnel.key}`,
+      rule_id: 'funnel.biggest_loss',
+      rule_version: 1,
+      severity: 'low',
+      state: 'unavailable',
+      title: 'Funnel loss is unavailable',
+      reason: 'The registered funnel could not be evaluated for the selected project, environment and window.',
+      impact: funnel.goal,
+      affected: [{ kind: 'funnel', ref: funnel.key }],
+      evidence: {
+        state: 'unavailable',
+        as_of: now.toISOString(),
+        freshness: 'unknown',
+        source_refs: [{ kind: 'funnel', key: funnel.key, goal: funnel.goal }],
+        warnings: [],
+        unavailable_reasons: [{
+          code: 'funnel_query_unavailable',
+          message: 'The typed saved-funnel query did not produce a result.',
+          prerequisite_action_id: `investigate_funnel_step.${funnel.key}`,
+        }],
+      },
+      primary_action: {
+        id: `investigate_funnel_step.${funnel.key}`,
+        kind: 'navigate',
+        label: 'Review funnel evidence',
+        href,
+      },
+    };
+  }
+}
+
 export const funnelLossSchema = z.object({
   from_step: z.number().int().nonnegative(),
   to_step: z.number().int().nonnegative(),
@@ -224,17 +317,19 @@ function warningAttention(
 export async function getProjectControlTower(
   pool: pg.Pool,
   eventStore: EventStore,
+  queryService: QueryService,
   project: { id: string; slug: string },
   env: string,
   rangeDays: 7 | 30 | 90,
   now = new Date(),
 ): Promise<ControlTowerResult> {
   const from = new Date(now.getTime() - rangeDays * 86_400_000);
-  const [onboarding, allWarnings, quality, decisions] = await Promise.all([
+  const [onboarding, allWarnings, quality, decisions, funnelItem] = await Promise.all([
     getOnboardingStatus(pool, eventStore, project.id, env),
     listIngestWarnings(pool, project.id, { env }),
     listDataQualityIssues(pool, eventStore, project.id, env, { sinceDays: rangeDays }),
     listDecisions(pool, project.id, { status: 'proposed', env }),
+    funnelAttention(pool, queryService, project, env, from, now),
   ]);
   const warnings = allWarnings.filter((warning) => Date.parse(warning.last_seen) >= from.getTime());
   const attention: AttentionItem[] = [];
@@ -297,6 +392,7 @@ export async function getProjectControlTower(
       primary_action: { id: 'continue_setup', kind: 'navigate', label: 'Continue setup', href: `/setup?env=${encodeURIComponent(env)}` },
     });
   }
+  if (funnelItem) attention.push(funnelItem);
   attention.sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity]
     || left.rule_id.localeCompare(right.rule_id));
   const primaryAction = attention[0]?.primary_action
@@ -333,6 +429,7 @@ export async function getProjectControlTower(
         { kind: 'operator_rule', rule_id: 'ingest.warnings', rule_version: 1 },
         { kind: 'operator_rule', rule_id: 'data_quality.entity_status', rule_version: 1 },
         { kind: 'operator_rule', rule_id: 'decision.awaiting_approval', rule_version: 1 },
+        ...(funnelItem ? funnelItem.evidence.source_refs : []),
       ],
       aggregation: `server-owned rule evaluation over the last ${rangeDays} days`,
       warnings: attention.filter((item) => item.severity === 'low').map((item) => ({

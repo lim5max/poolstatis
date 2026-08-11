@@ -34,8 +34,59 @@ const productMetric = {
   source: { event: 'product.used' },
 } as const;
 
+function controlTowerResponse() {
+  return {
+    schema_version: 1,
+    request_id: 'control-request',
+    generated_at: '2026-08-06T00:00:00.000Z',
+    scope: {
+      project_slug: 'alpha',
+      environment: 'prod',
+      window: { from: '2026-07-07T00:00:00.000Z', to: '2026-08-06T00:00:00.000Z', timezone: 'UTC' },
+    },
+    answer: {
+      state: 'partial',
+      headline: '1 item needs attention',
+      takeaway: 'The server found a measurement blocker.',
+      primary_value: { value: 1, unit: 'count', formatted: '1' },
+      why_it_matters: 'Server ordering must be identical in REST, MCP, and the UI.',
+    },
+    attention: [{
+      id: 'server.measurement.blocked',
+      rule_id: 'server.measurement.blocked',
+      rule_version: 3,
+      severity: 'high',
+      state: 'open',
+      title: 'Server-ordered measurement blocker',
+      reason: 'This item exists only in the canonical control-tower response.',
+      impact: 'The primary outcome cannot be trusted until the blocker is reviewed.',
+      affected: [{ kind: 'metric', ref: 'web_page_views' }],
+      evidence: {
+        state: 'blocked',
+        as_of: '2026-08-06T00:00:00.000Z',
+        freshness: 'fresh',
+        source_refs: [{ kind: 'operator_rule', rule_id: 'server.measurement.blocked', rule_version: 3 }],
+        warnings: [],
+        unavailable_reasons: [],
+      },
+      primary_action: { id: 'review_definition', kind: 'navigate', label: 'Review definition', href: '/registry' },
+    }],
+    evidence: {
+      state: 'blocked',
+      as_of: '2026-08-06T00:00:00.000Z',
+      freshness: 'fresh',
+      source_refs: [{ kind: 'operator_rule', rule_id: 'server.measurement.blocked', rule_version: 3 }],
+      warnings: [],
+      unavailable_reasons: [],
+    },
+    primary_action: { id: 'review_definition', kind: 'navigate', label: 'Review definition', href: '/registry' },
+    secondary_actions: [],
+  };
+}
+
 function websiteClient(intent: 'website' | 'both' | null = 'website', activeLinks = 0) {
   return {
+    controlTower: vi.fn().mockResolvedValue(controlTowerResponse()),
     projectIntent: vi.fn().mockResolvedValue({ intent: intent ? { project_mode: intent, goal_ids: ['website_traffic'], primary_goal_id: 'website_traffic' } : null }),
     metrics: vi.fn().mockResolvedValue([webMetric]),
     funnels: vi.fn().mockResolvedValue([]),
@@ -79,8 +130,43 @@ describe('goal-aware Attention', () => {
     window.localStorage.clear();
   });
 
+  it('renders the server-owned attention order instead of recomputing it in React', async () => {
+    const client = websiteClient();
+    setStore(client);
+
+    render(<MemoryRouter><Overview /></MemoryRouter>);
+
+    expect(await screen.findByRole('heading', { name: 'Server-ordered measurement blocker' })).toBeInTheDocument();
+    expect(screen.getByText('This item exists only in the canonical control-tower response.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Review definition/ })).toHaveAttribute('href', '/registry');
+    expect(client.controlTower).toHaveBeenCalledOnce();
+    expect(client.controlTower).toHaveBeenCalledWith('alpha', 'prod', '30d');
+  });
+
   it('renders a website answer from server facts with trust and responsive structure', async () => {
     const client = websiteClient() as Record<string, any>;
+    const server = controlTowerResponse();
+    client.controlTower.mockResolvedValue({
+      ...server,
+      attention: [{
+        ...server.attention[0],
+        id: 'funnel.biggest_loss.website_signup',
+        rule_id: 'funnel.biggest_loss',
+        rule_version: 1,
+        severity: 'medium',
+        title: 'Biggest loss: Visited → Started signup',
+        reason: '5 actors were lost at this step (62.5%).',
+        impact: 'See whether qualified visitors begin signup.',
+        affected: [{ kind: 'funnel', ref: 'website_signup' }],
+        evidence: {
+          ...server.evidence,
+          state: 'trusted',
+          source_refs: [{ kind: 'funnel', key: 'website_signup', goal: 'See whether qualified visitors begin signup.' }],
+        },
+        primary_action: { id: 'investigate_funnel_step', kind: 'navigate', label: 'Investigate step', href: '/analyze/funnels' },
+      }],
+      primary_action: { id: 'investigate_funnel_step', kind: 'navigate', label: 'Investigate step', href: '/analyze/funnels' },
+    });
     client.schema.mockResolvedValue({
       identity: { active_links: 0 },
       observed_events_30d: [
@@ -161,7 +247,24 @@ describe('goal-aware Attention', () => {
   });
 
   it('keeps a useful four-card outcome strip when website measurement is not configured yet', async () => {
-    const client = websiteClient();
+    const client = websiteClient() as Record<string, any>;
+    const server = controlTowerResponse();
+    client.controlTower.mockResolvedValue({
+      ...server,
+      attention: [{
+        ...server.attention[0],
+        id: 'onboarding.first_event_observed',
+        rule_id: 'onboarding.first_event_observed',
+        rule_version: 1,
+        severity: 'low',
+        title: 'No first event verified',
+        reason: 'No accepted product event has been observed.',
+        impact: 'Answers cannot be computed until a real event is stored.',
+        affected: [{ kind: 'project', ref: 'alpha:prod' }],
+        primary_action: { id: 'send_first_event', kind: 'navigate', label: 'Send an event', href: '/setup' },
+      }],
+      primary_action: { id: 'send_first_event', kind: 'navigate', label: 'Send an event', href: '/setup' },
+    });
     client.metrics.mockResolvedValue([]);
     setStore(client);
 

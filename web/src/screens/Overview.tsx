@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { ErrorNote, Loading, fmtNum, fmtRelative } from '@/components/ui';
 import { AnswerCanvas, type EvidenceTrust, type KpiItem } from '@/components/analytics';
 import { formatDurationMs, webPageMetric, type WebAnalyticsResult } from '../analysis/operations';
-import type { DecisionLoopOnboardingStatus, Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
+import type { AttentionItem, ControlTowerAction, ControlTowerResult, Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
 import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
 import type { ProjectMode } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
@@ -50,14 +50,12 @@ export function Overview() {
   const homeScope = `${project ?? ''}\u0000${env}`;
   const home = useAsync(async () => {
     try {
-      const [intent, metrics, funnels, schema, onboardingRead] = await Promise.all([
+      const [controlTower, intent, metrics, funnels, schema] = await Promise.all([
+        client!.controlTower(project!, env, '30d'),
         readProjectIntent(client as unknown as IntentCapableClient, project!),
         client!.metrics(project!, { status: 'active' }),
         client!.funnels(project!),
         client!.schema(project!, env).catch(() => null),
-        Promise.resolve().then(() => client!.onboardingStatus(project!, env))
-          .then((status) => ({ status, unavailable: false }))
-          .catch(() => ({ status: null, unavailable: true })),
       ]);
       const primaryMetric = pickPrimaryMetric(metrics, intent?.primary_goal_id ?? null);
       const revenueMetric = metrics.find((metric) => metric.category === 'revenue') ?? null;
@@ -85,8 +83,7 @@ export function Overview() {
           product,
           website,
           schema,
-          onboarding: onboardingRead.status,
-          onboardingUnavailable: onboardingRead.unavailable,
+          controlTower,
         },
         error: null as string | null,
       };
@@ -112,13 +109,13 @@ export function Overview() {
   if (scopedHome?.error) return <ErrorNote>{scopedHome.error}</ErrorNote>;
   if (!homeData) return <Loading what="reading current answers…" />;
 
-  const { intent, product, website, schema, onboarding, onboardingUnavailable } = homeData;
+  const { intent, product, website, schema, controlTower } = homeData;
   const mode = intent?.project_mode ?? null;
-  const attention = buildAttentionItems({ mode, onboarding, onboardingUnavailable, product, website, schema });
-  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
-  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} attention={attention} telemetryUserId={account?.user?.id} />;
+  const attention = controlTower.attention.slice(0, 3);
+  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   if (mode === 'both' && intent) {
-    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} attention={attention} onRetry={home.reload} />;
+    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   }
 
   // A missing intent row is legacy/unset. Keep the project useful and never
@@ -129,7 +126,7 @@ export function Overview() {
         title="Attention"
         answer="Project mode is not set. Your existing answers and data remain available."
       />
-      <AttentionQueue items={attention} telemetryUserId={account?.user?.id} />
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />
       <div className="rounded-panel border border-dashed bg-card px-4 py-3 text-sm text-muted-foreground">
         Legacy project · choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
       </div>
@@ -140,19 +137,13 @@ export function Overview() {
   );
 }
 
-type AttentionSeverity = 'critical' | 'warning' | 'info' | 'healthy';
-
-interface AttentionItem {
-  severity: AttentionSeverity;
-  title: string;
-  reason: string;
-  impact: string;
-  freshness: string;
-  href: string;
-  action: string;
-}
-
-function AttentionQueue({ items, telemetryUserId }: { items: AttentionItem[]; telemetryUserId?: string | null }) {
+function AttentionQueue({ result, items, telemetryUserId, onRetry }: {
+  result: ControlTowerResult;
+  items: AttentionItem[];
+  telemetryUserId?: string | null;
+  onRetry: () => void;
+}) {
+  const visibleItems = items.length > 0 ? items : [guardrailItem(result)];
   return (
     <section aria-labelledby="attention-title">
       <div className="mb-3 flex items-baseline justify-between gap-3">
@@ -163,25 +154,19 @@ function AttentionQueue({ items, telemetryUserId }: { items: AttentionItem[]; te
         <span className="font-mono text-sm text-muted-foreground">{items.length}</span>
       </div>
       <div className="grid gap-3 lg:grid-cols-3">
-        {items.map((item, index) => (
+        {visibleItems.map((item, index) => (
           <article
-            key={`${item.title}:${index}`}
-            className={`rounded-panel border bg-card p-4 ${item.severity === 'critical' ? 'border-destructive/45' : item.severity === 'warning' ? 'border-warning/45' : ''}`}
+            key={item.id}
+            className={`rounded-panel border bg-card p-4 ${item.severity === 'critical' || item.severity === 'high' ? 'border-destructive/45' : item.severity === 'medium' ? 'border-warning/45' : ''}`}
           >
             <div className="flex items-center justify-between gap-3 text-sm">
               <span className="font-medium">{severityLabel(item.severity)}</span>
-              <span className="text-muted-foreground">{item.freshness}</span>
+              <span className="text-muted-foreground">{item.evidence.freshness === 'fresh' ? fmtRelative(item.evidence.as_of) : item.evidence.freshness}</span>
             </div>
             <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
             <p className="mt-3 border-t pt-3 text-sm"><span className="font-medium">Impact:</span> <span className="text-muted-foreground">{item.impact}</span></p>
-            {index === 0 && (
-              <Button asChild className="mt-4 h-11 w-full sm:w-auto">
-                <Link to={item.href} onClick={() => trackHomeAction(actionTelemetry(item.href), telemetryUserId)}>
-                  {item.action} <ArrowRight className="size-4" />
-                </Link>
-              </Button>
-            )}
+            {index === 0 && <AttentionAction action={item.primary_action} telemetryUserId={telemetryUserId} onRetry={onRetry} />}
           </article>
         ))}
       </div>
@@ -189,148 +174,47 @@ function AttentionQueue({ items, telemetryUserId }: { items: AttentionItem[]; te
   );
 }
 
-function buildAttentionItems(input: {
-  mode: ProjectMode | null;
-  onboarding: DecisionLoopOnboardingStatus | null;
-  onboardingUnavailable: boolean;
-  product: ProductAnswer;
-  website: WebsiteAnswer;
-  schema: ProjectSchema | null;
-}): AttentionItem[] {
-  const items: AttentionItem[] = [];
-  const blocker = input.onboarding?.next_blocker;
-  if (blocker) items.push(onboardingAttention(blocker, input.mode));
-  else if (input.onboardingUnavailable) {
-    items.push({
-      severity: 'warning',
-      title: 'Setup proof is unavailable',
-      reason: 'Poolstatis could not read the current decision-loop gates, so this screen will not claim setup is complete.',
-      impact: 'The next project action cannot be prioritized from server proof.',
-      freshness: 'Unavailable',
-      href: '/setup',
-      action: 'Check Setup',
-    });
-  }
-
-  const trust = input.mode === 'website' ? input.website.trust : input.product.trust;
-  if (trust?.status === 'untrusted' && blocker?.key !== 'data_quality_accepted' && blocker?.key !== 'metrics_activated') {
-    const finding = trust.blockers[0] ?? trust.warnings[0];
-    items.push({
-      severity: 'critical',
-      title: 'Measurement trust is blocked',
-      reason: finding?.message ?? 'The primary outcome did not pass its server trust check.',
-      impact: finding?.next_action ?? 'Answers may remain unavailable until the definition is reviewed.',
-      freshness: 'Last 30 days',
-      href: '/registry',
-      action: 'Review definition',
-    });
-  }
-
-  const activity = recentObservedEvents(input.schema);
-  if (activity === null && items.length < 3) {
-    items.push({
-      severity: 'warning',
-      title: 'Event freshness is unavailable',
-      reason: 'The project schema read failed; no last-event claim is shown.',
-      impact: 'Freshness and recent volume cannot be verified from this screen.',
-      freshness: 'Unavailable',
-      href: '/data',
-      action: 'Check Events',
-    });
-  } else if (activity?.length === 0 && items.length < 3) {
-    items.push({
-      severity: 'warning',
-      title: 'No events in the last 30 days',
-      reason: 'The current project and environment have no observed event activity in the schema read.',
-      impact: 'Outcome and funnel answers cannot update until one real event arrives.',
-      freshness: 'Last 30 days',
-      href: '/setup',
-      action: 'Send an event',
-    });
-  }
-
-  const funnelItem = funnelAttention(input.product.funnel, input.product.funnelResult);
-  if (funnelItem && items.length < 3) items.push(funnelItem);
-
-  if (items.length === 0) {
-    const href = input.mode === 'website' ? '/analyze/web' : '/analyze/product';
-    items.push({
-      severity: 'healthy',
-      title: 'No setup or trust blocker detected',
-      reason: 'The latest onboarding and measurement reads do not require an immediate repair.',
-      impact: 'Review the primary answer before choosing a product action.',
-      freshness: 'Server checked',
-      href,
-      action: 'Open primary answer',
-    });
-  }
-  const severityRank: Record<AttentionSeverity, number> = { critical: 0, warning: 1, info: 2, healthy: 3 };
-  return [...items].sort((left, right) => severityRank[left.severity] - severityRank[right.severity]).slice(0, 3);
-}
-
-function onboardingAttention(blocker: NonNullable<DecisionLoopOnboardingStatus['next_blocker']>, mode: ProjectMode | null): AttentionItem {
-  const mapping: Record<string, { title: string; impact: string; href: string; action: string }> = {
-    workspace_created: { title: 'Workspace setup is incomplete', impact: 'Project-scoped evidence is not ready.', href: '/setup', action: 'Finish Setup' },
-    data_source_connected: { title: 'Product connection is incomplete', impact: 'No accepted product data can arrive yet.', href: '/setup', action: 'Connect product' },
-    first_event_observed: { title: 'No first event verified', impact: 'Answers cannot be computed until a real event is stored.', href: '/setup', action: 'Send first event' },
-    metrics_activated: { title: 'Metrics need review', impact: 'Raw activity is not yet a trusted business outcome.', href: '/registry', action: 'Review metrics' },
-    data_quality_accepted: { title: 'Data quality needs review', impact: 'Trust blockers can make answers unavailable.', href: '/registry', action: 'Review data quality' },
-    first_query_produced: { title: 'No trusted answer yet', impact: 'The project has data but no verified outcome read.', href: mode === 'website' ? '/analyze/web' : '/analyze/funnels', action: 'Run first answer' },
-    first_decision_saved: { title: 'No decision saved yet', impact: 'Evidence has not completed the decision loop.', href: '/decisions', action: 'Review decisions' },
-    agent_connected: { title: 'Agent access is not verified', impact: 'The agent cannot yet read or act on this project through MCP.', href: '/setup#agent-access', action: 'Connect agent' },
-  };
-  const next = mapping[blocker.key] ?? mapping.workspace_created!;
+function guardrailItem(result: ControlTowerResult): AttentionItem {
   return {
-    severity: blocker.key === 'data_quality_accepted' ? 'critical' : 'warning',
-    title: next.title,
-    reason: blocker.blocker ?? blocker.next_action ?? 'Complete the next server-verified setup gate.',
-    impact: next.impact,
-    freshness: evidenceFreshness(blocker.evidence),
-    href: next.href,
-    action: next.action,
-  };
-}
-
-function funnelAttention(funnel: Funnel | null, result: FunnelQueryResult | null): AttentionItem | null {
-  if (!funnel) return {
+    id: 'control-tower.evaluated',
+    rule_id: 'control-tower.evaluated',
+    rule_version: 1,
     severity: 'info',
-    title: 'No funnel is saved',
-    reason: 'No goal-bearing path is available for a drop-off read.',
-    impact: 'Poolstatis cannot identify where actors stop before an outcome.',
-    freshness: 'Not configured',
-    href: '/setup',
-    action: 'Create funnel',
-  };
-  if (!result || result.steps.length < 2) return null;
-  const losses = result.steps.slice(1).map((step, index) => {
-    const previous = result.steps[index]!;
-    const lost = Math.max(0, previous.actors - step.actors);
-    return { previous, step, lost, rate: previous.actors === 0 ? null : lost / previous.actors };
-  });
-  const biggest = losses.sort((left, right) => right.lost - left.lost)[0];
-  if (!biggest || biggest.lost === 0) return null;
-  const rate = biggest.rate === null ? 'rate unavailable' : `${Math.round(biggest.rate * 1_000) / 10}%`;
-  return {
-    severity: 'info',
-    title: `Biggest loss: ${biggest.previous.label} → ${biggest.step.label}`,
-    reason: `${fmtNum(biggest.lost)} actors were lost at this step (${rate}).`,
-    impact: funnel.goal,
-    freshness: fmtRelative(result.meta.computed_at),
-    href: '/analyze/funnels',
-    action: 'Investigate step',
+    state: result.answer.state === 'unavailable' || result.answer.state === 'error' ? 'unavailable' : 'resolved',
+    title: result.answer.headline,
+    reason: result.answer.takeaway,
+    impact: result.answer.why_it_matters,
+    affected: [],
+    evidence: result.evidence,
+    primary_action: result.primary_action,
   };
 }
 
-function evidenceFreshness(evidence: Record<string, unknown>) {
-  const timestamp = Object.values(evidence).find((value) => typeof value === 'string' && Number.isFinite(Date.parse(value)));
-  return typeof timestamp === 'string' ? fmtRelative(timestamp) : 'Server checked';
+function AttentionAction({ action, telemetryUserId, onRetry }: {
+  action: ControlTowerAction;
+  telemetryUserId?: string | null;
+  onRetry: () => void;
+}) {
+  if (action.kind === 'navigate') {
+    return (
+      <Button asChild className="mt-4 h-11 w-full sm:w-auto">
+        <Link to={action.href} onClick={() => trackHomeAction(actionTelemetry(action.href), telemetryUserId)}>
+          {action.label} <ArrowRight className="size-4" />
+        </Link>
+      </Button>
+    );
+  }
+  if (action.kind === 'retry') {
+    return <Button className="mt-4 h-11 w-full sm:w-auto" onClick={onRetry}>{action.label}</Button>;
+  }
+  return <Button className="mt-4 h-11 w-full sm:w-auto" disabled>{action.label}</Button>;
 }
 
-function severityLabel(severity: AttentionSeverity) {
+function severityLabel(severity: AttentionItem['severity']) {
   if (severity === 'critical') return 'Critical';
-  if (severity === 'warning') return 'Attention';
-  if (severity === 'healthy') return 'Healthy';
-  return 'Opportunity';
+  if (severity === 'high' || severity === 'medium') return 'Attention';
+  if (severity === 'low') return 'Watch';
+  return 'Evaluated';
 }
 
 function actionTelemetry(href: string): TelemetryHomeAction {
@@ -341,25 +225,25 @@ function actionTelemetry(href: string): TelemetryHomeAction {
   return 'open_current_answer';
 }
 
-function WebsiteHome({ answer, product, schema, env, attention, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
+function WebsiteHome({ answer, product, schema, env, controlTower, attention, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = websiteLead(answer);
   return (
     <div className="space-y-5">
       <PageHeader title="Attention" answer={lead} />
-      <AttentionQueue items={attention} telemetryUserId={telemetryUserId} />
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
       <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} onRetry={onRetry} />
     </div>
   );
 }
 
-function ProductHome({ answer, schema, env, attention, telemetryUserId }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; attention: AttentionItem[]; telemetryUserId?: string | null }) {
+function ProductHome({ answer, schema, env, controlTower, attention, telemetryUserId, onRetry }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = answer.metric
     ? `${answer.metric.name} is the clearest active outcome available for this project.`
     : 'Events may be arriving, but no active outcome is defined yet.';
   return (
     <div className="space-y-5">
       <PageHeader title="Attention" answer={lead} />
-      <AttentionQueue items={attention} telemetryUserId={telemetryUserId} />
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
       <ProductAnswerCanvas answer={answer} schema={schema} env={env} />
     </div>
   );
@@ -371,6 +255,7 @@ function BothHome({
   websiteFirst,
   schema,
   env,
+  controlTower,
   telemetryUserId,
   attention,
   onRetry,
@@ -380,6 +265,7 @@ function BothHome({
   websiteFirst: boolean;
   schema: ProjectSchema | null;
   env: string;
+  controlTower: ControlTowerResult;
   telemetryUserId?: string | null;
   attention: AttentionItem[];
   onRetry: () => void;
@@ -400,7 +286,7 @@ function BothHome({
             ? 'Identity evidence exists. Poolstatis still requires a registered cross-surface funnel before claiming an acquisition-to-activation path.'
             : 'Website and product activity are not linked yet.'}
       />
-      <AttentionQueue items={attention} telemetryUserId={telemetryUserId} />
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
       <div className="flex max-w-full gap-1 overflow-x-auto rounded-control border bg-card p-1" aria-label="Both mode surfaces">
         <span className="flex min-h-11 items-center rounded-control bg-secondary px-4 text-sm font-medium">All</span>
         <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to="/analyze/web">Website</Link>

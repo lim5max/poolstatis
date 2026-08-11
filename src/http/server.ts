@@ -818,6 +818,7 @@ function registerPlatformRoutes(
     return getProjectControlTower(
       ctx.pool,
       ctx.eventStore,
+      ctx.query,
       project,
       env,
       ranges[range as keyof typeof ranges],
