@@ -56,6 +56,7 @@ import { Usage } from './screens/Usage';
 import { SavedAnswers } from './screens/SavedAnswers';
 import { ControlTower } from './screens/ControlTower';
 import { AuthPortal } from './screens/AuthPortal';
+import type { ControlTowerResult, UsageControlResult } from './api/types';
 
 export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Attention: LayoutGrid,
@@ -130,8 +131,9 @@ export function App() {
 }
 
 function AdminApp() {
-  const { client, project } = useStore();
+  const { client, project, env } = useStore();
   const navigation = useProjectNavigation(client, project);
+  const signals = useShellSignals(client, project, env);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadSidebarState);
   const toggleSidebar = () => {
@@ -158,15 +160,15 @@ function AdminApp() {
       </a>
       <div className="min-h-screen bg-background md:flex md:h-screen">
         <MobileTopbar />
-        <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} navigation={navigation} />
-        <MobileNavDrawer navigation={navigation} onNavigate={() => setMobileNavOpen(false)} />
+        <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} navigation={navigation} signals={signals} />
+        <MobileNavDrawer navigation={navigation} signals={signals} onNavigate={() => setMobileNavOpen(false)} />
         <Main />
       </div>
     </Dialog>
   );
 }
 
-function Sidebar({ collapsed, onToggle, navigation }: { collapsed: boolean; onToggle: () => void; navigation: ProjectNavigation }) {
+function Sidebar({ collapsed, onToggle, navigation, signals }: { collapsed: boolean; onToggle: () => void; navigation: ProjectNavigation; signals: ShellSignals }) {
   return (
     <aside
       className={cn(
@@ -194,7 +196,7 @@ function Sidebar({ collapsed, onToggle, navigation }: { collapsed: boolean; onTo
         </Button>
       </div>
       <nav className={cn('min-h-0 flex-1 overflow-y-auto', collapsed ? 'px-2' : 'px-3')} aria-label="Customer admin">
-        <NavGroups collapsed={collapsed} navigation={navigation} />
+        <NavGroups collapsed={collapsed} navigation={navigation} signals={signals} />
       </nav>
       <ConnectionFooter collapsed={collapsed} />
     </aside>
@@ -217,7 +219,7 @@ function MobileTopbar() {
   );
 }
 
-function MobileNavDrawer({ onNavigate, navigation }: { onNavigate: () => void; navigation: ProjectNavigation }) {
+function MobileNavDrawer({ onNavigate, navigation, signals }: { onNavigate: () => void; navigation: ProjectNavigation; signals: ShellSignals }) {
   return (
     <DialogContent
       showCloseButton={false}
@@ -240,7 +242,7 @@ function MobileNavDrawer({ onNavigate, navigation }: { onNavigate: () => void; n
           </DialogClose>
         </div>
         <nav className="flex-1 px-3" aria-label="Customer admin">
-          <NavGroups navigation={navigation} onNavigate={onNavigate} />
+          <NavGroups navigation={navigation} signals={signals} onNavigate={onNavigate} />
         </nav>
         <ConnectionFooter onDisconnect={onNavigate} />
       </aside>
@@ -248,12 +250,12 @@ function MobileNavDrawer({ onNavigate, navigation }: { onNavigate: () => void; n
   );
 }
 
-function NavGroups({ navigation, onNavigate, collapsed = false }: { navigation: ProjectNavigation; onNavigate?: () => void; collapsed?: boolean }) {
+function NavGroups({ navigation, signals, onNavigate, collapsed = false }: { navigation: ProjectNavigation; signals: ShellSignals; onNavigate?: () => void; collapsed?: boolean }) {
   return (
     <>
       <div className="mb-1">
         {navigation.primary.map((item) => (
-          <NavigationRow key={item.label} item={item} collapsed={collapsed} onNavigate={onNavigate} />
+          <NavigationRow key={item.label} item={item} signal={signals[item.label]} collapsed={collapsed} onNavigate={onNavigate} />
         ))}
       </div>
       <SecondaryNavigation navigation={navigation} collapsed={collapsed} onNavigate={onNavigate} />
@@ -286,8 +288,9 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
   );
 }
 
-function NavigationRow({ item, collapsed, onNavigate }: {
+function NavigationRow({ item, signal, collapsed, onNavigate }: {
   item: NavigationItem;
+  signal?: ShellSignal;
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
@@ -325,8 +328,94 @@ function NavigationRow({ item, collapsed, onNavigate }: {
     >
       <Icon className="size-4 shrink-0" />
       <span className={collapsed ? 'sr-only' : undefined}>{item.label}</span>
+      {signal && (
+        <span
+          aria-hidden="true"
+          title={`${item.label}: ${signal.label}`}
+          className={cn(
+            'ml-auto max-w-32 truncate rounded-full px-1.5 py-0.5 text-xs font-medium tabular-nums',
+            collapsed && 'max-w-8 px-1',
+            signal.tone === 'warning'
+              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+              : signal.tone === 'danger'
+                ? 'bg-destructive/10 text-destructive'
+                : 'bg-muted text-muted-foreground',
+          )}
+        >
+          {collapsed && signal.label.includes('this cycle') ? '•' : signal.label}
+        </span>
+      )}
     </NavLink>
   );
+}
+
+type ShellSignalTone = 'neutral' | 'warning' | 'danger';
+interface ShellSignal { label: string; tone: ShellSignalTone }
+type ShellSignals = Partial<Record<string, ShellSignal>>;
+
+function useShellSignals(
+  client: ReturnType<typeof useStore>['client'],
+  project: string | null,
+  env: string,
+): ShellSignals {
+  const [signals, setSignals] = useState<ShellSignals>({});
+  useEffect(() => {
+    let current = true;
+    setSignals((existing) => Object.keys(existing).length > 0 ? {} : existing);
+    if (!client || !project) return () => { current = false; };
+    const period = new Date().toISOString().slice(0, 7);
+    const signalClient = client as unknown as {
+      controlTower?: (slug: string, targetEnv: string, range: '30d') => Promise<ControlTowerResult>;
+      usageControl?: (targetPeriod: string) => Promise<UsageControlResult>;
+    };
+    const readAttention = typeof signalClient.controlTower === 'function'
+      ? () => signalClient.controlTower!(project, env, '30d')
+      : null;
+    const readUsage = typeof signalClient.usageControl === 'function'
+      ? () => signalClient.usageControl!(period)
+      : null;
+    if (!readAttention && !readUsage) return () => { current = false; };
+    void Promise.all([
+      readAttention
+        ? readAttention().catch(() => null)
+        : Promise.resolve(null),
+      readUsage
+        ? readUsage().catch(() => null)
+        : Promise.resolve(null),
+    ]).then(([attention, usage]) => {
+      if (!current) return;
+      const next: ShellSignals = {};
+      const attentionSignal = attentionNavigationSignal(attention);
+      if (attentionSignal) next.Attention = attentionSignal;
+      if (usage) next.Usage = usageNavigationSignal(usage);
+      setSignals(next);
+    });
+    return () => { current = false; };
+  }, [client, env, project]);
+  return signals;
+}
+
+function attentionNavigationSignal(control: Pick<ControlTowerResult, 'attention'> | null): ShellSignal | null {
+  const count = control?.attention.filter((item) => item.state === 'open').length ?? 0;
+  return count > 0 ? { label: String(count), tone: 'warning' } : null;
+}
+
+export function usageNavigationSignal(usage: Pick<UsageControlResult, 'cap' | 'answer'>): ShellSignal {
+  if (usage.cap.state !== 'finite' || usage.cap.value === null) {
+    return { label: `${formatCycleQuantity(usage.answer.primary_value?.value)} this cycle`, tone: 'neutral' };
+  }
+  const used = Math.max(0, usage.cap.value - (usage.cap.remaining ?? usage.cap.value));
+  const ratio = usage.cap.value === 0 ? 0 : used / usage.cap.value;
+  return {
+    label: `${Math.round(ratio * 100)}%`,
+    tone: ratio >= 1 ? 'danger' : ratio >= 0.75 ? 'warning' : 'neutral',
+  };
+}
+
+function formatCycleQuantity(value: number | string | null | undefined): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return new Intl.NumberFormat('en-US').format(value);
+  if (typeof value === 'string' && /^\d+$/.test(value)) return new Intl.NumberFormat('en-US').format(BigInt(value));
+  return 'Unknown';
 }
 
 function ConnectionFooter({ onDisconnect, collapsed = false }: { onDisconnect?: () => void; collapsed?: boolean }) {

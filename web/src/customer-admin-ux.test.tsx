@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App, NAV_ICONS } from './App';
+import { App, NAV_ICONS, usageNavigationSignal } from './App';
 import { useStore } from './store';
 import {
   Browser,
@@ -137,6 +137,35 @@ describe('customer admin shell', () => {
     expect(screen.getByRole('link', { name: 'Web' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Funnels' })).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: /^(Attention|Web|Funnels|Saved|People|Ship|Usage|Setup)$/ })).toHaveLength(8);
+  });
+
+  it('shows server-owned attention and finite usage signals in the shell', async () => {
+    const current = baseStore() as any;
+    current.client.controlTower = vi.fn().mockResolvedValue({
+      attention: [
+        { id: 'a1', state: 'open' },
+        { id: 'a2', state: 'open' },
+        { id: 'a3', state: 'resolved' },
+      ],
+    });
+    current.client.usageControl = vi.fn().mockResolvedValue({
+      cap: { state: 'finite', value: 1_000, remaining: 200 },
+      answer: { primary_value: { value: 800 } },
+    });
+    mockedStore.mockReturnValue(current);
+
+    render(<MemoryRouter><App /></MemoryRouter>);
+
+    await waitFor(() => expect(within(screen.getByRole('link', { name: 'Attention' })).getByText('2')).toBeInTheDocument());
+    const usageSignal = within(screen.getByRole('link', { name: 'Usage' })).getByText('80%');
+    expect(usageSignal).toHaveClass('text-amber-700');
+  });
+
+  it('keeps an unconfigured cap neutral and names only real cycle volume', () => {
+    expect(usageNavigationSignal({
+      cap: { state: 'not_configured', value: null, remaining: null },
+      answer: { primary_value: { value: 1_234 } },
+    } as never)).toEqual({ label: '1,234 this cycle', tone: 'neutral' });
   });
 
   it('uses semantic Hugeicons and readable neutral hover text', () => {
