@@ -310,6 +310,14 @@ describe('organization usage ledger', () => {
         project_slug: 'alpha', project_name: 'Alpha', environment: 'prod',
         accepted_events: 1200, share: 1, change_7d: 0.1, last_ingest_at: `${period}-15T11:55:00.000Z`,
       }],
+      reconciliation: {
+        metered_quantity: 1200,
+        attributed_quantity: 1200,
+        difference: 0,
+        unattributed_quantity: 0,
+        overattributed_quantity: 0,
+        state: 'reconciled',
+      },
       ...overrides,
     };
   }

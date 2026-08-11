@@ -77,6 +77,14 @@ describe('Usage month range', () => {
         project_slug: 'alpha', project_name: 'Alpha', environment: 'prod', accepted_events: 620,
         share: 1, change_7d: 0.25, last_ingest_at: '2026-08-10T11:00:00.000Z',
       }],
+      reconciliation: {
+        metered_quantity: 620,
+        attributed_quantity: 620,
+        difference: 0,
+        unattributed_quantity: 0,
+        overattributed_quantity: 0,
+        state: 'reconciled',
+      },
     });
     usage.mockResolvedValue({
       meter: 'events_stored', period: monthOffset(0), quantity: 7, hard_limit: 100,
@@ -98,6 +106,9 @@ describe('Usage month range', () => {
 
     expect(await screen.findByText('620 accepted events this UTC cycle')).toBeInTheDocument();
     expect(screen.getByText('62 / day')).toBeInTheDocument();
+    expect(screen.getByText('7-day moving average')).toBeInTheDocument();
+    expect(screen.getByText(/As of Aug 10, 2026/)).toBeInTheDocument();
+    expect(screen.getByText(/3 of 7 calendar days with accepted events/)).toBeInTheDocument();
     expect(screen.getByText('1,922')).toBeInTheDocument();
     expect(screen.getByText('+25%')).toBeInTheDocument();
     expect(screen.getAllByText('Projected Aug 17, 2026')).toHaveLength(2);
@@ -106,6 +117,37 @@ describe('Usage month range', () => {
     expect(usageControl).toHaveBeenCalledOnce();
     expect(usageControl).toHaveBeenCalledWith(monthOffset(0));
     expect(usage).not.toHaveBeenCalled();
+  });
+
+  it('surfaces current-cycle quantity that is not reconciled to retained contributors', async () => {
+    const base = await usageControl();
+    usageControl.mockClear();
+    usageControl.mockResolvedValue({
+      ...base,
+      evidence: {
+        ...base.evidence,
+        state: 'partial',
+        warnings: [{
+          code: 'ledger_attribution_gap',
+          message: 'Current projection is 620, while retained contributor ledger facts total 600.',
+          remediation_action_id: 'review_usage_contributors',
+        }],
+      },
+      contributors: [{ ...base.contributors[0], accepted_events: 600, share: 600 / 620 }],
+      reconciliation: {
+        metered_quantity: 620,
+        attributed_quantity: 600,
+        difference: 20,
+        unattributed_quantity: 20,
+        overattributed_quantity: 0,
+        state: 'partial',
+      },
+    });
+
+    render(<Usage />);
+
+    expect(await screen.findByText('20 accepted events are not reconciled to retained project and environment contributors.')).toBeInTheDocument();
+    expect(screen.getByText('600 of 620 events attributed')).toBeInTheDocument();
   });
 
   it('keeps UTC presets correct across a year boundary', () => {

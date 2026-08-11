@@ -38,6 +38,7 @@ describe('project portfolio health', () => {
     expect(screen.getAllByText('Needs attention').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('12 · 24h / 80 · 7d')).toBeInTheDocument();
     expect(screen.getByText('1 active contract')).toBeInTheDocument();
+    expect(screen.getByText('2 attention items')).toBeInTheDocument();
     expect(screen.getByText('Off-standard event volume')).toBeInTheDocument();
     fireEvent.click(screen.getByText('4 server guardrails'));
     expect(screen.getByText('Registered coverage is at least 99%')).toBeInTheDocument();

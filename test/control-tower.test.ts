@@ -216,6 +216,14 @@ describe('organization usage control', () => {
           share: 10 / 70,
         }),
       ]),
+      reconciliation: {
+        metered_quantity: 70,
+        attributed_quantity: 70,
+        difference: 0,
+        unattributed_quantity: 0,
+        overattributed_quantity: 0,
+        state: 'reconciled',
+      },
       evidence: expect.objectContaining({
         source_refs: [{ kind: 'usage_ledger', meter: 'events_stored' }],
         aggregation: expect.stringContaining('ingest time'),
@@ -225,7 +233,7 @@ describe('organization usage control', () => {
     expect(() => usageControlResultSchema.parse(result.body)).not.toThrow();
     expect(Object.keys(result.body).sort()).toEqual([
       'answer', 'attention', 'cap', 'contributors', 'cycle', 'evidence', 'generated_at',
-      'meter', 'pace', 'primary_action', 'request_id', 'schema_version', 'scope',
+      'meter', 'pace', 'primary_action', 'reconciliation', 'request_id', 'schema_version', 'scope',
       'secondary_actions', 'threshold_forecasts',
     ]);
   });
@@ -246,6 +254,14 @@ describe('organization usage control', () => {
           { percent: 100, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
         ],
         contributors: [],
+        reconciliation: {
+          metered_quantity: 0,
+          attributed_quantity: 0,
+          difference: 0,
+          unattributed_quantity: 0,
+          overattributed_quantity: 0,
+          state: 'reconciled',
+        },
       });
       const secret = await api(foreign, foreign.secretToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
       expect(secret.status).toBe(403);

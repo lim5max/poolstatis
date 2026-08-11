@@ -290,10 +290,19 @@ function UsageHero({ usage, planName, mode, onReviewContributors }: {
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-1">
-          <UsageFact label="Current pace" value={usage.pace.events_per_day_7d === null ? 'Unavailable' : `${whole(Math.round(usage.pace.events_per_day_7d))} / day`} note={`${usage.pace.observed_days} observed ingest days`} />
+          <UsageFact label="Current pace" value={usage.pace.events_per_day_7d === null ? 'Unavailable' : `${whole(Math.round(usage.pace.events_per_day_7d))} / day`} note="7-day moving average" />
           <UsageFact label="Projected cycle end" value={usage.pace.projected_cycle_end === null ? 'Unavailable' : whole(Math.round(usage.pace.projected_cycle_end))} note={forecastNote} />
         </div>
       </div>
+      <details className="mt-4 rounded-control border bg-muted/20">
+        <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Forecast evidence</DisclosureSummary>
+        <div className="space-y-1 border-t px-3 py-3 text-sm text-muted-foreground">
+          <p>As of {formatForecastDate(usage.evidence.as_of) ?? 'Unavailable'} · {usage.pace.observed_days} of {usage.evidence.sample?.eligible ?? 7} calendar days with accepted events</p>
+          <p>{usage.evidence.aggregation ?? 'Accepted events are measured from the immutable usage ledger in UTC.'}</p>
+          {usage.evidence.warnings.map((warning) => <p key={warning.code}>{warning.message}</p>)}
+          {usage.evidence.unavailable_reasons.map((reason) => <p key={reason.code}>{reason.message}</p>)}
+        </div>
+      </details>
       <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-2xl text-sm text-muted-foreground">{usage.cap.consequence_at_100_percent ?? 'Accepted events continue to be metered; configure an entitlement server-side if enforcement is required.'}</p>
         <div className="flex flex-wrap gap-2">
@@ -325,8 +334,16 @@ function UsageFact({ label, value, note }: { label: string; value: string; note:
 }
 
 function CurrentContributors({ usage }: { usage: UsageControlResult }) {
+  const reconciliation = usage.reconciliation;
+  const reconciliationMessage = reconciliation.unattributed_quantity > 0
+    ? `${whole(reconciliation.unattributed_quantity)} accepted events are not reconciled to retained project and environment contributors.`
+    : reconciliation.overattributed_quantity > 0
+      ? `Retained contributor facts exceed the metered organization total by ${whole(reconciliation.overattributed_quantity)} events.`
+      : null;
   return (
     <Panel title={<h2 id="usage-contributors-title">Current contributors</h2>} right={<span className="text-sm text-muted-foreground">Current UTC cycle</span>}>
+      <p className="mb-3 text-sm text-muted-foreground">{whole(reconciliation.attributed_quantity)} of {whole(reconciliation.metered_quantity)} events attributed</p>
+      {reconciliationMessage && <div className="mb-3"><WarningNote>{reconciliationMessage}</WarningNote></div>}
       {usage.contributors.length === 0 ? <EmptyState headline={`No stored events in ${usage.cycle.from.slice(0, 7)}`} lead="Accepted events will appear here after durable ingest." /> : (
         <TableScroll testId="usage-breakdown-scroll"><Table>
           <TableHeader><TableRow><TableHead>Project</TableHead><TableHead>Environment</TableHead><TableHead className="text-right">Accepted</TableHead><TableHead className="text-right">Share</TableHead><TableHead className="text-right">7-day change</TableHead><TableHead>Last ingest</TableHead></TableRow></TableHeader>

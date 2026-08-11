@@ -1577,6 +1577,14 @@ export interface UsageControlResult extends ControlTowerResult {
     change_7d: number | null;
     last_ingest_at: string | null;
   }>;
+  reconciliation: {
+    metered_quantity: number;
+    attributed_quantity: number;
+    difference: number;
+    unattributed_quantity: number;
+    overattributed_quantity: number;
+    state: 'reconciled' | 'partial';
+  };
 }
 
 export interface OrganizationUsageActivity {

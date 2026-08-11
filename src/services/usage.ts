@@ -99,6 +99,14 @@ export const usageControlResultSchema = controlTowerResultSchema.extend({
     change_7d: z.number().nullable(),
     last_ingest_at: z.string().datetime().nullable(),
   }).strict()),
+  reconciliation: z.object({
+    metered_quantity: z.number().int().nonnegative(),
+    attributed_quantity: z.number().int().nonnegative(),
+    difference: z.number().int(),
+    unattributed_quantity: z.number().int().nonnegative(),
+    overattributed_quantity: z.number().int().nonnegative(),
+    state: z.enum(['reconciled', 'partial']),
+  }).strict(),
 }).strict();
 
 export type UsageControlResult = z.infer<typeof usageControlResultSchema>;
@@ -295,6 +303,16 @@ export async function getOrganizationUsageControl(
         last_ingest_at: row.last_ingest_at ? new Date(row.last_ingest_at).toISOString() : null,
       };
     });
+    const attributedQuantity = contributors.reduce((sum, contributor) => sum + contributor.accepted_events, 0);
+    const difference = quantity - attributedQuantity;
+    const reconciliation: UsageControlResult['reconciliation'] = {
+      metered_quantity: quantity,
+      attributed_quantity: attributedQuantity,
+      difference,
+      unattributed_quantity: Math.max(0, difference),
+      overattributed_quantity: Math.max(0, -difference),
+      state: difference === 0 ? 'reconciled' : 'partial',
+    };
     const actionable = thresholdForecasts
       .filter((forecast) => forecast.percent >= 75
         && (forecast.state === 'reached' || forecast.state === 'projected'))
@@ -362,6 +380,7 @@ export async function getOrganizationUsageControl(
       },
       threshold_forecasts: thresholdForecasts,
       contributors,
+      reconciliation,
     };
     await client.query('COMMIT');
     return usageControlResultSchema.parse(result);
