@@ -6,8 +6,8 @@ import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visual
 import type { OperationalQueryInput, OperationalQueryResult, PersonResult } from '../analysis/operations';
 
 export class ApiError extends Error {
-  constructor(public code: string, message: string, public hint?: string, public status?: number) {
-    super(message);
+  constructor(public code: string, message: string, public hint?: string, public status?: number, public requestId?: string) {
+    super(requestId ? `${message} (Request ID: ${requestId})` : message);
   }
 }
 
@@ -17,7 +17,7 @@ export interface AccessTokenRequest {
 
 export type AccessTokenProvider = (request?: AccessTokenRequest) => Promise<string>;
 
-type ApiErrorDetails = { code?: string; message?: string; hint?: string };
+type ApiErrorDetails = { code?: string; message?: string; hint?: string; requestId?: string };
 
 function apiErrorDetails(json: unknown): ApiErrorDetails | null {
   if (!json || typeof json !== 'object') return null;
@@ -35,7 +35,10 @@ function apiErrorDetails(json: unknown): ApiErrorDetails | null {
       ? record.message
       : typeof record.error_description === 'string' ? record.error_description : undefined;
   const hint = typeof candidate.hint === 'string' ? candidate.hint : undefined;
-  return { ...(code ? { code } : {}), ...(message ? { message } : {}), ...(hint ? { hint } : {}) };
+  const requestId = typeof candidate.request_id === 'string'
+    ? candidate.request_id
+    : typeof record.request_id === 'string' ? record.request_id : undefined;
+  return { ...(code ? { code } : {}), ...(message ? { message } : {}), ...(hint ? { hint } : {}), ...(requestId ? { requestId } : {}) };
 }
 
 function isSessionNotFound(status: number, details: ApiErrorDetails | null): boolean {
@@ -103,7 +106,8 @@ export class PoolstatisClient {
     const json = await res.json().catch(() => null);
     if (!res.ok) {
       const e = apiErrorDetails(json);
-      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
+      const requestId = e?.requestId ?? res.headers.get('x-request-id') ?? undefined;
+      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status, requestId);
     }
     return json as T;
   }
@@ -120,7 +124,8 @@ export class PoolstatisClient {
     if (!res.ok) {
       const json = await res.json().catch(() => null);
       const e = apiErrorDetails(json);
-      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
+      const requestId = e?.requestId ?? res.headers.get('x-request-id') ?? undefined;
+      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status, requestId);
     }
     return res;
   }

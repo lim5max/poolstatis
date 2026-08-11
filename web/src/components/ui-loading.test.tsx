@@ -8,6 +8,7 @@ describe('Loading', () => {
 
     expect(screen.getByRole('status', { name: 'Loading product answer…' })).toHaveAttribute('aria-busy', 'true');
     expect(container.querySelectorAll('[data-slot="loading-skeleton"]')).toHaveLength(4);
+    expect(container.querySelectorAll('[data-slot="loading-skeleton"].motion-reduce\\:animate-none')).toHaveLength(4);
     expect(container.querySelector('svg')).toBeNull();
   });
 });

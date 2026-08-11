@@ -123,6 +123,23 @@ describe('customer admin shell', () => {
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeInTheDocument();
   });
 
+  it('keeps every Data & settings route reachable when the desktop navigation is collapsed', async () => {
+    render(<MemoryRouter><App /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse navigation' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Data & settings' }), { key: 'ArrowDown' });
+
+    for (const name of ['Definitions', 'Events', 'Registry', 'Experience', 'Experiments', 'Decisions', 'Automations', 'Keys']) {
+      expect(await screen.findByRole('menuitem', { name })).toBeInTheDocument();
+    }
+  });
+
+  it('provides one focusable route heading for control screens that do not own a visible title', async () => {
+    render(<MemoryRouter initialEntries={['/data']}><App /></MemoryRouter>);
+
+    const heading = await screen.findByRole('heading', { name: 'Events', level: 1 });
+    await waitFor(() => expect(heading).toHaveFocus());
+  });
+
   it('keeps answer jobs primary and control surfaces behind Data & settings', () => {
     render(<MemoryRouter><App /></MemoryRouter>);
     expect(screen.getAllByText('Attention').length).toBeGreaterThanOrEqual(2);

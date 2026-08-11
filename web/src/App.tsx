@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -114,6 +114,7 @@ const titleFor = (path: string) => (
     ? 'Actor profile'
     : TITLES[path] ?? 'Poolstatis'
 );
+const FALLBACK_ROUTE_HEADINGS = new Set(['/projects', '/profile', '/registry', '/data', '/keys', '/experience']);
 const isProjectScoped = (path: string) => path === '/' || path.startsWith('/analyze') || path.startsWith('/setup') || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions') || path.startsWith('/automation');
 const SIDEBAR_KEY = 'poolstatis.sidebar.collapsed';
 const loadSidebarState = () => {
@@ -271,7 +272,25 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
   if (collapsed) {
     return (
       <div className="mt-2 border-t pt-2">
-        <NavigationRow item={{ label: 'Definitions', to: '/measurement', availability: 'available' }} collapsed onNavigate={onNavigate} />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm" className="mx-auto flex" aria-label="Data & settings" title="Data & settings">
+              <Catalogue className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="right" align="start" className="min-w-44">
+            {navigation.secondary.map((item) => {
+              const Icon = NAV_ICONS[item.label] ?? LayoutGrid;
+              return item.availability === 'available' && item.to ? (
+                <DropdownMenuItem key={item.label} asChild>
+                  <NavLink to={item.to} onClick={onNavigate}><Icon className="size-4" />{item.label}</NavLink>
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem key={item.label} disabled title={item.reason}><Icon className="size-4" />{item.label}</DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     );
   }
@@ -488,6 +507,7 @@ function Main() {
   const { projects, project, setProject, env } = useStore();
   const title = titleFor(loc.pathname);
   const showProject = isProjectScoped(loc.pathname);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     const main = mainRef.current;
@@ -531,7 +551,8 @@ function Main() {
         </div>
       </div>
       <motion.main ref={mainRef} id="main-content" tabIndex={-1} className="mx-auto w-full max-w-7xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
-        initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
+        initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={reduceMotion ? { duration: 0 } : { duration: 0.26, ease: 'easeOut' }}>
+        {FALLBACK_ROUTE_HEADINGS.has(loc.pathname) && <h1 className="sr-only">{title}</h1>}
         <SetupResumeBanner path={loc.pathname} />
         <Routes>
           <Route path="/" element={<Guarded><Overview /></Guarded>} />

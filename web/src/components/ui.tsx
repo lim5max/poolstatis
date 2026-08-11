@@ -125,10 +125,10 @@ export function Loading({ what }: { what?: string }) {
       aria-busy="true"
     >
       <span className="sr-only">{label}</span>
-      <div data-slot="loading-skeleton" aria-hidden="true" className="h-4 w-28 animate-pulse rounded bg-muted" />
-      <div data-slot="loading-skeleton" aria-hidden="true" className="h-8 max-w-sm animate-pulse rounded bg-muted" />
-      <div data-slot="loading-skeleton" aria-hidden="true" className="h-4 w-full max-w-2xl animate-pulse rounded bg-muted" />
-      <div data-slot="loading-skeleton" aria-hidden="true" className="h-40 w-full animate-pulse rounded-panel bg-muted/70" />
+      <div data-slot="loading-skeleton" aria-hidden="true" className="h-4 w-28 animate-pulse rounded bg-muted motion-reduce:animate-none" />
+      <div data-slot="loading-skeleton" aria-hidden="true" className="h-8 max-w-sm animate-pulse rounded bg-muted motion-reduce:animate-none" />
+      <div data-slot="loading-skeleton" aria-hidden="true" className="h-4 w-full max-w-2xl animate-pulse rounded bg-muted motion-reduce:animate-none" />
+      <div data-slot="loading-skeleton" aria-hidden="true" className="h-40 w-full animate-pulse rounded-panel bg-muted/70 motion-reduce:animate-none" />
     </div>
   );
 }
