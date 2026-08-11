@@ -128,6 +128,46 @@ describe('trend queries', () => {
 });
 
 describe('funnel queries', () => {
+  it('computes one adjacent-period comparison with the same project, environment and steps', async () => {
+    await activeMetric(env, { key: 'comparison_started', source: { event: 'comparison.started' } });
+    await activeMetric(env, { key: 'comparison_completed', source: { event: 'comparison.completed' } });
+    const timestamp = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+    const events = [
+      { event: 'comparison.started', distinct_id: 'previous-1', timestamp: timestamp(36) },
+      { event: 'comparison.completed', distinct_id: 'previous-1', timestamp: timestamp(35) },
+      { event: 'comparison.started', distinct_id: 'previous-2', timestamp: timestamp(36) },
+      ...['current-1', 'current-2', 'current-3', 'current-4'].map((distinct_id) => ({
+        event: 'comparison.started', distinct_id, timestamp: timestamp(12),
+      })),
+      ...['current-1', 'current-2', 'current-3'].map((distinct_id) => ({
+        event: 'comparison.completed', distinct_id, timestamp: timestamp(11),
+      })),
+    ];
+    const ingested = await api(env, env.ingestToken, 'POST', '/i/v1/events', { events });
+    expect(ingested.body.accepted).toBe(events.length);
+
+    const res = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'funnel',
+      steps: [{ metric: 'comparison_started' }, { metric: 'comparison_completed' }],
+      date_from: timestamp(20),
+      date_to: new Date(Date.now() + 60_000).toISOString(),
+      env: 'prod',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.steps.map((step: { actors: number }) => step.actors)).toEqual([4, 3]);
+    expect(res.body.summary).toMatchObject({
+      overall_conversion: 0.75,
+      previous_overall_conversion: 0.5,
+      delta_percentage_points: 25,
+    });
+    expect(res.body.answer.delta).toMatchObject({
+      value: 25,
+      unit: 'percentage_point',
+      direction: 'up',
+    });
+  });
+
   it('computes step conversion with inline steps', async () => {
     const res = await api(env, env.secretToken, 'POST', `${P()}/query`, {
       kind: 'funnel',

@@ -1150,7 +1150,11 @@ export class QueryService {
       );
     }
     let counts: number[];
+    let previousCounts: number[];
     let resultSource: 'native' | 'posthog' = 'native';
+    const durationMs = Math.max(0, to.getTime() - from.getTime());
+    const previousTo = from;
+    const previousFrom = new Date(from.getTime() - durationMs);
     if (sources[0]?.dataSource === 'posthog') {
       const connectionIds = new Set(sources.map((source) => source.connectionId));
       const connectionId = sources[0].connectionId;
@@ -1160,25 +1164,46 @@ export class QueryService {
           'all PostHog funnel metrics must use one available connection',
         );
       }
-      counts = await this.posthog.funnel({
-        projectId,
-        connectionId,
-        metricKeys: stepDefs.map(({ metric }) => metric.key),
-        steps: sources.map(({ event, filters }) => ({ event, filters })),
-        windowSeconds,
-        from,
-        to,
-      });
+      [counts, previousCounts] = await Promise.all([
+        this.posthog.funnel({
+          projectId,
+          connectionId,
+          metricKeys: stepDefs.map(({ metric }) => metric.key),
+          steps: sources.map(({ event, filters }) => ({ event, filters })),
+          windowSeconds,
+          from,
+          to,
+        }),
+        this.posthog.funnel({
+          projectId,
+          connectionId,
+          metricKeys: stepDefs.map(({ metric }) => metric.key),
+          steps: sources.map(({ event, filters }) => ({ event, filters })),
+          windowSeconds,
+          from: previousFrom,
+          to: previousTo,
+        }),
+      ]);
       resultSource = 'posthog';
     } else {
-      counts = await this.eventStore.funnel({
-        projectId,
-        env: q.env,
-        windowSeconds,
-        from,
-        to,
-        steps: sources.map(({ event, filters }) => ({ event, filters })),
-      });
+      [counts, previousCounts] = await Promise.all([
+        this.eventStore.funnel({
+          projectId,
+          env: q.env,
+          windowSeconds,
+          from,
+          to,
+          steps: sources.map(({ event, filters }) => ({ event, filters })),
+        }),
+        this.eventStore.funnel({
+          projectId,
+          env: q.env,
+          windowSeconds,
+          from: previousFrom,
+          to: previousTo,
+          steps: sources.map(({ event, filters }) => ({ event, filters })),
+        }),
+      ]);
     }
 
     const first = counts[0] ?? 0;
@@ -1191,10 +1216,16 @@ export class QueryService {
       conversion_from_prev: i === 0 ? 1 : ratio(actors, counts[i - 1]!),
       conversion_from_start: i === 0 ? 1 : ratio(actors, first),
     }));
+    const previousSteps = previousCounts.map((actors, i) => ({
+      label: stepDefs[i]!.label,
+      metric_key: stepDefs[i]!.metric.key,
+      purpose: stepDefs[i]!.metric.purpose,
+      actors,
+    }));
     return {
       kind: 'funnel',
       steps,
-      ...funnelControlBlocks(q, steps, now, resultSource, funnelGoal),
+      ...funnelControlBlocks(q, steps, now, resultSource, funnelGoal, previousSteps),
       meta: {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },

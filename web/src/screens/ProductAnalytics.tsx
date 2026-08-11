@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Loader2 } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ErrorNote, Loading } from '@/components/ui';
 import { AnswerCanvas, EvidenceLine, type EvidenceTrust } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { CreateSavedAnswerInput, Funnel, MeasurementTrust, Metric } from '../api/types';
+import type { CreateSavedAnswerInput, Experiment, Funnel, MeasurementTrust, Metric, Release } from '../api/types';
 import { useAsync, useStore } from '../store';
 import {
   ANALYSIS_TEMPLATES,
@@ -22,7 +22,6 @@ import {
   resolveRenderState,
   type AnalysisQueryInput,
   type AnalysisQueryResult,
-  type FunnelQueryInput,
   type FunnelQueryResult,
   type QueryInterval,
   type VisualizationSpec,
@@ -45,6 +44,16 @@ interface AnalysisRun {
   eventCount: number | null;
 }
 
+interface RequestedFunnelTransition {
+  fromStep: number;
+  toStep: number;
+}
+
+interface RelatedFunnelEvidence {
+  releases: Release[];
+  experiments: Experiment[];
+}
+
 const OPTION_TARGET = 'min-h-11 md:min-h-8';
 
 export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' | 'funnels' } = {}) {
@@ -52,6 +61,9 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const [params] = useSearchParams();
   const funnelSurface = surface === 'funnels';
   const requestedFunnel = funnelSurface ? params.get('funnel') ?? '' : '';
+  const requestedTransition = funnelSurface
+    ? requestedFunnelTransition(params.get('from_step'), params.get('to_step'))
+    : null;
   const initialTemplate = funnelSurface
     ? ANALYSIS_TEMPLATES.find((template) => template.key === 'activation-funnel')!
     : ANALYSIS_TEMPLATES.find((template) => template.key === params.get('template') && resolveTemplateCapability(template.key, CORE_ANALYZE_CAPABILITIES).status === 'available')
@@ -72,6 +84,14 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       properties: properties.filter((property) => property.scope === 'event' && property.status === 'trusted'),
     };
   }, [project, env]);
+  const relatedEvidence = useAsync(async (): Promise<RelatedFunnelEvidence> => {
+    if (!funnelSurface || !client || !project) return { releases: [], experiments: [] };
+    const [releases, experiments] = await Promise.all([
+      client.releases(project, { env }),
+      client.experiments(project),
+    ]);
+    return { releases, experiments };
+  }, [client, project, env, funnelSurface]);
   const [resourceKey, setResourceKey] = useState(requestedFunnel);
   const [range, setRange] = useState<TimeRangePreset>(template.defaultRange);
   const [interval, setInterval] = useState<QueryInterval>('day');
@@ -150,13 +170,10 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       dates,
     });
     try {
-      const [result, previousResult] = await Promise.all([
-        client!.query(runProject, query),
-        client!.query(
-          runProject,
-          query.kind === 'funnel' ? previousPeriodQuery(query) : previousAnalysisPeriodQuery(query),
-        ).catch(() => null),
-      ]);
+      const result = await client!.query(runProject, query);
+      const previousResult = query.kind === 'funnel'
+        ? null
+        : await client!.query(runProject, previousAnalysisPeriodQuery(query)).catch(() => null);
       if (generation !== runGeneration.current || scopeRef.current !== runScope) return;
       const metricKeys = queryMetricKeys(query, selectedFunnel);
       const trust = await readTrust(client!, runProject, runEnv, metricKeys, rangeDays(range));
@@ -170,13 +187,15 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         metric: selectedMetric,
         funnel: selectedFunnel,
         trust,
-        comparisonAvailable: previousResult?.kind === result.kind,
+        comparisonAvailable: result.kind === 'funnel'
+          ? result.summary?.previous_overall_conversion !== null && result.summary?.previous_overall_conversion !== undefined
+          : previousResult?.kind === result.kind,
       });
       setRun({
         spec,
         result,
         previousResult,
-        summary: summarizeAnswer(spec.title, result, previousResult, {
+        summary: summarizeProductAnswer(spec.title, result, previousResult, {
           metric: selectedMetric,
           breakdown,
         }),
@@ -306,7 +325,10 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         <FunnelBiggestLoss
           funnel={registry.data?.funnels.find((item) => item.key === (currentRun.spec.source.kind === 'funnel' ? currentRun.spec.source.key : '')) ?? null}
           result={currentRun.result}
-          comparison={currentRun.previousResult?.kind === 'funnel' ? currentRun.previousResult : null}
+          requestedTransition={requestedTransition}
+          relatedEvidence={relatedEvidence.data ?? { releases: [], experiments: [] }}
+          relatedEvidenceUnavailable={Boolean(relatedEvidence.error)}
+          env={env}
         />
       )}
 
@@ -592,68 +614,125 @@ function visualizationEvidenceTrust(status: VisualizationSpec['trust']['status']
   return status === 'trusted' ? 'trusted' : status === 'unavailable' ? 'unavailable' : 'partial';
 }
 
+function summarizeProductAnswer(
+  title: string,
+  result: AnalysisQueryResult,
+  previousResult: AnalysisQueryResult | null,
+  context: { metric?: Pick<Metric, 'type' | 'source'>; breakdown?: string },
+): StandardAnswerSummary {
+  if (result.kind !== 'funnel' || !result.summary) {
+    return summarizeAnswer(title, result, previousResult, context);
+  }
+  const currentValue = result.summary.overall_conversion;
+  const previousValue = result.summary.previous_overall_conversion;
+  const delta = result.summary.delta_percentage_points === null
+    ? null
+    : result.summary.delta_percentage_points / 100;
+  const deltaPercent = delta !== null && previousValue !== null && previousValue !== 0
+    ? delta / Math.abs(previousValue)
+    : null;
+  const movement = result.summary.delta_percentage_points === null
+    ? 'Previous-period comparison is unavailable.'
+    : Math.abs(result.summary.delta_percentage_points) < 0.05
+      ? 'It is stable versus the previous exact period.'
+      : `${result.summary.delta_percentage_points > 0 ? 'Up' : 'Down'} ${Math.abs(result.summary.delta_percentage_points).toLocaleString()} percentage points versus the previous exact period.`;
+  return {
+    takeaway: currentValue === null
+      ? `${title} is rendered, but the server summary has no conversion denominator.`
+      : `${title} is ${percent(currentValue)}. ${movement}`,
+    currentValue,
+    previousValue,
+    delta,
+    deltaPercent,
+    comparison: previousValue === null ? 'No safely comparable period headline' : 'Previous exact period',
+    followUp: deltaPercent !== null && Math.abs(deltaPercent) >= 0.1
+      ? 'Break this movement down by one trusted property.'
+      : 'Extend the range or inspect the funnel definition before acting.',
+  };
+}
+
 export interface FunnelLossSummary {
+  kind: 'absolute' | 'percentage';
   fromLabel: string;
   toLabel: string;
   fromMetric: string;
   toMetric: string;
   lostActors: number;
   dropRate: number | null;
-  previousLostActors: number | null;
-  previousDropRate: number | null;
-  dropRateDelta: number | null;
   overallConversion: number | null;
   previousOverallConversion: number | null;
+  deltaPercentagePoints: number | null;
 }
 
-export function biggestFunnelLoss(result: FunnelQueryResult, comparison: FunnelQueryResult | null): FunnelLossSummary | null {
-  if (result.steps.length < 2) return null;
-  const losses = result.steps.slice(1).map((step, index) => {
-    const previous = result.steps[index]!;
-    const lostActors = Math.max(0, previous.actors - step.actors);
-    return {
-      index,
-      previous,
-      step,
-      lostActors,
-      dropRate: previous.actors === 0 ? null : lostActors / previous.actors,
-    };
-  });
-  const biggest = losses.sort((left, right) => right.lostActors - left.lostActors)[0];
-  if (!biggest) return null;
-  const comparisonFrom = comparison?.steps[biggest.index];
-  const comparisonTo = comparison?.steps[biggest.index + 1];
-  const previousLostActors = comparisonFrom && comparisonTo
-    ? Math.max(0, comparisonFrom.actors - comparisonTo.actors)
-    : null;
-  const previousDropRate = comparisonFrom && previousLostActors !== null && comparisonFrom.actors > 0
-    ? previousLostActors / comparisonFrom.actors
-    : null;
-  const overallConversion = funnelOverallConversion(result);
-  const previousOverallConversion = comparison ? funnelOverallConversion(comparison) : null;
+export function selectServerFunnelLoss(
+  result: FunnelQueryResult,
+  requested?: RequestedFunnelTransition | null,
+): FunnelLossSummary | null {
+  const serverSummary = result.summary;
+  if (!serverSummary) return null;
+  const candidates = [
+    { kind: 'absolute' as const, loss: serverSummary.biggest_absolute_loss },
+    { kind: 'percentage' as const, loss: serverSummary.biggest_percentage_loss },
+  ];
+  const selected = requested
+    ? candidates.find(({ loss }) => loss?.from_step === requested.fromStep && loss.to_step === requested.toStep)
+    : candidates.find(({ loss }) => loss !== null);
+  if (!selected?.loss) return null;
+  const from = result.steps[selected.loss.from_step];
+  const to = result.steps[selected.loss.to_step];
+  if (!from || !to) return null;
   return {
-    fromLabel: biggest.previous.label,
-    toLabel: biggest.step.label,
-    fromMetric: biggest.previous.metric_key,
-    toMetric: biggest.step.metric_key,
-    lostActors: biggest.lostActors,
-    dropRate: biggest.dropRate,
-    previousLostActors,
-    previousDropRate,
-    dropRateDelta: biggest.dropRate === null || previousDropRate === null ? null : biggest.dropRate - previousDropRate,
-    overallConversion,
-    previousOverallConversion,
+    kind: selected.kind,
+    fromLabel: from.label,
+    toLabel: to.label,
+    fromMetric: from.metric_key,
+    toMetric: to.metric_key,
+    lostActors: selected.loss.lost_actors,
+    dropRate: selected.loss.drop_rate,
+    overallConversion: serverSummary.overall_conversion,
+    previousOverallConversion: serverSummary.previous_overall_conversion,
+    deltaPercentagePoints: serverSummary.delta_percentage_points,
   };
 }
 
-function FunnelBiggestLoss({ funnel, result, comparison }: { funnel: Funnel | null; result: FunnelQueryResult; comparison: FunnelQueryResult | null }) {
+function FunnelBiggestLoss({
+  funnel,
+  result,
+  requestedTransition,
+  relatedEvidence,
+  relatedEvidenceUnavailable,
+  env,
+}: {
+  funnel: Funnel | null;
+  result: FunnelQueryResult;
+  requestedTransition: RequestedFunnelTransition | null;
+  relatedEvidence: RelatedFunnelEvidence;
+  relatedEvidenceUnavailable: boolean;
+  env: string;
+}) {
   const [taskVisible, setTaskVisible] = useState(false);
   const [copied, setCopied] = useState(false);
-  const summary = biggestFunnelLoss(result, comparison);
-  if (!summary || !funnel) return null;
+  const summary = selectServerFunnelLoss(result, requestedTransition);
+  if (!funnel) return null;
+  if (!summary) {
+    return (
+      <AnswerCanvas>
+        <div className="p-4 sm:p-5">
+          <div className="text-sm font-medium text-muted-foreground">Biggest loss</div>
+          <h2 className="mt-1 text-xl font-semibold">Requested transition is unavailable</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            The server summary does not contain this transition. Open the funnel without step parameters or rerun it after checking the saved definition.
+          </p>
+        </div>
+      </AnswerCanvas>
+    );
+  }
   if (summary.lostActors === 0) {
     return <AnswerCanvas><div className="p-4 sm:p-5"><div className="text-sm font-medium text-muted-foreground">Biggest loss</div><h2 className="mt-1 text-xl font-semibold">No measured loss in this period</h2><p className="mt-2 text-sm text-muted-foreground">Every measured actor reached each saved funnel step. No loss or investigate action is implied.</p></div></AnswerCanvas>;
   }
+  const compatible = compatibleEvidence(result, summary.toMetric, relatedEvidence, env);
+  const absoluteLabel = funnelLossLabel(result, result.summary?.biggest_absolute_loss ?? null);
+  const percentageLabel = funnelLossLabel(result, result.summary?.biggest_percentage_loss ?? null);
   const task = `Investigate the biggest measured loss in funnel ${funnel.key} without changing its definition.\n\nGoal: ${funnel.goal}\nEnvironment and exact period are in the attached Poolstatis query.\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nCurrent loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nUse registered metrics and trusted properties only. Compare safe breakdowns, report sample and data-quality limits, and prepare an evidence-backed proposal for human review.`;
   const copyTask = async () => {
     try {
@@ -671,15 +750,50 @@ function FunnelBiggestLoss({ funnel, result, comparison }: { funnel: Funnel | nu
           <h2 className="mt-1 text-xl font-semibold">{summary.fromLabel} → {summary.toLabel}</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             {fmtActors(summary.lostActors)} lost · {summary.dropRate === null ? 'drop rate unavailable' : `${percent(summary.dropRate)} drop`}
-            {summary.dropRateDelta === null ? ' · previous-period comparison unavailable' : ` · ${signedPoints(summary.dropRateDelta)} vs previous period`}.
+            {summary.deltaPercentagePoints === null ? ' · previous-period comparison unavailable' : ` · overall ${signedPercentagePoints(summary.deltaPercentagePoints)} vs previous exact period`}.
           </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <FunnelFact label="Overall conversion" value={summary.overallConversion === null ? 'Unavailable' : percent(summary.overallConversion)} />
             <FunnelFact label="Previous conversion" value={summary.previousOverallConversion === null ? 'Unavailable' : percent(summary.previousOverallConversion)} />
+            <FunnelTransitionFact label="Biggest absolute" value={absoluteLabel} />
+            <FunnelTransitionFact label="Biggest percentage" value={percentageLabel} />
             <FunnelFact label="Affected goal" value={funnel.goal} />
           </div>
         </div>
         <Button className="h-11 w-full lg:w-auto" onClick={() => void copyTask()}>{copied ? 'Investigation copied' : 'Investigate this step'}</Button>
+      </div>
+      {result.evidence?.warnings.length ? (
+        <div className="border-t px-4 py-3 text-sm sm:px-5">
+          <div className="font-medium">Evidence notes</div>
+          {result.evidence.warnings.map((warning) => <p key={`${warning.code}:${warning.message}`} className="mt-1 text-muted-foreground">{warning.message}</p>)}
+        </div>
+      ) : null}
+      <div className="border-t px-4 py-4 text-sm sm:px-5">
+        <div className="font-medium">Related change evidence</div>
+        {compatible.releases.length === 0 && compatible.experiments.length === 0 ? (
+          <p className="mt-1 text-muted-foreground">
+            {relatedEvidenceUnavailable
+              ? 'Release and experiment evidence could not be read.'
+              : 'No compatible release or experiment overlaps this environment, metric and exact period.'}
+          </p>
+        ) : (
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+            {compatible.releases.map((release) => (
+              <Link key={release.id} className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">
+                Release {release.commit_sha.slice(0, 10)}
+              </Link>
+            ))}
+            {compatible.experiments.map((experiment) => (
+              <Link key={experiment.id} className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/experiments">
+                Experiment {experiment.name}
+              </Link>
+            ))}
+          </div>
+        )}
+        <p className="mt-3 text-muted-foreground">
+          This funnel finding cannot be saved directly to Decisions. Decisions accepts proposals only from evaluated registered releases.
+        </p>
+        <Link className="mt-2 inline-flex font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">Continue through Ship</Link>
       </div>
       {taskVisible && (
         <div className="border-t p-4 sm:p-5">
@@ -695,18 +809,21 @@ function FunnelFact({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0 rounded-control border bg-muted/20 p-3"><div className="text-sm text-muted-foreground">{label}</div><div className="mt-1 break-words font-medium">{value}</div></div>;
 }
 
-function funnelOverallConversion(result: FunnelQueryResult) {
-  const first = result.steps[0]?.actors;
-  const last = result.steps.at(-1)?.actors;
-  return first && last !== undefined ? last / first : null;
+function FunnelTransitionFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-control border bg-muted/20 p-3">
+      <div className="text-sm text-muted-foreground">{label}<span className="sr-only"> {value}</span></div>
+      <div aria-hidden="true" className="mt-1 break-words font-medium">{value}</div>
+    </div>
+  );
 }
 
 function percent(value: number) {
   return `${Math.round(value * 1_000) / 10}%`;
 }
 
-function signedPoints(value: number) {
-  const points = Math.round(value * 1_000) / 10;
+function signedPercentagePoints(value: number) {
+  const points = Math.round(value * 10) / 10;
   return `${points > 0 ? '+' : ''}${points} pp`;
 }
 
@@ -714,14 +831,49 @@ function fmtActors(value: number) {
   return `${value.toLocaleString()} ${value === 1 ? 'actor' : 'actors'}`;
 }
 
-export function previousPeriodQuery(query: FunnelQueryInput): FunnelQueryInput {
-  const from = Date.parse(query.date_from);
-  const to = Date.parse(query.date_to ?? '');
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return query;
-  const duration = to - from;
-  const previousTo = new Date(from - 1).toISOString();
-  const previousFrom = new Date(from - duration - 1).toISOString();
-  return { ...query, date_from: previousFrom, date_to: previousTo };
+function requestedFunnelTransition(from: string | null, to: string | null): RequestedFunnelTransition | null {
+  if (from === null && to === null) return null;
+  if (!/^\d+$/.test(from ?? '') || !/^\d+$/.test(to ?? '')) return null;
+  const fromStep = Number(from);
+  const toStep = Number(to);
+  return toStep === fromStep + 1 ? { fromStep, toStep } : null;
+}
+
+function funnelLossLabel(result: FunnelQueryResult, loss: NonNullable<FunnelQueryResult['summary']>['biggest_absolute_loss']): string {
+  if (!loss) return 'Unavailable';
+  const from = result.steps[loss.from_step];
+  const to = result.steps[loss.to_step];
+  return from && to ? `${from.label} → ${to.label}` : 'Unavailable';
+}
+
+function compatibleEvidence(
+  result: FunnelQueryResult,
+  metricKey: string,
+  evidence: RelatedFunnelEvidence,
+  env: string,
+): RelatedFunnelEvidence {
+  const from = Date.parse(result.meta.date_range.from);
+  const to = Date.parse(result.meta.date_range.to);
+  const releases = evidence.releases.filter((release) => {
+    const deployedAt = Date.parse(release.deployed_at ?? '');
+    return release.env === env
+      && ['deployed', 'observing', 'decided'].includes(release.status)
+      && release.contract_snapshot.primary_metric_key === metricKey
+      && Number.isFinite(deployedAt)
+      && deployedAt >= from
+      && deployedAt <= to;
+  });
+  const experiments = evidence.experiments.filter((experiment) => {
+    const startedAt = Date.parse(experiment.started_at ?? '');
+    const concludedAt = experiment.concluded_at ? Date.parse(experiment.concluded_at) : Number.POSITIVE_INFINITY;
+    return experiment.env === env
+      && ['running', 'concluded'].includes(experiment.status)
+      && experiment.primary_metric_key === metricKey
+      && Number.isFinite(startedAt)
+      && startedAt <= to
+      && concludedAt >= from;
+  });
+  return { releases, experiments };
 }
 
 function Control({ label, children }: { label: string; children: React.ReactNode }) {

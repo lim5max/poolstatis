@@ -105,6 +105,10 @@ export const attentionItemSchema = z.object({
     ref: z.string(),
   }).strict()),
   evidence: evidenceBlockSchema,
+  priority: z.object({
+    blocking_now: z.boolean(),
+    forecasted_at: z.string().datetime().nullable(),
+  }).strict().optional(),
   primary_action: controlTowerActionSchema,
 }).strict();
 
@@ -247,6 +251,44 @@ const severityOrder: Record<AttentionSeverity, number> = {
   info: 4,
 };
 
+const freshnessOrder: Record<EvidenceBlock['freshness'], number> = {
+  fresh: 0,
+  stale: 1,
+  unknown: 2,
+};
+
+/**
+ * Server-owned semantic priority. Optional priority metadata keeps the
+ * response additive for existing clients while making forecast ordering
+ * explicit for current and future rule composers.
+ */
+export function orderAttentionItems(items: AttentionItem[]): AttentionItem[] {
+  return [...items].sort((left, right) => {
+    const leftBlocking = left.priority?.blocking_now ?? left.evidence.state === 'blocked';
+    const rightBlocking = right.priority?.blocking_now ?? right.evidence.state === 'blocked';
+    if (leftBlocking !== rightBlocking) return leftBlocking ? -1 : 1;
+
+    const leftForecast = left.priority?.forecasted_at
+      ? Date.parse(left.priority.forecasted_at)
+      : Number.POSITIVE_INFINITY;
+    const rightForecast = right.priority?.forecasted_at
+      ? Date.parse(right.priority.forecasted_at)
+      : Number.POSITIVE_INFINITY;
+    if (leftForecast !== rightForecast) return leftForecast - rightForecast;
+
+    const severity = severityOrder[left.severity] - severityOrder[right.severity];
+    if (severity !== 0) return severity;
+
+    const affected = right.affected.length - left.affected.length;
+    if (affected !== 0) return affected;
+
+    const freshness = freshnessOrder[left.evidence.freshness] - freshnessOrder[right.evidence.freshness];
+    if (freshness !== 0) return freshness;
+
+    return left.rule_id.localeCompare(right.rule_id) || left.id.localeCompare(right.id);
+  });
+}
+
 function operationalEvidence(
   now: Date,
   state: TrustState,
@@ -310,6 +352,7 @@ function warningAttention(
       'accumulated ingest warnings by warning class and event name; raw samples are excluded',
       { eligible: null, observed: observations, coverage: null },
     ),
+    priority: { blocking_now: kind === 'rejected', forecasted_at: null },
     primary_action: action,
   });
 }
@@ -355,6 +398,7 @@ export async function getProjectControlTower(
         'registered terminal-event specifications compared with current entity state',
         { eligible: quality.checked.evidence_rows, observed: quality.issues.length, coverage: null },
       ),
+      priority: { blocking_now: true, forecasted_at: null },
       primary_action: { id: 'review_data_quality', kind: 'navigate', label: 'Review data quality', href: `/events?env=${encodeURIComponent(env)}&quality=conflict` },
     });
   }
@@ -373,6 +417,7 @@ export async function getProjectControlTower(
         ...operationalEvidence(now, 'trusted', 'decision.awaiting_approval', 'proposed decisions joined to release environment', { eligible: decisions.length, observed: decisions.length, coverage: 1 }),
         source_refs: decisions.map((decision) => ({ kind: 'release' as const, id: decision.release_id })),
       },
+      priority: { blocking_now: false, forecasted_at: null },
       primary_action: { id: 'review_decisions', kind: 'navigate', label: 'Review decisions', href: '/changes' },
     });
   }
@@ -389,18 +434,18 @@ export async function getProjectControlTower(
       impact: 'A trusted product answer remains unavailable until the required evidence exists.',
       affected: [{ kind: 'project', ref: `${project.slug}:${env}` }],
       evidence: operationalEvidence(now, 'partial', `onboarding.${blocker.key}`, 'required onboarding gates', { eligible: 1, observed: 0, coverage: 0 }),
+      priority: { blocking_now: true, forecasted_at: null },
       primary_action: { id: 'continue_setup', kind: 'navigate', label: 'Continue setup', href: `/setup?env=${encodeURIComponent(env)}` },
     });
   }
   if (funnelItem) attention.push(funnelItem);
-  attention.sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity]
-    || left.rule_id.localeCompare(right.rule_id));
-  const primaryAction = attention[0]?.primary_action
+  const orderedAttention = orderAttentionItems(attention);
+  const primaryAction = orderedAttention[0]?.primary_action
     ?? { id: 'review_measurement_evidence', kind: 'navigate' as const, label: 'Review measurement evidence', href: `/setup?env=${encodeURIComponent(env)}` };
-  const blocking = attention.some((item) => item.severity === 'critical' || item.severity === 'high');
-  const evidenceState: TrustState = blocking ? 'blocked' : attention.length > 0 ? 'partial' : 'trusted';
-  const answerState: ControlTowerState = attention.length > 0 ? 'partial' : onboarding.complete ? 'ready' : 'empty';
-  const top = attention[0];
+  const blocking = orderedAttention.some((item) => item.priority?.blocking_now ?? item.evidence.state === 'blocked');
+  const evidenceState: TrustState = blocking ? 'blocked' : orderedAttention.length > 0 ? 'partial' : 'trusted';
+  const answerState: ControlTowerState = orderedAttention.length > 0 ? 'partial' : onboarding.complete ? 'ready' : 'empty';
+  const top = orderedAttention[0];
   return controlTowerResultSchema.parse({
     schema_version: 1,
     request_id: randomUUID(),
@@ -412,14 +457,14 @@ export async function getProjectControlTower(
     },
     answer: {
       state: answerState,
-      headline: attention.length > 0
-        ? `${attention.length} items need attention`
+      headline: orderedAttention.length > 0
+        ? `${orderedAttention.length} items need attention`
         : 'No evaluated setup or data-quality blockers found',
       takeaway: top?.reason ?? 'The evaluated onboarding, ingest, data-quality and decision rules have no open items.',
-      primary_value: { value: attention.length, unit: 'count', formatted: String(attention.length) },
+      primary_value: { value: orderedAttention.length, unit: 'count', formatted: String(orderedAttention.length) },
       why_it_matters: top?.impact ?? 'Visible evaluated guardrails let a human verify trust before acting.',
     },
-    attention,
+    attention: orderedAttention,
     evidence: {
       state: evidenceState,
       as_of: now.toISOString(),
@@ -432,7 +477,7 @@ export async function getProjectControlTower(
         ...(funnelItem ? funnelItem.evidence.source_refs : []),
       ],
       aggregation: `server-owned rule evaluation over the last ${rangeDays} days`,
-      warnings: attention.filter((item) => item.severity === 'low').map((item) => ({
+      warnings: orderedAttention.filter((item) => item.severity === 'low').map((item) => ({
         code: item.rule_id,
         message: item.reason,
         remediation_action_id: item.primary_action.id,
@@ -440,7 +485,7 @@ export async function getProjectControlTower(
       unavailable_reasons: [],
     },
     primary_action: primaryAction,
-    secondary_actions: attention.slice(1, 3).map((item) => item.primary_action),
+    secondary_actions: orderedAttention.slice(1, 3).map((item) => item.primary_action),
   });
 }
 
@@ -506,6 +551,7 @@ export function funnelControlBlocks(
   now: Date,
   source: 'native' | 'posthog',
   goal?: string,
+  previousSteps?: Array<{ label: string; metric_key: string; purpose: string; actors: number }>,
 ): { summary: FunnelSummary; answer: AnswerBlock; evidence: EvidenceBlock } {
   const first = steps[0]?.actors ?? 0;
   const last = steps.at(-1)?.actors ?? 0;
@@ -529,12 +575,37 @@ export function funnelControlBlocks(
     return !best || best.drop_rate === null || loss.drop_rate > best.drop_rate ? loss : best;
   }, null);
   const overall = first > 0 ? last / first : null;
+  const previousFirst = previousSteps?.[0]?.actors ?? 0;
+  const previousLast = previousSteps?.at(-1)?.actors ?? 0;
+  const previousOverall = previousSteps && previousFirst > 0 ? previousLast / previousFirst : null;
+  const deltaPercentagePoints = overall === null || previousOverall === null
+    ? null
+    : Number(((overall - previousOverall) * 100).toFixed(6));
   const terminal = steps.at(-1)?.label ?? 'the final step';
+  const absoluteTies = biggestAbsolute && biggestAbsolute.lost_actors > 0
+    ? losses.filter((loss) => loss.lost_actors === biggestAbsolute.lost_actors)
+    : [];
+  const percentageTies = biggestPercentage?.drop_rate !== null && biggestPercentage?.drop_rate !== undefined
+    ? losses.filter((loss) => loss.drop_rate === biggestPercentage.drop_rate)
+    : [];
+  const tieWarnings: EvidenceBlock['warnings'] = [];
+  if (absoluteTies.length > 1 && biggestAbsolute) {
+    tieWarnings.push({
+      code: 'equal_biggest_absolute_loss',
+      message: `Equal absolute losses were measured at ${absoluteTies.map((loss) => `${steps[loss.from_step]!.label} -> ${steps[loss.to_step]!.label}`).join(' and ')}; stable funnel step order selected ${steps[biggestAbsolute.from_step]!.label} -> ${steps[biggestAbsolute.to_step]!.label}.`,
+    });
+  }
+  if (percentageTies.length > 1 && biggestPercentage) {
+    tieWarnings.push({
+      code: 'equal_biggest_percentage_loss',
+      message: `Equal percentage losses were measured at ${percentageTies.map((loss) => `${steps[loss.from_step]!.label} -> ${steps[loss.to_step]!.label}`).join(' and ')}; stable funnel step order selected ${steps[biggestPercentage.from_step]!.label} -> ${steps[biggestPercentage.to_step]!.label}.`,
+    });
+  }
   return {
     summary: funnelSummarySchema.parse({
       overall_conversion: overall,
-      previous_overall_conversion: null,
-      delta_percentage_points: null,
+      previous_overall_conversion: previousOverall,
+      delta_percentage_points: deltaPercentagePoints,
       biggest_absolute_loss: biggestAbsolute,
       biggest_percentage_loss: biggestPercentage,
     }),
@@ -549,6 +620,14 @@ export function funnelControlBlocks(
       ...(overall === null
         ? {}
         : { primary_value: { value: overall * 100, unit: 'percent' as const, formatted: `${formatted(overall * 100)}%` } }),
+      ...(deltaPercentagePoints === null ? {} : {
+        delta: {
+          value: deltaPercentagePoints,
+          unit: 'percentage_point' as const,
+          direction: deltaPercentagePoints > 0 ? 'up' as const : deltaPercentagePoints < 0 ? 'down' as const : 'flat' as const,
+          comparison_label: 'previous exact period',
+        },
+      }),
       why_it_matters: goal ?? (query.funnel
         ? `Conversion through the registered ${query.funnel} funnel.`
         : 'Conversion through the selected registered metric steps.'),
@@ -563,9 +642,12 @@ export function funnelControlBlocks(
       aggregation: 'ordered unique actors within the configured funnel window',
       denominator: { label: `actors who reached ${steps[0]?.metric_key ?? 'the first step'}`, value: first > 0 ? first : null },
       sample: { eligible: first > 0 ? first : null, observed: first > 0 ? last : null, coverage: overall },
-      warnings: source === 'posthog'
-        ? [{ code: 'external_source', message: 'Computed from the configured PostHog source.' }]
-        : [],
+      warnings: [
+        ...(source === 'posthog'
+          ? [{ code: 'external_source', message: 'Computed from the configured PostHog source.' }]
+          : []),
+        ...tieWarnings,
+      ],
       unavailable_reasons: first === 0
         ? [{ code: 'missing_denominator', message: 'No actors reached the first step.' }]
         : [],

@@ -29,6 +29,8 @@ function productStore(funnels: unknown[] = []) {
       metrics: vi.fn().mockResolvedValue([metric]),
       funnels: vi.fn().mockResolvedValue(funnels),
       properties: vi.fn().mockResolvedValue([]),
+      releases: vi.fn().mockResolvedValue([]),
+      experiments: vi.fn().mockResolvedValue([]),
       query: vi.fn().mockResolvedValue({
         kind: 'trend',
         series: [{ bucket: '2026-08-05T00:00:00Z', value: 8 }],
@@ -50,12 +52,35 @@ function productStore(funnels: unknown[] = []) {
 }
 
 function funnelResult(actors: number[]) {
+  const losses = actors.slice(1).map((actorsAtStep, index) => ({
+    from_step: index,
+    to_step: index + 1,
+    lost_actors: actors[index]! - actorsAtStep,
+    drop_rate: actors[index]! > 0 ? (actors[index]! - actorsAtStep) / actors[index]! : null,
+  }));
   return {
     kind: 'funnel',
-    steps: [
-      { label: 'Started', metric_key: 'signup_started', purpose: 'Measure entry into the signup journey.', category: 'activation', actors: actors[0], conversion_from_prev: null, conversion_from_start: 1 },
-      { label: 'Completed', metric_key: 'signup_completed', purpose: 'Measure successful completion of signup.', category: 'activation', actors: actors[1], conversion_from_prev: actors[1]! / actors[0]!, conversion_from_start: actors[1]! / actors[0]! },
-    ],
+    steps: actors.map((stepActors, index) => ({
+      label: ['Visited', 'Started', 'Completed'][index],
+      metric_key: ['signup_visited', 'signup_started', 'signup_completed'][index],
+      purpose: ['Measure entry into the signup journey.', 'Measure signup intent.', 'Measure successful completion of signup.'][index],
+      category: 'activation',
+      actors: stepActors,
+      conversion_from_prev: index === 0 ? 1 : stepActors / actors[index - 1]!,
+      conversion_from_start: stepActors / actors[0]!,
+    })),
+    summary: {
+      overall_conversion: actors.at(-1)! / actors[0]!,
+      previous_overall_conversion: 0.45,
+      delta_percentage_points: actors.at(-1)! / actors[0]! * 100 - 45,
+      biggest_absolute_loss: losses.reduce((best, loss) => loss.lost_actors > best.lost_actors ? loss : best),
+      biggest_percentage_loss: losses.reduce((best, loss) => (loss.drop_rate ?? -1) > (best.drop_rate ?? -1) ? loss : best),
+    },
+    evidence: {
+      state: 'trusted', as_of: '2026-08-06T00:00:00Z', freshness: 'fresh', source_refs: [],
+      warnings: [{ code: 'equal_biggest_absolute_loss', message: 'Stable step order resolved an equal loss.' }],
+      unavailable_reasons: [],
+    },
     meta: { computed_at: '2026-08-06T00:00:00Z', date_range: { from: '2026-07-07T00:00:00Z', to: '2026-08-06T00:00:00Z' }, sampling: null, source: 'native' },
   };
 }
@@ -130,18 +155,27 @@ describe('Product answer-first surface', () => {
       {
         id: 'f2', key: 'checkout', name: 'Checkout', goal: 'Find checkout drop-off.',
         steps: [
+          { metric_key: 'signup_visited', label: 'Visited' },
           { metric_key: 'signup_started', label: 'Started' },
           { metric_key: 'signup_completed', label: 'Completed' },
         ],
         window_seconds: 604800,
       },
     ]) as any;
-    current.client.query
-      .mockResolvedValueOnce(funnelResult([100, 40]))
-      .mockResolvedValueOnce(funnelResult([80, 48]));
+    current.client.query.mockResolvedValueOnce(funnelResult([100, 60, 30]));
+    current.client.releases.mockResolvedValueOnce([{
+      id: 'release-1', env: 'prod', status: 'observing', commit_sha: 'abcdef1234567890',
+      deployed_at: '2026-07-20T00:00:00Z',
+      contract_snapshot: { primary_metric_key: 'signup_completed', guardrail_metric_keys: [] },
+    }]);
+    current.client.experiments.mockResolvedValueOnce([{
+      id: 'experiment-1', key: 'signup_copy', name: 'Signup copy', env: 'prod', status: 'running',
+      primary_metric_key: 'signup_completed', secondary_metric_keys: [],
+      started_at: '2026-07-18T00:00:00Z', concluded_at: null,
+    }]);
     mockedStore.mockReturnValue(current);
 
-    render(<MemoryRouter initialEntries={['/analyze/funnels?funnel=checkout&env=prod&from_step=0&to_step=1']}><ProductAnalytics surface="funnels" /></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/analyze/funnels?funnel=checkout&env=prod&from_step=1&to_step=2']}><ProductAnalytics surface="funnels" /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Funnels' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Answer templates' })).not.toBeInTheDocument();
@@ -153,9 +187,16 @@ describe('Product answer-first surface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
     expect(await screen.findByText('Biggest loss')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Started → Completed' })).toBeInTheDocument();
-    expect(screen.getByText(/60 actors lost · 60% drop · \+20 pp vs previous period/)).toBeInTheDocument();
+    expect(screen.getByText(/30 actors lost · 50% drop/)).toBeInTheDocument();
+    expect(screen.getByText('Biggest absolute')).toHaveTextContent('Visited → Started');
+    expect(screen.getByText('Biggest percentage')).toHaveTextContent('Started → Completed');
+    expect(screen.getByText(/Stable step order resolved an equal loss/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Release abcdef1234/ })).toHaveAttribute('href', '/changes');
+    expect(screen.getByRole('link', { name: /Experiment Signup copy/ })).toHaveAttribute('href', '/experiments');
+    expect(screen.getByText(/cannot be saved directly to Decisions/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Continue through Ship' })).toHaveAttribute('href', '/changes');
     expect(screen.getByRole('button', { name: 'Investigate this step' })).toBeInTheDocument();
-    expect(current.client.query).toHaveBeenCalledTimes(2);
+    expect(current.client.query).toHaveBeenCalledTimes(1);
     expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({ kind: 'funnel', funnel: 'checkout', env: 'prod' }));
   });
 });

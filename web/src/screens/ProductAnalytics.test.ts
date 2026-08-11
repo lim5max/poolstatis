@@ -7,7 +7,7 @@ import {
   scenarioPickerOptions,
   visualizationTitle,
 } from '../analysis/product';
-import { biggestFunnelLoss, previousPeriodQuery } from './ProductAnalytics';
+import { selectServerFunnelLoss } from './ProductAnalytics';
 
 describe('Product analytics query and copy mapping', () => {
   it('builds registry-backed branches without raw event input', () => {
@@ -58,7 +58,7 @@ describe('Product analytics query and copy mapping', () => {
     });
   });
 
-  it('finds the largest actor loss and compares the same step with the adjacent period', () => {
+  it('uses the server-selected loss instead of recomputing a different transition in the browser', () => {
     const meta = {
       computed_at: '2026-08-08T00:00:00.000Z',
       date_range: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-08T00:00:00.000Z' },
@@ -69,25 +69,51 @@ describe('Product analytics query and copy mapping', () => {
       label, metric_key, actors, purpose: `${label} is measured for the signup goal.`, category: 'activation',
       conversion_from_prev: null, conversion_from_start: null,
     });
-    const summary = biggestFunnelLoss(
-      { kind: 'funnel', steps: [step('Visited', 'visited', 100), step('Started', 'started', 60), step('Completed', 'completed', 15)], meta },
-      { kind: 'funnel', steps: [step('Visited', 'visited', 80), step('Started', 'started', 64), step('Completed', 'completed', 32)], meta },
-    );
+    const result = {
+      kind: 'funnel' as const,
+      steps: [step('Visited', 'visited', 100), step('Started', 'started', 60), step('Completed', 'completed', 15)],
+      summary: {
+        overall_conversion: 0.15,
+        previous_overall_conversion: 0.4,
+        delta_percentage_points: -25,
+        biggest_absolute_loss: { from_step: 1, to_step: 2, lost_actors: 45, drop_rate: 0.75 },
+        biggest_percentage_loss: { from_step: 0, to_step: 1, lost_actors: 40, drop_rate: 0.4 },
+      },
+      meta,
+    };
+    const summary = selectServerFunnelLoss(result, { fromStep: 0, toStep: 1 });
 
     expect(summary).toMatchObject({
-      fromLabel: 'Started', toLabel: 'Completed', lostActors: 45,
-      dropRate: 0.75, previousLostActors: 32, previousDropRate: 0.5,
-      dropRateDelta: 0.25, overallConversion: 0.15, previousOverallConversion: 0.4,
+      kind: 'percentage', fromLabel: 'Visited', toLabel: 'Started', lostActors: 40,
+      dropRate: 0.4, overallConversion: 0.15, previousOverallConversion: 0.4,
+      deltaPercentagePoints: -25,
     });
   });
 
-  it('builds an exact adjacent previous-period funnel query', () => {
-    expect(previousPeriodQuery({
-      kind: 'funnel', funnel: 'signup', env: 'prod',
-      date_from: '2026-08-01T00:00:00.000Z', date_to: '2026-08-08T00:00:00.000Z',
-    })).toMatchObject({
-      date_from: '2026-07-24T23:59:59.999Z',
-      date_to: '2026-07-31T23:59:59.999Z',
-    });
+  it('fails closed when the deep-linked transition is not present in the server summary', () => {
+    const meta = {
+      computed_at: '2026-08-08T00:00:00.000Z',
+      date_range: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-08T00:00:00.000Z' },
+      sampling: null,
+      source: 'native' as const,
+    };
+    const result = {
+      kind: 'funnel' as const,
+      steps: [
+        { label: 'Visited', metric_key: 'visited', actors: 100, purpose: 'Measures visits.', category: 'acquisition', conversion_from_prev: 1, conversion_from_start: 1 },
+        { label: 'Started', metric_key: 'started', actors: 60, purpose: 'Measures signup starts.', category: 'activation', conversion_from_prev: 0.6, conversion_from_start: 0.6 },
+        { label: 'Completed', metric_key: 'completed', actors: 30, purpose: 'Measures signup completion.', category: 'activation', conversion_from_prev: 0.5, conversion_from_start: 0.3 },
+      ],
+      summary: {
+        overall_conversion: 0.3,
+        previous_overall_conversion: null,
+        delta_percentage_points: null,
+        biggest_absolute_loss: { from_step: 0, to_step: 1, lost_actors: 40, drop_rate: 0.4 },
+        biggest_percentage_loss: { from_step: 1, to_step: 2, lost_actors: 30, drop_rate: 0.5 },
+      },
+      meta,
+    };
+
+    expect(selectServerFunnelLoss(result, { fromStep: 0, toStep: 2 })).toBeNull();
   });
 });
