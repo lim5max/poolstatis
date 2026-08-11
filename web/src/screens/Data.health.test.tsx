@@ -119,14 +119,28 @@ describe('Events data-health control', () => {
     const flow = await screen.findByRole('heading', { name: 'Data flow' });
     const panel = (flow.closest('[data-slot="card"]') ?? flow.parentElement!) as HTMLElement;
     expect(within(panel).getByText('240')).toBeInTheDocument();
-    expect(within(panel).getByText('2')).toBeInTheDocument();
+    expect(within(panel).getAllByText('2').length).toBeGreaterThanOrEqual(1);
     expect(within(panel).getByRole('img', { name: /Accepted and rejected observations for 24 hours/ })).toBeInTheDocument();
+    fireEvent.click(within(panel).getByText('View accepted and rejected data table'));
+    const table = within(panel).getByRole('table', { name: 'Accepted and rejected observations for 24 hours' });
+    expect(within(table).getByText('2026-08-11T11:00:00.000Z')).toBeInTheDocument();
+    expect(within(table).getByRole('columnheader', { name: 'Rejected' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Improvements' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Doing well' })).toBeInTheDocument();
     expect(screen.getByText('Rejected observations need repair')).toBeInTheDocument();
     expect(screen.getByText('Accepted events are flowing')).toBeInTheDocument();
     expect(screen.getByText(/home, product:checkout_failed/)).toBeInTheDocument();
     expect(screen.queryByText(/raw payload/i)).not.toBeInTheDocument();
+  });
+
+  it('does not claim full instrumentation coverage before the first accepted event', async () => {
+    render(<TooltipProvider><MemoryRouter initialEntries={['/data']}><Data /></MemoryRouter></TooltipProvider>);
+
+    const coverageLabel = await screen.findByText('Instrumentation coverage');
+    const card = coverageLabel.closest<HTMLElement>('[data-slot="card"]')!;
+    expect(within(card).getByText('Unavailable')).toBeInTheDocument();
+    expect(within(card).getByRole('link', { name: 'Send the first event' })).toHaveAttribute('href', '/setup');
+    expect(within(card).queryByText('100%')).not.toBeInTheDocument();
   });
 
   it('runs verify-after-fix with the exact server signature watermark and reports the read-back', async () => {

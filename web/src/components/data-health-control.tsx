@@ -5,8 +5,9 @@ import { useAsync, useStore } from '../store';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { EmptyState, ErrorNote, Loading, Panel, fmtNum } from './ui';
+import { EmptyState, ErrorNote, Loading, Panel, TableScroll, fmtNum } from './ui';
 import { DisclosureSummary } from './disclosure';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 export function DataHealthControl({ focusedSignature }: { focusedSignature?: string }) {
   const { client, project, env } = useStore();
@@ -170,5 +171,20 @@ function DataFlowChart({ window, label }: { window: DataHealthWindow; label: str
       <span>{new Date(window.from).toLocaleString()}</span>
       <span>{new Date(window.to).toLocaleString()}</span>
     </div>
+    <details className="mt-3 rounded-control border">
+      <DisclosureSummary className="cursor-pointer px-3 py-2 text-sm font-medium">View accepted and rejected data table</DisclosureSummary>
+      <div className="border-t">
+        <TableScroll>
+          <Table aria-label={`Accepted and rejected observations for ${label}`}>
+            <TableHeader><TableRow><TableHead>UTC bucket</TableHead><TableHead className="text-right">Accepted</TableHead><TableHead className="text-right">Rejected</TableHead></TableRow></TableHeader>
+            <TableBody>{window.points.map((point) => <TableRow key={point.bucket}>
+              <TableCell><code className="text-xs">{point.bucket}</code></TableCell>
+              <TableCell className="text-right font-mono tabular-nums">{fmtNum(point.accepted)}</TableCell>
+              <TableCell className="text-right font-mono tabular-nums">{fmtNum(point.rejected)}</TableCell>
+            </TableRow>)}</TableBody>
+          </Table>
+        </TableScroll>
+      </div>
+    </details>
   </div>;
 }

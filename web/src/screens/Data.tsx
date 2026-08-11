@@ -74,7 +74,7 @@ function Health({ observed, focusedSignature }: { observed: ObservedEvent[]; foc
   const events = [...observed].sort((a, b) => b.count - a.count);
   const total = events.reduce((s, e) => s + e.count, 0);
   const weighted = events.reduce((s, e) => s + e.count * e.registered_share, 0);
-  const coverage = total ? weighted / total : 1;
+  const coverage = total > 0 ? weighted / total : null;
   const wild = events.filter((e) => e.registered_share < 0.999);
   const qualityIssues = quality.loading || quality.error ? undefined : quality.data?.issues;
   const qualityChecked = quality.loading || quality.error ? undefined : quality.data?.checked;
@@ -83,7 +83,13 @@ function Health({ observed, focusedSignature }: { observed: ObservedEvent[]; foc
     <div className="space-y-4">
       <DataHealthControl focusedSignature={focusedSignature} />
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <Stat label="Instrumentation coverage" value={fmtPct(coverage)} sub="of 30-day volume" />
+        <Stat
+          label="Instrumentation coverage"
+          value={coverage === null ? 'Unavailable' : fmtPct(coverage)}
+          sub={coverage === null
+            ? <><span>No accepted 30-day events. </span><Link to="/setup" className="underline underline-offset-2">Send the first event</Link></>
+            : 'of 30-day volume'}
+        />
         <Stat label="Off-standard names" value={wild.length} sub="no matching active metric" />
         <Stat label="Entity conflicts" value={quality.loading ? '…' : issueCount} sub="events vs current status" />
         <Stat label="Distinct events" value={events.length} sub={`${fmtNum(total)} total · 30d`} />
