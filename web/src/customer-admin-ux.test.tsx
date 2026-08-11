@@ -61,7 +61,7 @@ function baseStore() {
           sampling: null,
           source: 'native',
           limit: 50,
-          order: 'interesting_desc',
+          order: 'last_seen_desc',
           next_cursor: null,
           activity_metric: null,
           capabilities: {
@@ -85,9 +85,9 @@ function baseStore() {
             identity_status: 'Only explicit links are classified.',
             top_events: { registered_only: true, limit: 8 },
             pinned_properties: { source: null, fail_closed: true },
-            interesting_rank: {
-              inputs: ['first_seen', 'last_seen', 'active_days', 'total_events'],
-              excludes: ['properties', 'hidden profiles', 'predicted intent'],
+            ordering: {
+              selected: 'last_seen_desc',
+              input: 'last_seen',
               relative_to: 'the exact query window',
             },
           },

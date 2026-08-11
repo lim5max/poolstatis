@@ -9,10 +9,10 @@ active server-owned actor links. There is no mutable users table.
   must be replayed unchanged with the same query. They freeze the ingest
   cutoff, bind the resolved metric/session capability and carry a server-side
   HMAC; actor-link changes invalidate an outstanding cursor.
-- \`interesting_desc\` is the default queue order. Its score and reasons use
-  only first seen, last seen, active days and accepted event volume inside the
-  exact query window. They never infer risk, intent, demographics or segment
-  changes from hidden properties.
+- \`last_seen_desc\` is the default order. The other supported orders are
+  \`first_seen_desc\` and \`events_desc\`; each row names the selected factual
+  input and exact evidence window. Activation, stall, risk and segment-change
+  ranking stays unavailable until a purpose-backed definition exists.
 - \`linked\` requires active link provenance or multiple raw IDs.
   Unlinked actors are \`unknown\` unless the server detects a conflict.
   Email, name and ID spelling never determine identity status.

@@ -300,9 +300,9 @@ export type QueryResult =
           identity_status: string;
           top_events: { registered_only: true; limit: 8 };
           pinned_properties: { source: null; fail_closed: true };
-          interesting_rank: {
-            inputs: string[];
-            excludes: string[];
+          ordering: {
+            selected: import('../stores/eventStore.js').ActorOrder;
+            input: 'last_seen' | 'first_seen' | 'total_events';
             relative_to: string;
           };
         };
@@ -1342,8 +1342,6 @@ export class QueryService {
         {
           value: q.order === 'events_desc'
             ? last.total_events
-            : q.order === 'interesting_desc'
-              ? last.interesting_score
             : q.order === 'first_seen_desc'
               ? last.first_seen
               : last.last_seen,
@@ -1418,9 +1416,13 @@ export class QueryService {
           identity_status: 'linked requires active server-owned link provenance or multiple observed raw IDs; otherwise unknown unless a link conflict is detected',
           top_events: { registered_only: true, limit: 8 },
           pinned_properties: { source: null, fail_closed: true },
-          interesting_rank: {
-            inputs: ['first_seen', 'last_seen', 'active_days', 'total_events'],
-            excludes: ['properties', 'hidden profiles', 'predicted intent'],
+          ordering: {
+            selected: q.order,
+            input: q.order === 'events_desc'
+              ? 'total_events'
+              : q.order === 'first_seen_desc'
+                ? 'first_seen'
+                : 'last_seen',
             relative_to: 'the exact query window',
           },
         },

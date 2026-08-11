@@ -216,8 +216,8 @@ describe('actors Query DSL contract', () => {
     });
   });
 
-  it('returns stable opaque keyset pages for every supported order', async () => {
-    for (const order of ['interesting_desc', 'last_seen_desc', 'first_seen_desc', 'events_desc']) {
+  it('returns stable opaque keyset pages for every supported factual order', async () => {
+    for (const order of ['last_seen_desc', 'first_seen_desc', 'events_desc']) {
       const first = await actors({ order, limit: 1 });
       expect(first.status).toBe(200);
       expect(first.body.actors).toHaveLength(1);
@@ -239,7 +239,7 @@ describe('actors Query DSL contract', () => {
     expect(invalid.body.error.code).toBe('actors_cursor_invalid');
   });
 
-  it('applies trailing-30d, limit=50 and interesting order defaults', async () => {
+  it('applies trailing-30d, limit=50 and truthful last-seen order defaults', async () => {
     const result = await api(env, env.secretToken, 'POST', `${project()}/query`, {
       kind: 'actors',
       env: 'prod',
@@ -250,11 +250,12 @@ describe('actors Query DSL contract', () => {
     expect(to - from).toBe(30 * 24 * 60 * 60_000);
     expect(result.body.meta).toMatchObject({
       limit: 50,
-      order: 'interesting_desc',
+      order: 'last_seen_desc',
     });
-    expect(result.body.meta.provenance.interesting_rank).toMatchObject({
-      inputs: ['first_seen', 'last_seen', 'active_days', 'total_events'],
-      excludes: ['properties', 'hidden profiles', 'predicted intent'],
+    expect(result.body.meta.provenance.ordering).toMatchObject({
+      selected: 'last_seen_desc',
+      input: 'last_seen',
+      relative_to: 'the exact query window',
     });
     expect(result.body.meta.capabilities.interesting_categories).toEqual({
       recently_activated: {
@@ -281,26 +282,26 @@ describe('actors Query DSL contract', () => {
       available: false,
     });
     expect(result.body.actors[0]).toMatchObject({
-      interesting_score: expect.any(Number),
-      rank_reasons: [
-        'no_activity_in_final_7d_after_multiple_active_days',
-        'multiple_active_days_in_window',
-      ],
+      order_reason: 'last_seen_in_window',
       rank_evidence_window: {
         from: result.body.meta.date_range.from,
         to: result.body.meta.date_range.to,
       },
     });
     expect(result.body.actors.every((actor: any) => (
-      actor.interesting_score >= 1
-      && actor.interesting_score <= 490
-      && actor.rank_reasons.length > 0
+      actor.order_reason === 'last_seen_in_window'
       && actor.rank_evidence_window.from === result.body.meta.date_range.from
       && actor.rank_evidence_window.to === result.body.meta.date_range.to
     ))).toBe(true);
-    expect(result.body.actors.flatMap((actor: any) => actor.rank_reasons)).not.toEqual(
-      expect.arrayContaining(['recently_observed', 'stalled_after_activity']),
-    );
+    expect(result.body.actors[0]).not.toHaveProperty('interesting_score');
+    expect(result.body.actors[0]).not.toHaveProperty('rank_reasons');
+    expect(result.body.meta.provenance).not.toHaveProperty('interesting_rank');
+  });
+
+  it('rejects the unsupported generic interesting order', async () => {
+    const result = await actors({ order: 'interesting_desc' });
+    expect(result.status).toBe(400);
+    expect(result.body.error.code).toBe('validation_error');
   });
 
   it('rejects empty IDs, oversized limits and cursors bound to another order', async () => {

@@ -237,14 +237,12 @@ export interface ActorSummary {
 }
 
 export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
-export type ActorOrder = 'interesting_desc' | 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
 
-export type ActorRankReason =
-  | 'first_observed_in_final_7d_with_multiple_active_days'
-  | 'no_activity_in_final_7d_after_multiple_active_days'
-  | 'multiple_active_days_in_window'
-  | 'activity_in_final_3d'
-  | 'activity_observed_in_window';
+export type ActorOrderReason =
+  | 'last_seen_in_window'
+  | 'first_seen_in_window'
+  | 'event_volume_in_window';
 
 export interface ActorListItem {
   distinct_id: string;
@@ -257,8 +255,7 @@ export interface ActorListItem {
   top_events: Array<{ event: string; count: number }>;
   pinned_properties: Record<string, unknown>;
   identity_status: ActorIdentityStatus;
-  interesting_score: number;
-  rank_reasons: ActorRankReason[];
+  order_reason: ActorOrderReason;
   rank_evidence_window: { from: string; to: string };
 }
 

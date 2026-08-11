@@ -1924,15 +1924,13 @@ export class PostgresEventStore implements EventStore {
       ? 'first_seen'
       : q.order === 'events_desc'
         ? 'total_events'
-        : q.order === 'interesting_desc'
-          ? 'interesting_score'
         : 'last_seen';
     let keysetSql = '';
     if (q.cursor) {
       params.push(q.cursor.value, q.cursor.distinctId);
       const valueParam = `$${params.length - 1}`;
       const idParam = `$${params.length}`;
-      const cast = q.order === 'events_desc' || q.order === 'interesting_desc' ? '::int' : '::timestamptz';
+      const cast = q.order === 'events_desc' ? '::int' : '::timestamptz';
       keysetSql = `WHERE (
         aggregates.${sortColumn} < ${valueParam}${cast}
         OR (
@@ -1954,7 +1952,6 @@ export class PostgresEventStore implements EventStore {
       session_count: number | null;
       top_events: Array<{ event: string; count: number }>;
       identity_status: ActorListItem['identity_status'];
-      interesting_score: number;
     }>(
       `WITH RECURSIVE ${exactClosureSql} raw_actors AS MATERIALIZED (
          ${rawActorsSql}
@@ -2005,19 +2002,7 @@ export class PostgresEventStore implements EventStore {
                 count(*)::int AS total_events,
                 count(DISTINCT w.event)::int AS distinct_events,
                 count(DISTINCT date_trunc('day', w."timestamp"))::int AS active_days,
-                COALESCE(avg(w.registered::int), 0)::float AS registered_share,
-                (
-                  CASE
-                    WHEN min(w."timestamp") >= $4::timestamptz - interval '7 days'
-                      AND count(DISTINCT date_trunc('day', w."timestamp")) >= 2 THEN 400
-                    WHEN max(w."timestamp") < $4::timestamptz - interval '7 days'
-                      AND count(DISTINCT date_trunc('day', w."timestamp")) >= 2 THEN 300
-                    ELSE 0
-                  END
-                  + LEAST(count(DISTINCT date_trunc('day', w."timestamp"))::int, 30)
-                  + LEAST(count(*)::int, 20)
-                  + CASE WHEN max(w."timestamp") >= $4::timestamptz - interval '3 days' THEN 40 ELSE 0 END
-                )::int AS interesting_score
+                COALESCE(avg(w.registered::int), 0)::float AS registered_share
          FROM selected_events w
          GROUP BY w.actor_id
        ), page AS MATERIALIZED (
@@ -2095,8 +2080,11 @@ export class PostgresEventStore implements EventStore {
         })),
         pinned_properties: {},
         identity_status: row.identity_status,
-        interesting_score: Number(row.interesting_score),
-        rank_reasons: actorRankReasons(row, q.to),
+        order_reason: q.order === 'first_seen_desc'
+          ? 'first_seen_in_window'
+          : q.order === 'events_desc'
+            ? 'event_volume_in_window'
+            : 'last_seen_in_window',
         rank_evidence_window: { from: q.from.toISOString(), to: q.to.toISOString() },
       })),
       hasMore,
@@ -2532,29 +2520,6 @@ export class PostgresEventStore implements EventStore {
   private async ensurePartitions(timestamps: Date[]): Promise<void> {
     await ensureEventPartitions(this.pool, timestamps, this.knownPartitions);
   }
-}
-
-function actorRankReasons(
-  row: { first_seen: Date; last_seen: Date; active_days: number },
-  windowEnd: Date,
-): ActorListItem['rank_reasons'] {
-  const reasons: ActorListItem['rank_reasons'] = [];
-  const firstSeen = new Date(row.first_seen).getTime();
-  const lastSeen = new Date(row.last_seen).getTime();
-  const end = windowEnd.getTime();
-  const activeDays = Number(row.active_days);
-  if (activeDays >= 2 && firstSeen >= end - 7 * 86_400_000) {
-    reasons.push('first_observed_in_final_7d_with_multiple_active_days');
-  }
-  if (activeDays >= 2 && lastSeen < end - 7 * 86_400_000) {
-    reasons.push('no_activity_in_final_7d_after_multiple_active_days');
-  }
-  if (activeDays >= 3) reasons.push('multiple_active_days_in_window');
-  if (reasons.length === 0 && lastSeen >= end - 3 * 86_400_000) {
-    reasons.push('activity_in_final_3d');
-  }
-  if (reasons.length === 0) reasons.push('activity_observed_in_window');
-  return reasons;
 }
 
 export async function ensureRollingEventPartitions(

@@ -1159,7 +1159,7 @@ export const actorsQuerySchema = z.object({
   to: dateStr.nullable().optional(),
   limit: z.number().int().min(1).max(100).default(50),
   cursor: z.string().trim().min(1).max(8192).optional(),
-  order: z.enum(['interesting_desc', 'last_seen_desc', 'first_seen_desc', 'events_desc']).default('interesting_desc'),
+  order: z.enum(['last_seen_desc', 'first_seen_desc', 'events_desc']).default('last_seen_desc'),
   search: z.object({
     kind: z.literal('exact_id'),
     value: z.string().trim().min(1).max(200),

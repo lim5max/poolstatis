@@ -11,7 +11,7 @@ import { AnswerCanvas } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
 import {
   actorStatusLabel,
-  type ActorRankReason,
+  type ActorOrderReason,
   rangeDateFrom,
   type ActorIdentityStatus,
   type ActorOrder,
@@ -26,7 +26,7 @@ const PAGE_LIMIT = 50;
 export function Users() {
   const { client, project, env } = useStore();
   const [range, setRange] = useState<AnalyticsRange>('30d');
-  const [order, setOrder] = useState<ActorOrder>('interesting_desc');
+  const [order, setOrder] = useState<ActorOrder>('last_seen_desc');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [activityMetric, setActivityMetric] = useState('');
@@ -37,17 +37,22 @@ export function Users() {
     () => client!.metrics(project!, { status: 'active' }),
     [project, env],
   );
-  const actors = useAsync<ActorsResult>(() => client!.operationalQuery<ActorsResult>(project!, {
-    kind: 'actors',
-    env,
-    from: rangeDateFrom(range),
-    limit: PAGE_LIMIT,
-    order,
-    ...(cursor ? { cursor } : {}),
-    ...(search ? { search: { kind: 'exact_id', value: search } } : {}),
-    propertyFilters: [],
-    ...(activityMetric ? { activityMetric } : {}),
-  }), [project, env, range, order, search, activityMetric, cursor]);
+  const actorScopeKey = JSON.stringify([project, env, range, order, search, activityMetric, cursor ?? null]);
+  const actorScope = useMemo(() => ({ client, key: actorScopeKey }), [client, actorScopeKey]);
+  const actors = useAsync<{ scope: typeof actorScope; result: ActorsResult }>(async () => ({
+    scope: actorScope,
+    result: await client!.operationalQuery<ActorsResult>(project!, {
+      kind: 'actors',
+      env,
+      from: rangeDateFrom(range),
+      limit: PAGE_LIMIT,
+      order,
+      ...(cursor ? { cursor } : {}),
+      ...(search ? { search: { kind: 'exact_id', value: search } } : {}),
+      propertyFilters: [],
+      ...(activityMetric ? { activityMetric } : {}),
+    }),
+  }), [actorScope]);
 
   useEffect(() => {
     setCursorStack([null]);
@@ -57,7 +62,9 @@ export function Users() {
     () => (metrics.data ?? []).filter(isNativeEventMetric),
     [metrics.data],
   );
-  const actorData = actors.data;
+  const actorData = !actors.loading && !actors.error && actors.data?.scope === actorScope
+    ? actors.data.result
+    : null;
 
   const applySearch = (event: FormEvent) => {
     event.preventDefault();
@@ -104,7 +111,6 @@ export function Users() {
             <Select value={order} onValueChange={(value) => setOrder(value as ActorOrder)}>
               <SelectTrigger className="!h-11"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem className="min-h-11" value="interesting_desc">Observed signals first</SelectItem>
                 <SelectItem className="min-h-11" value="last_seen_desc">Last seen</SelectItem>
                 <SelectItem className="min-h-11" value="first_seen_desc">First seen</SelectItem>
                 <SelectItem className="min-h-11" value="events_desc">Event volume</SelectItem>
@@ -151,7 +157,7 @@ export function Users() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Person</TableHead>
-                      <TableHead>Why now</TableHead>
+                      <TableHead>Order evidence</TableHead>
                       <TableHead>First seen</TableHead>
                       <TableHead>Last seen</TableHead>
                       {actorData.meta.capabilities.session_count.project_capability
@@ -172,8 +178,8 @@ export function Users() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <RankReasons
-                            reasons={actor.rank_reasons}
+                          <OrderEvidence
+                            reason={actor.order_reason}
                             window={actor.rank_evidence_window ?? actorData.meta.date_range}
                           />
                         </TableCell>
@@ -229,7 +235,7 @@ export function Users() {
           <details className="group/disclosure border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
             <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center py-3 font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">How people are resolved</DisclosureSummary>
             Activity properties remain redacted. Exact-ID lookup accepts a canonical or raw actor ID and returns only its canonical bounded aggregate.
-            Observed-signal ranking uses only first seen, last seen, active days, and accepted event volume in this exact window. It does not infer risk, intent, activation, or segment changes.
+            Rows use only the explicit Last seen, First seen, or Event volume order selected above. Activation, stall, risk and segment changes are not ranked until a purpose-backed definition exists.
           </details>
           </AnswerCanvas>
         </>
@@ -238,22 +244,18 @@ export function Users() {
   );
 }
 
-const RANK_REASON_LABELS: Record<ActorRankReason, string> = {
-  first_observed_in_final_7d_with_multiple_active_days: 'First in-window observation fell in the final 7 days, with activity on multiple days',
-  no_activity_in_final_7d_after_multiple_active_days: 'No events in the final 7 days after activity on multiple days',
-  multiple_active_days_in_window: 'Activity occurred on at least 3 days in the window',
-  activity_in_final_3d: 'Activity occurred in the final 3 days of the window',
-  activity_observed_in_window: 'Activity was observed in the selected window',
+const ORDER_REASON_LABELS: Record<ActorOrderReason, string> = {
+  last_seen_in_window: 'Ordered by last seen in this window',
+  first_seen_in_window: 'Ordered by first seen in this window',
+  event_volume_in_window: 'Ordered by event volume in this window',
 };
 
-function RankReasons({ reasons, window }: {
-  reasons: ActorRankReason[];
+function OrderEvidence({ reason, window }: {
+  reason: ActorOrderReason;
   window: { from: string; to: string };
 }) {
   return <div className="max-w-sm">
-    <div className="flex flex-wrap gap-1">
-      {reasons.map((reason) => <Badge key={reason} variant="outline" className="whitespace-normal text-left font-normal">{RANK_REASON_LABELS[reason]}</Badge>)}
-    </div>
+    <Badge variant="outline" className="whitespace-normal text-left font-normal">{ORDER_REASON_LABELS[reason]}</Badge>
     <div className="mt-1.5 whitespace-nowrap text-xs text-muted-foreground">
       Evidence window: {formatDate(window.from)}–{formatDate(window.to)}
     </div>

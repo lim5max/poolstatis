@@ -1142,7 +1142,7 @@ jsonTool(
 
 jsonTool(
   'list_actors',
-  'List bounded query-time canonical actors with evidence-only interesting ranking, exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. activityMetric must be a registry metric key; unsupported actor property filters fail closed.',
+  'List bounded query-time canonical actors in an explicit factual order, with the exact evidence window, exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. Purpose-backed activation, stall, risk and segment ranking is unavailable; activityMetric must be a registry metric key and unsupported actor property filters fail closed.',
   { project, query: actorsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, {
     kind: 'actors',

@@ -22,8 +22,7 @@ describe('People list', () => {
         first_seen: '2026-08-01T00:00:00Z', last_seen: '2026-08-05T00:00:00Z',
         total_events: 4, active_days: 2, session_count: null,
         top_events: [{ event: 'page.viewed', count: 4 }], pinned_properties: {}, identity_status: 'unknown',
-        interesting_score: 406,
-        rank_reasons: ['first_observed_in_final_7d_with_multiple_active_days'],
+        order_reason: 'last_seen_in_window',
         rank_evidence_window: {
           from: '2026-07-07T00:00:00Z',
           to: '2026-08-06T00:00:00Z',
@@ -35,7 +34,7 @@ describe('People list', () => {
         sampling: null,
         source: 'native',
         limit: 50,
-        order: 'interesting_desc',
+        order: 'last_seen_desc',
         next_cursor: null,
         activity_metric: null,
         capabilities: {
@@ -71,9 +70,9 @@ describe('People list', () => {
           identity_status: 'Only explicit server-owned links are classified.',
           top_events: { registered_only: true, limit: 8 },
           pinned_properties: { source: null, fail_closed: true },
-          interesting_rank: {
-            inputs: ['first_seen', 'last_seen', 'active_days', 'total_events'],
-            excludes: ['properties', 'hidden profiles', 'predicted intent'],
+          ordering: {
+            selected: 'last_seen_desc',
+            input: 'last_seen',
             relative_to: 'the exact query window',
           },
         },
@@ -88,14 +87,26 @@ describe('People list', () => {
     } as never);
   });
 
-  it('shows a factual rank reason with its exact evidence window', async () => {
+  it('shows factual order evidence with its exact evidence window', async () => {
     render(<MemoryRouter><Users /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'People', level: 1 })).toBeInTheDocument();
-    expect(screen.getByText('First in-window observation fell in the final 7 days, with activity on multiple days')).toBeInTheDocument();
+    expect(screen.getByText('Ordered by last seen in this window')).toBeInTheDocument();
     expect(screen.getByText(/Evidence window:.*Jul 7, 2026.*Aug 6, 2026/)).toBeInTheDocument();
-    expect(screen.getByText(/does not infer risk/)).toBeInTheDocument();
+    expect(screen.getByText(/Activation, stall, risk and segment changes are not ranked/)).toBeInTheDocument();
     expect(screen.getByText(/Activity properties remain redacted/)).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Observed signals first' })).not.toBeInTheDocument();
+  });
+
+  it('requests truthful last-seen order by default', async () => {
+    render(<MemoryRouter><Users /></MemoryRouter>);
+
+    await screen.findByText('anon_7');
+    expect(operationalQuery).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      kind: 'actors',
+      env: 'prod',
+      order: 'last_seen_desc',
+    }));
   });
 
   it('consolidates missing identity, property and outcome capabilities into one data-health block', async () => {
@@ -125,5 +136,28 @@ describe('People list', () => {
       propertyFilters: [],
       limit: 50,
     })));
+  });
+
+  it('never renders rows from the previous project while the next scope is pending or errors', async () => {
+    const view = render(<MemoryRouter><Users /></MemoryRouter>);
+    await screen.findByText('anon_7');
+
+    let rejectBeta!: (reason: Error) => void;
+    const betaResult = new Promise<never>((_resolve, reject) => { rejectBeta = reject; });
+    operationalQuery.mockImplementationOnce(() => betaResult);
+    mockedStore.mockReturnValue({
+      project: 'beta', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([]),
+        operationalQuery,
+      },
+    } as never);
+
+    view.rerender(<MemoryRouter><Users /></MemoryRouter>);
+    expect(screen.queryByText('anon_7')).not.toBeInTheDocument();
+
+    rejectBeta(new Error('beta unavailable'));
+    expect(await screen.findByText('beta unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('anon_7')).not.toBeInTheDocument();
   });
 });
