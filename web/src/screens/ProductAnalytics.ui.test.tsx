@@ -44,6 +44,7 @@ function productStore(funnels: unknown[] = []) {
         primary_metric: { key: metric.key, purpose: metric.purpose, category: 'activation', observed_events: 34, observed_actors: 8, registered_coverage: 1 },
         identity: { distinct_id_coverage: 1, raw_actors: 8, resolved_actors: 8 }, properties: [], blockers: [], warnings: [],
       }),
+      createAnalysisView: vi.fn().mockResolvedValue({ id: 'view-1' }),
     },
   } as never;
 }
@@ -67,6 +68,8 @@ describe('Product answer-first surface', () => {
   });
 
   it('puts templates and a real answer before advanced query controls', async () => {
+    const current = productStore() as any;
+    mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Product' })).toBeInTheDocument();
@@ -89,6 +92,29 @@ describe('Product answer-first surface', () => {
     expect(task).toContain('Project: alpha');
     expect(task).toContain('Environment: prod');
     expect(task).not.toMatch(/raw event|sql|secret|token/i);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
+    expect(current.client.createAnalysisView).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      title: 'Product health · Weekly active users',
+      template_key: 'product-health',
+      schema_version: 1,
+      answer: expect.objectContaining({
+        state: 'ready',
+        why_it_matters: metric.purpose,
+      }),
+      evidence: expect.objectContaining({
+        state: 'trusted',
+        freshness: 'unknown',
+        source_refs: [{ kind: 'metric', key: metric.key, purpose: metric.purpose }],
+        warnings: [],
+        unavailable_reasons: [],
+        reproducible_query: expect.objectContaining({ kind: 'trend', metric: metric.key, env: 'prod' }),
+      }),
+    }));
+    expect(screen.getByRole('button', { name: 'Answer saved' })).toBeDisabled();
+    const savedPayload = current.client.createAnalysisView.mock.calls[0][1];
+    expect(JSON.stringify(savedPayload)).not.toMatch(/"(?:sql|secret|token|distinct_id)"\s*:/i);
   });
 
   it('gives funnels a focused answer surface without the product template grid', async () => {

@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ErrorNote, Loading } from '@/components/ui';
 import { AnswerCanvas, EvidenceLine, type EvidenceTrust } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { Funnel, MeasurementTrust, Metric } from '../api/types';
+import type { CreateSavedAnswerInput, Funnel, MeasurementTrust, Metric } from '../api/types';
 import { useAsync, useStore } from '../store';
 import {
   ANALYSIS_TEMPLATES,
@@ -80,6 +80,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const [run, setRun] = useState<AnalysisRun | null>(null);
   const [runError, setRunError] = useState<{ scope: string; message: string } | null>(null);
   const [running, setRunning] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const runGeneration = useRef(0);
   const currentScope = `${project ?? 'none'}:${env}`;
   const scopeRef = useRef(currentScope);
@@ -92,6 +93,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRun(null);
     setRunError(null);
     setRunning(false);
+    setSaveState('idle');
     return () => {
       runGeneration.current += 1;
     };
@@ -120,6 +122,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRun(null);
     setRunError(null);
     setRunning(false);
+    setSaveState('idle');
   };
 
   const execute = async () => {
@@ -130,6 +133,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     const runProject = project!;
     const runEnv = env;
     setRunning(true);
+    setSaveState('idle');
     setRunError(null);
     setRun(null);
     const dates = exactRange(range);
@@ -194,6 +198,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRun(null);
     setRunError(null);
     setRunning(false);
+    setSaveState('idle');
   };
 
   if (registry.loading) return <Loading what="reading registry capabilities…" />;
@@ -208,6 +213,17 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     error: currentRunError,
     pointCount,
   });
+
+  const saveAnswer = async () => {
+    if (!currentRun || !project || saveState === 'saving' || saveState === 'saved') return;
+    setSaveState('saving');
+    try {
+      await client!.createAnalysisView(project, savedAnswerInput(currentRun, template.key));
+      setSaveState('saved');
+    } catch {
+      setSaveState('error');
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -299,6 +315,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           summary={currentRun.summary}
           trust={currentRun.spec.trust.status}
           task={followUpAgentTask(currentRun.spec, currentRun.summary)}
+          saveState={saveState}
+          onSave={() => void saveAnswer()}
         />
       )}
       {renderState === 'ready' && currentRun && <ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
@@ -458,10 +476,12 @@ function followUpAgentTask(spec: VisualizationSpec, summary: StandardAnswerSumma
   return `Investigate the next evidence-backed question for ${spec.title} without changing its definition.\n\nProject: ${spec.project}\nEnvironment: ${spec.env}\nExact UTC range: ${spec.range.from} to ${spec.range.to}\nCurrent takeaway: ${summary.takeaway}\nNext question: ${summary.followUp}\n\nUse registered metrics and trusted properties only. Keep the same scope, report sample and data-quality limits, and prepare a proposal for human review.`;
 }
 
-function AnswerTakeaway({ summary, trust, task }: {
+function AnswerTakeaway({ summary, trust, task, saveState, onSave }: {
   summary: StandardAnswerSummary;
   trust: VisualizationSpec['trust']['status'];
   task: string;
+  saveState: 'idle' | 'saving' | 'saved' | 'error';
+  onSave: () => void;
 }) {
   const trusted = trust === 'trusted';
   const [copied, setCopied] = useState(false);
@@ -482,9 +502,16 @@ function AnswerTakeaway({ summary, trust, task }: {
           <div className="text-xs font-medium text-muted-foreground">Takeaway</div>
           <p className="mt-1 text-lg font-semibold leading-snug">{summary.takeaway}</p>
           <p className="mt-2 text-sm text-muted-foreground">Next question: {summary.followUp}</p>
-          <Button type="button" variant="outline" className="mt-3 h-11" onClick={() => void copyTask()}>
-            {copied ? 'Follow-up task copied' : 'Copy follow-up task'}
-          </Button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" className="h-11" onClick={onSave} disabled={saveState === 'saving' || saveState === 'saved'}>
+              {saveState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
+              {saveState === 'saved' ? 'Answer saved' : saveState === 'saving' ? 'Saving answer…' : 'Save answer'}
+            </Button>
+            <Button type="button" variant="outline" className="h-11" onClick={() => void copyTask()}>
+              {copied ? 'Follow-up task copied' : 'Copy follow-up task'}
+            </Button>
+          </div>
+          {saveState === 'error' && <p role="alert" className="mt-2 text-sm text-destructive">The answer could not be saved. Check access and try again.</p>}
         </div>
         <div className="flex flex-wrap gap-2 sm:justify-end">
           <Badge variant={trusted ? 'default' : 'outline'}>{trusted ? 'Trusted evidence' : 'Review trust'}</Badge>
@@ -499,6 +526,63 @@ function AnswerTakeaway({ summary, trust, task }: {
       )}
     </AnswerCanvas>
   );
+}
+
+function savedAnswerInput(run: AnalysisRun, templateKey: string): CreateSavedAnswerInput {
+  const { spec, summary, eventCount } = run;
+  const percentageValue = spec.kind === 'funnel' || spec.kind === 'retention_curve' || spec.kind === 'retention_matrix';
+  const sourceRef = spec.source.kind === 'funnel'
+    ? { kind: 'funnel' as const, key: spec.source.key, goal: spec.purpose }
+    : { kind: 'metric' as const, key: spec.source.key, purpose: spec.purpose };
+  const coverageMatch = /^(\d+(?:\.\d+)?)% registered$/.exec(spec.evidence.coverage);
+  const coverage = coverageMatch ? Number(coverageMatch[1]) / 100 : null;
+  const blockers = spec.trust.blockers.map((blocker) => ({ code: blocker.code, message: blocker.message }));
+  const query = spec.source.kind === 'metric' || spec.source.kind === 'funnel' ? spec.source.query : undefined;
+  return {
+    title: spec.title,
+    description: spec.question,
+    template_key: templateKey,
+    schema_version: 1,
+    visualization_spec: spec,
+    answer: {
+      state: 'ready',
+      headline: spec.title,
+      takeaway: summary.takeaway,
+      ...(summary.currentValue === null ? {} : {
+        primary_value: {
+          value: summary.currentValue,
+          unit: percentageValue ? 'percent' as const : 'count' as const,
+          formatted: formatSavedValue(summary.currentValue, percentageValue),
+        },
+      }),
+      ...(summary.delta === null ? {} : {
+        delta: {
+          value: summary.delta,
+          unit: percentageValue ? 'percent' as const : 'count' as const,
+          direction: summary.delta > 0 ? 'up' as const : summary.delta < 0 ? 'down' as const : 'flat' as const,
+          comparison_label: summary.comparison,
+        },
+      }),
+      why_it_matters: spec.purpose,
+    },
+    evidence: {
+      state: spec.trust.status,
+      as_of: spec.evidence.computedAt,
+      freshness: 'unknown',
+      source_refs: [sourceRef],
+      aggregation: spec.evidence.aggregation,
+      sample: { eligible: null, observed: eventCount, coverage },
+      warnings: spec.trust.status === 'unavailable' ? [] : blockers,
+      unavailable_reasons: spec.trust.status === 'unavailable' ? blockers : [],
+      ...(query ? { reproducible_query: query } : {}),
+    },
+  };
+}
+
+function formatSavedValue(value: number, percentage: boolean): string {
+  return new Intl.NumberFormat(undefined, percentage
+    ? { style: 'percent', maximumFractionDigits: 1 }
+    : { maximumFractionDigits: 2 }).format(value);
 }
 
 function visualizationEvidenceTrust(status: VisualizationSpec['trust']['status']): EvidenceTrust {
@@ -690,6 +774,7 @@ function createVisualizationSpec(input: {
     actions: [
       { kind: 'open_query', query: input.query },
       ...(source.kind === 'funnel' ? [{ kind: 'open_funnel' as const, key: source.key }] : [{ kind: 'open_metric' as const, key: source.key }]),
+      { kind: 'save_view' },
     ],
   };
   return spec;
