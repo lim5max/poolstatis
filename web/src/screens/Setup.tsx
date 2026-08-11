@@ -82,14 +82,23 @@ export function Setup() {
 
   const proof = useAsync(
     async () => {
+      const startedAt = performance.now();
       try {
         return {
           scope: uiScope,
           value: project ? await client!.onboardingStatus(project, env) : null,
           error: null as string | null,
+          readBackAt: new Date().toISOString(),
+          latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
         };
       } catch (caught) {
-        return { scope: uiScope, value: null, error: setupStatusMessage(caught) };
+        return {
+          scope: uiScope,
+          value: null,
+          error: setupStatusMessage(caught),
+          readBackAt: new Date().toISOString(),
+          latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        };
       }
     },
     [project, env],
@@ -259,10 +268,15 @@ export function Setup() {
           />
         </div>
         <SetupDecisionProgress status={proofData} />
+        {proof.data?.scope === uiScope && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Server read-back <time dateTime={proof.data.readBackAt}>{formatTimestamp(proof.data.readBackAt)}</time> · {proof.data.latencyMs} ms · {env}
+          </p>
+        )}
       </section>
 
       <div className="space-y-3 border-y py-4">
-        <ConnectionProgress current={currentConnectionStep} complete={eventSeen} />
+        {!eventSeen && <ConnectionProgress current={currentConnectionStep} complete={false} />}
         <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
           <div className="font-medium">
             {eventSeen
@@ -272,6 +286,10 @@ export function Setup() {
           {eventSeen && <Button size="sm" variant="outline" onClick={() => setConnectionOpen(true)}>View connection</Button>}
         </div>
       </div>
+
+      {proofData && <SetupEvidenceLedger status={proofData} />}
+
+      {proofData?.final_result && <VerifiedFirstOutcome result={proofData.final_result} />}
 
       {connectionVisible && (
         <ProductConnectionGuide
@@ -415,13 +433,13 @@ export function resolveSetupNextStep(input: {
     case 'first_event_observed':
       return { kind: 'connection', title: 'Verify the first event', reason, label: 'Send first event', blocker: blocker.key };
     case 'metrics_activated':
-      return { kind: 'route', title: 'Activate the key outcome', reason, label: 'Review metrics', route: '/registry', blocker: blocker.key };
+      return { kind: 'route', title: 'Review the registry', reason, label: 'Review registry', route: '/registry', blocker: blocker.key };
     case 'data_quality_accepted':
-      return { kind: 'route', title: 'Accept measurement quality', reason, label: 'Review data quality', route: '/registry', blocker: blocker.key };
+      return { kind: 'route', title: 'Verify the key metric', reason, label: 'Review key metric', route: '/measurement', blocker: blocker.key };
     case 'first_query_produced':
       return {
         kind: 'fix',
-        title: input.mode === 'website' ? 'Produce the first web answer' : 'Produce the first funnel or outcome answer',
+        title: input.mode === 'website' ? 'Produce the first web answer' : 'Run the first query for a funnel or outcome',
         reason,
         label: 'Copy answer task',
         route: input.mode === 'website' ? '/analyze/web' : '/analyze/funnels',
@@ -432,6 +450,75 @@ export function resolveSetupNextStep(input: {
     case 'agent_connected':
       return { kind: 'agent', title: 'Verify agent access', reason, label: 'Connect agent', blocker: blocker.key };
   }
+}
+
+const GATE_LABELS: Record<OnboardingGateKey, string> = {
+  workspace_created: 'Workspace created',
+  agent_connected: 'Agent connected',
+  data_source_connected: 'Data source connected',
+  first_event_observed: 'First event observed',
+  metrics_activated: 'Metrics activated',
+  data_quality_accepted: 'Data quality accepted',
+  first_query_produced: 'First query produced',
+  first_decision_saved: 'First decision saved',
+};
+
+function SetupEvidenceLedger({ status }: { status: DecisionLoopOnboardingStatus }) {
+  return (
+    <section className="overflow-hidden rounded-lg border bg-card" aria-labelledby="setup-evidence-title">
+      <div className="border-b px-4 py-3 sm:px-5">
+        <h2 id="setup-evidence-title" className="text-sm font-medium">Server-verified gate evidence</h2>
+        <p className="mt-1 text-xs text-muted-foreground">Exact bounded evidence returned for this project and environment. Copied keys, tasks, or config never complete a gate.</p>
+      </div>
+      <ol className="divide-y" aria-label="Setup gate evidence">
+        {status.gates.map((gate) => {
+          const timestamp = latestEvidenceTimestamp(gate.evidence);
+          const entries = Object.entries(gate.evidence);
+          return (
+            <li key={gate.key} className="grid min-w-0 gap-3 px-4 py-3 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)] sm:px-5">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium">{GATE_LABELS[gate.key]}</span>
+                  <Badge variant={gate.complete ? 'default' : gate.required ? 'outline' : 'secondary'}>{gate.complete ? 'Verified' : gate.required ? 'Pending' : 'Optional'}</Badge>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {timestamp ? <>Evidence as of <time dateTime={timestamp}>{formatTimestamp(timestamp)}</time></> : 'Evidence freshness unavailable · no timestamp returned'}
+                </p>
+              </div>
+              <div className="min-w-0">
+                {entries.length > 0 ? (
+                  <dl className="grid min-w-0 gap-x-3 gap-y-1 text-xs sm:grid-cols-[minmax(8rem,auto)_minmax(0,1fr)]">
+                    {entries.map(([key, value]) => (
+                      <div key={key} className="contents">
+                        <dt className="font-mono text-muted-foreground">{key}</dt>
+                        <dd className="break-words font-mono">{safeEvidenceValue(value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : <p className="text-xs text-muted-foreground">No server evidence yet.</p>}
+                {!gate.complete && gate.blocker && <p className="mt-2 text-xs text-muted-foreground">Blocker · {gate.blocker}</p>}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
+function VerifiedFirstOutcome({ result }: { result: NonNullable<DecisionLoopOnboardingStatus['final_result']> }) {
+  return (
+    <section className="rounded-panel border bg-card p-4 sm:p-5" role="region" aria-label="Verified first outcome">
+      <div className="text-xs font-medium text-muted-foreground">Verified funnel or outcome read-back</div>
+      <h2 className="mt-1 text-base font-medium"><code>{result.metric_key}</code></h2>
+      <p className="mt-1 text-sm text-muted-foreground">{result.metric_purpose}</p>
+      <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-3">
+        <div><dt className="text-muted-foreground">Source</dt><dd className="mt-1 font-mono">{result.source}</dd></div>
+        <div className="sm:col-span-2"><dt className="text-muted-foreground">Query window</dt><dd className="mt-1 break-words font-mono">{result.query_window.from} → {result.query_window.to}</dd></div>
+      </dl>
+      <p className="mt-4 border-t pt-3 text-sm"><span className="text-muted-foreground">Next action · </span>{result.next_action}</p>
+    </section>
+  );
 }
 
 function SetupPrimaryAction({ step, project, env, client, telemetryUserId, connectionOpen, onConnection, onAgent, onRetry, onNavigate }: {
@@ -674,6 +761,27 @@ function localEvidenceFingerprint(value: unknown): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function latestEvidenceTimestamp(evidence: Record<string, unknown>): string | null {
+  const timestamps = Object.entries(evidence)
+    .filter(([key, value]) => typeof value === 'string' && /(?:_at|_seen|timestamp)$/.test(key))
+    .map(([, value]) => value as string)
+    .filter((value) => Number.isFinite(Date.parse(value)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left));
+  return timestamps[0] ?? null;
+}
+
+function safeEvidenceValue(value: unknown): string {
+  const formatted = typeof value === 'string' ? value : JSON.stringify(value);
+  if (!formatted) return String(value);
+  return containsCredentialValue(formatted) ? '[credential redacted]' : formatted;
+}
+
+function formatTimestamp(value: string): string {
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return value;
+  return timestamp.toLocaleString();
 }
 
 function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected }: {

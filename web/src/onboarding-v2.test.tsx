@@ -702,9 +702,9 @@ describe('condensed Setup', () => {
 
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
-    expect(await screen.findByText('Activate the key outcome')).toBeInTheDocument();
+    expect(await screen.findByText('Review the registry')).toBeInTheDocument();
     expect(screen.getByText('No active metric has verified source evidence.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Review metrics' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review registry' })).toBeInTheDocument();
     expect(screen.queryByText('No product key yet')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy fix task' })).not.toBeInTheDocument();
     await waitFor(() => expect(telemetryEvents('onboarding.blocked')).toHaveLength(1));
@@ -717,6 +717,109 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('beta') as never);
     render(<MemoryRouter><Setup /></MemoryRouter>);
     await waitFor(() => expect(telemetryEvents('onboarding.blocked')).toHaveLength(2));
+  });
+
+  it('collapses completed connection into exact timestamped evidence and advances to registry review', async () => {
+    const proof = {
+      ...connectedProof,
+      gates: [
+        {
+          key: 'data_source_connected', complete: true, required: true,
+          evidence: { native: true, native_key_created_at: '2026-08-11T09:58:00.000Z' },
+          blocker: null, next_action: null,
+        },
+        ...connectedProof.gates.filter((gate) => gate.key !== 'data_source_connected'),
+        {
+          key: 'metrics_activated', complete: false, required: true, evidence: {},
+          blocker: 'No active metric has verified source evidence.', next_action: 'Review and activate a metric.',
+        },
+      ],
+      next_blocker: {
+        key: 'metrics_activated', complete: false, required: true, evidence: {},
+        blocker: 'No active metric has verified source evidence.', next_action: 'Review and activate a metric.',
+      },
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(proof),
+        projectIntent: vi.fn().mockResolvedValue({ intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null } }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    expect(await screen.findByText('Review the registry')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review registry' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Create a product key' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Server read-back/)).toHaveTextContent(/ms/);
+    const evidence = screen.getByRole('list', { name: 'Setup gate evidence' });
+    expect(within(evidence).getByText('Data source connected')).toBeInTheDocument();
+    expect(within(evidence).getByText('native_key_created_at')).toBeInTheDocument();
+    expect(within(evidence).getByText('2026-08-11T09:58:00.000Z')).toBeInTheDocument();
+    expect(within(evidence).getAllByText(/Evidence as of/).length).toBeGreaterThan(0);
+  });
+
+  it('keeps copied MCP config unverified until the server reports a real agent tool call', async () => {
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(connectedProof),
+        projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'pt_private_token', tokenKind: 'personal',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    const status = await screen.findByLabelText('Setup status');
+    fireEvent.click(within(status).getByRole('button', { name: 'Connect' }));
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Copy config for Codex' })));
+
+    expect(within(status).getByText('Agent access').parentElement).toHaveTextContent('Optional');
+    expect(screen.getByText(/marks MCP connected only after that real tool call/)).toBeInTheDocument();
+    expect(screen.queryByText('Agent access verified')).not.toBeInTheDocument();
+  });
+
+  it('shows the verified funnel or outcome read-back after the decision loop completes', async () => {
+    const completed = {
+      complete: true,
+      gates: [
+        ...connectedProof.gates,
+        { key: 'metrics_activated', complete: true, required: true, evidence: { metric_key: 'activation_completed' }, blocker: null, next_action: null },
+        { key: 'data_quality_accepted', complete: true, required: true, evidence: { issues: 0 }, blocker: null, next_action: null },
+        { key: 'first_query_produced', complete: true, required: true, evidence: { query_run_id: 'query-1', source: 'native', created_at: '2026-08-11T10:00:00.000Z' }, blocker: null, next_action: null },
+        { key: 'first_decision_saved', complete: true, required: true, evidence: { insight_id: 'insight-1', created_at: '2026-08-11T10:02:00.000Z' }, blocker: null, next_action: null },
+      ],
+      next_blocker: null,
+      final_result: {
+        metric_key: 'activation_completed',
+        metric_purpose: 'Measure completed activation after the setup funnel.',
+        query_window: { from: '2026-08-04T00:00:00.000Z', to: '2026-08-11T00:00:00.000Z' },
+        source: 'native',
+        next_action: 'Keep the shorter setup and monitor the guardrail.',
+      },
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(completed),
+        projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 1, funnels: 1, events_30d: 10 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    const result = await screen.findByRole('region', { name: 'Verified first outcome' });
+    expect(result).toHaveTextContent('activation_completed');
+    expect(result).toHaveTextContent('Measure completed activation after the setup funnel.');
+    expect(result).toHaveTextContent('2026-08-04T00:00:00.000Z');
+    expect(result).toHaveTextContent('Keep the shorter setup and monitor the guardrail.');
   });
 
   it('copies a server fix task and records only the normalized server gate key', async () => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Decision, DecisionAction, Experiment, Release } from '../api/types';
@@ -206,7 +206,11 @@ describe('Ship lifecycle', () => {
     expect(decisions).toHaveBeenCalledWith('alpha', { env: 'prod' });
     expect(experiments).toHaveBeenCalledWith('alpha');
     expect(screen.getByRole('article', { name: 'Shorter activation' })).toHaveTextContent('Waiting for evidence');
-    expect(screen.getByRole('article', { name: 'Activation experiment' })).toHaveTextContent('Running');
+    const experimentRow = screen.getByRole('article', { name: 'Activation experiment' });
+    expect(experimentRow).toHaveTextContent('Running');
+    expect(experimentRow).toHaveTextContent('The experiment is collecting exposure evidence.');
+    expect(experimentRow).toHaveTextContent('OwnerNot recorded');
+    expect(experimentRow).toHaveTextContent('Expected decisionNot scheduled');
     expect(screen.getAllByText('Outcome not available yet')).toHaveLength(2);
     screen.getAllByText('Technical details').forEach((summary) => expect(summary.closest('details')).not.toHaveAttribute('open'));
   });
@@ -372,6 +376,66 @@ describe('Ship lifecycle', () => {
       env: 'prod',
       status: 'deployed',
     })));
+  });
+
+  it('chooses Create experiment when release prerequisites are absent and previews the documented lifecycle', async () => {
+    mockedStore.mockReturnValue({
+      client: {
+        releases: vi.fn().mockResolvedValue([]),
+        decisions: vi.fn().mockResolvedValue([]),
+        experiments: vi.fn().mockResolvedValue([]),
+        contracts: vi.fn().mockResolvedValue([]),
+      },
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Changes /></MemoryRouter>);
+
+    expect(await screen.findByRole('link', { name: 'Create experiment' })).toHaveAttribute('href', '/experiments');
+    expect(screen.queryByRole('button', { name: 'Register release' })).not.toBeInTheDocument();
+    const preview = screen.getByRole('region', { name: 'Release decision loop documentation preview' });
+    expect(preview).toHaveTextContent('Documentation preview');
+    expect(preview).toHaveTextContent('poolstatis.yml');
+    expect(within(preview).getAllByRole('listitem')).toHaveLength(5);
+    expect(preview).toHaveTextContent('Register release');
+    expect(preview).toHaveTextContent('Human decision');
+  });
+
+  it('shows the active release blocker, frozen owner, and expected decision date', async () => {
+    const proposed = decision('proposed');
+    const detail = decisionDetail(proposed);
+    detail.release.next_evaluation_at = '2026-08-12T10:00:00.000Z';
+    const blockedDetail = {
+      ...detail,
+      evidence: {
+        ...detail.evidence,
+        ready: false,
+        blockers: [{
+          code: 'minimum_sample',
+          message: 'Only 45 of 50 required actors are available.',
+          next_action: 'Wait for five more actors.',
+        }],
+      },
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        releases: vi.fn().mockResolvedValue([detail.release]),
+        decisions: vi.fn().mockResolvedValue([proposed]),
+        experiments: vi.fn().mockResolvedValue([]),
+        contracts: vi.fn().mockResolvedValue([]),
+        decision: vi.fn().mockResolvedValue(blockedDetail),
+      },
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Changes /></MemoryRouter>);
+
+    const row = await screen.findByRole('article', { name: 'Shorter activation' });
+    expect(within(row).getByText('Only 45 of 50 required actors are available.')).toBeInTheDocument();
+    expect(within(row).getByText('growth-team')).toBeInTheDocument();
+    expect(within(row).getAllByText(/Aug 12, 2026/).length).toBeGreaterThan(0);
   });
 
   it('evaluates the first eligible release from the guided decision queue', async () => {

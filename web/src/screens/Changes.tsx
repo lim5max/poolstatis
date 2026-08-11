@@ -14,6 +14,7 @@ import {
   SHIP_STAGES,
   SHIP_STAGE_LABELS,
   ShipLifecycleRail,
+  ShipDocumentationPreview,
   ShipStageBadge,
   deriveExperimentStage,
   deriveReleaseStage,
@@ -118,7 +119,7 @@ export function Changes() {
             ]}
             action={activeContracts.length > 0
               ? <Button onClick={() => setRegistering(true)}><GitCommit className="size-4" />Register release</Button>
-              : <Button asChild><Link to="/measurement">Open Measurement</Link></Button>}
+              : <Button asChild><Link to="/experiments">Create experiment</Link></Button>}
             agentTask={releaseSetupTask(project!, env, activeContracts)}
             referenceTitle="First real lifecycle result"
             referenceItems={[
@@ -128,6 +129,7 @@ export function Changes() {
               'Keep, fix, rollback, or inconclusive proposal for review',
             ]}
           />
+          <ShipDocumentationPreview />
           {registering && activeContracts.length > 0 && (
             <RegisterReleaseForm
               env={env}
@@ -296,6 +298,10 @@ function ReleaseLifecycleRow({ release, detail, busy, onEvaluate }: {
   const outcome = releaseOutcome(release, detail);
   const evidence = detail?.evidence;
   const canEvaluate = release.status === 'deployed' || release.status === 'observing';
+  const blocker = evidence?.blockers[0]?.message
+    ?? (typeof release.retry_state.reason === 'string' ? release.retry_state.reason : null)
+    ?? (stage === 'waiting_for_evidence' ? 'Waiting for sufficient trusted evidence.' : stage === 'running' ? 'Observation has not produced a readout yet.' : 'No recorded blocker.');
+  const expectedDecisionAt = release.next_evaluation_at ?? expectedDecisionDate(release);
   return (
     <article aria-label={release.contract_snapshot.name} className="grid min-w-0 gap-4 p-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:p-5">
       <div className="min-w-0">
@@ -323,6 +329,11 @@ function ReleaseLifecycleRow({ release, detail, busy, onEvaluate }: {
         {detail?.decision.status === 'proposed' && <Button asChild size="sm"><Link to="/decisions">Review decision</Link></Button>}
         {release.experiment_key && <Button asChild size="sm" variant="outline"><Link to="/experiments">Open experiment</Link></Button>}
       </div>
+      <dl className="grid min-w-0 gap-3 rounded-control border bg-muted/20 p-3 text-xs sm:grid-cols-3 lg:col-span-3">
+        <div className="min-w-0"><dt className="text-muted-foreground">Blocker</dt><dd className="mt-1 break-words font-medium">{blocker}</dd></div>
+        <div className="min-w-0"><dt className="text-muted-foreground">Owner</dt><dd className="mt-1 break-words font-medium">{release.contract_snapshot.decision_owner}</dd></div>
+        <div className="min-w-0"><dt className="text-muted-foreground">Expected decision</dt><dd className="mt-1 break-words font-medium">{expectedDecisionAt ? formatDate(expectedDecisionAt) : 'Not scheduled'}</dd></div>
+      </dl>
       <details className="group/disclosure min-w-0 lg:col-span-3">
         <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8">
           Technical details
@@ -360,6 +371,11 @@ function ExperimentLifecycleRow({ experiment }: { experiment: Experiment }) {
         <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">{outcome.detail}</p>
       </div>
       <div className="flex items-start lg:justify-end"><Button asChild size="sm" variant="outline"><Link to="/experiments">Open experiment</Link></Button></div>
+      <dl className="grid min-w-0 gap-3 rounded-control border bg-muted/20 p-3 text-xs sm:grid-cols-3 lg:col-span-3">
+        <div className="min-w-0"><dt className="text-muted-foreground">Blocker</dt><dd className="mt-1 break-words font-medium">{experiment.status === 'running' ? 'Collecting exposure evidence.' : experiment.status === 'draft' ? 'Experiment has not started.' : 'No recorded blocker.'}</dd></div>
+        <div className="min-w-0"><dt className="text-muted-foreground">Owner</dt><dd className="mt-1 break-words font-medium">Not recorded</dd></div>
+        <div className="min-w-0"><dt className="text-muted-foreground">Expected decision</dt><dd className="mt-1 break-words font-medium">{experiment.concluded_at ? formatDate(experiment.concluded_at) : 'Not scheduled'}</dd></div>
+      </dl>
       <details className="group/disclosure min-w-0 lg:col-span-3">
         <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8">Technical details</DisclosureSummary>
         <div className="grid min-w-0 gap-x-5 gap-y-1 border-l pl-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
@@ -388,3 +404,10 @@ function MetricChange({ detail }: { detail: DecisionDetail }) {
 
 function shortSha(value: string) { return value.slice(0, 10); }
 function formatDate(value: string) { return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); }
+
+function expectedDecisionDate(release: Release): string | null {
+  if (!release.deployed_at) return null;
+  const deployedAt = new Date(release.deployed_at).getTime();
+  if (!Number.isFinite(deployedAt)) return null;
+  return new Date(deployedAt + release.contract_snapshot.observation_window_days * 86_400_000).toISOString();
+}
