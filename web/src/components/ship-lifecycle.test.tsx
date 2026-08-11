@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Decision, Experiment, Release } from '../api/types';
+import type { Decision, DecisionAction, Experiment, Release } from '../api/types';
 import { useStore } from '../store';
 import { Changes } from '../screens/Changes';
 import { Decisions } from '../screens/Decisions';
@@ -193,7 +193,7 @@ describe('Ship lifecycle', () => {
     const decisions = vi.fn().mockResolvedValue([]);
     const experiments = vi.fn().mockResolvedValue([experiment('running')]);
     mockedStore.mockReturnValue({
-      client: { releases, decisions, experiments },
+      client: { releases, decisions, experiments, contracts: vi.fn().mockResolvedValue([]) },
       project: 'alpha',
       env: 'prod',
     } as never);
@@ -226,6 +226,7 @@ describe('Ship lifecycle', () => {
         releases: vi.fn().mockResolvedValue([]),
         decisions: vi.fn().mockResolvedValue([]),
         experiments: vi.fn().mockResolvedValue([closed, recorded, delivered]),
+        contracts: vi.fn().mockResolvedValue([]),
       },
       project: 'alpha',
       env: 'prod',
@@ -243,16 +244,28 @@ describe('Ship lifecycle', () => {
   it('leads decision review with the human outcome and keeps audit detail collapsed', async () => {
     const approved = decision('approved');
     const detail = decisionDetail(approved);
+    const preparedAction: DecisionAction = {
+      id: 'action-1', decision_id: approved.id, release_id: detail.release.id, evidence_id: 'evidence-1',
+      decision_revision: 1, action_type: 'schedule_observation', status: 'prepared',
+      target: { repository: 'poolstatis/product', env: 'prod' },
+      payload: { at: '2026-08-12T10:00:00.000Z' },
+      expected_effect: 'Schedule one bounded observation without changing traffic.',
+      undo: { action: 'cancel_scheduled_observation', scheduled_at: '2026-08-12T10:00:00.000Z' },
+      confirmation_fingerprint: 'f'.repeat(64), idempotency_key: 'action-1', prepared_by: 'owner',
+      approved_by: null, approved_at: null, executed_at: null, result: null, error_code: null,
+      error_message: null, created_at: '2026-08-11T10:00:00.000Z', updated_at: '2026-08-11T10:00:00.000Z',
+    };
     const listDecisions = vi.fn().mockResolvedValue([approved]);
     mockedStore.mockReturnValue({
       client: {
         decisions: listDecisions,
+        releases: vi.fn().mockResolvedValue([detail.release]),
         decision: vi.fn().mockResolvedValue(detail),
         decisionInbox: vi.fn().mockResolvedValue([]),
         decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
         webhookDeliveries: vi.fn().mockResolvedValue([]),
         decisionExplanations: vi.fn().mockResolvedValue([]),
-        decisionActions: vi.fn().mockResolvedValue([]),
+        decisionActions: vi.fn().mockResolvedValue([preparedAction]),
       },
       project: 'alpha',
       env: 'prod',
@@ -267,6 +280,14 @@ describe('Ship lifecycle', () => {
     expect(screen.getByLabelText("Current environment prod")).toBeInTheDocument();
     expect(await screen.findAllByText('Decided: keep')).not.toHaveLength(0);
     expect(screen.getAllByText('Ship the measured improvement.').length).toBeGreaterThan(0);
+    expect(await screen.findByText('Review before deciding')).toBeInTheDocument();
+    expect(await screen.findByText('Assumptions')).toBeInTheDocument();
+    expect(screen.getByText(/does not deploy code, change a flag, or roll back traffic/)).toBeInTheDocument();
+    expect(await screen.findByLabelText('Frozen target')).toHaveTextContent(/"repository": "poolstatis\/product"/);
+    expect(screen.getByLabelText('Frozen payload')).toHaveTextContent(/"at": "2026-08-12T10:00:00.000Z"/);
+    expect(screen.getByLabelText('Frozen undo')).toHaveTextContent(/"action": "cancel_scheduled_observation"/);
+    expect(screen.getByLabelText('Full action confirmation fingerprint')).toHaveTextContent('f'.repeat(64));
+    expect(screen.getByRole('button', { name: 'Approve shown payload' })).toBeInTheDocument();
     expect((await screen.findByText('Technical record')).closest('details')).not.toHaveAttribute('open');
     expect(screen.getByText('Decision operations & audit').closest('details')).not.toHaveAttribute('open');
   });
@@ -278,6 +299,7 @@ describe('Ship lifecycle', () => {
     const listDecisions = vi.fn().mockResolvedValue([proposed]);
     const client = {
       decisions: listDecisions,
+      releases: vi.fn().mockResolvedValue([detail.release]),
       decision: vi.fn().mockResolvedValue(detail),
       decisionInbox: vi.fn().mockResolvedValue([]),
       decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
@@ -302,7 +324,75 @@ describe('Ship lifecycle', () => {
       "This decision belongs to prod. Switch back to that environment before reviewing it.",
     );
     expect(screen.getByRole('button', { name: 'Approve proposal' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Explain outcome' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Prepare' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'Explain outcome' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'Prepare' })).toBeDisabled();
+  });
+
+  it('registers the first deployed release from a real active contract without showing zero lifecycle KPIs', async () => {
+    const registerRelease = vi.fn().mockResolvedValue({ id: 'new-release', idempotent: false });
+    const snapshot = release('planned').contract_snapshot;
+    const contract = {
+      ...snapshot,
+      id: 'contract-1',
+      revision: 4,
+      declaration_hash: 'a'.repeat(64),
+      created_by: 'test',
+      created_at: '2026-08-11T10:00:00.000Z',
+      updated_at: '2026-08-11T10:00:00.000Z',
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        releases: vi.fn().mockResolvedValue([]),
+        decisions: vi.fn().mockResolvedValue([]),
+        experiments: vi.fn().mockResolvedValue([]),
+        contracts: vi.fn().mockResolvedValue([contract]),
+        registerRelease,
+      },
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Changes /></MemoryRouter>);
+
+    expect(await screen.findByText('Start the first release decision loop')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Ship lifecycle' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Register release' }));
+    fireEvent.change(screen.getByLabelText('Release repository'), { target: { value: 'acme/product' } });
+    fireEvent.change(screen.getByLabelText('Release commit SHA'), { target: { value: 'abcdef1234567' } });
+    fireEvent.change(screen.getByLabelText('Release deployed at'), { target: { value: '2026-08-11T15:24:00Z' } });
+    fireEvent.change(screen.getByLabelText('Release deployment id'), { target: { value: 'deploy-2026-08-11-01' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Register release' }).at(-1)!);
+
+    await waitFor(() => expect(registerRelease).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      idempotency_key: 'admin:deploy-2026-08-11-01',
+      contract_key: 'activation_change',
+      repository: 'acme/product',
+      commit_sha: 'abcdef1234567',
+      deployed_at: '2026-08-11T15:24:00.000Z',
+      env: 'prod',
+      status: 'deployed',
+    })));
+  });
+
+  it('evaluates the first eligible release from the guided decision queue', async () => {
+    const eligible = release('observing');
+    const evaluateRelease = vi.fn().mockResolvedValue({});
+    mockedStore.mockReturnValue({
+      client: {
+        decisions: vi.fn().mockResolvedValue([]),
+        releases: vi.fn().mockResolvedValue([eligible]),
+        evaluateRelease,
+        decisionInbox: vi.fn().mockResolvedValue([]),
+        decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+        webhookDeliveries: vi.fn().mockResolvedValue([]),
+      },
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Decisions /></MemoryRouter>);
+    expect(await screen.findByText('Create the first reviewable decision')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Evaluate eligible release' }));
+    await waitFor(() => expect(evaluateRelease).toHaveBeenCalledWith('alpha', eligible.id));
   });
 });

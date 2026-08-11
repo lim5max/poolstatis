@@ -284,6 +284,22 @@ export class PoolstatisClient {
     );
   }
 
+  registerRelease(slug: string, body: {
+    idempotency_key: string;
+    contract_key: string;
+    env: string;
+    repository: string;
+    branch?: string;
+    commit_sha: string;
+    pr_url?: string;
+    deployed_at: string;
+    status: 'deployed';
+  }) {
+    return this.req<Release & { idempotent: boolean }>(
+      'POST', `/api/v1/projects/${slug}/releases`, body,
+    );
+  }
+
   evaluateRelease(slug: string, id: string) {
     return this.req<{ evidence: EvidenceSet; decision: Decision; idempotent: boolean }>(
       'POST', `/api/v1/projects/${slug}/releases/${id}/evaluate`, {},
