@@ -172,6 +172,86 @@ jsonTool(
   wrap(({ period }) => api('GET', `/api/v1/me/usage/control?period=${encodeURIComponent(period)}`)),
 );
 
+// ===== Saved / official answers and measurement readiness =====
+
+jsonTool(
+  'create_saved_answer',
+  'Persist one validated, versioned VisualizationSpec with its Answer and Evidence snapshots. The server rejects SQL, prompts, credentials, raw actor ids and event payloads.',
+  { project, view: z.record(z.unknown()) },
+  wrap(({ project: slug, view }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/analysis-views`,
+    view,
+  )),
+);
+
+jsonTool(
+  'list_saved_answers',
+  'List saved answers for one exact project and environment. Optional status and official filters are server-owned.',
+  {
+    project,
+    env: z.string().default('prod'),
+    status: z.enum(['active', 'archived']).optional(),
+    official: z.boolean().optional(),
+  },
+  wrap(({ project: slug, env, status, official }) => {
+    const query = new URLSearchParams({ env });
+    if (status) query.set('status', status);
+    if (official !== undefined) query.set('official', String(official));
+    return api('GET', `/api/v1/projects/${slug}/analysis-views?${query}`);
+  }),
+);
+
+jsonTool(
+  'get_saved_answer',
+  'Read one saved answer and its append-only bounded audit metadata.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/analysis-views/${id}`)),
+);
+
+jsonTool(
+  'update_saved_answer',
+  'Update an active saved answer. VisualizationSpec, Answer and Evidence snapshots must be replaced together.',
+  { project, id: z.string().uuid(), patch: z.record(z.unknown()) },
+  wrap(({ project: slug, id, patch }) => api(
+    'PATCH',
+    `/api/v1/projects/${slug}/analysis-views/${id}`,
+    patch,
+  )),
+);
+
+jsonTool(
+  'archive_saved_answer',
+  'Archive a saved answer through its audited lifecycle. Archived answers are read-only and cannot remain official.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/analysis-views/${id}/archive`,
+    {},
+  )),
+);
+
+jsonTool(
+  'set_saved_answer_official',
+  'Mark or unmark an active saved answer as official. Only an authenticated workspace owner/admin credential is authorized.',
+  { project, id: z.string().uuid(), official: z.boolean() },
+  wrap(({ project: slug, id, official }) => api(
+    'PUT',
+    `/api/v1/projects/${slug}/analysis-views/${id}/official`,
+    { official },
+  )),
+);
+
+jsonTool(
+  'get_measurement_readiness',
+  'Read server-ranked tracking-plan, property, identity and data-source readiness with affected saved-answer ids and one exact repair action.',
+  { project, env: z.string().default('prod') },
+  wrap(({ project: slug, env }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/readiness?env=${encodeURIComponent(env)}`,
+  )),
+);
+
 // ===== Measurement trust =====
 
 jsonTool(

@@ -24,6 +24,7 @@ import {
   createOrganization,
   createProject,
 } from '../src/services/projects.js';
+import { analysisViewInput } from './analysis-view-fixtures.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -161,7 +162,7 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe(
-        '035_project_intents.sql',
+        '037_analysis_views.sql',
       );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
@@ -195,6 +196,9 @@ describe('hosted policy migration role topology', () => {
       );
       await deploy.query(
         'SELECT poolstatis_prepare_project_intent_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_analysis_views_role_grants()',
       );
       await deploy.query(
         'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
@@ -321,7 +325,7 @@ describe('hosted policy migration role topology', () => {
       });
       const api = async (
         bearer: string,
-        method: 'GET' | 'POST' | 'PUT',
+        method: 'GET' | 'POST' | 'PUT' | 'PATCH',
         url: string,
         payload?: unknown,
       ) => {
@@ -400,6 +404,32 @@ describe('hosted policy migration role topology', () => {
         source: { event: 'isolated.event' },
       });
       expect(metric.status).toBe(201);
+      const activatedMetric = await api(
+        token,
+        'PATCH',
+        '/api/v1/projects/isolated-project/metrics/isolated_events',
+        { status: 'active' },
+      );
+      expect(activatedMetric.status).toBe(200);
+      const savedAnswer = await api(
+        token,
+        'POST',
+        '/api/v1/projects/isolated-project/analysis-views',
+        analysisViewInput('isolated-project', 'prod', 'isolated_events'),
+      );
+      expect(savedAnswer.status).toBe(201);
+      const officialAnswer = await api(
+        token,
+        'PUT',
+        `/api/v1/projects/isolated-project/analysis-views/${savedAnswer.body.view.id}/official`,
+        { official: true },
+      );
+      expect(officialAnswer.status).toBe(200);
+      await expect(coreRuntime.query(
+        `UPDATE analysis_view_audit SET action = 'archived'
+         WHERE analysis_view_id = $1`,
+        [savedAnswer.body.view.id],
+      )).rejects.toMatchObject({ code: '42501' });
       const ingested = await api(ingestKey.body.token, 'POST', '/i/v1/events', {
         events: [{ event: 'isolated.event', distinct_id: 'isolated-actor' }],
       });
@@ -481,7 +511,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '035_project_intents.sql',
+        last_migration: '037_analysis_views.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -565,6 +595,7 @@ describe('hosted policy migration role topology', () => {
       await selfHost.query('SELECT poolstatis_prepare_metric_taxonomy_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_event_management_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_project_intent_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_analysis_views_role_grants()');
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(selfHost, new Date(), 12);
       await ensureRetentionIndexes(selfHost);
@@ -707,7 +738,7 @@ describe('hosted policy migration role topology', () => {
       );
       const applied = await migrateWithEvidence(selfHost);
       expect(applied.at(-1)).toBe(
-        '035_project_intents.sql',
+        '037_analysis_views.sql',
       );
       const topology = await selfHost.query<{
         superuser: boolean;

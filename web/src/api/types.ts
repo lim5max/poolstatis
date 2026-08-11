@@ -1,4 +1,127 @@
 // Mirrors the Platform API response shapes (src/http/server.ts + services).
+import type { VisualizationSpec } from '../analysis/visualization';
+
+export type SavedAnswerState = 'ready' | 'partial' | 'empty' | 'unavailable' | 'not_configured' | 'stale' | 'error';
+export type SavedAnswerTrust = 'trusted' | 'partial' | 'blocked' | 'unavailable';
+
+export interface SavedAnswerSnapshot {
+  state: SavedAnswerState;
+  headline: string;
+  takeaway: string;
+  primary_value?: {
+    value: number | string | null;
+    unit: 'count' | 'percent' | 'percentage_point' | 'duration_ms' | 'date' | 'text';
+    formatted: string;
+  };
+  delta?: {
+    value: number | null;
+    unit: 'count' | 'percent' | 'percentage_point';
+    direction: 'up' | 'down' | 'flat' | 'unknown';
+    comparison_label: string;
+  };
+  why_it_matters: string;
+}
+
+export interface SavedEvidenceSnapshot {
+  state: SavedAnswerTrust;
+  as_of: string;
+  freshness: 'fresh' | 'stale' | 'unknown';
+  source_refs: Array<Record<string, unknown>>;
+  aggregation?: string;
+  denominator?: { label: string; value: number | null };
+  sample?: { eligible: number | null; observed: number | null; coverage: number | null };
+  warnings: Array<{ code: string; message: string; remediation_action_id?: string }>;
+  unavailable_reasons: Array<{ code: string; message: string; prerequisite_action_id?: string }>;
+  reproducible_query?: Record<string, unknown>;
+}
+
+export interface SavedAnswer {
+  id: string;
+  project: string;
+  env: string;
+  title: string;
+  description: string | null;
+  template_key: string | null;
+  schema_version: 1;
+  visualization_spec: VisualizationSpec;
+  answer: SavedAnswerSnapshot;
+  evidence: SavedEvidenceSnapshot;
+  status: 'active' | 'archived';
+  official: boolean;
+  created_by: { kind: 'secret' | 'personal' | 'user'; role: 'owner' | 'admin' | null };
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface SavedAnswerAudit {
+  id: string;
+  action: 'created' | 'updated' | 'official_changed' | 'archived';
+  performed_by: { kind: 'secret' | 'personal' | 'user'; role: 'owner' | 'admin' | null };
+  schema_version: 1;
+  spec_fingerprint: string;
+  previous_status: SavedAnswer['status'] | null;
+  next_status: SavedAnswer['status'];
+  previous_official: boolean | null;
+  next_official: boolean;
+  created_at: string;
+}
+
+export type CreateSavedAnswerInput = Pick<
+  SavedAnswer,
+  'title' | 'schema_version' | 'visualization_spec' | 'answer' | 'evidence'
+> & Partial<Pick<SavedAnswer, 'description' | 'template_key'>>;
+
+export type UpdateSavedAnswerInput = Partial<Pick<
+  CreateSavedAnswerInput,
+  'title' | 'description' | 'template_key' | 'schema_version' | 'visualization_spec' | 'answer' | 'evidence'
+>>;
+
+export type MeasurementReadinessSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info' | 'none';
+export type MeasurementReadinessGroupKey = 'tracking_plan' | 'properties' | 'identity' | 'data_sources';
+export interface MeasurementReadinessRepairAction {
+  action_code: 'activate_metric' | 'repair_funnel' | 'review_property' | 'verify_identity' | 'connect_data_source' | 'verify_data_source';
+  kind: 'navigate';
+  label: string;
+  href: string;
+}
+export interface MeasurementReadinessGap {
+  code: 'metric_inactive' | 'funnel_definition_incomplete' | 'property_untrusted'
+    | 'identity_evidence_unavailable' | 'identity_coverage_incomplete'
+    | 'data_source_missing' | 'data_source_unverified';
+  severity: Exclude<MeasurementReadinessSeverity, 'none'>;
+  definition_ref: string | null;
+  affected_answer_ids: string[];
+  repair_action: MeasurementReadinessRepairAction;
+}
+export interface MeasurementReadinessGroup {
+  key: MeasurementReadinessGroupKey;
+  label: string;
+  healthy_count: number;
+  incomplete_count: number;
+  highest_severity: MeasurementReadinessSeverity;
+  gaps: MeasurementReadinessGap[];
+  repair_action: MeasurementReadinessRepairAction | null;
+  evidence: Record<string, number>;
+}
+export interface MeasurementReadiness {
+  schema_version: 1;
+  generated_at: string;
+  project: string;
+  env: string;
+  summary: {
+    healthy_count: number;
+    incomplete_count: number;
+    highest_severity: MeasurementReadinessSeverity;
+  };
+  groups: MeasurementReadinessGroup[];
+  fix_next: (MeasurementReadinessRepairAction & {
+    group: MeasurementReadinessGroupKey;
+    gap_code: MeasurementReadinessGap['code'];
+    severity: Exclude<MeasurementReadinessSeverity, 'none'>;
+    affected_answer_ids: string[];
+  }) | null;
+}
 
 export type MetricCategory = string;
 

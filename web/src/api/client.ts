@@ -1,5 +1,5 @@
 import type {
-  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, PreparedExperiment, ProjectIntent, ProjectIntentInput, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse,
+  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, CreateSavedAnswerInput, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
   BackfillPreview, BackfillRecord, ControlTowerResult, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, UsageControlResult, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
@@ -175,6 +175,64 @@ export class PoolstatisClient {
 
   schema(slug: string, env = 'prod') {
     return this.req<ProjectSchema>('GET', `/api/v1/projects/${slug}/schema?env=${encodeURIComponent(env)}`);
+  }
+
+  analysisViews(slug: string, filter: {
+    env: string; status?: SavedAnswer['status']; official?: boolean;
+  }) {
+    const query = new URLSearchParams({ env: filter.env });
+    if (filter.status) query.set('status', filter.status);
+    if (filter.official !== undefined) query.set('official', String(filter.official));
+    return this.req<{ views: SavedAnswer[] }>(
+      'GET',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views?${query}`,
+    ).then((response) => response.views);
+  }
+
+  analysisView(slug: string, id: string) {
+    return this.req<{ view: SavedAnswer; audit: SavedAnswerAudit[] }>(
+      'GET',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views/${encodeURIComponent(id)}`,
+    );
+  }
+
+  createAnalysisView(slug: string, body: CreateSavedAnswerInput) {
+    return this.req<{ view: SavedAnswer }>(
+      'POST',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views`,
+      body,
+    ).then((response) => response.view);
+  }
+
+  updateAnalysisView(slug: string, id: string, patch: UpdateSavedAnswerInput) {
+    return this.req<{ view: SavedAnswer }>(
+      'PATCH',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views/${encodeURIComponent(id)}`,
+      patch,
+    ).then((response) => response.view);
+  }
+
+  archiveAnalysisView(slug: string, id: string) {
+    return this.req<{ view: SavedAnswer }>(
+      'POST',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views/${encodeURIComponent(id)}/archive`,
+      {},
+    ).then((response) => response.view);
+  }
+
+  setAnalysisViewOfficial(slug: string, id: string, official: boolean) {
+    return this.req<{ view: SavedAnswer }>(
+      'PUT',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views/${encodeURIComponent(id)}/official`,
+      { official },
+    ).then((response) => response.view);
+  }
+
+  measurementReadiness(slug: string, env = 'prod') {
+    return this.req<MeasurementReadiness>(
+      'GET',
+      `/api/v1/projects/${encodeURIComponent(slug)}/readiness?env=${encodeURIComponent(env)}`,
+    );
   }
 
   onboardingStatus(slug: string, env = 'prod') {

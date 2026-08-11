@@ -10,6 +10,12 @@ import {
   requireOrganizationWriteReadiness, updateAuthenticatedProfile, type McpRunnerConfig,
 } from '../services/accounts.js';
 import { getProjectIntent, recordSetupTaskFeedback, upsertProjectIntent } from '../services/projectIntents.js';
+import {
+  analysisViewCreateSchema, analysisViewOfficialSchema, analysisViewUpdateSchema,
+  archiveAnalysisView, createAnalysisView, getAnalysisView, listAnalysisViews,
+  setAnalysisViewOfficial, updateAnalysisView, type AnalysisViewCredential,
+} from '../services/analysisViews.js';
+import { getMeasurementReadiness } from '../services/measurementReadiness.js';
 import { generateSetupTask } from '../services/setupTask.js';
 import type { SetupTaskProvider } from '../services/setupTaskProvider.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
@@ -252,6 +258,15 @@ function requireOrganizationManagementAccess(auth: AuthContext): void {
       'ask an owner or admin to upgrade your workspace role',
     );
   }
+}
+
+function analysisViewCredential(auth: AuthContext): AnalysisViewCredential {
+  if (auth.kind === 'ingest') throw new ApiError(403, 'wrong_key_kind', 'ingest keys cannot manage saved answers');
+  return {
+    kind: auth.kind,
+    role: auth.userRole === 'owner' || auth.userRole === 'admin' ? auth.userRole : null,
+    canSetOfficial: hasOrganizationManagementRole(auth),
+  };
 }
 
 function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number, name: string): number {
@@ -969,6 +984,100 @@ function registerPlatformRoutes(
     const project = await resolveProject(req);
     const { env } = req.query as { env?: string };
     return getProjectSchema(ctx.pool, ctx.eventStore, project, env ?? 'prod');
+  });
+
+  // ----- Saved / official analysis answers -----
+  app.post('/api/v1/projects/:slug/analysis-views', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const view = await createAnalysisView(
+      ctx.pool,
+      project,
+      analysisViewCreateSchema.parse(req.body),
+      analysisViewCredential(req.auth),
+    );
+    return reply.status(201).send({ view });
+  });
+
+  app.get('/api/v1/projects/:slug/analysis-views', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const query = req.query as { env?: string; status?: string; official?: string };
+    const status = query.status;
+    if (status !== undefined && status !== 'active' && status !== 'archived') {
+      throw badRequest('invalid_query_param', 'status must be active or archived');
+    }
+    let official: boolean | undefined;
+    if (query.official !== undefined) {
+      if (query.official !== 'true' && query.official !== 'false') {
+        throw badRequest('invalid_query_param', 'official must be true or false');
+      }
+      official = query.official === 'true';
+    }
+    return {
+      views: await listAnalysisViews(ctx.pool, project, {
+        env: query.env ?? req.auth.env,
+        ...(status ? { status } : {}),
+        ...(official !== undefined ? { official } : {}),
+      }),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/readiness', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env = req.auth.env } = req.query as { env?: string };
+    if (!env.trim() || env.length > 100) {
+      throw badRequest('invalid_query_param', 'env must contain between 1 and 100 characters');
+    }
+    return getMeasurementReadiness(ctx.pool, ctx.eventStore, project, env);
+  });
+
+  app.get('/api/v1/projects/:slug/analysis-views/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return getAnalysisView(ctx.pool, project, id);
+  });
+
+  app.patch('/api/v1/projects/:slug/analysis-views/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return {
+      view: await updateAnalysisView(
+        ctx.pool,
+        project,
+        id,
+        analysisViewUpdateSchema.parse(req.body),
+        analysisViewCredential(req.auth),
+      ),
+    };
+  });
+
+  app.post('/api/v1/projects/:slug/analysis-views/:id/archive', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return {
+      view: await archiveAnalysisView(ctx.pool, project, id, analysisViewCredential(req.auth)),
+    };
+  });
+
+  app.put('/api/v1/projects/:slug/analysis-views/:id/official', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const body = analysisViewOfficialSchema.parse(req.body);
+    return {
+      view: await setAnalysisViewOfficial(
+        ctx.pool,
+        project,
+        id,
+        body.official,
+        analysisViewCredential(req.auth),
+      ),
+    };
   });
 
   // ----- browser experience -----

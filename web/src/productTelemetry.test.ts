@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  captureProductTelemetryOnce,
   claimProductTelemetryOnce,
   createProductTelemetry,
   normalizeTelemetryCode,
@@ -94,6 +95,67 @@ describe('optional product telemetry', () => {
     expect(serialized).not.toContain('form contents');
   });
 
+  it('emits the control-tower taxonomy with finite properties and strips every prohibited detail', () => {
+    const { capture, fetch } = runtime();
+    const unsafe = {
+      raw_prompt: 'Explain customer Acme', copied_task: 'paste private source', source_code: 'const secret = true',
+      dom: '<main>private</main>', free_text: 'operator note', url: 'https://customer.test/private', path: '/private',
+      project_id: 'project-private', org_id: 'org-private', actor_id: 'person-private', customer_name: 'Acme',
+      purpose: 'private metric purpose', goal: 'private funnel goal', warning_detail: 'raw rejection payload',
+      token: 'sk_secret_fragment', economics: 1999,
+    };
+    capture('control_tower.answer_viewed', {
+      surface: 'home', state: 'ready', trust: 'trusted', latency_bucket: '250ms_to_1s', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('control_tower.attention_opened', {
+      surface: 'home', rule_code: 'tracking_plan_incomplete', severity: 'high', age_bucket: '1h_to_24h', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('control_tower.primary_action_clicked', {
+      surface: 'home', action_code: 'fix_tracking_plan', state: 'partial', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('control_tower.evidence_opened', {
+      surface: 'product', trust: 'partial', warning_count_bucket: 'two_to_five', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('control_tower.empty_task_copied', {
+      surface: 'setup', task_code: 'instrument_events', method: 'clipboard', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('usage.forecast_viewed', {
+      cap_state: 'approaching_limit', forecast_state: 'at_risk', threshold_state: 'approaching', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('usage.contributor_opened', {
+      rank_bucket: 'second_to_third', share_bucket: '25_to_50_percent', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('funnel.biggest_loss_opened', {
+      loss_kind: 'conversion_rate', step_count_bucket: 'four_to_five', trust: 'blocked', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('setup.next_gate_opened', {
+      gate_key: 'verify_measurement', state: 'not_configured', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('saved_answer.created', {
+      template_code: 'product_health', official: false, ...unsafe,
+    } as never, { distinctId: 'user_123' });
+    capture('saved_answer.official_changed', {
+      template_code: 'product_health', next_state: 'official', ...unsafe,
+    } as never, { distinctId: 'user_123' });
+
+    expect(fetch).toHaveBeenCalledTimes(11);
+    expect(Array.from({ length: 11 }, (_, index) => request(fetch, index).body.events[0].properties)).toEqual([
+      { surface: 'home', state: 'ready', trust: 'trusted', latency_bucket: '250ms_to_1s' },
+      { surface: 'home', rule_code: 'tracking_plan_incomplete', severity: 'high', age_bucket: '1h_to_24h' },
+      { surface: 'home', action_code: 'fix_tracking_plan', state: 'partial' },
+      { surface: 'product', trust: 'partial', warning_count_bucket: 'two_to_five' },
+      { surface: 'setup', task_code: 'instrument_events', method: 'clipboard' },
+      { cap_state: 'approaching_limit', forecast_state: 'at_risk', threshold_state: 'approaching' },
+      { rank_bucket: 'second_to_third', share_bucket: '25_to_50_percent' },
+      { loss_kind: 'conversion_rate', step_count_bucket: 'four_to_five', trust: 'blocked' },
+      { gate_key: 'verify_measurement', state: 'not_configured' },
+      { template_code: 'product_health', official: false },
+      { template_code: 'product_health', next_state: 'official' },
+    ]);
+    const serialized = fetch.mock.calls.map((call) => String((call[1] as RequestInit).body)).join(' ');
+    for (const prohibited of Object.values(unsafe)) expect(serialized).not.toContain(String(prohibited));
+  });
+
   it('uses a configured API origin, keepalive, fresh retry-safe batches, and a stable authenticated id', () => {
     const { capture, fetch } = runtime();
     capture('onboarding.mode_selected', { mode: 'product' }, { distinctId: 'account:user_42' });
@@ -136,6 +198,9 @@ describe('optional product telemetry', () => {
     capture('onboarding.key_copied', { environment: 'prod', method: 'other' } as never);
     capture('onboarding.task_copied', { agent_id: 'codex', method: 'other' } as never);
     capture('home.next_action_clicked', { action_id: 'raw private action' } as never);
+    capture('control_tower.answer_viewed', { surface: 'raw_url', state: 'ready', trust: 'trusted', latency_bucket: 'under_250ms' } as never);
+    capture('saved_answer.created', { template_code: 'product_health', official: true } as never);
+    capture('usage.forecast_viewed', { cap_state: 'private exact value', forecast_state: 'at_risk', threshold_state: 'approaching' } as never);
     capture('unknown.event' as never, { secret: 'value' } as never);
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -156,6 +221,28 @@ describe('optional product telemetry', () => {
     ).join(' ');
     expect(persisted).not.toContain('private-project');
     expect(persisted).not.toContain(durableKey);
+  });
+
+  it('emits one physical action or scoped view once without persisting the raw scope', () => {
+    const { capture, fetch } = runtime();
+    const scopedView = {
+      idempotencyKey: 'view:home:private-project:prod:ready',
+      distinctId: 'user_123',
+    } as const;
+    expect(captureProductTelemetryOnce(capture, 'control_tower.answer_viewed', {
+      surface: 'home', state: 'ready', trust: 'trusted', latency_bucket: 'under_250ms',
+    }, scopedView)).toBe(true);
+    expect(captureProductTelemetryOnce(capture, 'control_tower.answer_viewed', {
+      surface: 'home', state: 'ready', trust: 'trusted', latency_bucket: 'under_250ms',
+    }, scopedView)).toBe(false);
+    expect(captureProductTelemetryOnce(capture, 'control_tower.answer_viewed', {
+      surface: 'home', state: 'ready', trust: 'trusted', latency_bucket: 'under_250ms',
+    }, { ...scopedView, idempotencyKey: 'view:home:other-project:prod:ready' })).toBe(true);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const persisted = window.sessionStorage.getItem('poolstatis.telemetry.once.session.v2') ?? '';
+    expect(persisted).not.toContain('private-project');
+    expect(persisted).not.toContain('other-project');
   });
 
   it('swallows synchronous and asynchronous transport failures', async () => {
