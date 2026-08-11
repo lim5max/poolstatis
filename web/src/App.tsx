@@ -259,10 +259,6 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
-  const items = [
-    ...navigation.secondary,
-    { label: 'Profile', to: '/profile', availability: 'available' as const },
-  ];
   if (collapsed) {
     return (
       <div className="mt-2 border-t pt-2">
@@ -277,7 +273,7 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
         Data &amp; settings
       </DisclosureSummary>
       <div className="mt-1 border-l pl-2">
-        {items.map((item) => <NavigationRow key={item.label} item={item} collapsed={false} onNavigate={onNavigate} />)}
+        {navigation.secondary.map((item) => <NavigationRow key={item.label} item={item} collapsed={false} onNavigate={onNavigate} />)}
       </div>
     </details>
   );
@@ -334,13 +330,16 @@ function ConnectionFooter({ onDisconnect, collapsed = false }: { onDisconnect?: 
     onDisconnect?.();
   };
   return (
-    <div className={cn('mt-2 border-t pt-3', collapsed ? 'flex justify-center px-2' : 'flex items-center justify-between px-5')}>
+    <div aria-label="Account navigation" className={cn('mt-2 border-t pt-3', collapsed ? 'flex justify-center gap-1 px-2' : 'flex items-center justify-between gap-2 px-5')}>
       {!collapsed && <span className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className={cn('size-1.5 rounded-full', client ? 'bg-muted-foreground' : 'bg-destructive')} /> {tokenKind ?? 'admin'} key session
       </span>}
-      <Button variant="ghost" size={collapsed ? 'icon-sm' : 'sm'} className={cn('text-xs text-muted-foreground', !collapsed && 'h-7')} onClick={handleDisconnect} aria-label={collapsed ? 'Disconnect admin session' : undefined}>
-        {collapsed ? <X className="size-4" /> : 'disconnect'}
-      </Button>
+      <div className="flex items-center gap-1">
+        <AccountProfileLink collapsed={collapsed} onNavigate={onDisconnect} />
+        <Button variant="ghost" size={collapsed ? 'icon-sm' : 'sm'} className={cn('text-xs text-muted-foreground', !collapsed && 'h-7')} onClick={handleDisconnect} aria-label={collapsed ? 'Disconnect admin session' : undefined}>
+          {collapsed ? <X className="size-4" /> : 'disconnect'}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -354,14 +353,35 @@ function HostedConnectionFooter({ onDisconnect, collapsed = false }: { onDisconn
     void logout();
   };
   return (
-    <div className={cn('mt-2 border-t pt-3', collapsed ? 'flex justify-center px-2' : 'flex items-center justify-between px-5')}>
+    <div aria-label="Account navigation" className={cn('mt-2 border-t pt-3', collapsed ? 'flex justify-center gap-1 px-2' : 'flex items-center justify-between gap-2 px-5')}>
       {!collapsed && <span className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className={cn('size-1.5 rounded-full', client ? 'bg-muted-foreground' : 'bg-destructive')} /> hosted session
       </span>}
-      <Button variant="ghost" size={collapsed ? 'icon-sm' : 'sm'} className={cn('text-xs text-muted-foreground', !collapsed && 'h-7')} onClick={handleDisconnect} aria-label={collapsed ? 'Sign out' : undefined}>
-        {collapsed ? <X className="size-4" /> : 'sign out'}
-      </Button>
+      <div className="flex items-center gap-1">
+        <AccountProfileLink collapsed={collapsed} onNavigate={onDisconnect} />
+        <Button variant="ghost" size={collapsed ? 'icon-sm' : 'sm'} className={cn('text-xs text-muted-foreground', !collapsed && 'h-7')} onClick={handleDisconnect} aria-label={collapsed ? 'Sign out' : undefined}>
+          {collapsed ? <X className="size-4" /> : 'sign out'}
+        </Button>
+      </div>
     </div>
+  );
+}
+
+function AccountProfileLink({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
+  return (
+    <NavLink
+      to="/profile"
+      onClick={onNavigate}
+      aria-label={collapsed ? 'Profile' : undefined}
+      className={({ isActive }) => cn(
+        'flex items-center rounded-control text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/10 hover:text-sidebar-foreground',
+        collapsed ? 'size-8 justify-center' : 'h-7 gap-1.5 px-2',
+        isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
+      )}
+    >
+      <UserCircle className="size-4" />
+      {!collapsed && <span>Profile</span>}
+    </NavLink>
   );
 }
 

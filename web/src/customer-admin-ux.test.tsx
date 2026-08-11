@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, NAV_ICONS } from './App';
@@ -95,6 +95,11 @@ describe('customer admin shell', () => {
     expect(screen.getByText('Data & settings')).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: /^(Attention|Web|Product|Funnels|People|Ship|Usage|Setup)$/ })).toHaveLength(8);
     expect(screen.getByRole('link', { name: 'Funnels' })).toHaveAttribute('href', '/analyze/funnels');
+    const settings = screen.getByText('Data & settings').closest('details');
+    expect(settings).not.toBeNull();
+    fireEvent.click(screen.getByText('Data & settings'));
+    expect(within(settings!).queryByRole('link', { name: 'Profile' })).not.toBeInTheDocument();
+    expect(within(screen.getByLabelText('Account navigation')).getByRole('link', { name: 'Profile' })).toHaveAttribute('href', '/profile');
   });
 
   it('keeps an unfinished project recoverable after the user navigates away from onboarding', async () => {
