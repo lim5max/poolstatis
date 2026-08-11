@@ -83,7 +83,7 @@ export function ControlTower({ result, onAction }: {
 }) {
   return (
     <section aria-label="Control tower" className="space-y-4">
-      <div role="status" aria-live="polite">
+      <div role={result.answer.state === 'error' ? 'alert' : 'status'} aria-live={result.answer.state === 'error' ? 'assertive' : 'polite'}>
         <Panel>
           <div className="space-y-4">
             <div className="space-y-2">

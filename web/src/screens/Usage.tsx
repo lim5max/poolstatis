@@ -393,7 +393,9 @@ function UsageThresholds({ usage }: { usage: UsageControlResult }) {
                 <span>Audit: {threshold.audit_source.replace('_', ' ')}</span>
               </div>
             </div>
-            <span className={threshold.state === 'reached' || threshold.state === 'projected' ? 'font-medium text-warning' : 'text-muted-foreground'}>
+            <span className={threshold.state === 'reached' || threshold.state === 'projected'
+              ? threshold.percent === 100 ? 'font-medium text-destructive' : 'font-medium text-warning'
+              : 'text-muted-foreground'}>
               {threshold.state === 'reached' ? `Reached${formatForecastDate(threshold.reached_or_projected_at) ? ` ${formatForecastDate(threshold.reached_or_projected_at)}` : ''}`
                 : threshold.state === 'projected' ? `Projected ${formatForecastDate(threshold.reached_or_projected_at)}`
                   : threshold.state === 'not_applicable' ? 'Not applicable without a cap' : 'Not projected'}
@@ -450,7 +452,10 @@ export function Usage() {
             usage={usage}
             planName={account?.billing?.plan?.name ?? null}
             mode={mode.data}
-            onReviewContributors={() => document.getElementById('usage-contributors-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            onReviewContributors={() => document.getElementById('usage-contributors-title')?.scrollIntoView({
+              behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+              block: 'start',
+            })}
           />
           {usage.attention.map((item) => <WarningNote key={item.id}>{item.title}: {item.impact}</WarningNote>)}
           <div aria-labelledby="usage-contributors-title"><CurrentContributors usage={usage} /></div>

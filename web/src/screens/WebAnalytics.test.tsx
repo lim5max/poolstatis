@@ -238,7 +238,9 @@ describe('Web analytics partial availability', () => {
     expect(within(screen.getByText('resolved actors').parentElement!).getByText('8')).toBeInTheDocument();
     expect(within(screen.getByText('actor + session ID').parentElement!).getByText('11')).toBeInTheDocument();
     expect(within(screen.getByText('accepted canonical views').parentElement!).getByText('20')).toBeInTheDocument();
-    expect(screen.getByText('telegram')).toBeInTheDocument();
+    expect(screen.queryByText('telegram')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load traffic breakdown' }));
+    expect(await screen.findByText('telegram')).toBeInTheDocument();
     expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_sessions')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));
     await screen.findByRole('link', { name: 'actor-1' });
@@ -315,11 +317,55 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByTestId('web-trend')).toBeInTheDocument();
   });
 
+  it('renders the current headline before slow secondary reads and loads source only on request', async () => {
+    const overview = await operationalQuery('y1blin-com', {
+      kind: 'web_analytics',
+      metric: metric.key,
+      date_from: '-30d',
+      filters: [],
+      env: 'prod',
+      dimensions: [],
+    });
+    operationalQuery.mockClear();
+    const isolatedOperationalQuery = vi.fn((_project, query) => {
+      if (query.kind === 'web_analytics' && query.date_to === '-30d') return new Promise(() => undefined);
+      if (query.kind === 'web_analytics' && query.dimensions?.includes('source')) return new Promise(() => undefined);
+      if (query.kind === 'web_analytics') return Promise.resolve(overview);
+      throw new Error(`Unexpected query kind: ${query.kind}`);
+    });
+    const slowTrend = vi.fn(() => new Promise(() => undefined));
+    const slowTrust = vi.fn(() => new Promise(() => undefined));
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com',
+      env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webOutcome]),
+        properties,
+        operationalQuery: isolatedOperationalQuery,
+        query: slowTrend,
+        measurementTrust: slowTrust,
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+    expect(screen.getByText('Previous-period comparison is loading.')).toBeInTheDocument();
+    expect(isolatedOperationalQuery.mock.calls.filter(([, query]) => query.dimensions?.includes('source'))).toHaveLength(0);
+    expect(screen.queryByText('telegram')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load traffic breakdown' }));
+    await waitFor(() => expect(isolatedOperationalQuery.mock.calls.filter(([, query]) => query.dimensions?.includes('source'))).toHaveLength(1));
+    expect(screen.getByText('Loading Sources breakdown…')).toBeInTheDocument();
+    expect(screen.getByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+  });
+
   it('does not keep prior-scope KPI data visible while a new project registry is loading', async () => {
     const view = render(
       <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
     );
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Load traffic breakdown' }));
     await screen.findByText('telegram');
     mockedStore.mockReturnValue({
       project: 'beta',
@@ -360,8 +406,7 @@ describe('Web analytics partial availability', () => {
     render(
       <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
     );
-    await screen.findByText('telegram');
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'UTM term' }), { key: 'Enter' });
+    fireEvent.keyDown(await screen.findByRole('tab', { name: 'UTM term' }), { key: 'Enter' });
     expect(await screen.findByText('launch')).toBeInTheDocument();
     expect(trend).not.toHaveBeenCalled();
     expect(screen.getByText('5')).toBeInTheDocument();

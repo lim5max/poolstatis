@@ -57,10 +57,25 @@ interface WebRegistryRead {
   readiness: MeasurementReadiness | null;
 }
 
-interface WebPrimaryRead extends Omit<WebWorkspaceResult, 'sessions'> {
+interface WebPrimaryRead {
   scope: string;
-  previousOverview: WebAnalyticsResult | null;
-  trust: WebTrustRead;
+  metric: Metric;
+  overview: WebAnalyticsResult;
+}
+
+interface WebComparisonRead {
+  scope: string;
+  result: WebAnalyticsResult;
+}
+
+interface WebTrendRead {
+  scope: string;
+  result: WebWorkspaceResult['trend'];
+}
+
+interface WebTrustScopedRead {
+  scope: string;
+  result: WebTrustRead;
 }
 
 interface WebSecondaryRead {
@@ -122,6 +137,7 @@ export function WebAnalytics() {
   const [dimension, setDimension] = useState<BreakdownView>('source');
   const [selectedSession, setSelectedSession] = useState<{ scope: string; session: WebSessionSummary } | null>(null);
   const [sessionsRequested, setSessionsRequested] = useState(false);
+  const [breakdownRequested, setBreakdownRequested] = useState(false);
   const registryScope = `${project ?? ''}\u0000${env}`;
   const registry = useAsync<WebRegistryRead>(async () => {
     const [metrics, properties, readiness] = await Promise.all([
@@ -151,40 +167,42 @@ export function WebAnalytics() {
       filters: [],
       env,
     };
-    const days = Number.parseInt(range, 10);
-    const [overview, previousOverview, trend, trust] = await Promise.all([
-      client!.operationalQuery<WebAnalyticsResult>(project!, {
-        kind: 'web_analytics',
-        ...base,
-        dimensions: ['source'],
-      }),
-      client!.operationalQuery<WebAnalyticsResult>(project!, {
-        kind: 'web_analytics',
-        ...base,
-        date_from: `-${days * 2}d`,
-        date_to: `-${days}d`,
-        dimensions: ['source'],
-      }).catch(() => null),
-      client!.query(project!, {
-        kind: 'trend',
-        metric: metric.key,
-        date_from: rangeDateFrom(range),
-        date_to: null,
-        interval: 'day',
-        filters: [],
-        env,
-      }).then((result) => {
-        if (result.kind !== 'trend') throw new Error('Trend query returned an unexpected result kind');
-        return result;
-      }),
-      readWebTrust(client!, project!, env, metric.key),
-    ]);
-    return { scope: primaryScope, metric, overview, previousOverview, trend, trust };
+    const overview = await client!.operationalQuery<WebAnalyticsResult>(project!, {
+      kind: 'web_analytics',
+      ...base,
+      dimensions: [],
+    });
+    return { scope: primaryScope, metric, overview };
   }, [project, env, range, metric?.key]);
   const primaryData = primary.data?.scope === primaryScope ? primary.data : null;
+  const comparison = useAsync<WebComparisonRead | null>(async () => {
+    if (!metric || !primaryData) return null;
+    const days = Number.parseInt(range, 10);
+    const result = await client!.operationalQuery<WebAnalyticsResult>(project!, {
+      kind: 'web_analytics', metric: metric.key, date_from: `-${days * 2}d`, date_to: `-${days}d`,
+      filters: [], env, dimensions: [],
+    });
+    return { scope: primaryScope, result };
+  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at]);
+  const comparisonData = comparison.data?.scope === primaryScope ? comparison.data.result : null;
+  const trendRead = useAsync<WebTrendRead | null>(async () => {
+    if (!metric || !primaryData) return null;
+    const result = await client!.query(project!, {
+      kind: 'trend', metric: metric.key, date_from: rangeDateFrom(range), date_to: null,
+      interval: 'day', filters: [], env,
+    });
+    if (result.kind !== 'trend') throw new Error('Trend query returned an unexpected result kind');
+    return { scope: primaryScope, result };
+  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at]);
+  const trendData = trendRead.data?.scope === primaryScope ? trendRead.data.result : null;
+  const trustRead = useAsync<WebTrustScopedRead | null>(async () => {
+    if (!metric || !primaryData) return null;
+    return { scope: primaryScope, result: await readWebTrust(client!, project!, env, metric.key) };
+  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at]);
+  const trustData = trustRead.data?.scope === primaryScope ? trustRead.data.result : null;
   const operationalDimension = dimension !== 'conversion' ? dimension : null;
   const secondary = useAsync<WebSecondaryRead | null>(async () => {
-    if (!metric || !primaryData || !operationalDimension || operationalDimension === 'source') return null;
+    if (!metric || !primaryData || !breakdownRequested || !operationalDimension) return null;
     const result = await client!.operationalQuery<WebAnalyticsResult>(project!, {
       kind: 'web_analytics',
       metric: metric.key,
@@ -194,7 +212,7 @@ export function WebAnalytics() {
       dimensions: [operationalDimension],
     });
     return { scope: primaryScope, dimension: operationalDimension, result };
-  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension]);
+  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension, breakdownRequested]);
   const secondaryData = secondary.data?.scope === primaryScope
     && secondary.data.dimension === operationalDimension ? secondary.data.result : null;
   const sessions = useAsync<WebSessionsRead | null>(async () => {
@@ -210,6 +228,7 @@ export function WebAnalytics() {
   useEffect(() => {
     setSelectedSession(null);
     setSessionsRequested(false);
+    setBreakdownRequested(false);
   }, [project, env, range]);
 
   if (registry.loading || (!registryData && !registry.error)) return <WebAnalyticsSkeleton />;
@@ -234,10 +253,11 @@ export function WebAnalytics() {
   if (primary.error) return <ErrorNote>{primary.error}</ErrorNote>;
   if (!primaryData) return null;
 
-  const { overview, previousOverview, trend, trust } = primaryData;
+  const { overview } = primaryData;
   const { properties, metrics } = registryData;
-  const spec = webTrendSpec(project!, env, metric.name, metric.purpose, overview, trend, trust);
-  const breakdownResponse = operationalDimension === 'source' ? overview : secondaryData;
+  const trust = trustData ?? { result: null, unavailable: true };
+  const spec = trendData ? webTrendSpec(project!, env, metric.name, metric.purpose, overview, trendData, trust) : null;
+  const breakdownResponse = secondaryData;
   const breakdown = operationalDimension ? breakdownResponse?.breakdowns[operationalDimension] ?? [] : [];
   const unavailableDimensions = breakdownResponse?.meta.unavailable_dimensions ?? {};
   const unavailable = operationalDimension ? unavailableDimensions[operationalDimension] : null;
@@ -259,7 +279,15 @@ export function WebAnalytics() {
       )}
 
       {canonicalReady && acquisitionTrusted && outcomeReady && (
-        <WebHealthAnswer current={overview} previous={previousOverview} range={range} trust={trust} env={env} />
+        <WebHealthAnswer
+          current={overview}
+          previous={comparisonData}
+          comparisonState={comparisonData ? 'ready' : comparison.error ? 'unavailable' : 'loading'}
+          range={range}
+          trust={trust}
+          trustLoading={!trustData && !trustRead.error}
+          env={env}
+        />
       )}
 
       <KpiStrip items={[
@@ -286,12 +314,16 @@ export function WebAnalytics() {
         <Rate label="Bounce rate" value={overview.engagement.bounce_rate} />
       </div>
 
-      <ManualVisualizationRenderer spec={spec} result={trend} />
+      {trendData && spec ? <ManualVisualizationRenderer spec={spec} result={trendData} />
+        : trendRead.error ? <div><ErrorNote>{trendRead.error}</ErrorNote><Button variant="outline" className="mt-3 h-11" onClick={trendRead.reload}>Retry trend</Button></div>
+          : <Loading what="Loading traffic trend…" />}
 
       <AnswerCanvas>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
           <h2 className="text-sm font-semibold">Traffic breakdown</h2>
-          {!breakdownResponse && operationalDimension !== null
+          {!breakdownRequested
+            ? <Badge variant="outline">Load on request</Badge>
+            : !breakdownResponse && operationalDimension !== null
             ? <Badge variant="outline">Loading selected view</Badge>
             : breakdownResponse && breakdownResponse.meta.truncated_dimensions.length > 0
             ? <Badge variant="outline">Top values · truncated</Badge>
@@ -301,7 +333,7 @@ export function WebAnalytics() {
         </div>
         <div className="p-4 sm:p-5">
         <div className="mb-4 max-w-full overflow-x-auto">
-          <Tabs value={dimension} onValueChange={(value) => setDimension(value as BreakdownView)}>
+          <Tabs value={dimension} onValueChange={(value) => { setDimension(value as BreakdownView); setBreakdownRequested(value !== 'conversion'); }}>
             <TabsList className="w-max">
               {DIMENSIONS.map((item) => <TabsTrigger key={item.value} value={item.value}>{item.label}</TabsTrigger>)}
             </TabsList>
@@ -313,9 +345,15 @@ export function WebAnalytics() {
             <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">The current canonical web response does not include a conversion outcome, so Poolstatis will not display a zero.</p>
             <Button asChild variant="outline" className="mt-4 h-11"><Link to="/registry">Review outcomes</Link></Button>
           </div>
-        ) : operationalDimension !== 'source' && secondary.loading ? (
+        ) : !breakdownRequested ? (
+          <div className="flex flex-col items-start gap-3 border-y border-dashed px-4 py-7">
+            <div className="text-lg font-semibold">Traffic dimensions load when requested</div>
+            <p className="max-w-2xl text-sm text-muted-foreground">The current Web answer stays visible while sources, pages and campaign dimensions load independently.</p>
+            <Button variant="outline" className="h-11" onClick={() => setBreakdownRequested(true)}>Load traffic breakdown</Button>
+          </div>
+        ) : secondary.loading ? (
           <Loading what={`Loading ${DIMENSIONS.find((item) => item.value === dimension)?.label ?? dimension} breakdown…`} />
-        ) : operationalDimension !== 'source' && secondary.error ? (
+        ) : secondary.error ? (
           <div><ErrorNote>{secondary.error}</ErrorNote><Button variant="outline" className="mt-3 h-11" onClick={secondary.reload}>Retry breakdown</Button></div>
         ) : unavailable ? (
           <UnavailableDimension label={DIMENSIONS.find((item) => item.value === dimension)?.label ?? dimension} unavailable={unavailable} />
@@ -437,11 +475,13 @@ export function WebAnalytics() {
   );
 }
 
-function WebHealthAnswer({ current, previous, range, trust, env }: {
+function WebHealthAnswer({ current, previous, comparisonState, range, trust, trustLoading, env }: {
   current: WebAnalyticsResult;
   previous: WebAnalyticsResult | null;
+  comparisonState: 'loading' | 'ready' | 'unavailable';
   range: AnalyticsRange;
   trust: WebTrustRead;
+  trustLoading: boolean;
   env: string;
 }) {
   const currentViews = current.summary.page_views;
@@ -449,14 +489,18 @@ function WebHealthAnswer({ current, previous, range, trust, env }: {
   const delta = previousViews === null ? null : currentViews - previousViews;
   const deltaRate = previousViews === null || previousViews === 0 || delta === null ? null : delta / previousViews;
   const days = Number.parseInt(range, 10);
-  const comparison = delta === null
+  const comparison = comparisonState === 'loading'
+    ? 'Previous-period comparison is loading.'
+    : delta === null
     ? 'Previous-period comparison is unavailable.'
     : delta === 0
     ? `No change versus the previous ${days} days.`
     : deltaRate === null
       ? `${delta > 0 ? '+' : ''}${fmtNum(delta)} page views; the previous period was zero, so percentage change is unavailable.`
       : `${delta > 0 ? 'Up' : 'Down'} ${Math.abs(deltaRate * 100).toFixed(1)}% versus the previous ${days} days.`;
-  const trustLabel = trust.result?.status === 'trusted' && !trust.unavailable
+  const trustLabel = trustLoading
+    ? 'Trust evidence loading'
+    : trust.result?.status === 'trusted' && !trust.unavailable
     ? 'Trusted measurement'
     : trust.unavailable ? 'Trust evidence unavailable' : 'Partial measurement trust';
   const observed = trust.result?.primary_metric.observed_events ?? currentViews;

@@ -1,9 +1,10 @@
 import type {
   AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataHealthResult, DataHealthVerifyInput, DataHealthVerifyResult, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
-  BackfillPreview, BackfillRecord, ControlTowerResult, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, UsageControlResult, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
+  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
 import type { OperationalQueryInput, OperationalQueryResult, PersonResult } from '../analysis/operations';
+import { decodeControlTowerResult, decodeUsageControlResult } from './control-tower-decoder';
 
 export class ApiError extends Error {
   constructor(public code: string, message: string, public hint?: string, public status?: number, public requestId?: string) {
@@ -143,7 +144,8 @@ export class PoolstatisClient {
   }
 
   usageControl(period: string) {
-    return this.req<UsageControlResult>('GET', `/api/v1/me/usage/control?period=${encodeURIComponent(period)}`);
+    return this.req<unknown>('GET', `/api/v1/me/usage/control?period=${encodeURIComponent(period)}`)
+      .then(decodeUsageControlResult);
   }
 
   usageRange(from: string, to: string) {
@@ -259,10 +261,10 @@ export class PoolstatisClient {
 
   controlTower(slug: string, env = 'prod', range: '7d' | '30d' | '90d' = '30d') {
     const query = new URLSearchParams({ env, range });
-    return this.req<ControlTowerResult>(
+    return this.req<unknown>(
       'GET',
       `/api/v1/projects/${encodeURIComponent(slug)}/control-tower?${query}`,
-    );
+    ).then(decodeControlTowerResult);
   }
 
   projectIntent(slug: string) {
