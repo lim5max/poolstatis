@@ -781,7 +781,7 @@ function registerPlatformRoutes(
 
   app.get('/api/v1/projects', async (req) => {
     platform(req);
-    const all = await listProjectsWithStats(ctx.pool, req.auth.orgId);
+    const all = await listProjectsWithStats(ctx.pool, ctx.eventStore, req.auth.orgId);
     // Secret keys are pinned to one project; personal tokens see the whole org.
     if (req.auth.kind === 'secret') {
       const { rows } = await ctx.pool.query('SELECT slug FROM projects WHERE id = $1', [req.auth.projectId]);
@@ -802,7 +802,11 @@ function registerPlatformRoutes(
       // A new project has no data yet — return the same shape as the list (stats zeroed).
       return reply.status(201).send({
         slug: project.slug, name: project.name, timezone: project.timezone,
-        active_metrics: 0, funnels: 0, events_30d: 0,
+        active_metrics: 0, proposed_metrics: 0, active_outcome_contracts: 0, funnels: 0,
+        events_24h: 0, events_7d: 0, events_30d: 0,
+        last_event_at: null, registered_coverage_30d: null,
+        key_outcome_available: false, health: 'no_data',
+        attention: ['No events in 30 days', 'No active measurement contract'],
       });
     } catch (err) {
       if ((err as { code?: string }).code === '23505') {

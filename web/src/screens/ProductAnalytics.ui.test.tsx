@@ -64,6 +64,8 @@ describe('Product answer-first surface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
     await waitFor(() => expect(screen.getByText(/Observed · Trusted · 34 events ·/)).toBeInTheDocument());
+    expect(screen.getByText('Takeaway')).toBeInTheDocument();
+    expect(screen.getByText('Previous exact period')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Product answer chart' })).toHaveTextContent('table fallback');
   });
 

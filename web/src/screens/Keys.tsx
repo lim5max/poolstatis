@@ -21,6 +21,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import type { ApiKeyRow, PersonalToken } from '../api/types';
+import { credentialHealth, credentialPermissions } from '../analysis/semanticHealth';
 
 type IssuableKind = 'ingest' | 'secret' | 'personal';
 
@@ -100,6 +101,12 @@ export function Keys() {
   const refreshError = projectKeys.error ?? (
     tokenKind === 'user' ? personalTokens.error : null
   );
+  const healthCounts = rows.reduce((counts, row) => {
+    const status = keyHealth(row).status;
+    if (status === 'review') counts.attention += 1;
+    else if (status === 'healthy') counts.healthy += 1;
+    return counts;
+  }, { healthy: 0, attention: 0 });
 
   return (
     <div className="space-y-4">
@@ -114,8 +121,8 @@ export function Keys() {
       />
 
       <Panel
-        title={<h2>Keys</h2>}
-        right={<span className="text-xs text-muted-foreground">Full values are shown once.</span>}
+        title={<h2>Credential health</h2>}
+        right={<span className="text-xs text-muted-foreground">{healthCounts.healthy} healthy · {healthCounts.attention} need review</span>}
       >
         {rows.length === 0 ? <EmptyState headline="No keys" lead="Create one above." /> : (
           <TableScroll>
@@ -126,6 +133,8 @@ export function Keys() {
                   <TableHead>Scope</TableHead>
                   <TableHead>Label</TableHead>
                   <TableHead>Created</TableHead>
+                  <TableHead>Last used</TableHead>
+                  <TableHead>Health</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead />
                 </TableRow>
@@ -150,6 +159,8 @@ export function Keys() {
                     </TableCell>
                     <TableCell className="text-muted-foreground">{key.label ?? '—'}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{fmtRelative(key.createdAt)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{key.lastUsedAt ? fmtRelative(key.lastUsedAt) : 'Never'}</TableCell>
+                    <TableCell><CredentialHealthBadge item={key} /></TableCell>
                     <TableCell>
                       {key.revokedAt
                         ? <Badge variant="secondary" className="line-through opacity-70">revoked</Badge>
@@ -175,7 +186,7 @@ export function Keys() {
           </TableScroll>
         )}
         <p className="mt-3 text-xs text-muted-foreground">
-          Lost a key? Revoke it and create a replacement. Plaintext keys cannot be recovered.
+          Rotation is replacement-first: create a new key, verify its consumer, then revoke the predecessor. Plaintext keys cannot be recovered.
         </p>
         {refreshError && (
           <div className="mt-3">
@@ -226,7 +237,7 @@ function projectKeyRow(key: ApiKeyRow, project: string): KeyListItem {
     scope: `${project} only`,
     env: key.kind === 'ingest' ? key.env : null,
     createdAt: key.created_at,
-    lastUsedAt: null,
+    lastUsedAt: key.last_used_at,
     revokedAt: key.revoked_at,
     owner: 'project',
   };
@@ -248,8 +259,17 @@ function personalKeyRow(token: PersonalToken): KeyListItem {
 }
 
 function KindChip({ kind }: { kind: IssuableKind }) {
-  const variant = kind === 'secret' ? 'destructive' : kind === 'personal' ? 'default' : 'outline';
+  const variant = kind === 'personal' ? 'default' : 'outline';
   return <Badge variant={variant} className="font-normal">{prefix(kind)}</Badge>;
+}
+
+function keyHealth(item: KeyListItem) {
+  return credentialHealth({ created_at: item.createdAt, last_used_at: item.lastUsedAt, revoked_at: item.revokedAt });
+}
+
+function CredentialHealthBadge({ item }: { item: KeyListItem }) {
+  const health = keyHealth(item);
+  return <Badge variant={health.status === 'revoked' ? 'destructive' : health.status === 'healthy' ? 'default' : 'outline'}>{health.label}</Badge>;
 }
 
 function prefix(kind: IssuableKind): 'pk_' | 'sk_' | 'pt_' {
@@ -386,6 +406,7 @@ function KeyDetails({ item, onDone }: { item: KeyListItem; onDone: () => void })
     : item.kind === 'secret'
       ? 'Project MCP key'
       : 'Workspace MCP token';
+  const health = keyHealth(item);
   return (
     <Dialog open onOpenChange={(open) => !open && onDone()}>
       <DialogContent>
@@ -398,7 +419,9 @@ function KeyDetails({ item, onDone }: { item: KeyListItem; onDone: () => void })
           <div><dt className="text-xs text-muted-foreground">Environment</dt><dd className="mt-1 font-mono">{item.env ?? 'all'}</dd></div>
           <div><dt className="text-xs text-muted-foreground">Created</dt><dd className="mt-1">{fmtRelative(item.createdAt)}</dd></div>
           <div><dt className="text-xs text-muted-foreground">Last used</dt><dd className="mt-1">{item.lastUsedAt ? fmtRelative(item.lastUsedAt) : 'Not recorded'}</dd></div>
+          <div className="col-span-2"><dt className="text-xs text-muted-foreground">Permissions</dt><dd className="mt-1">{credentialPermissions(item.kind)}</dd></div>
         </dl>
+        <div className="rounded-md border p-3 text-sm"><div className="font-medium">{health.label}</div><p className="mt-1 text-xs text-muted-foreground">{health.recommendation}</p></div>
         <div className="rounded-md bg-muted/50 p-3 text-sm">
           <p className="font-medium">The full key cannot be shown again.</p>
           <p className="mt-1 text-xs text-muted-foreground">Poolstatis does not store its plaintext.</p>

@@ -59,7 +59,11 @@ describe('hosted StoreProvider connection', () => {
   });
 
   it('hydrates projects for a hosted owner after verifying the hosted profile', async () => {
-    const projects: ProjectWithStats[] = [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 }];
+    const projects: ProjectWithStats[] = [{
+      slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, proposed_metrics: 0, active_outcome_contracts: 0, funnels: 0,
+      events_24h: 0, events_7d: 0, events_30d: 0, last_event_at: null, registered_coverage_30d: null,
+      key_outcome_available: false, health: 'no_data', attention: ['No events in 30 days', 'No active measurement contract'],
+    }];
     me.mockResolvedValue(account('owner'));
     listProjects.mockResolvedValue({ projects, scope: 'org' });
     render(<StoreProvider><StoreProbe onChange={(store) => { current = store; }} /></StoreProvider>);

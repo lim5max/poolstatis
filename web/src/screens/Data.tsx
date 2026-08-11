@@ -18,7 +18,9 @@ import {
 import type {
   BackfillPreview, DataQualityIssue, EntityRow, EventRevisionPatch, EventRevisionPreview, FilterOp,
   ObservedEvent, SampleEvent, SampleFilter,
+  Metric,
 } from '../api/types';
+import { buildDataHealth, type HealthFinding } from '../analysis/semanticHealth';
 
 function EnvSelect() {
   const { env, setEnv, availableEnvs } = useStore();
@@ -57,7 +59,7 @@ export function Data() {
         </div>
         <EnvSelect />
       </div>
-      <TabsContent value="health"><Health observed={schema.data.observed_events_30d} /></TabsContent>
+      <TabsContent value="health"><Health observed={schema.data.observed_events_30d} metrics={schema.data.metrics} /></TabsContent>
       <TabsContent value="events"><EventStream initialEvent={eventParam} initialActor={actorParam} observed={schema.data.observed_events_30d} /></TabsContent>
       <TabsContent value="backfill"><BackfillManager /></TabsContent>
       <TabsContent value="entities"><Entities types={schema.data.entity_types.map((t) => t.name)} /></TabsContent>
@@ -66,16 +68,21 @@ export function Data() {
   );
 }
 
-function Health({ observed }: { observed: ObservedEvent[] }) {
+function Health({ observed, metrics }: { observed: ObservedEvent[]; metrics: Metric[] }) {
   const { client, project, env } = useStore();
   const quality = useAsync(() => client!.dataQuality(project!, { env, limit: 50 }), [project, env]);
+  const warnings = useAsync(() => client!.ingestWarnings(project!, { env }), [project, env]);
   const events = [...observed].sort((a, b) => b.count - a.count);
   const total = events.reduce((s, e) => s + e.count, 0);
   const weighted = events.reduce((s, e) => s + e.count * e.registered_share, 0);
   const coverage = total ? weighted / total : 1;
   const wild = events.filter((e) => e.registered_share < 0.999);
   const qualityIssues = quality.loading || quality.error ? undefined : quality.data?.issues;
+  const qualityChecked = quality.loading || quality.error ? undefined : quality.data?.checked;
   const issueCount = quality.error ? 'error' : quality.loading ? '…' : (qualityIssues?.length ?? 0);
+  const health = qualityIssues && qualityChecked && warnings.data
+    ? buildDataHealth({ observed, issues: qualityIssues, checked: qualityChecked, warnings: warnings.data, metrics })
+    : null;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -84,7 +91,13 @@ function Health({ observed }: { observed: ObservedEvent[] }) {
         <Stat label="Entity conflicts" value={quality.loading ? '…' : issueCount} sub="events vs current status" />
         <Stat label="Distinct events" value={events.length} sub={`${fmtNum(total)} total · 30d`} />
       </div>
-      <DataQualityPanel loading={quality.loading} error={quality.error} issues={qualityIssues} />
+      {(warnings.loading || quality.loading) && <Loading what="classifying integration health…" />}
+      {warnings.error && <ErrorNote>{warnings.error}</ErrorNote>}
+      {health && <div className="grid gap-4 lg:grid-cols-2">
+        <FindingPanel title="Possible improvements" findings={health.improvements} empty="No current integration improvement was found from available signals." />
+        <FindingPanel title="Doing great" findings={health.doingGreat} empty="No healthy claim can be confirmed from the current evidence." positive />
+      </div>}
+      <DataQualityPanel loading={quality.loading} error={quality.error} issues={qualityIssues} checked={qualityChecked} />
       <Panel title="Observed events · 30 days">
         {events.length === 0 ? <EmptyState headline="No events yet" lead="send some to the ingest API to see them here" /> : (
           <div className="overflow-x-auto">
@@ -108,13 +121,39 @@ function Health({ observed }: { observed: ObservedEvent[] }) {
   );
 }
 
-function DataQualityPanel({ loading, error, issues }: { loading: boolean; error: string | null; issues?: DataQualityIssue[] }) {
+function FindingPanel({ title, findings, empty, positive = false }: { title: string; findings: HealthFinding[]; empty: string; positive?: boolean }) {
+  return <Panel title={title}>
+    {findings.length === 0 ? <p className="text-sm text-muted-foreground">{empty}</p> : <div className="divide-y rounded-control border">
+      {findings.map((finding) => <div key={finding.code} className="p-3">
+        <div className="flex items-start gap-2"><span className={`mt-1 size-2 shrink-0 rounded-full ${positive ? 'bg-success' : 'bg-warning'}`} /><div><div className="text-sm font-medium">{finding.title}</div><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{finding.detail}</p></div></div>
+        {finding.affected.length > 0 && <p className="mt-2 text-xs"><span className="font-medium">Affected:</span> {finding.affected.join(', ')}</p>}
+        <p className="mt-1 text-xs text-muted-foreground"><span className="font-medium text-foreground">Verify:</span> {finding.verify}</p>
+      </div>)}
+    </div>}
+  </Panel>;
+}
+
+function DataQualityPanel({
+  loading,
+  error,
+  issues,
+  checked,
+}: {
+  loading: boolean;
+  error: string | null;
+  issues?: DataQualityIssue[];
+  checked?: { terminal_event_specs: number; evidence_rows: number };
+}) {
   return (
     <Panel title="Entity/event consistency">
       {loading && <Loading />}
       {error && <ErrorNote>{error}</ErrorNote>}
-      {issues && (issues.length === 0 ? (
-        <EmptyState headline="No conflicts" lead="terminal events match current entity status" />
+      {issues && (issues.length === 0 ? checked?.terminal_event_specs === 0 ? (
+        <EmptyState headline="Not evaluated" lead="no supported terminal entity event is registered" />
+      ) : checked?.evidence_rows === 0 ? (
+        <EmptyState headline="No comparable evidence" lead="terminal rules exist, but no event and current entity status could be matched" />
+      ) : (
+        <EmptyState headline="No conflicts" lead={`${checked?.evidence_rows ?? 0} comparable entity records match terminal events`} />
       ) : (
         <div className="overflow-x-auto">
           <Table>

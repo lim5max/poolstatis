@@ -32,7 +32,12 @@ describe('projects admin', () => {
     expect(res.status).toBe(200);
     expect(res.body.scope).toBe('org');
     const p = res.body.projects.find((x: any) => x.slug === env.projectSlug);
-    expect(p).toMatchObject({ active_metrics: expect.any(Number), funnels: expect.any(Number), events_30d: expect.any(Number) });
+    expect(p).toMatchObject({
+      active_metrics: expect.any(Number), proposed_metrics: expect.any(Number), active_outcome_contracts: expect.any(Number), funnels: expect.any(Number),
+      events_24h: expect.any(Number), events_7d: expect.any(Number), events_30d: expect.any(Number),
+      key_outcome_available: expect.any(Boolean), health: expect.stringMatching(/^(healthy|needs_attention|no_data)$/),
+      attention: expect.any(Array),
+    });
   });
 
   it('scopes a secret key to its own project', async () => {
@@ -154,7 +159,9 @@ describe('api key admin', () => {
     expect(res.body.keys.length).toBeGreaterThanOrEqual(3); // ingest prod, ingest dev, secret
     expect(res.body.keys[0]).not.toHaveProperty('token');
     expect(res.body.keys[0]).not.toHaveProperty('token_hash');
+    expect(res.body.keys[0]).toHaveProperty('last_used_at');
     expect(res.body.keys[0].masked_token).toMatch(/^(pk|sk)_\.\.\.[a-f0-9]{4}$/);
+    expect(res.body.keys.some((key: any) => key.kind === 'secret' && key.last_used_at)).toBe(true);
   });
 
   it('issues an ingest key and returns the token exactly once', async () => {

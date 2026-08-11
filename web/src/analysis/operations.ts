@@ -15,7 +15,8 @@ export type WebDimension =
   | 'language'
   | 'timezone'
   | 'country';
-export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+export type ActorOrder = 'interesting_desc' | 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+export type ActorRankReason = 'recently_observed' | 'stalled_after_activity' | 'sustained_activity' | 'recent_activity';
 export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
 
 interface WebQueryBase {
@@ -179,6 +180,8 @@ export interface ActorListItem {
   top_events: Array<{ event: string; count: number }>;
   pinned_properties: Record<string, unknown>;
   identity_status: ActorIdentityStatus;
+  interesting_score: number;
+  rank_reasons: ActorRankReason[];
 }
 
 export interface ActorsResult {
@@ -202,6 +205,11 @@ export interface ActorsResult {
       identity_status: string;
       top_events: { registered_only: true; limit: 8 };
       pinned_properties: { source: null; fail_closed: true };
+      interesting_rank: {
+        inputs: string[];
+        excludes: string[];
+        relative_to: string;
+      };
     };
   };
 }

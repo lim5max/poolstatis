@@ -11,6 +11,7 @@ import { AnswerCanvas } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
 import {
   actorStatusLabel,
+  type ActorRankReason,
   rangeDateFrom,
   type ActorIdentityStatus,
   type ActorOrder,
@@ -25,7 +26,7 @@ const PAGE_LIMIT = 50;
 export function Users() {
   const { client, project, env } = useStore();
   const [range, setRange] = useState<AnalyticsRange>('30d');
-  const [order, setOrder] = useState<ActorOrder>('last_seen_desc');
+  const [order, setOrder] = useState<ActorOrder>('interesting_desc');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [activityMetric, setActivityMetric] = useState('');
@@ -102,6 +103,7 @@ export function Users() {
             <Select value={order} onValueChange={(value) => setOrder(value as ActorOrder)}>
               <SelectTrigger className="!h-11"><SelectValue /></SelectTrigger>
               <SelectContent>
+                <SelectItem className="min-h-11" value="interesting_desc">Interesting first</SelectItem>
                 <SelectItem className="min-h-11" value="last_seen_desc">Last seen</SelectItem>
                 <SelectItem className="min-h-11" value="first_seen_desc">First seen</SelectItem>
                 <SelectItem className="min-h-11" value="events_desc">Event volume</SelectItem>
@@ -132,7 +134,7 @@ export function Users() {
         <AnswerCanvas>
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
             <h2 className="text-sm font-semibold">People</h2>
-            <span className="text-xs text-muted-foreground">Page {page + 1} · max {PAGE_LIMIT}</span>
+            <span className="text-xs text-muted-foreground">Ranked from observed activity only · page {page + 1}</span>
           </div>
           {actors.data.actors.length === 0 ? (
             <EmptyState
@@ -147,6 +149,7 @@ export function Users() {
                     <TableRow>
                       <TableHead>Person</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Why now</TableHead>
                       <TableHead>First seen</TableHead>
                       <TableHead>Last seen</TableHead>
                       <TableHead className="text-right">Sessions</TableHead>
@@ -163,6 +166,7 @@ export function Users() {
                           <div className="mt-1 text-xs text-muted-foreground">{fmtNum(actor.total_events)} events · {actor.active_days} active days</div>
                         </TableCell>
                         <TableCell><IdentityBadge status={actor.identity_status} /></TableCell>
+                        <TableCell><RankReasons reasons={actor.rank_reasons ?? []} /></TableCell>
                         <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(actor.first_seen)}</TableCell>
                         <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(actor.last_seen)}</TableCell>
                         <TableCell className="text-right tabular-nums">{actor.session_count ?? 'Unavailable'}</TableCell>
@@ -215,11 +219,24 @@ export function Users() {
           <details className="group/disclosure border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
             <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center py-3 font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">How people are resolved</DisclosureSummary>
             Activity properties remain redacted. Property filters and pinned properties stay unavailable until a deterministic trusted canonical actor-property source exists.
+            Interesting ranking uses only first seen, last seen, active days, and accepted event volume in this exact window. It does not infer risk, intent, or segment changes.
           </details>
         </AnswerCanvas>
       )}
     </div>
   );
+}
+
+const RANK_REASON_LABELS: Record<ActorRankReason, string> = {
+  recently_observed: 'Recently first observed',
+  stalled_after_activity: 'Stalled after activity',
+  sustained_activity: 'Sustained activity',
+  recent_activity: 'Recent activity',
+};
+
+function RankReasons({ reasons }: { reasons: ActorRankReason[] }) {
+  if (reasons.length === 0) return <span className="text-xs text-muted-foreground">No standout signal</span>;
+  return <div className="flex max-w-56 flex-wrap gap-1">{reasons.map((reason) => <Badge key={reason} variant="outline" className="font-normal">{RANK_REASON_LABELS[reason]}</Badge>)}</div>;
 }
 
 export function IdentityBadge({ status }: { status: ActorIdentityStatus }) {

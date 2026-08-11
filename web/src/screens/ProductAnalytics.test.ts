@@ -51,9 +51,9 @@ describe('Product analytics query and copy mapping', () => {
 
   it('exposes previous-period comparison honestly when the typed DSL cannot execute it', () => {
     expect(comparisonControl()).toEqual({
-      label: 'Current period only',
+      label: 'Previous exact period',
       disabled: true,
-      reason: 'Previous-period comparison is unavailable for single-window queries',
+      reason: 'Runs an adjacent window with identical duration when a safe headline aggregation exists',
     });
   });
 });
