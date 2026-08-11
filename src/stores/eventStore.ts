@@ -224,7 +224,13 @@ export interface ActorSummary {
 }
 
 export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
-export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+export type ActorOrder = 'interesting_desc' | 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+
+export type ActorRankReason =
+  | 'recently_observed'
+  | 'stalled_after_activity'
+  | 'sustained_activity'
+  | 'recent_activity';
 
 export interface ActorListItem {
   distinct_id: string;
@@ -237,6 +243,8 @@ export interface ActorListItem {
   top_events: Array<{ event: string; count: number }>;
   pinned_properties: Record<string, unknown>;
   identity_status: ActorIdentityStatus;
+  interesting_score: number;
+  rank_reasons: ActorRankReason[];
 }
 
 /** Internal detail fields retained for Person compatibility, not Actors DSL output. */
@@ -438,6 +446,16 @@ export interface EntityStatusEvidence {
   last_event_at: string;
   evidence_events: number;
   entity_updated_at: string;
+}
+
+/** Bounded event evidence used by the organization project portfolio. */
+export interface ProjectPortfolioEventStats {
+  project_id: string;
+  events_24h: number;
+  events_7d: number;
+  events_30d: number;
+  registered_events_30d: number;
+  last_event_at: string | null;
 }
 
 export interface EntityStatusEvidenceQuery {
@@ -647,7 +665,11 @@ export interface EventStore {
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;
   measurementCoverage(q: MeasurementCoverageQuery): Promise<MeasurementCoverage>;
   metricAggregate(q: MetricAggregateQuery): Promise<MetricAggregate>;
-  entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]>;
+  entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<{
+    issues: EntityStatusEvidence[];
+    matchedEntities: number;
+  }>;
+  projectPortfolioStats(projectIds: string[]): Promise<ProjectPortfolioEventStats[]>;
   /**
    * Hard-delete events for a project. Optionally scope to one env and/or a
    * single actor (distinct_id) — the latter powers person-level deletion.

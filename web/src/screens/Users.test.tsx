@@ -25,6 +25,7 @@ describe('People list', () => {
             first_seen: '2026-08-01T00:00:00Z', last_seen: '2026-08-05T00:00:00Z',
             total_events: 4, active_days: 2, session_count: null,
             top_events: [{ event: 'page.viewed', count: 4 }], pinned_properties: {}, identity_status: 'anonymous',
+            interesting_score: 406, rank_reasons: ['recently_observed'],
           }],
           meta: { next_cursor: null },
         }),
@@ -39,6 +40,8 @@ describe('People list', () => {
     expect(screen.getByText('Anonymous')).toBeInTheDocument();
     expect(screen.getByText('Not assessed')).toBeInTheDocument();
     expect(screen.getByText('Unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Recently first observed')).toBeInTheDocument();
+    expect(screen.getByText(/does not infer risk/)).toBeInTheDocument();
     expect(screen.getByText(/Activity properties remain redacted/)).toBeInTheDocument();
   });
 });

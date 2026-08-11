@@ -217,7 +217,7 @@ describe('actors Query DSL contract', () => {
   });
 
   it('returns stable opaque keyset pages for every supported order', async () => {
-    for (const order of ['last_seen_desc', 'first_seen_desc', 'events_desc']) {
+    for (const order of ['interesting_desc', 'last_seen_desc', 'first_seen_desc', 'events_desc']) {
       const first = await actors({ order, limit: 1 });
       expect(first.status).toBe(200);
       expect(first.body.actors).toHaveLength(1);
@@ -239,7 +239,7 @@ describe('actors Query DSL contract', () => {
     expect(invalid.body.error.code).toBe('actors_cursor_invalid');
   });
 
-  it('applies trailing-30d, limit=50 and last_seen order defaults', async () => {
+  it('applies trailing-30d, limit=50 and interesting order defaults', async () => {
     const result = await api(env, env.secretToken, 'POST', `${project()}/query`, {
       kind: 'actors',
       env: 'prod',
@@ -250,7 +250,15 @@ describe('actors Query DSL contract', () => {
     expect(to - from).toBe(30 * 24 * 60 * 60_000);
     expect(result.body.meta).toMatchObject({
       limit: 50,
-      order: 'last_seen_desc',
+      order: 'interesting_desc',
+    });
+    expect(result.body.meta.provenance.interesting_rank).toMatchObject({
+      inputs: ['first_seen', 'last_seen', 'active_days', 'total_events'],
+      excludes: ['properties', 'hidden profiles', 'predicted intent'],
+    });
+    expect(result.body.actors[0]).toMatchObject({
+      interesting_score: expect.any(Number),
+      rank_reasons: expect.any(Array),
     });
   });
 

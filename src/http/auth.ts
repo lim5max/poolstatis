@@ -190,12 +190,14 @@ export async function authenticate(
   if (key.kind === 'personal' && key.issued_by_user_id && !key.issued_user_role) {
     throw unauthorized('personal token owner no longer belongs to this organization');
   }
-  if (key.kind === 'personal') {
-    await pool.query(
-      'UPDATE api_keys SET last_used_at = now() WHERE id = $1 AND revoked_at IS NULL',
-      [key.id],
-    );
-  }
+  // Credential health is meaningful for every key kind. Throttle the write so
+  // high-volume ingest keys do not turn authentication into a hot row.
+  await pool.query(
+    `UPDATE api_keys SET last_used_at = now()
+     WHERE id = $1 AND revoked_at IS NULL
+       AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')`,
+    [key.id],
+  );
   return {
     keyId: key.id,
     orgId: key.org_id,

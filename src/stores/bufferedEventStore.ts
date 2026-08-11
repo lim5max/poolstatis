@@ -48,6 +48,7 @@ import type {
   WebSessionResult,
   PageEngagementQuery,
   WebPageEngagementResult,
+  ProjectPortfolioEventStats,
 } from './eventStore.js';
 
 export interface BufferedEventStoreOptions {
@@ -253,8 +254,15 @@ export class BufferedEventStore implements EventStore {
     return this.inner.metricAggregate(q);
   }
 
-  entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]> {
+  entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<{
+    issues: EntityStatusEvidence[];
+    matchedEntities: number;
+  }> {
     return this.inner.entityStatusEvidence(q);
+  }
+
+  projectPortfolioStats(projectIds: string[]): Promise<ProjectPortfolioEventStats[]> {
+    return this.inner.projectPortfolioStats(projectIds);
   }
 
   purge(projectId: string, env?: string, distinctId?: string): Promise<number> {

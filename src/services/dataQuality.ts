@@ -52,7 +52,7 @@ export async function listDataQualityIssues(
     limit,
   });
 
-  const issues = evidence.map((ev) => ({
+  const issues = evidence.issues.map((ev) => ({
       kind: 'entity_event_status_conflict',
       severity: 'warning',
       entity_type: ev.entity_type,
@@ -66,7 +66,13 @@ export async function listDataQualityIssues(
       message: `${ev.event} exists for ${ev.entity_type}:${ev.entity_id}, but current entity status is "${ev.current_status}".`,
     } satisfies DataQualityIssue));
 
-  return { issues, checked: { terminal_event_specs: specs.length, evidence_rows: evidence.length } };
+  return {
+    issues,
+    checked: {
+      terminal_event_specs: specs.length,
+      evidence_rows: evidence.matchedEntities,
+    },
+  };
 }
 
 async function entityStatusSpecs(pool: pg.Pool, projectId: string): Promise<EntityStatusEvidenceSpec[]> {

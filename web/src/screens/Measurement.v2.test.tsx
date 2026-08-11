@@ -35,6 +35,8 @@ describe('Definitions surface', () => {
       expect(screen.getByText(label, { selector: 'span' }).closest('details')).not.toHaveAttribute('open');
     }
     expect(screen.getByText('No external sources')).toBeInTheDocument();
+    expect(screen.getByText(/Canonical People/)).toBeInTheDocument();
+    expect(screen.getAllByText(/healthy ·/).length).toBeGreaterThanOrEqual(4);
     expect(screen.queryByText('Advanced web reporting')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Propose acquisition UTM properties' })).not.toBeInTheDocument();
   });

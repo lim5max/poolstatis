@@ -119,9 +119,16 @@ function jsonTool(
 
 jsonTool(
   'list_projects',
-  'List projects this token can access.',
+  'List projects this token can access with portfolio health, recent usage, key-outcome availability and explicit attention reasons.',
   {},
   wrap(() => api('GET', '/api/v1/projects')),
+);
+
+jsonTool(
+  'list_project_keys',
+  'List masked project credentials with environment, last-used evidence and revocation state. Plaintext and hashes are never returned; rotate replacement-first.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/keys`)),
 );
 
 jsonTool(
@@ -921,7 +928,7 @@ jsonTool(
 
 jsonTool(
   'list_actors',
-  'List bounded query-time canonical actors with exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. activityMetric must be a registry metric key; unsupported actor property filters fail closed.',
+  'List bounded query-time canonical actors with evidence-only interesting ranking, exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. activityMetric must be a registry metric key; unsupported actor property filters fail closed.',
   { project, query: actorsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, {
     kind: 'actors',

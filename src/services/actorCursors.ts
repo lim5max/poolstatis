@@ -128,7 +128,7 @@ export function decodeActorsCursor(
     || typeof payload.distinct_id !== 'string'
     || payload.distinct_id.length === 0
     || payload.distinct_id.length > 200
-    || (order === 'events_desc'
+    || (order === 'events_desc' || order === 'interesting_desc'
       ? !Number.isSafeInteger(payload.value)
         || Number(payload.value) < 0
         || Number(payload.value) > PG_INT_MAX
