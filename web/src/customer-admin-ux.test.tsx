@@ -99,6 +99,7 @@ describe('customer admin shell', () => {
     const settings = screen.getByText('Data & settings').closest('details');
     expect(settings).not.toBeNull();
     fireEvent.click(screen.getByText('Data & settings'));
+    expect(screen.getByRole('link', { name: 'Automations' })).toHaveAttribute('href', '/automation');
     expect(within(settings!).queryByRole('link', { name: 'Profile' })).not.toBeInTheDocument();
     expect(within(screen.getByLabelText('Account navigation')).getByRole('link', { name: 'Profile' })).toHaveAttribute('href', '/profile');
   });

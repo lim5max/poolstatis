@@ -19,6 +19,7 @@ describe('mode-aware navigation contract', () => {
     expect(legacy.primary).toHaveLength(9);
     expect(legacy.primary.map((item) => item.label)).toEqual(['Attention', 'Web', 'Product', 'Funnels', 'Saved', 'People', 'Ship', 'Usage', 'Setup']);
     expect(legacy.secondary.map((item) => item.label)).toContain('Definitions');
+    expect(legacy.secondary.map((item) => item.label)).toContain('Automations');
     expect(PROJECT_MENU_ITEMS).toContainEqual(expect.objectContaining({ label: 'Manage projects', to: '/projects' }));
   });
 
@@ -31,5 +32,6 @@ describe('mode-aware navigation contract', () => {
     expect(activeNavigationItem('/analyze/users/actor-1')).toBe('/analyze/users');
     expect(activeNavigationItem('/measurement')).toBe('/measurement');
     expect(activeNavigationItem('/usage')).toBe('/usage');
+    expect(activeNavigationItem('/automation')).toBe('/automation');
   });
 });

@@ -36,6 +36,7 @@ const SECONDARY_ITEMS: NavigationItem[] = [
   { label: 'Experience', to: '/experience', availability: 'available' },
   { label: 'Experiments', to: '/experiments', availability: 'available' },
   { label: 'Decisions', to: '/decisions', availability: 'available' },
+  { label: 'Automations', to: '/automation', availability: 'available' },
   { label: 'Keys', to: '/keys', availability: 'available' },
 ];
 

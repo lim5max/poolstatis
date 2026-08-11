@@ -18,6 +18,7 @@ import {
   Menu,
   Plug,
   Ruler,
+  Settings,
   TaskDone,
   TestTube,
   UserCircle,
@@ -53,6 +54,7 @@ import { Decisions } from './screens/Decisions';
 import { Profile } from './screens/Profile';
 import { Usage } from './screens/Usage';
 import { SavedAnswers } from './screens/SavedAnswers';
+import { ControlTower } from './screens/ControlTower';
 import { AuthPortal } from './screens/AuthPortal';
 
 export const NAV_ICONS: Record<string, PoolstatisIcon> = {
@@ -74,6 +76,7 @@ export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Changes: GitCommit,
   Experiments: TestTube,
   Decisions: TaskDone,
+  Automations: Settings,
   Data: Database,
   Registry: Catalogue,
   Measurement: Ruler,
@@ -101,6 +104,7 @@ const TITLES: Record<string, string> = {
   '/experience': 'Experience',
   '/changes': 'Ship',
   '/decisions': 'Decisions',
+  '/automation': 'Automations',
   '/setup': 'Setup',
   '/onboarding': 'Onboarding',
 };
@@ -109,7 +113,7 @@ const titleFor = (path: string) => (
     ? 'Actor profile'
     : TITLES[path] ?? 'Poolstatis'
 );
-const isProjectScoped = (path: string) => path === '/' || path.startsWith('/analyze') || path.startsWith('/setup') || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
+const isProjectScoped = (path: string) => path === '/' || path.startsWith('/analyze') || path.startsWith('/setup') || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions') || path.startsWith('/automation');
 const SIDEBAR_KEY = 'poolstatis.sidebar.collapsed';
 const loadSidebarState = () => {
   try { return localStorage.getItem(SIDEBAR_KEY) === 'true'; } catch { return false; }
@@ -451,6 +455,7 @@ function Main() {
           <Route path="/experience" element={<Guarded><Experience /></Guarded>} />
           <Route path="/changes" element={<Guarded><Changes /></Guarded>} />
           <Route path="/decisions" element={<Guarded><Decisions /></Guarded>} />
+          <Route path="/automation" element={<Guarded><ControlTower /></Guarded>} />
           <Route path="/setup" element={<Setup />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
