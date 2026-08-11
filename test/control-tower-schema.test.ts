@@ -3,10 +3,45 @@ import {
   funnelControlBlocks,
   funnelSummarySchema,
   orderAttentionItems,
+  trendControlBlocks,
   type AttentionItem,
 } from '../src/services/controlTower.js';
 
 describe('control tower serialization contracts', () => {
+  it('keeps a unique-actor answer ready when the latest bucket is zero but the selected window is not empty', () => {
+    const result = trendControlBlocks(
+      {
+        id: 'metric-1',
+        key: 'weekly_active',
+        name: 'Weekly active',
+        purpose: 'Measures whether people return and remain active across the selected window.',
+        category: 'retention',
+        tags: [],
+        type: 'unique_actors',
+        source: { event: 'app.opened', filters: [] },
+        status: 'active',
+        owner: null,
+        deprecation_reason: null,
+        deprecated_at: null,
+      },
+      { kind: 'trend', metric: 'weekly_active', date_from: '-2d', interval: 'day', filters: [], env: 'prod' },
+      [{ value: 4 }, { value: 0 }],
+      new Date('2026-08-11T12:00:00.000Z'),
+      'native',
+    );
+
+    expect(result.answer).toMatchObject({
+      state: 'ready',
+      headline: 'Weekly active latest bucket: 0',
+      takeaway: '0 unique actors matched the latest returned bucket; 1 earlier bucket has observations in the selected window.',
+      primary_value: { value: 0, unit: 'count', formatted: '0' },
+    });
+    expect(result.evidence).toMatchObject({
+      aggregation: 'latest returned bucket unique actors; bucket counts are not summed because actors can repeat',
+      sample: { eligible: 2, observed: 1, coverage: 0.5 },
+    });
+  });
+
   it('serializes funnel loss step references as stable zero-based indexes', () => {
     const result = funnelControlBlocks(
       {

@@ -1,7 +1,12 @@
 import type pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { controlTowerResultSchema, type AttentionItem, type EvidenceBlock } from './controlTower.js';
+import {
+  controlTowerResultSchema,
+  orderAttentionItems,
+  type AttentionItem,
+  type EvidenceBlock,
+} from './controlTower.js';
 
 export interface OrganizationUsage {
   meter: 'events_stored';
@@ -315,29 +320,32 @@ export async function getOrganizationUsageControl(
     };
     const actionable = thresholdForecasts
       .filter((forecast) => forecast.percent >= 75
-        && (forecast.state === 'reached' || forecast.state === 'projected'))
-      .sort((left, right) => right.percent - left.percent)[0];
-    const attention: AttentionItem[] = actionable ? [{
-      id: `usage.threshold.${actionable.percent}`,
-      rule_id: `usage.threshold.${actionable.percent}`,
+        && (forecast.state === 'reached' || forecast.state === 'projected'));
+    const attention = orderAttentionItems(actionable.map<AttentionItem>((forecast) => ({
+      id: `usage.threshold.${forecast.percent}`,
+      rule_id: `usage.threshold.${forecast.percent}`,
       rule_version: 1,
-      severity: actionable.percent === 100 && actionable.state === 'reached'
+      severity: forecast.percent === 100 && forecast.state === 'reached'
         ? 'critical'
-        : actionable.percent >= 90 ? 'high' : 'medium',
+        : forecast.percent >= 90 ? 'high' : 'medium',
       state: 'open',
-      title: actionable.state === 'reached'
-        ? `${actionable.percent}% of the configured event cap is reached`
-        : `${actionable.percent}% of the configured event cap is projected`,
-      reason: actionable.reached_or_projected_at
-        ? `Threshold time: ${actionable.reached_or_projected_at}.`
+      title: forecast.state === 'reached'
+        ? `${forecast.percent}% of the configured event cap is reached`
+        : `${forecast.percent}% of the configured event cap is projected`,
+      reason: forecast.reached_or_projected_at
+        ? `Threshold time: ${forecast.reached_or_projected_at}.`
         : 'The threshold state is derived from the current accepted-event quantity.',
-      impact: actionable.percent === 100
+      impact: forecast.percent === 100
         ? 'At the configured hard limit, new accepted-event writes are rejected until the cycle resets or the limit changes.'
         : 'Approaching the cap can put measurement continuity at risk.',
       affected: [{ kind: 'customer', ref: orgId }],
       evidence,
+      priority: {
+        blocking_now: forecast.percent === 100 && forecast.state === 'reached',
+        forecasted_at: forecast.state === 'projected' ? forecast.reached_or_projected_at : null,
+      },
       primary_action: { id: 'review_usage_contributors', kind: 'navigate', label: 'Review usage contributors', href: '/usage' },
-    }] : [];
+    })));
     const remaining = hardLimit === null ? null : Math.max(0, hardLimit - quantity);
     const formattedQuantity = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(quantity);
     const result: UsageControlResult = {

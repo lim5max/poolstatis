@@ -333,7 +333,7 @@ function warningAttention(
     id: `review_ingest_${kind}`,
     kind: 'navigate',
     label: 'Review ingest warnings',
-    href: `/events?env=${encodeURIComponent(env)}&warning=${kind}`,
+    href: `/data?tab=warnings&env=${encodeURIComponent(env)}&warning=${kind}`,
   };
   return attentionItemSchema.parse({
     id: `ingest.${kind}`,
@@ -399,7 +399,7 @@ export async function getProjectControlTower(
         { eligible: quality.checked.evidence_rows, observed: quality.issues.length, coverage: null },
       ),
       priority: { blocking_now: true, forecasted_at: null },
-      primary_action: { id: 'review_data_quality', kind: 'navigate', label: 'Review data quality', href: `/events?env=${encodeURIComponent(env)}&quality=conflict` },
+      primary_action: { id: 'review_data_quality', kind: 'navigate', label: 'Review data quality', href: `/data?tab=health&env=${encodeURIComponent(env)}&quality=conflict` },
     });
   }
   if (decisions.length > 0) {
@@ -503,9 +503,14 @@ export function trendControlBlocks(
   const sourceDefinition = metric.source as { agg?: 'sum' | 'avg' | 'min' | 'max' | 'p90' };
   const additive = metric.type === 'count'
     || (metric.type === 'value' && (sourceDefinition.agg ?? 'sum') === 'sum');
+  const latestValue = series.at(-1)?.value ?? 0;
   const value = additive
     ? series.reduce((sum, point) => sum + point.value, 0)
-    : series.at(-1)?.value ?? 0;
+    : latestValue;
+  const observedBuckets = series.filter((point) => point.value > 0).length;
+  const hasWindowObservations = metric.type === 'unique_actors'
+    ? observedBuckets > 0
+    : value !== 0;
   const unit: NonNullable<AnswerBlock['primary_value']>['unit'] = metric.type === 'count'
     || metric.type === 'unique_actors' || metric.type === 'state'
     ? 'count'
@@ -519,11 +524,17 @@ export function trendControlBlocks(
         : `latest returned bucket for registered ${sourceDefinition.agg ?? 'sum'} value aggregation`;
   return {
     answer: {
-      state: value === 0 ? 'empty' : 'ready',
-      headline: value === 0
+      state: hasWindowObservations ? 'ready' : 'empty',
+      headline: !hasWindowObservations
         ? `No ${metric.name} observations in this window`
-        : `${metric.name}: ${formatted(value)}`,
-      takeaway: additive
+        : metric.type === 'unique_actors'
+          ? `${metric.name} latest bucket: ${formatted(value)}`
+          : `${metric.name}: ${formatted(value)}`,
+      takeaway: metric.type === 'unique_actors'
+        ? latestValue === 0 && observedBuckets > 0
+          ? `0 unique actors matched the latest returned bucket; ${observedBuckets} earlier ${observedBuckets === 1 ? 'bucket has' : 'buckets have'} observations in the selected window.`
+          : `${formatted(latestValue)} unique actors matched the latest returned bucket; the full series remains available for trend interpretation.`
+        : additive
         ? `${formatted(value)} matched the registered metric in the selected window.`
         : `${formatted(value)} is the latest returned bucket value; the full series remains available for trend interpretation.`,
       primary_value: { value, unit, formatted: formatted(value) },
@@ -535,7 +546,13 @@ export function trendControlBlocks(
       freshness: 'fresh',
       source_refs: [{ kind: 'metric', key: metric.key, purpose: metric.purpose }],
       aggregation,
-      sample: { eligible: null, observed: value, coverage: null },
+      sample: metric.type === 'unique_actors'
+        ? {
+            eligible: series.length,
+            observed: observedBuckets,
+            coverage: series.length > 0 ? observedBuckets / series.length : null,
+          }
+        : { eligible: null, observed: value, coverage: null },
       warnings: source === 'posthog'
         ? [{ code: 'external_source', message: 'Computed from the configured PostHog source.' }]
         : [],

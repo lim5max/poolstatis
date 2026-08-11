@@ -51,7 +51,12 @@ describe('project control tower', () => {
             state: 'blocked',
             source_refs: [{ kind: 'operator_rule', rule_id: 'ingest.rejected', rule_version: 1 }],
           }),
-          primary_action: expect.objectContaining({ id: 'review_ingest_rejected', kind: 'navigate' }),
+          primary_action: {
+            id: 'review_ingest_rejected',
+            kind: 'navigate',
+            label: 'Review ingest warnings',
+            href: '/data?tab=warnings&env=prod&warning=rejected',
+          },
         }),
       ]),
       evidence: expect.objectContaining({
@@ -86,6 +91,61 @@ describe('project control tower', () => {
     expect(forbidden.status).toBe(403);
     const invalid = await api(env, env.secretToken, 'GET', `/api/v1/projects/${env.projectSlug}/control-tower?range=365d`);
     expect(invalid.status).toBe(400);
+  });
+
+  it('deep-links entity conflicts to the existing Data health tab', async () => {
+    const qualityEnv = await createTestEnv({ ingestBuffer: false });
+    try {
+      const entityType = await api(
+        qualityEnv,
+        qualityEnv.secretToken,
+        'POST',
+        `/api/v1/projects/${qualityEnv.projectSlug}/entity-types`,
+        { name: 'order', description: 'Orders used to verify control-tower entity status conflicts.' },
+      );
+      expect(entityType.status).toBe(201);
+      await activeMetric(qualityEnv, {
+        key: 'tower_order_completed',
+        type: 'count',
+        source: { event: 'order.completed' },
+        purpose: 'Detect completed orders whose mutable entity state still disagrees with event evidence.',
+      });
+      const entity = await api(qualityEnv, qualityEnv.ingestToken, 'POST', '/i/v1/entities', {
+        entities: [{ entity_type: 'order', entity_id: 'order-1', properties: { status: 'pending' } }],
+      });
+      expect(entity.status).toBe(200);
+      const ingested = await api(qualityEnv, qualityEnv.ingestToken, 'POST', '/i/v1/events', {
+        batch_id: 'control-tower-quality-conflict',
+        events: [{
+          event: 'order.completed',
+          distinct_id: 'quality-actor',
+          properties: { entity_id: 'order-1' },
+        }],
+      });
+      expect(ingested.status).toBe(200);
+
+      const result = await api(
+        qualityEnv,
+        qualityEnv.secretToken,
+        'GET',
+        `/api/v1/projects/${qualityEnv.projectSlug}/control-tower?env=prod&range=30d`,
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.body.attention).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          rule_id: 'data_quality.entity_status',
+          primary_action: {
+            id: 'review_data_quality',
+            kind: 'navigate',
+            label: 'Review data quality',
+            href: '/data?tab=health&env=prod&quality=conflict',
+          },
+        }),
+      ]));
+    } finally {
+      await qualityEnv.close();
+    }
   });
 
   it('adds the saved funnel biggest loss to the server-owned attention order', async () => {
@@ -229,6 +289,20 @@ describe('organization usage control', () => {
         aggregation: expect.stringContaining('ingest time'),
         sample: { eligible: 7, observed: 2, coverage: 2 / 7 },
       }),
+      attention: [
+        expect.objectContaining({
+          id: 'usage.threshold.75',
+          priority: { blocking_now: false, forecasted_at: expect.any(String) },
+        }),
+        expect.objectContaining({
+          id: 'usage.threshold.90',
+          priority: { blocking_now: false, forecasted_at: expect.any(String) },
+        }),
+        expect.objectContaining({
+          id: 'usage.threshold.100',
+          priority: { blocking_now: false, forecasted_at: expect.any(String) },
+        }),
+      ],
     });
     expect(() => usageControlResultSchema.parse(result.body)).not.toThrow();
     expect(Object.keys(result.body).sort()).toEqual([
@@ -267,6 +341,46 @@ describe('organization usage control', () => {
       expect(secret.status).toBe(403);
     } finally {
       await foreign.close();
+    }
+  });
+
+  it('orders a reached hard limit before other reached thresholds', async () => {
+    const reached = await createTestEnv({ ingestBuffer: false });
+    try {
+      const orgId = (await reached.pool.query<{ org_id: string }>(
+        'SELECT org_id::text FROM projects WHERE id = $1',
+        [reached.projectId],
+      )).rows[0]!.org_id;
+      const period = new Date().toISOString().slice(0, 7);
+      await reached.pool.query(
+        `INSERT INTO organization_entitlements (org_id, meter_key, hard_limit, warning_thresholds)
+         VALUES ($1, 'events_stored', 100, ARRAY[50, 75, 90]::bigint[])`,
+        [orgId],
+      );
+      await reached.pool.query(
+        `INSERT INTO organization_usage (org_id, meter_key, period_start, quantity)
+         VALUES ($1, 'events_stored', $2::date, 100)`,
+        [orgId, `${period}-01`],
+      );
+      await reached.pool.query(
+        `INSERT INTO usage_ledger (
+           org_id, project_id, env, meter_key, period_start, quantity,
+           source_batch, dedupe_key, ingested_at
+         ) VALUES ($1, $2, 'prod', 'events_stored', $3::date, 100, 'hard-limit', 'hard-limit', now())`,
+        [orgId, reached.projectId, `${period}-01`],
+      );
+
+      const result = await api(reached, reached.personalToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
+
+      expect(result.status).toBe(200);
+      expect(result.body.attention.map((item: { id: string }) => item.id)).toEqual([
+        'usage.threshold.100',
+        'usage.threshold.90',
+        'usage.threshold.75',
+      ]);
+      expect(result.body.attention[0].priority).toEqual({ blocking_now: true, forecasted_at: null });
+    } finally {
+      await reached.close();
     }
   });
 });
