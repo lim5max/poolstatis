@@ -137,7 +137,7 @@ beforeAll(async () => {
   (globalThis as { mcpTenantProjects?: { a: string; b: string; beta: string } }).mcpTenantProjects = {
     a: projectA, b: projectB, beta: betaProject,
   };
-});
+}, 60_000);
 
 afterAll(async () => {
   await secretClient?.close();

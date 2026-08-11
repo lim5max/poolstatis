@@ -161,7 +161,7 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe(
-        '035_project_intents.sql',
+        '036_control_tower_automation.sql',
       );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
@@ -195,6 +195,9 @@ describe('hosted policy migration role topology', () => {
       );
       await deploy.query(
         'SELECT poolstatis_prepare_project_intent_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_control_tower_automation_role_grants()',
       );
       await deploy.query(
         'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
@@ -481,7 +484,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '035_project_intents.sql',
+        last_migration: '036_control_tower_automation.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -565,6 +568,7 @@ describe('hosted policy migration role topology', () => {
       await selfHost.query('SELECT poolstatis_prepare_metric_taxonomy_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_event_management_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_project_intent_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_control_tower_automation_role_grants()');
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(selfHost, new Date(), 12);
       await ensureRetentionIndexes(selfHost);
@@ -707,7 +711,7 @@ describe('hosted policy migration role topology', () => {
       );
       const applied = await migrateWithEvidence(selfHost);
       expect(applied.at(-1)).toBe(
-        '035_project_intents.sql',
+        '036_control_tower_automation.sql',
       );
       const topology = await selfHost.query<{
         superuser: boolean;
