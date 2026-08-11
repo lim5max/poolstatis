@@ -195,7 +195,7 @@ function AttentionCard({ item, primary, telemetryUserId, onRetry }: {
   onRetry: () => void;
 }) {
   return (
-    <article className={`rounded-panel border bg-card p-4 ${item.severity === 'critical' || item.severity === 'high' ? 'border-destructive/45' : item.severity === 'medium' ? 'border-warning/45' : ''}`}>
+    <article className={`min-w-0 rounded-panel border bg-card p-4 ${item.severity === 'critical' || item.severity === 'high' ? 'border-destructive/45' : item.severity === 'medium' ? 'border-warning/45' : ''}`}>
       <div className="flex items-center justify-between gap-3 text-sm">
         <span className="font-medium">{severityLabel(item.severity)}</span>
         <span className="text-muted-foreground">{item.evidence.freshness === 'fresh' ? fmtRelative(item.evidence.as_of) : item.evidence.freshness}</span>
@@ -232,7 +232,7 @@ function AttentionAction({ action, primary, telemetryUserId, onRetry }: {
 }) {
   if (action.kind === 'navigate') {
     return (
-      <Button asChild variant={primary ? 'default' : 'outline'} className="mt-4 h-11 w-full sm:w-auto">
+      <Button asChild variant={primary ? 'default' : 'outline'} className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto">
         <Link to={action.href} onClick={() => trackHomeAction(actionTelemetry(action.href), telemetryUserId)}>
           {action.label} <ArrowRight className="size-4" />
         </Link>
@@ -240,9 +240,9 @@ function AttentionAction({ action, primary, telemetryUserId, onRetry }: {
     );
   }
   if (action.kind === 'retry') {
-    return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-11 w-full sm:w-auto" onClick={onRetry}>{action.label}</Button>;
+    return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto" onClick={onRetry}>{action.label}</Button>;
   }
-  return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-11 w-full sm:w-auto" disabled>{action.label}</Button>;
+  return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto" disabled>{action.label}</Button>;
 }
 
 function severityLabel(severity: AttentionItem['severity']) {
