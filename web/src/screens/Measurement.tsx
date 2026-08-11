@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Loader2, Search } from '@/components/icons';
 import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, HelpHint, Hint, Loading, Panel, RecoverableError, fmtNum } from '../components/ui';
@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AnswerCanvas } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
 import { isRedundantKey } from '@/lib/utils';
-import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
+import type { MeasurementContract, MeasurementReadiness, MeasurementReadinessGroup, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
 import { buildMeasurementReadiness, type ReadinessGroup } from '../analysis/semanticHealth';
 
 interface MetricTrustRow {
@@ -30,13 +30,19 @@ interface PropertyCoverageRow {
 
 export function Measurement() {
   const { client, project, env } = useStore();
+  const [searchParams] = useSearchParams();
+  const focusedGroup = searchParams.get('group');
+  const focusedProperty = searchParams.get('property');
   const audit = useAsync(async () => {
-    const [properties, identity, sources, metrics, contracts] = await Promise.all([
+    const [properties, identity, sources, metrics, contracts, serverReadiness] = await Promise.all([
       client!.properties(project!),
       client!.actorLinks(project!, env),
       client!.sources(project!),
       client!.metrics(project!, { status: 'active' }),
       client!.contracts(project!),
+      typeof client!.measurementReadiness === 'function'
+        ? client!.measurementReadiness(project!, env)
+        : Promise.resolve(null),
     ]);
     const trust: MetricTrustRow[] = await Promise.all(metrics.map(async (metric) => {
       try {
@@ -71,17 +77,26 @@ export function Measurement() {
         return coverage ? { metric, property: property.key, coverage: coverage.coverage, status: coverage.status } : null;
       } catch { return null; }
     })))).filter((row): row is PropertyCoverageRow => row !== null);
-    return { properties, identity, sources, trust, contracts, propertyCoverage };
+    return { properties, identity, sources, trust, contracts, propertyCoverage, serverReadiness };
   }, [project, env]);
+
+  useEffect(() => {
+    if (audit.loading || !focusedProperty) return;
+    const row = document.getElementById(`property-${encodeURIComponent(focusedProperty)}`);
+    if (!row) return;
+    row.focus();
+    if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'center' });
+  }, [audit.loading, focusedProperty]);
 
   if (audit.loading) return <Loading what="checking measurement trust…" />;
   if (audit.error) return <RecoverableError onRetry={audit.reload}>{audit.error}</RecoverableError>;
   if (!audit.data) return null;
-  const { properties, identity, sources, trust, contracts, propertyCoverage } = audit.data;
+  const { properties, identity, sources, trust, contracts, propertyCoverage, serverReadiness } = audit.data;
 
   const activeLinks = identity.links.filter((link) => link.status === 'active').length;
   const readiness = buildMeasurementReadiness({ trust, properties, activeLinks, sources, contracts });
   const group = (key: ReadinessGroup['key']) => readiness.find((item) => item.key === key)!;
+  const serverGroup = (key: MeasurementReadinessGroup['key']) => serverReadiness?.groups.find((item) => item.key === key);
 
   return <div className="space-y-5">
     <header className="max-w-3xl">
@@ -89,18 +104,25 @@ export function Measurement() {
       <p className="mt-1 text-sm text-muted-foreground">Four groups define what this project measures and how much of it can be trusted.</p>
     </header>
 
+    {serverReadiness && <MeasurementHealth readiness={serverReadiness} />}
+
     <AnswerCanvas>
-      <DefinitionGroup title="Tracking plan" readiness={group('tracking')} action="Review">
+      <DefinitionGroup title="Tracking plan" readiness={group('tracking')} server={serverGroup('tracking_plan')} action="Review" focused={focusedGroup === 'tracking_plan'}>
         <TrustOverview rows={trust} properties={properties.length} activeLinks={activeLinks} onRefresh={audit.reload} />
         <div className="mt-4"><ContractsPanel contracts={contracts} /></div>
       </DefinitionGroup>
 
-      <DefinitionGroup title="Properties" readiness={group('properties')} action="Open">
+      <DefinitionGroup title="Properties" readiness={group('properties')} server={serverGroup('properties')} action="Open" focused={focusedGroup === 'properties' || Boolean(focusedProperty)}>
         <Panel title={<>Property meanings <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{properties.length}</span></>}>
       <p className="mb-4 max-w-3xl text-sm text-muted-foreground">Registered property meanings, value types, trust and observed coverage for this project.</p>
       {properties.length === 0 ? <p className="text-sm text-muted-foreground">No decision properties are registered yet.</p> : <div className="overflow-x-auto">
         <Table data-testid="property-meanings-table" className="min-w-6xl table-fixed"><TableHeader><TableRow><TableHead className="w-56">Property</TableHead><TableHead className="w-96">Meaning</TableHead><TableHead className="w-28">Type</TableHead><TableHead className="w-32">Trust</TableHead><TableHead className="w-64">Coverage</TableHead><TableHead className="w-28">Source</TableHead></TableRow></TableHeader>
-          <TableBody>{properties.map((property) => <TableRow key={`${property.scope}:${property.key}`}>
+          <TableBody>{properties.map((property) => <TableRow
+            key={`${property.scope}:${property.key}`}
+            id={`property-${encodeURIComponent(property.key)}`}
+            tabIndex={property.key === focusedProperty ? -1 : undefined}
+            className={property.key === focusedProperty ? 'bg-accent/45' : undefined}
+          >
             <TableCell className="break-all align-top"><code className="break-all text-xs">{property.scope}.{property.key}</code></TableCell>
             <TableCell className="whitespace-normal break-words align-top text-sm text-muted-foreground">{property.purpose}</TableCell>
             <TableCell><Badge variant="outline" className="font-normal">{property.value_type}</Badge></TableCell>
@@ -113,7 +135,7 @@ export function Measurement() {
         </Panel>
       </DefinitionGroup>
 
-      <DefinitionGroup title="Identity" readiness={group('identity')} action="View">
+      <DefinitionGroup title="Identity" readiness={group('identity')} server={serverGroup('identity')} action="View" focused={focusedGroup === 'identity'}>
         <Panel title="Identity links" right={<span className="text-xs text-muted-foreground">reversible · append-only audit</span>}>
       {identity.links.length === 0 ? <p className="text-sm text-muted-foreground">No anonymous-to-identified links have been recorded for <code>{env}</code>.</p> : <div className="overflow-x-auto">
         <Table><TableHeader><TableRow><TableHead>Source actor</TableHead><TableHead>Stable actor</TableHead><TableHead>Status</TableHead><TableHead>Created by</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
@@ -130,7 +152,7 @@ export function Measurement() {
         </Panel>
       </DefinitionGroup>
 
-      <DefinitionGroup title="Data sources" readiness={group('sources')} context={sources.length > 0 ? `${sources.length} external` : 'No external sources'} action="Manage">
+      <DefinitionGroup title="Data sources" readiness={group('sources')} server={serverGroup('data_sources')} context={sources.length > 0 ? `${sources.length} external` : 'No external sources'} action="Manage" focused={focusedGroup === 'data_sources'}>
         <Panel title="Data sources" right={<span className="text-xs text-muted-foreground">bounded read-only capabilities</span>}>
       {sources.length === 0 ? <p className="text-sm text-muted-foreground">No external source is configured. Native ingest readiness is shown in Setup; configure PostHog through MCP or the Platform API when raw data should remain external.</p> : <div className="space-y-3">
         {sources.map((source) => <div key={source.id} className="rounded-panel border bg-muted/20 p-4">
@@ -146,25 +168,72 @@ export function Measurement() {
   </div>;
 }
 
-function DefinitionGroup({ title, readiness, context, action, children }: {
+function MeasurementHealth({ readiness }: { readiness: MeasurementReadiness }) {
+  const gapCount = readiness.summary.incomplete_count;
+  const fix = readiness.fix_next;
+  return (
+    <Panel
+      title="Measurement health"
+      right={<Badge variant={readiness.summary.highest_severity === 'critical' || readiness.summary.highest_severity === 'high' ? 'destructive' : 'outline'}>{readiness.summary.highest_severity}</Badge>}
+    >
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+        <div>
+          <h2 className="text-xl font-semibold">
+            {gapCount === 0 ? 'Definitions support current answers' : `${gapCount} definition ${gapCount === 1 ? 'gap needs' : 'gaps need'} attention`}
+          </h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {fix?.affected_answer_ids.length
+              ? <>Affected saved answers: <span className="font-mono text-xs text-foreground">{fix.affected_answer_ids.join(', ')}</span></>
+              : 'No saved answer is currently blocked by the highest-ranked gap.'}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">Server evaluated at <time dateTime={readiness.generated_at}>{formatDate(readiness.generated_at)}</time> for {readiness.env}.</p>
+        </div>
+        {fix && <Button asChild><Link to={fix.href}>{fix.label}</Link></Button>}
+      </div>
+    </Panel>
+  );
+}
+
+function DefinitionGroup({ title, readiness, server, context, action, focused = false, children }: {
   title: string;
   readiness: ReadinessGroup;
+  server?: MeasurementReadinessGroup;
   context?: string;
   action: string;
+  focused?: boolean;
   children: React.ReactNode;
 }) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (!focused || !detailsRef.current) return;
+    detailsRef.current.open = true;
+    const summary = detailsRef.current.querySelector('summary');
+    summary?.focus();
+    if (summary && typeof summary.scrollIntoView === 'function') summary.scrollIntoView({ block: 'center' });
+  }, [focused]);
+  const healthy = server?.healthy_count ?? readiness.healthy;
+  const incomplete = server?.incomplete_count ?? readiness.incomplete;
+  const affectedAnswers = server
+    ? [...new Set(server.gaps.flatMap((gap) => gap.affected_answer_ids))]
+    : readiness.affectedAnswers;
+  const repairAction = server?.repair_action;
   return (
-    <details className="group border-b last:border-b-0">
+    <details ref={detailsRef} open={focused || undefined} className="group border-b last:border-b-0">
       <DisclosureSummary className="grid min-h-16 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[auto_minmax(11rem,1fr)_minmax(10rem,1fr)_auto] sm:px-5">
         <span className="text-sm font-semibold">{title}</span>
-        <span className="text-right text-xs text-muted-foreground sm:text-left sm:text-sm">{context && <><span>{context}</span><span> · </span></>}{readiness.healthy} healthy · {readiness.incomplete} incomplete</span>
+        <span className="text-right text-xs text-muted-foreground sm:text-left sm:text-sm">{context && <><span>{context}</span><span> · </span></>}{healthy} healthy · {incomplete} incomplete{server && server.highest_severity !== 'none' ? ` · ${server.highest_severity}` : ''}</span>
         <span className="hidden truncate text-xs text-muted-foreground sm:block">
-          {readiness.affectedAnswers.length > 0 ? `Affects: ${readiness.affectedAnswers.join(', ')}` : 'No answer currently blocked'}
+          {affectedAnswers.length > 0 ? `Affects: ${affectedAnswers.join(', ')}` : 'No answer currently blocked'}
         </span>
         <span className="col-start-2 col-end-4 text-right text-xs font-medium text-foreground group-open:hidden sm:col-auto">{action}</span>
       </DisclosureSummary>
       <div className="border-t bg-background/35 p-4 sm:p-5 [&_[data-slot=card]]:rounded-none [&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-none">
-        <div className="mb-4 rounded-control border bg-card px-3 py-2 text-sm"><span className="font-medium">Fix next:</span> <span className="text-muted-foreground">{readiness.fixNext}</span></div>
+        <div className="mb-4 rounded-control border bg-card px-3 py-2 text-sm">
+          <span className="font-medium">Fix next:</span>{' '}
+          {repairAction
+            ? <Link className="text-foreground underline decoration-muted-foreground/60 underline-offset-4 hover:decoration-foreground" to={repairAction.href}>{repairAction.label}</Link>
+            : <span className="text-muted-foreground">{server ? 'No server-ranked repair is required.' : readiness.fixNext}</span>}
+        </div>
         {children}
       </div>
     </details>

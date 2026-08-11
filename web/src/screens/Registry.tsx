@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, ChevronRight, ChevronDown } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import {
@@ -30,6 +30,13 @@ import { buildRegistryHealth, type RegistryMetricHealth } from '../analysis/sema
 
 export function Registry() {
   const { client, project, env } = useStore();
+  const [searchParams] = useSearchParams();
+  const focusedMetric = searchParams.get('metric');
+  const focusedFunnel = searchParams.get('funnel');
+  const [tab, setTab] = useState(focusedFunnel ? 'funnels' : 'metrics');
+  useEffect(() => {
+    setTab(focusedFunnel ? 'funnels' : 'metrics');
+  }, [focusedFunnel, focusedMetric]);
   const { data, error, loading, reload } = useAsync(async () => {
     const schema = await client!.schema(project!, env);
     const [experiments, usageEntries] = await Promise.all([
@@ -69,7 +76,7 @@ export function Registry() {
   };
 
   return (
-    <Tabs defaultValue="metrics" className="gap-4">
+    <Tabs value={tab} onValueChange={setTab} className="gap-4">
       <div className="max-w-full overflow-x-auto pb-1">
         <TabsList className="w-max">
           <TabsTrigger value="metrics">Metrics · {data.metrics.length}</TabsTrigger>
@@ -79,7 +86,7 @@ export function Registry() {
         </TabsList>
       </div>
       <TabsContent value="metrics">
-        <MetricsTable metrics={data.metrics} categories={categories} health={data.registry_health} onChanged={reload} />
+        <MetricsTable metrics={data.metrics} categories={categories} health={data.registry_health} focusKey={focusedMetric} onChanged={reload} />
       </TabsContent>
       <TabsContent value="categories">
         <MetricCategoriesPanel
@@ -90,7 +97,7 @@ export function Registry() {
           onDelete={deleteCategory}
         />
       </TabsContent>
-      <TabsContent value="funnels"><FunnelsTable funnels={data.funnels} /></TabsContent>
+      <TabsContent value="funnels"><FunnelsTable funnels={data.funnels} focusKey={focusedFunnel} /></TabsContent>
       <TabsContent value="entities"><EntityTypesTable types={data.entity_types} /></TabsContent>
     </Tabs>
   );
@@ -111,17 +118,19 @@ function MetricsTable({
   metrics,
   categories,
   health,
+  focusKey,
   onChanged,
 }: {
   metrics: Metric[];
   categories: MetricCategoryDefinition[];
   health: ReturnType<typeof buildRegistryHealth>;
+  focusKey: string | null;
   onChanged: () => void;
 }) {
   const { client, project } = useStore();
   const nav = useNavigate();
   const openEvents = (ev: string) => nav(`/data?tab=events&event=${encodeURIComponent(ev)}`);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(focusKey ?? '');
   const [cats, setCats] = useState<Set<string>>(new Set());
   const [statuses, setStatuses] = useState<Set<string>>(new Set());
   const [tagSel, setTagSel] = useState<Set<string>>(new Set());
@@ -154,6 +163,16 @@ function MetricsTable({
   }, [metrics, search, cats, statuses, tagSel, sort]);
 
   const groups = useMemo(() => groupRows(filtered, groupBy), [filtered, groupBy]);
+  useEffect(() => {
+    if (focusKey) setSearch(focusKey);
+  }, [focusKey]);
+  useEffect(() => {
+    if (!focusKey) return;
+    const row = document.getElementById(`metric-${encodeURIComponent(focusKey)}`);
+    if (!row) return;
+    row.focus();
+    row.scrollIntoView({ block: 'center' });
+  }, [focusKey, filtered]);
   const toggle = (set: Set<string>, setter: (s: Set<string>) => void, v: string) => { const n = new Set(set); n.has(v) ? n.delete(v) : n.add(v); setter(n); };
   const chips: Chip[] = [
     ...[...cats].map((c) => ({
@@ -236,6 +255,7 @@ function MetricsTable({
                 <Section
                   key={g.label ?? '_'}
                   group={g}
+                  focusKey={focusKey}
                   categories={categories}
                   healthByKey={healthByKey}
                   busy={busy}
@@ -554,8 +574,9 @@ function TaxonomyEditor({
   );
 }
 
-function Section({ group, categories, healthByKey, busy, onActivate, onDeprecate, onDelete, onEditTaxonomy, onReviewDefinition, onOpenEvents }: {
+function Section({ group, focusKey, categories, healthByKey, busy, onActivate, onDeprecate, onDelete, onEditTaxonomy, onReviewDefinition, onOpenEvents }: {
   group: { label: string | null; rows: Metric[] }; busy: string | null;
+  focusKey: string | null;
   categories: MetricCategoryDefinition[];
   healthByKey: Map<string, RegistryMetricHealth>;
   onActivate: (k: string) => void; onDeprecate: (m: Metric) => void; onDelete: (m: Metric) => void;
@@ -576,7 +597,12 @@ function Section({ group, categories, healthByKey, busy, onActivate, onDeprecate
       {open && group.rows.map((m) => {
         const health = healthByKey.get(m.key);
         return (
-        <TableRow key={m.id} className="group">
+        <TableRow
+          key={m.id}
+          id={`metric-${encodeURIComponent(m.key)}`}
+          tabIndex={m.key === focusKey ? -1 : undefined}
+          className={cn('group', m.key === focusKey && 'bg-accent/45')}
+        >
           <TableCell>
             {metricEvent(m)
               ? <button className="font-medium text-left text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground" title="See this metric's events" onClick={() => onOpenEvents(metricEvent(m)!)}>{m.name}</button>
@@ -646,21 +672,29 @@ function groupRows(rows: Metric[], by: string): Array<{ label: string | null; ro
   return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, rs]) => ({ label, rows: rs }));
 }
 
-function FunnelsTable({ funnels }: { funnels: Funnel[] }) {
+function FunnelsTable({ funnels, focusKey }: { funnels: Funnel[]; focusKey: string | null }) {
   if (funnels.length === 0) return <Panel><EmptyState headline="No funnels" lead="defined from registry metrics via MCP or API" /></Panel>;
   return (
     <Panel title={<>Funnels <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{funnels.length}</span></>}>
       <div className="divide-y">
-        {funnels.map((f) => <FunnelRow key={f.key} funnel={f} />)}
+        {funnels.map((f) => <FunnelRow key={f.key} funnel={f} focused={f.key === focusKey} />)}
       </div>
     </Panel>
   );
 }
 
-function FunnelRow({ funnel }: { funnel: Funnel }) {
-  const [open, setOpen] = useState(false);
+function FunnelRow({ funnel, focused }: { funnel: Funnel; focused: boolean }) {
+  const [open, setOpen] = useState(focused);
+  const rowId = `funnel-${encodeURIComponent(funnel.key)}`;
+  useEffect(() => {
+    if (!focused) return;
+    setOpen(true);
+    const row = document.getElementById(rowId);
+    row?.focus();
+    row?.scrollIntoView({ block: 'center' });
+  }, [focused, rowId]);
   return (
-    <section data-testid={`funnel-summary-${funnel.key}`} className="grid min-w-0 gap-3 px-5 py-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(16rem,2fr)_auto] lg:items-start">
+    <section id={rowId} tabIndex={focused ? -1 : undefined} data-testid={`funnel-summary-${funnel.key}`} className={cn('grid min-w-0 gap-3 px-5 py-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(16rem,2fr)_auto] lg:items-start', focused && 'bg-accent/45')}>
       <div className="min-w-0">
         <div className="font-medium break-words">{funnel.name}</div>
         <code className="text-xs text-muted-foreground break-all">{funnel.key}</code>

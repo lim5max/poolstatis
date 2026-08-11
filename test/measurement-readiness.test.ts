@@ -84,6 +84,7 @@ describe('server-owned measurement readiness', () => {
     expect(readiness.body.fix_next).toMatchObject({
       group: 'tracking_plan',
       action_code: 'activate_metric',
+      href: '/registry?metric=activation_completed',
     });
     expect(JSON.stringify(readiness.body)).not.toContain('Measures the first');
     expect(JSON.stringify(readiness.body)).not.toContain('plan tier');
@@ -111,6 +112,7 @@ describe('server-owned measurement readiness', () => {
     expect(readiness.body.fix_next).toMatchObject({
       group: 'data_sources',
       action_code: 'connect_data_source',
+      href: '/setup?env=prod',
     });
 
     const dev = await api(

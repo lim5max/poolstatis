@@ -103,10 +103,9 @@ export async function getMeasurementReadiness(
   ]);
 
   const affected = answerDependencies(views, funnels);
-  const tracking = trackingPlanGroup(project.slug, metrics, funnels, affected.metrics);
-  const propertyGroup = propertiesGroup(project.slug, properties, affected.properties);
+  const tracking = trackingPlanGroup(metrics, funnels, affected.metrics);
+  const propertyGroup = propertiesGroup(properties, affected.properties);
   const identity = await identityGroup(
-    project.slug,
     project.id,
     env,
     metrics,
@@ -115,7 +114,6 @@ export async function getMeasurementReadiness(
     identityCounts.rows[0] ?? { active_links: 0, audit_entries: 0 },
   );
   const dataSources = dataSourcesGroup(
-    project.slug,
     env,
     Number(nativeSources.rows[0]?.count ?? 0),
     sources.map((source) => source.status),
@@ -154,7 +152,6 @@ export async function getMeasurementReadiness(
 }
 
 function trackingPlanGroup(
-  slug: string,
   metrics: Metric[],
   funnels: Funnel[],
   affected: Map<string, string[]>,
@@ -171,7 +168,7 @@ function trackingPlanGroup(
         action_code: 'activate_metric',
         kind: 'navigate',
         label: 'Review and activate metric',
-        href: `/projects/${encodeURIComponent(slug)}/registry?metric=${encodeURIComponent(metric.key)}`,
+        href: `/registry?metric=${encodeURIComponent(metric.key)}`,
       },
     }));
   let healthyFunnels = 0;
@@ -191,7 +188,7 @@ function trackingPlanGroup(
         action_code: 'repair_funnel',
         kind: 'navigate',
         label: 'Repair funnel definitions',
-        href: `/projects/${encodeURIComponent(slug)}/registry?funnel=${encodeURIComponent(funnel.key)}`,
+        href: `/registry?funnel=${encodeURIComponent(funnel.key)}`,
       },
     });
   }
@@ -206,7 +203,6 @@ function trackingPlanGroup(
 }
 
 function propertiesGroup(
-  slug: string,
   properties: Array<{ key: string; scope: string; status: string }>,
   affected: Map<string, string[]>,
 ): MeasurementReadinessGroup {
@@ -222,7 +218,7 @@ function propertiesGroup(
         action_code: 'review_property',
         kind: 'navigate',
         label: 'Review property meaning',
-        href: `/projects/${encodeURIComponent(slug)}/definitions?property=${encodeURIComponent(property.key)}`,
+        href: `/measurement?property=${encodeURIComponent(property.key)}`,
       },
     }));
   const known = new Set(eventProperties.map((property) => property.key));
@@ -237,7 +233,7 @@ function propertiesGroup(
         action_code: 'review_property',
         kind: 'navigate',
         label: 'Register property meaning',
-        href: `/projects/${encodeURIComponent(slug)}/definitions?property=${encodeURIComponent(key)}`,
+        href: `/measurement?property=${encodeURIComponent(key)}`,
       },
     });
   }
@@ -252,7 +248,6 @@ function propertiesGroup(
 }
 
 async function identityGroup(
-  slug: string,
   projectId: string,
   env: string,
   metrics: Metric[],
@@ -268,7 +263,7 @@ async function identityGroup(
   for (const metric of dependencies) {
     const sources = identityEventSources(metric);
     if (sources === null) {
-      gaps.push(identityGap(slug, metric.key, 'identity_evidence_unavailable', 'low', affected.get(metric.key) ?? []));
+      gaps.push(identityGap(metric.key, 'identity_evidence_unavailable', 'low', affected.get(metric.key) ?? []));
       continue;
     }
     if (sources.length === 0) {
@@ -285,9 +280,9 @@ async function identityGroup(
     })));
     const observed = coverage.reduce((sum, item) => sum + item.events, 0);
     if (observed === 0) {
-      gaps.push(identityGap(slug, metric.key, 'identity_evidence_unavailable', 'low', affected.get(metric.key) ?? []));
+      gaps.push(identityGap(metric.key, 'identity_evidence_unavailable', 'low', affected.get(metric.key) ?? []));
     } else if (coverage.some((item) => item.distinctIdCoverage < 1)) {
-      gaps.push(identityGap(slug, metric.key, 'identity_coverage_incomplete', 'high', affected.get(metric.key) ?? []));
+      gaps.push(identityGap(metric.key, 'identity_coverage_incomplete', 'high', affected.get(metric.key) ?? []));
     } else {
       healthy += 1;
     }
@@ -307,7 +302,6 @@ async function identityGroup(
 }
 
 function identityGap(
-  slug: string,
   key: string,
   code: 'identity_evidence_unavailable' | 'identity_coverage_incomplete',
   severity: 'low' | 'high',
@@ -322,13 +316,12 @@ function identityGap(
       action_code: 'verify_identity',
       kind: 'navigate',
       label: 'Verify identity evidence',
-      href: `/projects/${encodeURIComponent(slug)}/definitions?group=identity`,
+      href: '/measurement?group=identity',
     },
   };
 }
 
 function dataSourcesGroup(
-  slug: string,
   env: string,
   nativeCount: number,
   externalStatuses: string[],
@@ -347,7 +340,7 @@ function dataSourcesGroup(
         action_code: 'connect_data_source',
         kind: 'navigate',
         label: 'Connect a data source',
-        href: `/projects/${encodeURIComponent(slug)}/setup?env=${encodeURIComponent(env)}`,
+        href: `/setup?env=${encodeURIComponent(env)}`,
       },
     });
   }
@@ -361,7 +354,7 @@ function dataSourcesGroup(
         action_code: 'verify_data_source',
         kind: 'navigate',
         label: 'Verify configured data source',
-        href: `/projects/${encodeURIComponent(slug)}/definitions?group=data_sources`,
+        href: '/measurement?group=data_sources',
       },
     });
   }

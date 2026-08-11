@@ -82,6 +82,40 @@ describe('live customer screen UX', () => {
     expect(screen.getByText('signup_completed')).toBeInTheDocument();
   });
 
+  it('opens the exact funnel requested by a registry repair link', async () => {
+    mockedStore.mockReturnValue(store({
+      schema: vi.fn().mockResolvedValue({
+        metrics: [], metric_categories: [], entity_types: [], observed_events_30d: [], properties: [], identity: {},
+        sources: [], project: { slug: 'alpha', name: 'Alpha' }, env: 'prod',
+        funnels: [{
+          id: 'f1', key: 'signup', name: 'Signup', goal: 'Measure completed accounts.', window_seconds: 604800,
+          steps: [{ metric_key: 'landing_visits', label: 'Landing viewed' }, { metric_key: 'signup_completed', label: 'Signup completed' }],
+        }],
+      }),
+    }));
+
+    render(<TooltipProvider><MemoryRouter initialEntries={['/registry?funnel=signup']}><Registry /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByRole('tab', { name: /Funnels/ })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('button', { name: /Hide Signup steps/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('signup_completed')).toBeInTheDocument();
+  });
+
+  it('filters to the exact metric requested by a registry repair link', async () => {
+    mockedStore.mockReturnValue(store({
+      schema: vi.fn().mockResolvedValue({
+        metrics: [metric, guardrailMetric], metric_categories: [], entity_types: [], observed_events_30d: [], properties: [], identity: {},
+        sources: [], funnels: [], project: { slug: 'alpha', name: 'Alpha' }, env: 'prod',
+      }),
+    }));
+
+    render(<TooltipProvider><MemoryRouter initialEntries={['/registry?metric=landing_visits']}><Registry /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByDisplayValue('landing_visits')).toBeInTheDocument();
+    expect(screen.getByText('Landing visits')).toBeInTheDocument();
+    expect(screen.queryByText('Checkout errors')).not.toBeInTheDocument();
+  });
+
   it('omits a metric key when it only repeats the human-readable name', async () => {
     mockedStore.mockReturnValue(store({
       schema: vi.fn().mockResolvedValue({
