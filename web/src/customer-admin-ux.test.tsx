@@ -142,10 +142,10 @@ describe('customer admin shell', () => {
 
   it('keeps answer jobs primary and control surfaces behind Data & settings', () => {
     render(<MemoryRouter><App /></MemoryRouter>);
-    expect(screen.getAllByText('Attention').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('Home').length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText('Answers')).not.toBeInTheDocument();
     expect(screen.getByText('Data & settings')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /^(Attention|Web|Product|Funnels|Saved|People|Ship|Usage|Setup)$/ })).toHaveLength(9);
+    expect(screen.getAllByRole('link', { name: /^(Home|Web|Product|Funnels|Saved|People|Ship|Usage|Setup)$/ })).toHaveLength(9);
     expect(screen.getByRole('link', { name: 'Funnels' })).toHaveAttribute('href', '/analyze/funnels');
     expect(screen.getByRole('link', { name: 'Saved' })).toHaveAttribute('href', '/analyze/saved');
     const settings = screen.getByText('Data & settings').closest('details');
@@ -188,7 +188,7 @@ describe('customer admin shell', () => {
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Product' })).not.toBeInTheDocument());
     expect(screen.getByRole('link', { name: 'Web' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Funnels' })).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /^(Attention|Web|Funnels|Saved|People|Ship|Usage|Setup)$/ })).toHaveLength(8);
+    expect(screen.getAllByRole('link', { name: /^(Home|Web|Funnels|Saved|People|Ship|Usage|Setup)$/ })).toHaveLength(8);
   });
 
   it('shows server-owned attention and finite usage signals in the shell', async () => {
@@ -208,7 +208,7 @@ describe('customer admin shell', () => {
 
     render(<MemoryRouter><App /></MemoryRouter>);
 
-    await waitFor(() => expect(within(screen.getByRole('link', { name: 'Attention' })).getByText('2')).toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByRole('link', { name: 'Home' })).getByText('2')).toBeInTheDocument());
     const usageSignal = within(screen.getByRole('link', { name: 'Usage' })).getByText('80%');
     expect(usageSignal).toHaveClass('text-amber-700');
   });

@@ -420,7 +420,7 @@ export function resolveSetupNextStep(input: {
   };
   const blocker = input.status?.next_blocker;
   if (input.status?.complete) return {
-    kind: 'route', title: 'Decision loop is ready', reason: 'Connection, definitions, the first answer, and the first saved decision have server proof.', label: 'Open Attention', route: '/',
+    kind: 'route', title: 'Decision loop is ready', reason: 'Connection, definitions, the first answer, and the first saved decision have server proof.', label: 'Open Home', route: '/',
   };
   if (!blocker) return {
     kind: 'retry', title: 'Next setup step is unavailable', reason: 'The server reports setup is incomplete but did not identify a next blocker.', label: 'Retry verification',

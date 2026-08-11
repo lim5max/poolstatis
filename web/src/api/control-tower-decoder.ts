@@ -24,10 +24,15 @@ const isNullableNumber = (value: unknown): value is number | null => value === n
 const isNullableNonNegativeNumber = (value: unknown): value is number | null => value === null || isNonNegativeNumber(value);
 const isNullableRatio = (value: unknown): value is number | null => value === null || isRatio(value);
 const isNullableString = (value: unknown): value is string | null => value === null || isString(value);
-const ISO_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
-const isIsoDate = (value: unknown): value is string => isString(value)
-  && ISO_UTC_TIMESTAMP.test(value)
-  && Number.isFinite(Date.parse(value));
+const ISO_UTC_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/;
+const isIsoDate = (value: unknown): value is string => {
+  if (!isString(value)) return false;
+  const match = ISO_UTC_TIMESTAMP.exec(value);
+  if (!match) return false;
+  const canonical = `${match[1]}.${(match[2] ?? '').padEnd(3, '0')}Z`;
+  const parsed = new Date(canonical);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === canonical;
+};
 const inEnum = <T extends readonly string[]>(value: unknown, values: T): value is T[number] => isString(value) && values.includes(value);
 const optionalString = (value: unknown) => value === undefined || isString(value);
 

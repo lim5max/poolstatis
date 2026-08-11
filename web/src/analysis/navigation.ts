@@ -19,7 +19,7 @@ export interface ProjectNavigation {
   secondary: NavigationItem[];
 }
 
-const ATTENTION: NavigationItem = { label: 'Attention', to: '/', availability: 'available' };
+const HOME: NavigationItem = { label: 'Home', to: '/', availability: 'available' };
 const WEB: NavigationItem = { label: 'Web', to: '/analyze/web', availability: 'available' };
 const PRODUCT: NavigationItem = { label: 'Product', to: '/analyze/product', availability: 'available' };
 const FUNNELS: NavigationItem = { label: 'Funnels', to: '/analyze/funnels', availability: 'available' };
@@ -46,10 +46,10 @@ const SECONDARY_ITEMS: NavigationItem[] = [
  */
 export function navigationForProject({ mode }: ProjectNavigationContext): ProjectNavigation {
   const primary = mode === 'website'
-    ? [ATTENTION, WEB, FUNNELS, SAVED, PEOPLE, SHIP, USAGE, SETUP]
+    ? [HOME, WEB, FUNNELS, SAVED, PEOPLE, SHIP, USAGE, SETUP]
     : mode === 'product'
-      ? [ATTENTION, PRODUCT, FUNNELS, SAVED, PEOPLE, SHIP, USAGE, SETUP]
-      : [ATTENTION, WEB, PRODUCT, FUNNELS, SAVED, PEOPLE, SHIP, USAGE, SETUP];
+      ? [HOME, PRODUCT, FUNNELS, SAVED, PEOPLE, SHIP, USAGE, SETUP]
+      : [HOME, WEB, PRODUCT, FUNNELS, SAVED, PEOPLE, SHIP, USAGE, SETUP];
 
   return { primary, secondary: SECONDARY_ITEMS };
 }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PoolstatisClient } from './client';
+import { decodeControlTowerResult } from './control-tower-decoder';
 
 describe('PoolstatisClient usage', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -126,6 +127,26 @@ describe('PoolstatisClient usage', () => {
     expect(result.primary_action).toMatchObject({ kind: 'retry', label: 'Reload' });
     expect(Number.isFinite(Date.parse(result.generated_at))).toBe(true);
     expect(Number.isFinite(Date.parse(result.scope.window.from))).toBe(true);
+  });
+
+  it.each([
+    '2026-02-30T00:00:00.000Z',
+    '2026-04-31T00:00:00.000Z',
+    '2026-08-12T24:00:00.000Z',
+  ])('fails closed for calendar-invalid timestamps: %s', (generatedAt) => {
+    const result = decodeControlTowerResult({
+      schema_version: 1,
+      request_id: 'req-invalid-calendar',
+      generated_at: generatedAt,
+      scope: { window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-12T00:00:00.000Z', timezone: 'UTC' } },
+      answer: { state: 'ready', headline: 'Unsafe success', takeaway: 'Unsafe', why_it_matters: 'Unsafe' },
+      attention: [],
+      evidence: { state: 'trusted', freshness: 'fresh', as_of: '2026-08-12T00:00:00.000Z', source_refs: [], warnings: [], unavailable_reasons: [] },
+      primary_action: { id: 'review', kind: 'navigate', label: 'Review', href: '/' },
+      secondary_actions: [],
+    });
+
+    expect(result.answer).toMatchObject({ state: 'unavailable', headline: 'Answer unavailable' });
   });
 
   it('never leaks partial usage fields when the current-schema shape is malformed', async () => {

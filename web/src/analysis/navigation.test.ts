@@ -4,20 +4,20 @@ import { PROJECT_MENU_ITEMS, activeNavigationItem, navigationForProject } from '
 describe('mode-aware navigation contract', () => {
   it('keeps funnels directly reachable for every project mode', () => {
     expect(navigationForProject({ mode: 'website' }).primary.map((item) => item.label)).toEqual([
-      'Attention', 'Web', 'Funnels', 'Saved', 'People', 'Ship', 'Usage', 'Setup',
+      'Home', 'Web', 'Funnels', 'Saved', 'People', 'Ship', 'Usage', 'Setup',
     ]);
     expect(navigationForProject({ mode: 'product' }).primary.map((item) => item.label)).toEqual([
-      'Attention', 'Product', 'Funnels', 'Saved', 'People', 'Ship', 'Usage', 'Setup',
+      'Home', 'Product', 'Funnels', 'Saved', 'People', 'Ship', 'Usage', 'Setup',
     ]);
     expect(navigationForProject({ mode: 'both' }).primary.map((item) => item.label)).toEqual([
-      'Attention', 'Web', 'Product', 'Funnels', 'Saved', 'People', 'Ship', 'Usage', 'Setup',
+      'Home', 'Web', 'Product', 'Funnels', 'Saved', 'People', 'Ship', 'Usage', 'Setup',
     ]);
   });
 
   it('keeps a legacy project usable without fabricating a mode', () => {
     const legacy = navigationForProject({ mode: null });
     expect(legacy.primary).toHaveLength(9);
-    expect(legacy.primary.map((item) => item.label)).toEqual(['Attention', 'Web', 'Product', 'Funnels', 'Saved', 'People', 'Ship', 'Usage', 'Setup']);
+    expect(legacy.primary.map((item) => item.label)).toEqual(['Home', 'Web', 'Product', 'Funnels', 'Saved', 'People', 'Ship', 'Usage', 'Setup']);
     expect(legacy.secondary.map((item) => item.label)).toContain('Definitions');
     expect(legacy.secondary.map((item) => item.label)).toContain('Automations');
     expect(PROJECT_MENU_ITEMS).toContainEqual(expect.objectContaining({ label: 'Manage projects', to: '/projects' }));

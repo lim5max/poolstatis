@@ -88,7 +88,7 @@ export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Profile: UserCircle,
 };
 const TITLES: Record<string, string> = {
-  '/': 'Attention',
+  '/': 'Home',
   '/projects': 'Projects',
   '/analyze/product': 'Product',
   '/analyze/funnels': 'Funnels',
@@ -405,7 +405,7 @@ function useShellSignals(
       if (!current) return;
       const next: ShellSignals = {};
       const attentionSignal = attentionNavigationSignal(attention);
-      if (attentionSignal) next.Attention = attentionSignal;
+      if (attentionSignal) next.Home = attentionSignal;
       if (usage) next.Usage = usageNavigationSignal(usage);
       setSignals(next);
     });

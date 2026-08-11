@@ -124,7 +124,7 @@ export function Overview() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Attention"
+        title="Home"
         answer={website.overview
           ? websiteLead(website)
           : product.metric
@@ -240,7 +240,7 @@ function WebsiteHome({ answer, product, schema, env, controlTower, attention, te
   const lead = websiteLead(answer);
   return (
     <div className="space-y-5">
-      <PageHeader title="Attention" answer={lead} />
+      <PageHeader title="Home" answer={lead} />
       <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
       <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} onRetry={onRetry} />
     </div>
@@ -253,7 +253,7 @@ function ProductHome({ answer, schema, env, controlTower, attention, telemetryUs
     : 'Events may be arriving, but no active outcome is defined yet.';
   return (
     <div className="space-y-5">
-      <PageHeader title="Attention" answer={lead} />
+      <PageHeader title="Home" answer={lead} />
       <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
       <ProductAnswerCanvas answer={answer} schema={schema} env={env} />
     </div>
@@ -290,7 +290,7 @@ function BothHome({
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Attention"
+        title="Home"
         answer={identityState === 'unavailable'
           ? 'Identity evidence is unavailable right now, so Poolstatis will not claim a cross-surface path.'
           : identityLinked

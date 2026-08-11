@@ -232,7 +232,7 @@ describe('goal-aware Attention', () => {
     setStore(client);
     const view = render(<MemoryRouter><Overview /></MemoryRouter>);
 
-    expect(await screen.findByRole('heading', { name: 'Attention' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Customize dashboard' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Biggest loss: Visited → Started signup' })).toBeInTheDocument();
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
@@ -267,13 +267,13 @@ describe('goal-aware Attention', () => {
     view.unmount();
 
     const sameScope = render(<MemoryRouter><Overview /></MemoryRouter>);
-    await screen.findByRole('heading', { name: 'Attention' });
+    await screen.findByRole('heading', { name: 'Home' });
     expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toHaveLength(1);
     sameScope.unmount();
 
     setStore(websiteClient(), 'beta');
     render(<MemoryRouter><Overview /></MemoryRouter>);
-    await screen.findByRole('heading', { name: 'Attention' });
+    await screen.findByRole('heading', { name: 'Home' });
     await waitFor(() => expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toHaveLength(2));
   });
 
@@ -301,7 +301,7 @@ describe('goal-aware Attention', () => {
 
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
-    expect(await screen.findByRole('heading', { name: 'Attention' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
     expect(within(outcomes).getByText('Visitors')).toBeInTheDocument();
     expect(within(outcomes).getByText('Sessions')).toBeInTheDocument();
@@ -352,7 +352,7 @@ describe('goal-aware Attention', () => {
 
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
-    expect(await screen.findByRole('heading', { name: 'Attention' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByText(/Biggest loss:/)).not.toBeInTheDocument();
     expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0);
   });
@@ -361,7 +361,7 @@ describe('goal-aware Attention', () => {
     setStore(websiteClient(null));
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
-    expect(await screen.findByRole('heading', { name: 'Attention' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByText(/Project mode is not set/)).not.toBeVisible();
     expect(screen.queryByText(/Nothing has been inferred/)).not.toBeVisible();
     fireEvent.click(screen.getByText('Project settings'));
@@ -387,7 +387,7 @@ describe('goal-aware Attention', () => {
     setStore(client);
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
-    expect(await screen.findByRole('heading', { name: 'Attention' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByText(/Observed · Last 30 days · Unavailable · event count unavailable ·/)).toBeInTheDocument();
     expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0);
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
