@@ -7,14 +7,26 @@ import { Confirm, EmptyState, ErrorNote, FieldLabel, Loading, OneTimeTokenReveal
 import { useAsync, useStore } from '../store';
 import { useHostedAuth } from '../oidc';
 
-function ProfileUnavailable() {
-  return <Panel title="Profile"><EmptyState headline="Hosted profile unavailable" lead="Sign in with a hosted account to manage your identity and personal tokens." /></Panel>;
+function ProfileUnavailable({ tokenKind, baseUrl }: { tokenKind: string | null; baseUrl: string }) {
+  return <div className="max-w-2xl space-y-4">
+    <Panel title="Account boundary" right={<span className="text-xs text-muted-foreground">API-key session</span>}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div><FieldLabel>Current access</FieldLabel><p className="mt-1 text-sm">{tokenKind === 'secret' ? 'One project' : tokenKind === 'personal' ? 'One workspace' : 'Credential session'}</p></div>
+        <div><FieldLabel>Connected deployment</FieldLabel><p className="mt-1 break-all font-mono text-xs">{baseUrl || 'Unavailable'}</p></div>
+      </div>
+      <p className="mt-4 text-sm text-muted-foreground">This session can target a self-hosted or hosted API. Poolstatis does not infer deployment ownership from a token prefix.</p>
+    </Panel>
+    <Panel title="Hosted-only capabilities">
+      <EmptyState headline="Hosted profile unavailable" lead="Identity profile, verified email, workspace membership, social login, and personal-token issuance require a hosted account session." />
+      <Button asChild variant="outline" className="mt-4"><a href="/setup">Open connection setup</a></Button>
+    </Panel>
+  </div>;
 }
 
 /** This outer guard deliberately never invokes hosted identity actions for self-host key sessions. */
 export function Profile() {
-  const { tokenKind } = useStore();
-  if (tokenKind !== 'user') return <ProfileUnavailable />;
+  const { tokenKind, baseUrl } = useStore();
+  if (tokenKind !== 'user') return <ProfileUnavailable tokenKind={tokenKind} baseUrl={baseUrl} />;
   return <HostedProfile />;
 }
 
@@ -32,7 +44,7 @@ function HostedProfile() {
 
   useEffect(() => setDisplayName(account?.user.display_name ?? ''), [account?.user.display_name]);
 
-  if (!account || !client) return <ProfileUnavailable />;
+  if (!account || !client) return <ProfileUnavailable tokenKind="user" baseUrl="" />;
   const canIssue = account.membership.role === 'owner' || account.membership.role === 'admin';
 
   const saveProfile = async () => {
@@ -83,7 +95,7 @@ function HostedProfile() {
   const initial = (account.user.display_name || account.user.email || '?').slice(0, 1).toUpperCase();
   return (
     <div className="space-y-4">
-      <Panel title="Profile" right={<div className="flex gap-2"><Button asChild variant="outline"><a href="https://auth.poolstatis.xyz/profile">Manage login</a></Button><Button variant="outline" onClick={signOut}>Log out</Button></div>}>
+      <Panel title="Hosted profile" right={<div className="flex gap-2"><Button asChild variant="outline"><a href="https://auth.poolstatis.xyz/profile">Manage login</a></Button><Button variant="outline" onClick={signOut}>Log out</Button></div>}>
         <div className="grid gap-6 md:flex md:items-start">
           {account.user.picture_url ? <img className="size-16 rounded-full border object-cover" src={account.user.picture_url} alt="Profile avatar" /> : <div className="flex size-16 items-center justify-center rounded-full border bg-muted font-medium text-xl" aria-label="Profile avatar">{initial}</div>}
           <div className="min-w-0 space-y-4">

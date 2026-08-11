@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { generateToken, type KeyKind } from '../keys.js';
 import { notFound } from '../errors.js';
+import type { EventStore } from '../stores/eventStore.js';
 
 export interface Project {
   id: string;
@@ -101,6 +102,7 @@ export interface ApiKeyRow {
   label: string | null;
   masked_token: string;
   created_at: string;
+  last_used_at: string | null;
   revoked_at: string | null;
 }
 
@@ -154,7 +156,7 @@ export async function revokePersonalApiKey(
 /** Keys for a project, masked — the token itself is shown only once at creation. */
 export async function listApiKeys(pool: pg.Pool, projectId: string): Promise<ApiKeyRow[]> {
   const { rows } = await pool.query(
-    `SELECT id, kind, env, label, token_prefix, token_suffix, created_at, revoked_at
+    `SELECT id, kind, env, label, token_prefix, token_suffix, created_at, last_used_at, revoked_at
      FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC`,
     [projectId],
   );
@@ -167,6 +169,7 @@ export async function listApiKeys(pool: pg.Pool, projectId: string): Promise<Api
       ? `${row.token_prefix ?? (row.kind === 'ingest' ? 'pk_' : 'sk_')}...${row.token_suffix}`
       : `${row.token_prefix ?? (row.kind === 'ingest' ? 'pk_' : 'sk_')}...`,
     created_at: row.created_at,
+    last_used_at: row.last_used_at,
     revoked_at: row.revoked_at,
   }));
 }
@@ -189,21 +192,87 @@ export async function revokeApiKey(
 
 export interface ProjectWithStats extends Pick<Project, 'slug' | 'name' | 'timezone'> {
   active_metrics: number;
+  proposed_metrics: number;
+  active_outcome_contracts: number;
   funnels: number;
+  events_24h: number;
+  events_7d: number;
   events_30d: number;
+  last_event_at: string | null;
+  registered_coverage_30d: number | null;
+  key_outcome_available: boolean;
+  health: 'healthy' | 'needs_attention' | 'no_data';
+  attention: string[];
 }
 
-export async function listProjectsWithStats(pool: pg.Pool, orgId: string): Promise<ProjectWithStats[]> {
+export async function listProjectsWithStats(
+  pool: pg.Pool,
+  eventStore: EventStore,
+  orgId: string,
+): Promise<ProjectWithStats[]> {
   const { rows } = await pool.query(
-    `SELECT p.slug, p.name, p.timezone,
-       (SELECT count(*) FROM metrics m WHERE m.project_id = p.id AND m.status = 'active')::int AS active_metrics,
-       (SELECT count(*) FROM funnels f WHERE f.project_id = p.id)::int AS funnels,
-       (SELECT count(*) FROM events e WHERE e.project_id = p.id
-          AND e."timestamp" >= now() - interval '30 days')::int AS events_30d
-     FROM projects p WHERE p.org_id = $1 ORDER BY p.created_at`,
+    `SELECT p.id, p.slug, p.name, p.timezone,
+       metric_stats.active_metrics,
+       metric_stats.proposed_metrics,
+       funnel_stats.funnels,
+       contract_stats.active_outcome_contracts
+     FROM projects p
+     CROSS JOIN LATERAL (
+       SELECT
+         count(*) FILTER (WHERE status = 'active')::int AS active_metrics,
+         count(*) FILTER (WHERE status = 'proposed')::int AS proposed_metrics
+       FROM metrics WHERE project_id = p.id
+     ) metric_stats
+     CROSS JOIN LATERAL (
+       SELECT count(*)::int AS funnels FROM funnels WHERE project_id = p.id
+     ) funnel_stats
+     CROSS JOIN LATERAL (
+       SELECT count(*) FILTER (WHERE status = 'active')::int AS active_outcome_contracts
+       FROM measurement_contracts WHERE project_id = p.id
+     ) contract_stats
+     WHERE p.org_id = $1 ORDER BY p.created_at`,
     [orgId],
   );
-  return rows;
+  const eventStats = new Map(
+    (await eventStore.projectPortfolioStats(rows.map((row) => row.id as string)))
+      .map((stats) => [stats.project_id, stats]),
+  );
+  return rows.map((row) => {
+    const activeMetrics = Number(row.active_metrics);
+    const proposedMetrics = Number(row.proposed_metrics);
+    const activeOutcomeContracts = Number(row.active_outcome_contracts);
+    const events = eventStats.get(row.id) ?? {
+      events_24h: 0,
+      events_7d: 0,
+      events_30d: 0,
+      registered_events_30d: 0,
+      last_event_at: null,
+    };
+    const events30d = events.events_30d;
+    const coverage = events30d === 0 ? null : events.registered_events_30d / events30d;
+    const attention: string[] = [];
+    if (events30d === 0) attention.push('No events in 30 days');
+    if (activeOutcomeContracts === 0) attention.push('No active measurement contract');
+    if (coverage !== null && coverage < 0.99) attention.push('Off-standard event volume');
+    if (proposedMetrics > 0) attention.push(`${proposedMetrics} metric${proposedMetrics === 1 ? '' : 's'} awaiting review`);
+    return {
+      slug: row.slug,
+      name: row.name,
+      timezone: row.timezone,
+      active_metrics: activeMetrics,
+      proposed_metrics: proposedMetrics,
+      active_outcome_contracts: activeOutcomeContracts,
+      funnels: Number(row.funnels),
+      events_24h: events.events_24h,
+      events_7d: events.events_7d,
+      events_30d: events30d,
+      last_event_at: events.last_event_at,
+      registered_coverage_30d: coverage,
+      key_outcome_available: activeOutcomeContracts > 0,
+      health: events30d === 0 ? 'no_data' : attention.length > 0 ? 'needs_attention' : 'healthy',
+      attention,
+    };
+  });
 }
 
 export async function getProjectBySlug(

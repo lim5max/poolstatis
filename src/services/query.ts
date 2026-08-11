@@ -292,6 +292,11 @@ export type QueryResult =
           identity_status: string;
           top_events: { registered_only: true; limit: 8 };
           pinned_properties: { source: null; fail_closed: true };
+          interesting_rank: {
+            inputs: string[];
+            excludes: string[];
+            relative_to: string;
+          };
         };
       };
     }
@@ -1298,6 +1303,8 @@ export class QueryService {
         {
           value: q.order === 'events_desc'
             ? last.total_events
+            : q.order === 'interesting_desc'
+              ? last.interesting_score
             : q.order === 'first_seen_desc'
               ? last.first_seen
               : last.last_seen,
@@ -1346,6 +1353,11 @@ export class QueryService {
           identity_status: 'linked requires active server-owned link provenance or multiple observed raw IDs; otherwise unknown unless a link conflict is detected',
           top_events: { registered_only: true, limit: 8 },
           pinned_properties: { source: null, fail_closed: true },
+          interesting_rank: {
+            inputs: ['first_seen', 'last_seen', 'active_days', 'total_events'],
+            excludes: ['properties', 'hidden profiles', 'predicted intent'],
+            relative_to: 'the exact query window',
+          },
         },
       },
     };

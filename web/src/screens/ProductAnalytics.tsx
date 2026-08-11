@@ -35,11 +35,13 @@ import {
   visualizationTitle,
   type MetricView,
 } from '../analysis/product';
+import { previousPeriodQuery as previousAnalysisPeriodQuery, summarizeAnswer, type StandardAnswerSummary } from '../analysis/semanticHealth';
 
 interface AnalysisRun {
   spec: VisualizationSpec;
   result: AnalysisQueryResult;
-  comparisonResult: AnalysisQueryResult | null;
+  previousResult: AnalysisQueryResult | null;
+  summary: StandardAnswerSummary;
   eventCount: number | null;
 }
 
@@ -143,11 +145,12 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       dates,
     });
     try {
-      const [result, comparisonResult] = await Promise.all([
+      const [result, previousResult] = await Promise.all([
         client!.query(runProject, query),
-        query.kind === 'funnel'
-          ? client!.query(runProject, previousPeriodQuery(query)).catch(() => null)
-          : Promise.resolve(null),
+        client!.query(
+          runProject,
+          query.kind === 'funnel' ? previousPeriodQuery(query) : previousAnalysisPeriodQuery(query),
+        ).catch(() => null),
       ]);
       if (generation !== runGeneration.current || scopeRef.current !== runScope) return;
       const metricKeys = queryMetricKeys(query, selectedFunnel);
@@ -159,15 +162,19 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         template,
         query,
         result,
-        comparisonResult,
         metric: selectedMetric,
         funnel: selectedFunnel,
         trust,
+        comparisonAvailable: previousResult?.kind === result.kind,
       });
       setRun({
         spec,
         result,
-        comparisonResult,
+        previousResult,
+        summary: summarizeAnswer(spec.title, result, previousResult, {
+          metric: selectedMetric,
+          breakdown,
+        }),
         eventCount: trust.results.length === 0
           ? null
           : trust.results.reduce((sum, item) => sum + item.primary_metric.observed_events, 0),
@@ -282,16 +289,20 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         <FunnelBiggestLoss
           funnel={registry.data?.funnels.find((item) => item.key === (currentRun.spec.source.kind === 'funnel' ? currentRun.spec.source.key : '')) ?? null}
           result={currentRun.result}
-          comparison={currentRun.comparisonResult?.kind === 'funnel' ? currentRun.comparisonResult : null}
+          comparison={currentRun.previousResult?.kind === 'funnel' ? currentRun.previousResult : null}
         />
       )}
 
-      {currentRun && (
-        <EvidenceLine trust={visualizationEvidenceTrust(currentRun.spec.trust.status)} eventCount={currentRun.eventCount} env={env}>
-          {currentRun.spec.purpose} Aggregation: {currentRun.spec.evidence.aggregation}. Exact range and source remain attached to the reproducible query below.
-        </EvidenceLine>
-      )}
+      {renderState === 'ready' && currentRun && <AnswerTakeaway summary={currentRun.summary} trust={currentRun.spec.trust.status} />}
       {renderState === 'ready' && currentRun && <ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
+      {currentRun && (
+        <div className="space-y-2">
+          <p className="max-w-3xl text-sm"><span className="font-medium">Purpose:</span> {currentRun.spec.purpose}</p>
+          <EvidenceLine trust={visualizationEvidenceTrust(currentRun.spec.trust.status)} eventCount={currentRun.eventCount} env={env}>
+            Aggregation: {currentRun.spec.evidence.aggregation}. Sample: {currentRun.spec.evidence.sampleSize ?? 'unavailable'}. Coverage: {currentRun.spec.evidence.coverage}. Comparison: {currentRun.spec.evidence.comparisonBasis}. Computed from {currentRun.spec.evidence.source} at {new Date(currentRun.spec.evidence.computedAt).toLocaleString()}.
+          </EvidenceLine>
+        </div>
+      )}
 
       <details className="group rounded-panel border bg-card">
         <DisclosureSummary className="flex min-h-14 cursor-pointer items-center gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
@@ -433,6 +444,25 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         </div>
       </details>
     </div>
+  );
+}
+
+function AnswerTakeaway({ summary, trust }: { summary: StandardAnswerSummary; trust: VisualizationSpec['trust']['status'] }) {
+  const trusted = trust === 'trusted';
+  return (
+    <AnswerCanvas className="border-l-4 border-l-primary">
+      <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:p-5">
+        <div>
+          <div className="text-xs font-medium text-muted-foreground">Takeaway</div>
+          <p className="mt-1 text-lg font-semibold leading-snug">{summary.takeaway}</p>
+          <p className="mt-2 text-sm text-muted-foreground">Next question: {summary.followUp}</p>
+        </div>
+        <div className="flex flex-wrap gap-2 sm:justify-end">
+          <Badge variant={trusted ? 'default' : 'outline'}>{trusted ? 'Trusted evidence' : 'Review trust'}</Badge>
+          <Badge variant="outline">{summary.comparison}</Badge>
+        </div>
+      </div>
+    </AnswerCanvas>
   );
 }
 
@@ -582,10 +612,10 @@ function createVisualizationSpec(input: {
   template: AnalysisTemplate;
   query: AnalysisQueryInput;
   result: AnalysisQueryResult;
-  comparisonResult: AnalysisQueryResult | null;
   metric?: Metric;
   funnel?: Funnel;
   trust: TrustRead;
+  comparisonAvailable: boolean;
 }): VisualizationSpec {
   const source = input.query.kind === 'funnel'
     ? { kind: 'funnel' as const, key: input.funnel?.key ?? input.query.funnel ?? 'inline', query: input.query }
@@ -614,14 +644,12 @@ function createVisualizationSpec(input: {
       coverage: input.trust.coverage,
       source: input.result.meta.source,
       computedAt: input.result.meta.computed_at,
-      comparisonBasis: input.query.kind === 'funnel' && input.comparisonResult?.kind === 'funnel'
-        ? 'Adjacent previous period with the same duration and funnel definition.'
-        : 'Current exact period only; previous-period comparison is unavailable.',
+      comparisonBasis: input.comparisonAvailable ? 'Previous exact period of equal duration.' : 'Previous-period comparison is unavailable.',
     },
     display: {
       valueFormat: input.query.kind === 'retention' || input.query.kind === 'funnel' ? 'percent' : 'number',
       granularity: 'interval' in input.query ? input.query.interval : undefined,
-      compare: input.query.kind === 'funnel' && input.comparisonResult?.kind === 'funnel' ? 'previous_period' : 'none',
+      compare: input.comparisonAvailable ? 'previous_period' : 'none',
       series: seriesFor(input.result, input.metric),
     },
     actions: [

@@ -590,8 +590,17 @@ export interface ProjectWithStats {
   name: string;
   timezone: string;
   active_metrics: number;
+  proposed_metrics: number;
+  active_outcome_contracts: number;
   funnels: number;
+  events_24h: number;
+  events_7d: number;
   events_30d: number;
+  last_event_at: string | null;
+  registered_coverage_30d: number | null;
+  key_outcome_available: boolean;
+  health: 'healthy' | 'needs_attention' | 'no_data';
+  attention: string[];
 }
 
 export interface ProjectSchema {
@@ -1058,6 +1067,7 @@ export interface ApiKeyRow {
   /** Permanently masked server value, e.g. sk_...cafe. */
   masked_token: string;
   created_at: string;
+  last_used_at: string | null;
   revoked_at: string | null;
 }
 

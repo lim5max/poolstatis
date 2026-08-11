@@ -13,6 +13,7 @@ import { AnswerCanvas } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
 import { isRedundantKey } from '@/lib/utils';
 import type { MeasurementContract, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
+import { buildMeasurementReadiness, type ReadinessGroup } from '../analysis/semanticHealth';
 
 interface MetricTrustRow {
   metric: Metric;
@@ -78,8 +79,9 @@ export function Measurement() {
   if (!audit.data) return null;
   const { properties, identity, sources, trust, contracts, propertyCoverage } = audit.data;
 
-  const trusted = trust.filter((row) => row.trust?.status === 'trusted').length;
   const activeLinks = identity.links.filter((link) => link.status === 'active').length;
+  const readiness = buildMeasurementReadiness({ trust, properties, activeLinks, sources, contracts });
+  const group = (key: ReadinessGroup['key']) => readiness.find((item) => item.key === key)!;
 
   return <div className="space-y-5">
     <header className="max-w-3xl">
@@ -88,12 +90,12 @@ export function Measurement() {
     </header>
 
     <AnswerCanvas>
-      <DefinitionGroup title="Tracking plan" summary={`${trust.length} active · ${trusted} trusted`} action="Review">
+      <DefinitionGroup title="Tracking plan" readiness={group('tracking')} action="Review">
         <TrustOverview rows={trust} properties={properties.length} activeLinks={activeLinks} onRefresh={audit.reload} />
         <div className="mt-4"><ContractsPanel contracts={contracts} /></div>
       </DefinitionGroup>
 
-      <DefinitionGroup title="Properties" summary={`${properties.length} defined`} action="Open">
+      <DefinitionGroup title="Properties" readiness={group('properties')} action="Open">
         <Panel title={<>Property meanings <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{properties.length}</span></>}>
       <p className="mb-4 max-w-3xl text-sm text-muted-foreground">Registered property meanings, value types, trust and observed coverage for this project.</p>
       {properties.length === 0 ? <p className="text-sm text-muted-foreground">No decision properties are registered yet.</p> : <div className="overflow-x-auto">
@@ -111,7 +113,7 @@ export function Measurement() {
         </Panel>
       </DefinitionGroup>
 
-      <DefinitionGroup title="Identity" summary={activeLinks > 0 ? `${activeLinks} active links` : 'Not linked'} action="View">
+      <DefinitionGroup title="Identity" readiness={group('identity')} action="View">
         <Panel title="Identity links" right={<span className="text-xs text-muted-foreground">reversible · append-only audit</span>}>
       {identity.links.length === 0 ? <p className="text-sm text-muted-foreground">No anonymous-to-identified links have been recorded for <code>{env}</code>.</p> : <div className="overflow-x-auto">
         <Table><TableHeader><TableRow><TableHead>Source actor</TableHead><TableHead>Stable actor</TableHead><TableHead>Status</TableHead><TableHead>Created by</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
@@ -128,7 +130,7 @@ export function Measurement() {
         </Panel>
       </DefinitionGroup>
 
-      <DefinitionGroup title="Data sources" summary={sources.length > 0 ? `${sources.length} external` : 'No external sources'} action="Manage">
+      <DefinitionGroup title="Data sources" readiness={group('sources')} context={sources.length > 0 ? `${sources.length} external` : 'No external sources'} action="Manage">
         <Panel title="Data sources" right={<span className="text-xs text-muted-foreground">bounded read-only capabilities</span>}>
       {sources.length === 0 ? <p className="text-sm text-muted-foreground">No external source is configured. Native ingest readiness is shown in Setup; configure PostHog through MCP or the Platform API when raw data should remain external.</p> : <div className="space-y-3">
         {sources.map((source) => <div key={source.id} className="rounded-panel border bg-muted/20 p-4">
@@ -144,9 +146,10 @@ export function Measurement() {
   </div>;
 }
 
-function DefinitionGroup({ title, summary, action, children }: {
+function DefinitionGroup({ title, readiness, context, action, children }: {
   title: string;
-  summary: string;
+  readiness: ReadinessGroup;
+  context?: string;
   action: string;
   children: React.ReactNode;
 }) {
@@ -154,10 +157,16 @@ function DefinitionGroup({ title, summary, action, children }: {
     <details className="group border-b last:border-b-0">
       <DisclosureSummary className="grid min-h-16 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[auto_minmax(11rem,1fr)_minmax(10rem,1fr)_auto] sm:px-5">
         <span className="text-sm font-semibold">{title}</span>
-        <span className="text-right text-xs text-muted-foreground sm:text-left sm:text-sm">{summary}</span>
+        <span className="text-right text-xs text-muted-foreground sm:text-left sm:text-sm">{context && <><span>{context}</span><span> · </span></>}{readiness.healthy} healthy · {readiness.incomplete} incomplete</span>
+        <span className="hidden truncate text-xs text-muted-foreground sm:block">
+          {readiness.affectedAnswers.length > 0 ? `Affects: ${readiness.affectedAnswers.join(', ')}` : 'No answer currently blocked'}
+        </span>
         <span className="col-start-2 col-end-4 text-right text-xs font-medium text-foreground group-open:hidden sm:col-auto">{action}</span>
       </DisclosureSummary>
-      <div className="border-t bg-background/35 p-4 sm:p-5 [&_[data-slot=card]]:rounded-none [&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-none">{children}</div>
+      <div className="border-t bg-background/35 p-4 sm:p-5 [&_[data-slot=card]]:rounded-none [&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-none">
+        <div className="mb-4 rounded-control border bg-card px-3 py-2 text-sm"><span className="font-medium">Fix next:</span> <span className="text-muted-foreground">{readiness.fixNext}</span></div>
+        {children}
+      </div>
     </details>
   );
 }

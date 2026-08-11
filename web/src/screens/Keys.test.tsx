@@ -36,6 +36,7 @@ describe('Keys', () => {
         label: 'Project MCP',
         masked_token: 'sk_...cafe',
         created_at: '2026-07-29T12:00:00.000Z',
+        last_used_at: '2026-08-10T12:00:00.000Z',
         revoked_at: null,
       },
     ]);
@@ -132,12 +133,15 @@ describe('Keys', () => {
     expect(screen.getByRole('button', { name: 'View pt_...beef details' })).toBeInTheDocument();
     expect(screen.getByText('alpha only')).toBeInTheDocument();
     expect(screen.getByText('All projects')).toBeInTheDocument();
+    expect(screen.getByText('Credential health')).toBeInTheDocument();
+    expect(screen.getByText(/Rotation is replacement-first/)).toBeInTheDocument();
 
     fireEvent.click(projectToken);
     const dialog = screen.getByRole('dialog', { name: 'Project MCP key' });
     expect(within(dialog).getByText('The full key cannot be shown again.')).toBeInTheDocument();
     expect(within(dialog).getByText('Poolstatis does not store its plaintext.')).toBeInTheDocument();
     expect(within(dialog).getByText('all')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Read and manage one project/)).toBeInTheDocument();
   });
 
   it('does not offer an organization-wide personal token in a project-scoped session', async () => {

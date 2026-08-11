@@ -24,11 +24,28 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn, isRedundantKey } from '@/lib/utils';
-import type { Funnel, Metric, MetricCategoryDefinition, MetricStatus } from '../api/types';
+import { DisclosureSummary } from '@/components/disclosure';
+import type { Funnel, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage } from '../api/types';
+import { buildRegistryHealth, type RegistryMetricHealth } from '../analysis/semanticHealth';
 
 export function Registry() {
   const { client, project, env } = useStore();
-  const { data, error, loading, reload } = useAsync(() => client!.schema(project!, env), [project, env]);
+  const { data, error, loading, reload } = useAsync(async () => {
+    const schema = await client!.schema(project!, env);
+    const [experiments, usageEntries] = await Promise.all([
+      typeof client!.experiments === 'function' ? client!.experiments(project!).catch(() => null) : Promise.resolve(null),
+      Promise.all(schema.metrics.map(async (metric) => {
+        if (typeof client!.metricUsage !== 'function') return [metric.key, null] as const;
+        try {
+          return [metric.key, await client!.metricUsage(project!, metric.key, { env, sinceDays: 30 })] as const;
+        } catch {
+          return [metric.key, null] as const;
+        }
+      })),
+    ]);
+    const usages = new Map<string, MetricUsage | null>(usageEntries);
+    return { ...schema, registry_health: buildRegistryHealth(schema.metrics, schema.funnels, usages, experiments) };
+  }, [project, env]);
 
   if (loading) return <Loading what="reading registry…" />;
   if (error) return <RecoverableError onRetry={reload}>{error}</RecoverableError>;
@@ -62,7 +79,7 @@ export function Registry() {
         </TabsList>
       </div>
       <TabsContent value="metrics">
-        <MetricsTable metrics={data.metrics} categories={categories} onChanged={reload} />
+        <MetricsTable metrics={data.metrics} categories={categories} health={data.registry_health} onChanged={reload} />
       </TabsContent>
       <TabsContent value="categories">
         <MetricCategoriesPanel
@@ -93,10 +110,12 @@ function metricEvent(m: Metric): string | null {
 function MetricsTable({
   metrics,
   categories,
+  health,
   onChanged,
 }: {
   metrics: Metric[];
   categories: MetricCategoryDefinition[];
+  health: ReturnType<typeof buildRegistryHealth>;
   onChanged: () => void;
 }) {
   const { client, project } = useStore();
@@ -113,6 +132,7 @@ function MetricsTable({
   const [deleting, setDeleting] = useState<Metric | null>(null);
   const [editing, setEditing] = useState<Metric | null>(null);
   const proposedCount = metrics.filter((m) => m.status === 'proposed').length;
+  const healthByKey = useMemo(() => new Map(health.rows.map((row) => [row.key, row])), [health.rows]);
   const allTags = useMemo(() => [...new Set(metrics.flatMap((m) => m.tags ?? []))].sort(), [metrics]);
 
   const filtered = useMemo(() => {
@@ -169,6 +189,11 @@ function MetricsTable({
       <div className="flex items-center px-5 py-3.5 border-b">
         <h3 className="serif text-lg flex items-center gap-2">Metrics {proposedCount > 0 && <Badge variant="outline" className="font-sans">{proposedCount} awaiting activation</Badge>}</h3>
       </div>
+      <div className="grid grid-cols-3 border-b bg-muted/20 text-center">
+        <RegistryStat label="Proposed" value={health.proposed} note="Needs explicit activation" />
+        <RegistryStat label="Incomplete" value={health.incomplete} note="Active, no source evidence · 30d" />
+        <RegistryStat label="Unused" value={health.unused} note={health.usageUnavailable > 0 ? `${health.usageUnavailable} need evidence refresh` : 'No saved funnel, insight or experiment'} />
+      </div>
       <Toolbar
         left={<SearchInput value={search} onChange={setSearch} placeholder="Search name, key, purpose…" />}
         center={<>
@@ -200,6 +225,7 @@ function MetricsTable({
                 <SortableTableHead label="Category" direction={sortDirection('category')} onSort={() => clickSort('category')} />
                 <SortableTableHead label="Type" direction={sortDirection('type')} onSort={() => clickSort('type')} />
                 <TableHead>Source</TableHead><TableHead>Purpose</TableHead>
+                <TableHead>Used by answers</TableHead>
                 <SortableTableHead label="Status" direction={sortDirection('status')} onSort={() => clickSort('status')} />
                 <TableHead className="w-12" />
               </TableRow>
@@ -210,6 +236,7 @@ function MetricsTable({
                   key={g.label ?? '_'}
                   group={g}
                   categories={categories}
+                  healthByKey={healthByKey}
                   busy={busy}
                   onActivate={(k) => setStatus(k, 'active')}
                   onDeprecate={setDeprecating}
@@ -244,6 +271,10 @@ function MetricsTable({
       )}
     </Card>
   );
+}
+
+function RegistryStat({ label, value, note }: { label: string; value: number; note: string }) {
+  return <div className="min-w-0 border-r p-3 last:border-r-0"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-xl font-semibold tabular-nums">{value}</div><div className="mt-1 hidden truncate text-xs text-muted-foreground sm:block" title={note}>{note}</div></div>;
 }
 
 function DeprecateDialog({ metric, onCancel, onConfirm }: { metric: Metric; onCancel: () => void; onConfirm: (reason: string) => Promise<void> }) {
@@ -377,9 +408,10 @@ function TaxonomyEditor({
   );
 }
 
-function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, onEditTaxonomy, onOpenEvents }: {
+function Section({ group, categories, healthByKey, busy, onActivate, onDeprecate, onDelete, onEditTaxonomy, onOpenEvents }: {
   group: { label: string | null; rows: Metric[] }; busy: string | null;
   categories: MetricCategoryDefinition[];
+  healthByKey: Map<string, RegistryMetricHealth>;
   onActivate: (k: string) => void; onDeprecate: (m: Metric) => void; onDelete: (m: Metric) => void;
   onEditTaxonomy: (m: Metric) => void; onOpenEvents: (ev: string) => void;
 }) {
@@ -388,14 +420,16 @@ function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, o
     <>
       {group.label && (
         <TableRow className="bg-muted/40 hover:bg-muted/40">
-          <TableCell colSpan={7} className="py-2">
+          <TableCell colSpan={8} className="py-2">
             <button className="flex items-center gap-2 text-xs font-medium text-muted-foreground capitalize" onClick={() => setOpen((o) => !o)}>
               {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}{group.label}<Badge variant="secondary">{group.rows.length}</Badge>
             </button>
           </TableCell>
         </TableRow>
       )}
-      {open && group.rows.map((m) => (
+      {open && group.rows.map((m) => {
+        const health = healthByKey.get(m.key);
+        return (
         <TableRow key={m.id} className="group">
           <TableCell>
             {metricEvent(m)
@@ -412,6 +446,14 @@ function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, o
           <TableCell><TypeTag type={m.type} /></TableCell>
           <TableCell className="text-xs text-muted-foreground whitespace-nowrap font-mono">{sourceSummary(m)}</TableCell>
           <TableCell className="max-w-sm"><div className="truncate text-xs text-muted-foreground italic" title={m.purpose}>{m.purpose}</div></TableCell>
+          <TableCell className="max-w-xs">
+            <div className="flex flex-wrap gap-1">
+              {health?.usedByAnswers.slice(0, 2).map((answer) => <Badge key={answer} variant="outline" className="max-w-40 truncate font-normal" title={answer}>{answer}</Badge>)}
+              {(health?.usedByAnswers.length ?? 0) > 2 && <Badge variant="secondary">+{health!.usedByAnswers.length - 2}</Badge>}
+              {(health?.usedByAnswers.length ?? 0) === 0 && <span className="text-xs text-muted-foreground">{health?.unused === null ? 'Consumer evidence unavailable' : 'No saved consumer'}</span>}
+            </div>
+            <details className="mt-1"><DisclosureSummary className="cursor-pointer text-xs font-medium text-foreground underline decoration-border underline-offset-2">Review evidence</DisclosureSummary><div className="mt-1 text-xs text-muted-foreground">{health?.unused === null ? 'Saved-consumer evidence is incomplete; no unused claim was made.' : health?.observedEvents == null ? 'Source evidence unavailable' : `${health.observedEvents} source events · 30d`}</div></details>
+          </TableCell>
           <TableCell>
             <StatusBadge status={m.status} />
             {m.status === 'deprecated' && (
@@ -433,7 +475,7 @@ function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, o
             )}
           </TableCell>
         </TableRow>
-      ))}
+      );})}
     </>
   );
 }

@@ -10,9 +10,9 @@ export type MetricView = 'trend' | 'lifecycle' | 'stickiness';
 
 export function comparisonControl() {
   return {
-    label: 'Current period only',
+    label: 'Previous exact period',
     disabled: true,
-    reason: 'Previous-period comparison is unavailable for single-window queries',
+    reason: 'Runs an adjacent window with identical duration when a safe headline aggregation exists',
   } as const;
 }
 
