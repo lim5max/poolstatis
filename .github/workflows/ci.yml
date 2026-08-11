@@ -47,6 +47,15 @@ jobs:
       - run: corepack enable
       - run: corepack prepare pnpm@10.13.1 --activate
       - run: pnpm install --frozen-lockfile
+
+      - name: Configure Hugeicons Pro registry
+        env:
+          HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+        run: |
+          test -n "$HUGEICONS_LICENSE_KEY"
+          npm config set @hugeicons-pro:registry https://npm.hugeicons.com/
+          npm config set //npm.hugeicons.com/:_authToken "$HUGEICONS_LICENSE_KEY"
+
       - run: pnpm --dir web install --frozen-lockfile
 
       - name: Bootstrap hosted-policy test roles

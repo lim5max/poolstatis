@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@hugeicons-pro/core-solid-rounded':
+        specifier: 4.2.3
+        version: 4.2.3
       '@hugeicons/core-free-icons':
         specifier: ^4.2.1
         version: 4.2.1
@@ -381,6 +384,9 @@ packages:
 
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
+
+  '@hugeicons-pro/core-solid-rounded@4.2.3':
+    resolution: {integrity: sha512-gJLILPZZ3+G5u/MzoVAA3WMJY96Ol+kkpA7hBK3675xrMEFqT0AKdd9NWKr+Nd6rRe/HVvAA4p/H5G+l2KGxoA==}
 
   '@hugeicons/core-free-icons@4.2.1':
     resolution: {integrity: sha512-75jYZKYyA9VwS35YRmmGUGzFedbY+Fl0Vxx5FzXR2CGDlIhNRumFeVqaaKoClf2MeYEJwPAVMEL9RwCYtOgnSw==}
@@ -2525,6 +2531,8 @@ snapshots:
       react-dom: 19.2.7(react@19.2.7)
 
   '@floating-ui/utils@0.2.11': {}
+
+  '@hugeicons-pro/core-solid-rounded@4.2.3': {}
 
   '@hugeicons/core-free-icons@4.2.1': {}
 

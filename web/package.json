@@ -11,6 +11,7 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@hugeicons-pro/core-solid-rounded": "4.2.3",
     "@hugeicons/core-free-icons": "^4.2.1",
     "@hugeicons/react": "^1.1.7",
     "@tailwindcss/vite": "^4.3.1",
