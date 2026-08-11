@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
 import { ErrorNote, Loading, Panel, RecoverableError } from '../components/ui';
@@ -14,6 +14,8 @@ import type { Decision, DecisionAction, DecisionActionType, DecisionDetail, Deci
 
 export function Decisions() {
   const { client, project, env } = useStore();
+  const [params] = useSearchParams();
+  const requestedDecisionId = params.get('decision');
   const list = useAsync(async () => {
     const [decisions, releases] = await Promise.all([
       client!.decisions(project!, { env }),
@@ -32,11 +34,25 @@ export function Decisions() {
     return { inbox, history: history.items, deliveries };
   }, [project]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const appliedRequestedDecision = useRef<string | null | undefined>(undefined);
   const [emptyBusy, setEmptyBusy] = useState(false);
   const [emptyError, setEmptyError] = useState<string | null>(null);
   useEffect(() => {
-    if (list.data && (!selectedId || !list.data.decisions.some((decision) => decision.id === selectedId))) setSelectedId(list.data.decisions[0]?.id ?? null);
-  }, [list.data, selectedId]);
+    if (!list.data) return;
+    const requested = requestedDecisionId && list.data.decisions.some((decision) => decision.id === requestedDecisionId)
+      ? requestedDecisionId
+      : null;
+    if (appliedRequestedDecision.current !== requestedDecisionId) {
+      appliedRequestedDecision.current = requestedDecisionId;
+    } else if (selectedId && list.data.decisions.some((decision) => decision.id === selectedId)) {
+      return;
+    }
+    if (requested) {
+      setSelectedId(requested);
+      return;
+    }
+    setSelectedId(list.data.decisions[0]?.id ?? null);
+  }, [list.data, requestedDecisionId, selectedId]);
   const detail = useAsync(async () => selectedId ? client!.decision(project!, selectedId) : null, [project, selectedId, list.data]);
 
   if (list.loading) return <Loading what="reading decision revisions…" />;

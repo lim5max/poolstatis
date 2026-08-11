@@ -7,7 +7,7 @@ import {
   scenarioPickerOptions,
   visualizationTitle,
 } from '../analysis/product';
-import { selectServerFunnelLoss } from './ProductAnalytics';
+import { selectCompatibleFunnelEvidence, selectServerFunnelLoss } from './ProductAnalytics';
 
 describe('Product analytics query and copy mapping', () => {
   it('builds registry-backed branches without raw event input', () => {
@@ -115,5 +115,43 @@ describe('Product analytics query and copy mapping', () => {
     };
 
     expect(selectServerFunnelLoss(result, { fromStep: 0, toStep: 2 })).toBeNull();
+  });
+
+  it('links only explicit release and experiment records compatible with the exact funnel evidence', () => {
+    const result = {
+      kind: 'funnel',
+      steps: [],
+      meta: {
+        computed_at: '2026-08-08T00:00:00.000Z',
+        date_range: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-08T00:00:00.000Z' },
+        sampling: null,
+        source: 'native',
+      },
+    } as const;
+    const matchingRelease = {
+      id: 'release-match', env: 'prod', status: 'observing', deployed_at: '2026-08-04T00:00:00.000Z',
+      contract_snapshot: { primary_metric_key: 'completed' },
+    };
+    const matchingExperiment = {
+      id: 'experiment-match', env: 'prod', status: 'running', started_at: '2026-07-30T00:00:00.000Z',
+      concluded_at: null, primary_metric_key: 'completed',
+    };
+    const selected = selectCompatibleFunnelEvidence(result as never, 'completed', {
+      releases: [
+        matchingRelease,
+        { ...matchingRelease, id: 'release-wrong-env', env: 'staging' },
+        { ...matchingRelease, id: 'release-wrong-metric', contract_snapshot: { primary_metric_key: 'started' } },
+        { ...matchingRelease, id: 'release-outside-window', deployed_at: '2026-07-20T00:00:00.000Z' },
+      ] as never,
+      experiments: [
+        matchingExperiment,
+        { ...matchingExperiment, id: 'experiment-wrong-env', env: 'staging' },
+        { ...matchingExperiment, id: 'experiment-wrong-metric', primary_metric_key: 'started' },
+        { ...matchingExperiment, id: 'experiment-after-window', started_at: '2026-08-10T00:00:00.000Z' },
+      ] as never,
+    }, 'prod');
+
+    expect(selected.releases.map((release) => release.id)).toEqual(['release-match']);
+    expect(selected.experiments.map((experiment) => experiment.id)).toEqual(['experiment-match']);
   });
 });

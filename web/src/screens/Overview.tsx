@@ -4,6 +4,7 @@ import { ArrowRight } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { ErrorNote, Loading, fmtNum, fmtRelative } from '@/components/ui';
 import { AnswerCanvas, type EvidenceTrust, type KpiItem } from '@/components/analytics';
+import { DisclosureSummary } from '@/components/disclosure';
 import { formatDurationMs, webPageMetric, type WebAnalyticsResult } from '../analysis/operations';
 import type { AttentionItem, ControlTowerAction, ControlTowerResult, Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
 import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
@@ -124,12 +125,21 @@ export function Overview() {
     <div className="space-y-5">
       <PageHeader
         title="Attention"
-        answer="Project mode is not set. Your existing answers and data remain available."
+        answer={website.overview
+          ? websiteLead(website)
+          : product.metric
+            ? `${product.metric.name} is the clearest active outcome available for this project.`
+            : controlTower.answer.takeaway}
       />
       <AttentionQueue result={controlTower} items={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />
-      <div className="rounded-panel border border-dashed bg-card px-4 py-3 text-sm text-muted-foreground">
-        Legacy project · choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
-      </div>
+      <details className="rounded-panel border bg-card">
+        <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-4 py-3 text-sm font-medium">
+          Project settings
+        </DisclosureSummary>
+        <p className="border-t px-4 py-3 text-sm text-muted-foreground">
+          Project mode is not set. Choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
+        </p>
+      </details>
       {website.overview
         ? <WebsiteAnswerCanvas answer={website} product={product} schema={schema} env={env} onRetry={home.reload} />
         : <ProductAnswerCanvas answer={product} schema={schema} env={env} />}
@@ -154,7 +164,7 @@ function AttentionQueue({ result, items, telemetryUserId, onRetry }: {
         <span className="font-mono text-sm text-muted-foreground">{items.length}</span>
       </div>
       <div className="grid gap-3 lg:grid-cols-3">
-        {visibleItems.map((item, index) => (
+        {visibleItems.map((item) => (
           <article
             key={item.id}
             className={`rounded-panel border bg-card p-4 ${item.severity === 'critical' || item.severity === 'high' ? 'border-destructive/45' : item.severity === 'medium' ? 'border-warning/45' : ''}`}
@@ -166,7 +176,7 @@ function AttentionQueue({ result, items, telemetryUserId, onRetry }: {
             <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
             <p className="mt-3 border-t pt-3 text-sm"><span className="font-medium">Impact:</span> <span className="text-muted-foreground">{item.impact}</span></p>
-            {index === 0 && <AttentionAction action={item.primary_action} telemetryUserId={telemetryUserId} onRetry={onRetry} />}
+            <AttentionAction action={item.primary_action} telemetryUserId={telemetryUserId} onRetry={onRetry} />
           </article>
         ))}
       </div>

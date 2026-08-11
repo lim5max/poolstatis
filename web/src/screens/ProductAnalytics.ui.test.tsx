@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
@@ -47,6 +47,7 @@ function productStore(funnels: unknown[] = []) {
         identity: { distinct_id_coverage: 1, raw_actors: 8, resolved_actors: 8 }, properties: [], blockers: [], warnings: [],
       }),
       createAnalysisView: vi.fn().mockResolvedValue({ id: 'view-1' }),
+      evaluateRelease: vi.fn(),
     },
   } as never;
 }
@@ -104,12 +105,14 @@ describe('Product answer-first surface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
     await waitFor(() => expect(screen.getByText(/Observed · Trusted · 34 events ·/)).toBeInTheDocument());
-    expect(screen.getByText('Takeaway')).toBeInTheDocument();
-    expect(screen.getByText('Previous exact period')).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'Product answer chart' })).toHaveTextContent('table fallback');
-    expect(screen.getByText(/Aggregation:/)).not.toBeVisible();
-    fireEvent.click(screen.getByText('How this is calculated'));
-    expect(screen.getByText(/Aggregation:/)).toBeVisible();
+    const answer = screen.getByRole('region', { name: 'Canonical answer' });
+    expect(within(answer).getByText('Takeaway')).toBeInTheDocument();
+    expect(within(answer).getByText('No safely comparable period headline')).toBeInTheDocument();
+    expect(within(answer).getByText(metric.purpose)).toBeInTheDocument();
+    expect(within(answer).getByRole('img', { name: 'Product answer chart' })).toHaveTextContent('table fallback');
+    expect(within(answer).getByText(/Aggregation:/)).not.toBeVisible();
+    fireEvent.click(within(answer).getByText('Evidence'));
+    expect(within(answer).getByText(/Aggregation:/)).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Copy follow-up task' }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledOnce());
     const task = vi.mocked(navigator.clipboard.writeText).mock.calls[0]?.[0] as string;
@@ -173,6 +176,7 @@ describe('Product answer-first surface', () => {
       primary_metric_key: 'signup_completed', secondary_metric_keys: [],
       started_at: '2026-07-18T00:00:00Z', concluded_at: null,
     }]);
+    current.client.evaluateRelease.mockResolvedValueOnce({ decision: { id: 'decision-1' }, idempotent: false });
     mockedStore.mockReturnValue(current);
 
     render(<MemoryRouter initialEntries={['/analyze/funnels?funnel=checkout&env=prod&from_step=1&to_step=2']}><ProductAnalytics surface="funnels" /></MemoryRouter>);
@@ -193,8 +197,10 @@ describe('Product answer-first surface', () => {
     expect(screen.getByText(/Stable step order resolved an equal loss/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Release abcdef1234/ })).toHaveAttribute('href', '/changes');
     expect(screen.getByRole('link', { name: /Experiment Signup copy/ })).toHaveAttribute('href', '/experiments');
-    expect(screen.getByText(/cannot be saved directly to Decisions/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Continue through Ship' })).toHaveAttribute('href', '/changes');
+    fireEvent.click(screen.getByRole('button', { name: 'Save proposal to Decisions' }));
+    await waitFor(() => expect(current.client.evaluateRelease).toHaveBeenCalledWith('alpha', 'release-1'));
+    expect(screen.getByRole('link', { name: 'Open proposal in Decisions' })).toHaveAttribute('href', '/decisions?decision=decision-1');
+    expect(screen.queryByText(/cannot be saved directly to Decisions/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Investigate this step' })).toBeInTheDocument();
     expect(current.client.query).toHaveBeenCalledTimes(1);
     expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({ kind: 'funnel', funnel: 'checkout', env: 'prod' }));

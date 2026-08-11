@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ErrorNote, Loading } from '@/components/ui';
-import { AnswerCanvas, EvidenceLine, type EvidenceTrust } from '@/components/analytics';
+import { AnswerCanvas, CanonicalAnswer, type EvidenceTrust } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
 import type { CreateSavedAnswerInput, Experiment, Funnel, MeasurementTrust, Metric, Release } from '../api/types';
 import { useAsync, useStore } from '../store';
@@ -49,7 +49,7 @@ interface RequestedFunnelTransition {
   toStep: number;
 }
 
-interface RelatedFunnelEvidence {
+export interface RelatedFunnelEvidence {
   releases: Release[];
   experiments: Experiment[];
 }
@@ -333,22 +333,20 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       )}
 
       {renderState === 'ready' && currentRun && (
-        <AnswerTakeaway
-          summary={currentRun.summary}
-          trust={currentRun.spec.trust.status}
-          task={followUpAgentTask(currentRun.spec, currentRun.summary)}
+        <CanonicalAnswer
+          takeaway={currentRun.summary.takeaway}
+          comparison={currentRun.summary.comparison}
+          trust={visualizationEvidenceTrust(currentRun.spec.trust.status)}
+          eventCount={currentRun.eventCount}
+          env={env}
+          purpose={currentRun.spec.purpose}
+          followUp={currentRun.summary.followUp}
+          followUpTask={followUpAgentTask(currentRun.spec, currentRun.summary)}
           saveState={saveState}
           onSave={() => void saveAnswer()}
+          chart={<ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
+          evidence={<>Aggregation: {currentRun.spec.evidence.aggregation}. Sample: {currentRun.spec.evidence.sampleSize ?? 'unavailable'}. Coverage: {currentRun.spec.evidence.coverage}. Comparison: {currentRun.spec.evidence.comparisonBasis}. Computed from {currentRun.spec.evidence.source} at {new Date(currentRun.spec.evidence.computedAt).toLocaleString()}.</>}
         />
-      )}
-      {renderState === 'ready' && currentRun && <ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
-      {currentRun && (
-        <div className="space-y-2">
-          <p className="max-w-3xl text-sm"><span className="font-medium">Purpose:</span> {currentRun.spec.purpose}</p>
-          <EvidenceLine trust={visualizationEvidenceTrust(currentRun.spec.trust.status)} eventCount={currentRun.eventCount} env={env}>
-            Aggregation: {currentRun.spec.evidence.aggregation}. Sample: {currentRun.spec.evidence.sampleSize ?? 'unavailable'}. Coverage: {currentRun.spec.evidence.coverage}. Comparison: {currentRun.spec.evidence.comparisonBasis}. Computed from {currentRun.spec.evidence.source} at {new Date(currentRun.spec.evidence.computedAt).toLocaleString()}.
-          </EvidenceLine>
-        </div>
       )}
 
       <details className="group rounded-panel border bg-card">
@@ -496,58 +494,6 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
 
 function followUpAgentTask(spec: VisualizationSpec, summary: StandardAnswerSummary): string {
   return `Investigate the next evidence-backed question for ${spec.title} without changing its definition.\n\nProject: ${spec.project}\nEnvironment: ${spec.env}\nExact UTC range: ${spec.range.from} to ${spec.range.to}\nCurrent takeaway: ${summary.takeaway}\nNext question: ${summary.followUp}\n\nUse registered metrics and trusted properties only. Keep the same scope, report sample and data-quality limits, and prepare a proposal for human review.`;
-}
-
-function AnswerTakeaway({ summary, trust, task, saveState, onSave }: {
-  summary: StandardAnswerSummary;
-  trust: VisualizationSpec['trust']['status'];
-  task: string;
-  saveState: 'idle' | 'saving' | 'saved' | 'error';
-  onSave: () => void;
-}) {
-  const trusted = trust === 'trusted';
-  const [copied, setCopied] = useState(false);
-  const [manualCopy, setManualCopy] = useState(false);
-  const copyTask = async () => {
-    try {
-      await navigator.clipboard.writeText(task);
-      setCopied(true);
-      setManualCopy(false);
-    } catch {
-      setManualCopy(true);
-    }
-  };
-  return (
-    <AnswerCanvas className="border-l-4 border-l-primary">
-      <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:p-5">
-        <div>
-          <div className="text-xs font-medium text-muted-foreground">Takeaway</div>
-          <p className="mt-1 text-lg font-semibold leading-snug">{summary.takeaway}</p>
-          <p className="mt-2 text-sm text-muted-foreground">Next question: {summary.followUp}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button type="button" className="h-11" onClick={onSave} disabled={saveState === 'saving' || saveState === 'saved'}>
-              {saveState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
-              {saveState === 'saved' ? 'Answer saved' : saveState === 'saving' ? 'Saving answer…' : 'Save answer'}
-            </Button>
-            <Button type="button" variant="outline" className="h-11" onClick={() => void copyTask()}>
-              {copied ? 'Follow-up task copied' : 'Copy follow-up task'}
-            </Button>
-          </div>
-          {saveState === 'error' && <p role="alert" className="mt-2 text-sm text-destructive">The answer could not be saved. Check access and try again.</p>}
-        </div>
-        <div className="flex flex-wrap gap-2 sm:justify-end">
-          <Badge variant={trusted ? 'default' : 'outline'}>{trusted ? 'Trusted evidence' : 'Review trust'}</Badge>
-          <Badge variant="outline">{summary.comparison}</Badge>
-        </div>
-      </div>
-      {manualCopy && (
-        <div className="border-t p-4 sm:p-5">
-          <p role="alert" className="mb-2 text-sm text-muted-foreground">Clipboard access was blocked. Copy the prepared follow-up task manually.</p>
-          <pre tabIndex={0} className="max-h-72 overflow-auto whitespace-pre-wrap rounded-panel border bg-background p-4 text-sm">{task}</pre>
-        </div>
-      )}
-    </AnswerCanvas>
-  );
 }
 
 function savedAnswerInput(run: AnalysisRun, templateKey: string): CreateSavedAnswerInput {
@@ -710,8 +656,15 @@ function FunnelBiggestLoss({
   relatedEvidenceUnavailable: boolean;
   env: string;
 }) {
+  const { client, project } = useStore();
   const [taskVisible, setTaskVisible] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [proposalState, setProposalState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [proposalDecisionId, setProposalDecisionId] = useState<string | null>(null);
+  useEffect(() => {
+    setProposalState('idle');
+    setProposalDecisionId(null);
+  }, [env, funnel?.key, result.meta.computed_at]);
   const summary = selectServerFunnelLoss(result, requestedTransition);
   if (!funnel) return null;
   if (!summary) {
@@ -730,7 +683,8 @@ function FunnelBiggestLoss({
   if (summary.lostActors === 0) {
     return <AnswerCanvas><div className="p-4 sm:p-5"><div className="text-sm font-medium text-muted-foreground">Biggest loss</div><h2 className="mt-1 text-xl font-semibold">No measured loss in this period</h2><p className="mt-2 text-sm text-muted-foreground">Every measured actor reached each saved funnel step. No loss or investigate action is implied.</p></div></AnswerCanvas>;
   }
-  const compatible = compatibleEvidence(result, summary.toMetric, relatedEvidence, env);
+  const compatible = selectCompatibleFunnelEvidence(result, summary.toMetric, relatedEvidence, env);
+  const proposalRelease = compatible.releases.find((release) => release.status === 'deployed' || release.status === 'observing') ?? null;
   const absoluteLabel = funnelLossLabel(result, result.summary?.biggest_absolute_loss ?? null);
   const percentageLabel = funnelLossLabel(result, result.summary?.biggest_percentage_loss ?? null);
   const task = `Investigate the biggest measured loss in funnel ${funnel.key} without changing its definition.\n\nGoal: ${funnel.goal}\nEnvironment and exact period are in the attached Poolstatis query.\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nCurrent loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nUse registered metrics and trusted properties only. Compare safe breakdowns, report sample and data-quality limits, and prepare an evidence-backed proposal for human review.`;
@@ -740,6 +694,17 @@ function FunnelBiggestLoss({
       setCopied(true);
     } catch {
       setTaskVisible(true);
+    }
+  };
+  const saveProposal = async () => {
+    if (!proposalRelease || !client || !project || proposalState === 'saving' || proposalState === 'saved') return;
+    setProposalState('saving');
+    try {
+      const saved = await client.evaluateRelease(project, proposalRelease.id);
+      setProposalDecisionId(saved.decision.id);
+      setProposalState('saved');
+    } catch {
+      setProposalState('error');
     }
   };
   return (
@@ -790,10 +755,20 @@ function FunnelBiggestLoss({
             ))}
           </div>
         )}
-        <p className="mt-3 text-muted-foreground">
-          This funnel finding cannot be saved directly to Decisions. Decisions accepts proposals only from evaluated registered releases.
-        </p>
-        <Link className="mt-2 inline-flex font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">Continue through Ship</Link>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          {proposalDecisionId ? (
+            <Button asChild><Link to={`/decisions?decision=${encodeURIComponent(proposalDecisionId)}`}>Open proposal in Decisions</Link></Button>
+          ) : proposalRelease ? (
+            <Button type="button" onClick={() => void saveProposal()} disabled={proposalState === 'saving'}>
+              {proposalState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
+              {proposalState === 'saving' ? 'Saving proposal…' : 'Save proposal to Decisions'}
+            </Button>
+          ) : (
+            <p className="text-muted-foreground">Link a compatible registered release before creating a Decisions proposal.</p>
+          )}
+          <Link className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">Continue through Ship</Link>
+        </div>
+        {proposalState === 'error' && <p role="alert" className="mt-2 text-destructive">The release evidence could not be evaluated. Review its frozen contract and try again.</p>}
       </div>
       {taskVisible && (
         <div className="border-t p-4 sm:p-5">
@@ -846,7 +821,7 @@ function funnelLossLabel(result: FunnelQueryResult, loss: NonNullable<FunnelQuer
   return from && to ? `${from.label} → ${to.label}` : 'Unavailable';
 }
 
-function compatibleEvidence(
+export function selectCompatibleFunnelEvidence(
   result: FunnelQueryResult,
   metricKey: string,
   evidence: RelatedFunnelEvidence,

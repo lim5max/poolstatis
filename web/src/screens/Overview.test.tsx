@@ -131,7 +131,32 @@ describe('goal-aware Attention', () => {
   });
 
   it('renders the server-owned attention order instead of recomputing it in React', async () => {
-    const client = websiteClient();
+    const client = websiteClient() as Record<string, any>;
+    const server = controlTowerResponse();
+    client.controlTower.mockResolvedValue({
+      ...server,
+      attention: [
+        server.attention[0],
+        {
+          ...server.attention[0],
+          id: 'server.funnel.blocked',
+          title: 'Server-ordered funnel blocker',
+          reason: 'The saved path has an unavailable step.',
+          impact: 'The conversion answer remains partial.',
+          evidence: { ...server.evidence, as_of: '2026-08-05T00:00:00.000Z', freshness: 'stale' },
+          primary_action: { id: 'review_funnel', kind: 'navigate', label: 'Review funnel', href: '/analyze/funnels' },
+        },
+        {
+          ...server.attention[0],
+          id: 'server.usage.watch',
+          title: 'Server-ordered usage watch',
+          reason: 'Accepted volume is approaching the configured threshold.',
+          impact: 'Ingest may be constrained if the pace continues.',
+          evidence: { ...server.evidence, as_of: '2026-08-04T00:00:00.000Z', freshness: 'fresh' },
+          primary_action: { id: 'review_usage', kind: 'navigate', label: 'Review usage', href: '/usage' },
+        },
+      ],
+    });
     setStore(client);
 
     render(<MemoryRouter><Overview /></MemoryRouter>);
@@ -139,6 +164,9 @@ describe('goal-aware Attention', () => {
     expect(await screen.findByRole('heading', { name: 'Server-ordered measurement blocker' })).toBeInTheDocument();
     expect(screen.getByText('This item exists only in the canonical control-tower response.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Review definition/ })).toHaveAttribute('href', '/registry');
+    expect(screen.getByRole('link', { name: /Review funnel/ })).toHaveAttribute('href', '/analyze/funnels');
+    expect(screen.getByRole('link', { name: /Review usage/ })).toHaveAttribute('href', '/usage');
+    expect(screen.getByText('stale')).toBeInTheDocument();
     expect(client.controlTower).toHaveBeenCalledOnce();
     expect(client.controlTower).toHaveBeenCalledWith('alpha', 'prod', '30d');
   });
@@ -331,8 +359,11 @@ describe('goal-aware Attention', () => {
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Attention' })).toBeInTheDocument();
-    expect(screen.getByText(/Project mode is not set/)).toBeInTheDocument();
-    expect(screen.getByText(/Nothing has been inferred/)).toBeInTheDocument();
+    expect(screen.queryByText(/Project mode is not set/)).not.toBeVisible();
+    expect(screen.queryByText(/Nothing has been inferred/)).not.toBeVisible();
+    fireEvent.click(screen.getByText('Project settings'));
+    expect(screen.getByText(/Project mode is not set/)).toBeVisible();
+    expect(screen.getByText(/Nothing has been inferred/)).toBeVisible();
   });
 
   it('does not claim a cross-surface path without identity evidence', async () => {
