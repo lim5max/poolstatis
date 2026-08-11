@@ -287,6 +287,14 @@ export type QueryResult =
             unavailable_value: null;
             project_capability: boolean;
           };
+          identity_profile: { available: false; reason: string };
+          outcome_rank: { available: false; reason: string };
+          interesting_categories: {
+            recently_activated: { available: false; requires: 'purpose_backed_activation_metric_or_funnel' };
+            stalled: { available: false; requires: 'purpose_backed_stall_definition' };
+            at_risk: { available: false; requires: 'purpose_backed_risk_definition' };
+            changed_segment: { available: false; requires: 'trusted_canonical_actor_property_source' };
+          };
         };
         provenance: {
           identity_status: string;
@@ -1378,6 +1386,32 @@ export class QueryService {
             source: 'canonical_browser_sessions',
             unavailable_value: null,
             project_capability: trustedBrowserSessions,
+          },
+          identity_profile: {
+            available: false,
+            reason: 'Only explicit server-owned identity links are available; no canonical actor profile source is configured.',
+          },
+          outcome_rank: {
+            available: false,
+            reason: 'No purpose-backed activation, stall or risk definition is selected for this actors query.',
+          },
+          interesting_categories: {
+            recently_activated: {
+              available: false,
+              requires: 'purpose_backed_activation_metric_or_funnel',
+            },
+            stalled: {
+              available: false,
+              requires: 'purpose_backed_stall_definition',
+            },
+            at_risk: {
+              available: false,
+              requires: 'purpose_backed_risk_definition',
+            },
+            changed_segment: {
+              available: false,
+              requires: 'trusted_canonical_actor_property_source',
+            },
           },
         },
         provenance: {

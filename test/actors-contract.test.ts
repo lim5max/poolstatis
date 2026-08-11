@@ -256,10 +256,51 @@ describe('actors Query DSL contract', () => {
       inputs: ['first_seen', 'last_seen', 'active_days', 'total_events'],
       excludes: ['properties', 'hidden profiles', 'predicted intent'],
     });
+    expect(result.body.meta.capabilities.interesting_categories).toEqual({
+      recently_activated: {
+        available: false,
+        requires: 'purpose_backed_activation_metric_or_funnel',
+      },
+      stalled: {
+        available: false,
+        requires: 'purpose_backed_stall_definition',
+      },
+      at_risk: {
+        available: false,
+        requires: 'purpose_backed_risk_definition',
+      },
+      changed_segment: {
+        available: false,
+        requires: 'trusted_canonical_actor_property_source',
+      },
+    });
+    expect(result.body.meta.capabilities.identity_profile).toMatchObject({
+      available: false,
+    });
+    expect(result.body.meta.capabilities.outcome_rank).toMatchObject({
+      available: false,
+    });
     expect(result.body.actors[0]).toMatchObject({
       interesting_score: expect.any(Number),
-      rank_reasons: expect.any(Array),
+      rank_reasons: [
+        'no_activity_in_final_7d_after_multiple_active_days',
+        'multiple_active_days_in_window',
+      ],
+      rank_evidence_window: {
+        from: result.body.meta.date_range.from,
+        to: result.body.meta.date_range.to,
+      },
     });
+    expect(result.body.actors.every((actor: any) => (
+      actor.interesting_score >= 1
+      && actor.interesting_score <= 490
+      && actor.rank_reasons.length > 0
+      && actor.rank_evidence_window.from === result.body.meta.date_range.from
+      && actor.rank_evidence_window.to === result.body.meta.date_range.to
+    ))).toBe(true);
+    expect(result.body.actors.flatMap((actor: any) => actor.rank_reasons)).not.toEqual(
+      expect.arrayContaining(['recently_observed', 'stalled_after_activity']),
+    );
   });
 
   it('rejects empty IDs, oversized limits and cursors bound to another order', async () => {

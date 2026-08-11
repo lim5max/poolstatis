@@ -2097,6 +2097,7 @@ export class PostgresEventStore implements EventStore {
         identity_status: row.identity_status,
         interesting_score: Number(row.interesting_score),
         rank_reasons: actorRankReasons(row, q.to),
+        rank_evidence_window: { from: q.from.toISOString(), to: q.to.toISOString() },
       })),
       hasMore,
     };
@@ -2542,10 +2543,17 @@ function actorRankReasons(
   const lastSeen = new Date(row.last_seen).getTime();
   const end = windowEnd.getTime();
   const activeDays = Number(row.active_days);
-  if (activeDays >= 2 && firstSeen >= end - 7 * 86_400_000) reasons.push('recently_observed');
-  if (activeDays >= 2 && lastSeen < end - 7 * 86_400_000) reasons.push('stalled_after_activity');
-  if (activeDays >= 3) reasons.push('sustained_activity');
-  if (reasons.length === 0 && lastSeen >= end - 3 * 86_400_000) reasons.push('recent_activity');
+  if (activeDays >= 2 && firstSeen >= end - 7 * 86_400_000) {
+    reasons.push('first_observed_in_final_7d_with_multiple_active_days');
+  }
+  if (activeDays >= 2 && lastSeen < end - 7 * 86_400_000) {
+    reasons.push('no_activity_in_final_7d_after_multiple_active_days');
+  }
+  if (activeDays >= 3) reasons.push('multiple_active_days_in_window');
+  if (reasons.length === 0 && lastSeen >= end - 3 * 86_400_000) {
+    reasons.push('activity_in_final_3d');
+  }
+  if (reasons.length === 0) reasons.push('activity_observed_in_window');
   return reasons;
 }
 

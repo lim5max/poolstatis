@@ -16,7 +16,12 @@ export type WebDimension =
   | 'timezone'
   | 'country';
 export type ActorOrder = 'interesting_desc' | 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
-export type ActorRankReason = 'recently_observed' | 'stalled_after_activity' | 'sustained_activity' | 'recent_activity';
+export type ActorRankReason =
+  | 'first_observed_in_final_7d_with_multiple_active_days'
+  | 'no_activity_in_final_7d_after_multiple_active_days'
+  | 'multiple_active_days_in_window'
+  | 'activity_in_final_3d'
+  | 'activity_observed_in_window';
 export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
 
 interface WebQueryBase {
@@ -182,6 +187,7 @@ export interface ActorListItem {
   identity_status: ActorIdentityStatus;
   interesting_score: number;
   rank_reasons: ActorRankReason[];
+  rank_evidence_window: { from: string; to: string };
 }
 
 export interface ActorsResult {
@@ -199,6 +205,14 @@ export interface ActorsResult {
         source: 'canonical_browser_sessions';
         unavailable_value: null;
         project_capability: boolean;
+      };
+      identity_profile: { available: false; reason: string };
+      outcome_rank: { available: false; reason: string };
+      interesting_categories: {
+        recently_activated: { available: false; requires: 'purpose_backed_activation_metric_or_funnel' };
+        stalled: { available: false; requires: 'purpose_backed_stall_definition' };
+        at_risk: { available: false; requires: 'purpose_backed_risk_definition' };
+        changed_segment: { available: false; requires: 'trusted_canonical_actor_property_source' };
       };
     };
     provenance: {
