@@ -93,6 +93,50 @@ describe('project control tower', () => {
     expect(invalid.status).toBe(400);
   });
 
+  it('counts only warning occurrences inside the selected control-tower window', async () => {
+    const warningEnv = await createTestEnv({ ingestBuffer: false });
+    try {
+      await recordWarnings(warningEnv.pool, warningEnv.projectId, 'prod', [{
+        kind: 'rejected',
+        event: 'windowed.warning',
+        detail: 'windowed warning count regression',
+        count: 1,
+      }]);
+      const signature = (await warningEnv.pool.query<{ signature_id: string }>(
+        `UPDATE ingest_warnings
+         SET count = count + 100,
+             first_seen = now() - interval '31 days'
+         WHERE project_id = $1 AND env = 'prod' AND kind = 'rejected' AND event = 'windowed.warning'
+         RETURNING signature_id::text`,
+        [warningEnv.projectId],
+      )).rows[0]!.signature_id;
+      await warningEnv.pool.query(
+        `INSERT INTO ingest_warning_occurrences (signature_id, bucket, count)
+         VALUES ($1, date_trunc('hour', now() - interval '31 days'), 100)`,
+        [signature],
+      );
+
+      const result = await api(
+        warningEnv,
+        warningEnv.secretToken,
+        'GET',
+        `/api/v1/projects/${warningEnv.projectSlug}/control-tower?env=prod&range=30d`,
+      );
+
+      expect(result.status).toBe(200);
+      const warning = result.body.attention.find((item: { rule_id: string }) => item.rule_id === 'ingest.rejected');
+      expect(warning).toMatchObject({
+        reason: '1 observations across 1 event names are recorded in this warning class.',
+        evidence: {
+          aggregation: 'ingest warning occurrences in the selected control-tower window by warning class and event name; raw samples are excluded',
+          sample: { eligible: null, observed: 1, coverage: null },
+        },
+      });
+    } finally {
+      await warningEnv.close();
+    }
+  });
+
   it('deep-links entity conflicts to the existing Data health tab', async () => {
     const qualityEnv = await createTestEnv({ ingestBuffer: false });
     try {

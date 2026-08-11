@@ -21,6 +21,20 @@ beforeAll(async () => {
     key: 'pro_exports',
     source: { event: 'doc.exported', filters: [{ property: 'plan', op: 'eq', value: 'pro' }] },
   });
+  await activeMetric(env, {
+    key: 'breakdown_unique_actors', type: 'unique_actors',
+    source: { event: 'trend.observed' },
+  });
+  for (const agg of ['sum', 'avg', 'min', 'max', 'p90'] as const) {
+    await activeMetric(env, {
+      key: `breakdown_value_${agg}`, type: 'value',
+      source: { event: 'trend.observed', value_property: 'amount', agg },
+    });
+  }
+  await activeMetric(env, {
+    key: 'zero_value_sum', type: 'value',
+    source: { event: 'trend.zero_observed', value_property: 'amount', agg: 'sum' },
+  });
 
   // Three users: u1 completes the whole journey quickly, u2 signs up and
   // exports a day later (outside a 2h window), u3 only signs up.
@@ -33,6 +47,11 @@ beforeAll(async () => {
     { event: 'checkout.completed', distinct_id: 'u2', timestamp: hoursAgo(9), properties: { amount: 15 } },
     { event: 'signup.completed', distinct_id: 'u3', timestamp: hoursAgo(30) },
     { event: 'doc.exported', distinct_id: 'u1', timestamp: hoursAgo(8), properties: { plan: 'pro' } },
+    { event: 'trend.observed', distinct_id: 'shared', timestamp: hoursAgo(1), properties: { plan: 'a', amount: 0 } },
+    { event: 'trend.observed', distinct_id: 'actor-a', timestamp: hoursAgo(1), properties: { plan: 'a', amount: 100 } },
+    { event: 'trend.observed', distinct_id: 'shared', timestamp: hoursAgo(1), properties: { plan: 'b', amount: 10 } },
+    { event: 'trend.observed', distinct_id: 'actor-b', timestamp: hoursAgo(1), properties: { plan: 'b', amount: 20 } },
+    { event: 'trend.zero_observed', distinct_id: 'zero-actor', timestamp: hoursAgo(1), properties: { amount: 0 } },
   ];
   const res = await api(env, env.ingestToken, 'POST', '/i/v1/events', { events });
   if (res.body.accepted !== events.length) throw new Error(JSON.stringify(res.body));
@@ -100,6 +119,40 @@ describe('trend queries', () => {
       byValue[p.breakdown_value] = (byValue[p.breakdown_value] ?? 0) + p.value;
     }
     expect(byValue).toEqual({ pro: 2, free: 1 });
+  });
+
+  it.each([
+    ['breakdown_unique_actors', 3],
+    ['breakdown_value_sum', 130],
+    ['breakdown_value_avg', 32.5],
+    ['breakdown_value_min', 0],
+    ['breakdown_value_max', 100],
+    ['breakdown_value_p90', 76],
+  ] as const)('uses the whole latest bucket for a %s breakdown answer', async (metric, expected) => {
+    const res = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'trend', metric, date_from: '-7d', interval: 'month',
+      breakdown: { property: 'plan' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.series).toHaveLength(2);
+    expect(res.body.answer.state).toBe('ready');
+    expect(res.body.answer.primary_value.value).toBeCloseTo(expected);
+    expect(res.body.evidence.sample).toMatchObject({ eligible: 1, observed: 1, coverage: 1 });
+  });
+
+  it('keeps a real zero-valued aggregate observation ready', async () => {
+    const res = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'trend', metric: 'zero_value_sum', date_from: '-7d', interval: 'day',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.series).toEqual([expect.objectContaining({ value: 0 })]);
+    expect(res.body.answer).toMatchObject({
+      state: 'ready',
+      primary_value: { value: 0, formatted: '0' },
+    });
+    expect(res.body.evidence.sample).toMatchObject({ eligible: 1, observed: 1, coverage: 1 });
   });
 
   it('refuses to trend a conversion metric, with a teaching hint', async () => {

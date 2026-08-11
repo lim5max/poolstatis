@@ -9,7 +9,11 @@ import { listFunnels, type Funnel, type Metric } from './registry.js';
 import { listDataQualityIssues } from './dataQuality.js';
 import { listDecisions } from './decisions.js';
 import { getOnboardingStatus } from './onboarding.js';
-import { listIngestWarnings, type WarningKind } from './warnings.js';
+import {
+  summarizeIngestWarningOccurrences,
+  type IngestWarningWindowSummary,
+  type WarningKind,
+} from './warnings.js';
 
 export const controlTowerStateSchema = z.enum([
   'ready', 'partial', 'empty', 'unavailable', 'not_configured', 'stale', 'error',
@@ -312,12 +316,12 @@ function warningAttention(
   projectSlug: string,
   env: string,
   kind: WarningKind,
-  rows: Awaited<ReturnType<typeof listIngestWarnings>>,
+  summaries: IngestWarningWindowSummary[],
   now: Date,
 ): AttentionItem | null {
-  const matching = rows.filter((warning) => warning.kind === kind);
-  if (matching.length === 0) return null;
-  const observations = matching.reduce((sum, warning) => sum + warning.count, 0);
+  const summary = summaries.find((warning) => warning.kind === kind);
+  if (!summary) return null;
+  const observations = summary.count;
   const severity: AttentionSeverity = kind === 'rejected' ? 'high' : kind === 'unregistered' ? 'medium' : 'low';
   const title = kind === 'rejected'
     ? 'Accepted-event coverage is losing rejected observations'
@@ -342,14 +346,14 @@ function warningAttention(
     severity,
     state: 'open',
     title,
-    reason: `${observations} observations across ${matching.length} event names are recorded in this warning class.`,
+    reason: `${observations} observations across ${summary.event_count} event names are recorded in this warning class.`,
     impact,
     affected: [{ kind: 'project', ref: `${projectSlug}:${env}` }],
     evidence: operationalEvidence(
       now,
       kind === 'rejected' ? 'blocked' : 'partial',
       `ingest.${kind}`,
-      'accumulated ingest warnings by warning class and event name; raw samples are excluded',
+      'ingest warning occurrences in the selected control-tower window by warning class and event name; raw samples are excluded',
       { eligible: null, observed: observations, coverage: null },
     ),
     priority: { blocking_now: kind === 'rejected', forecasted_at: null },
@@ -367,14 +371,13 @@ export async function getProjectControlTower(
   now = new Date(),
 ): Promise<ControlTowerResult> {
   const from = new Date(now.getTime() - rangeDays * 86_400_000);
-  const [onboarding, allWarnings, quality, decisions, funnelItem] = await Promise.all([
+  const [onboarding, warnings, quality, decisions, funnelItem] = await Promise.all([
     getOnboardingStatus(pool, eventStore, project.id, env),
-    listIngestWarnings(pool, project.id, { env }),
+    summarizeIngestWarningOccurrences(pool, project.id, { env, from, to: now }),
     listDataQualityIssues(pool, eventStore, project.id, env, { sinceDays: rangeDays }),
     listDecisions(pool, project.id, { status: 'proposed', env }),
     funnelAttention(pool, queryService, project, env, from, now),
   ]);
-  const warnings = allWarnings.filter((warning) => Date.parse(warning.last_seen) >= from.getTime());
   const attention: AttentionItem[] = [];
   for (const kind of ['rejected', 'unregistered', 'clock_skew'] as const) {
     const item = warningAttention(project.slug, env, kind, warnings, now);
@@ -496,21 +499,25 @@ function formatted(value: number): string {
 export function trendControlBlocks(
   metric: Metric,
   query: TrendQueryInput,
-  series: Array<{ value: number }>,
+  series: Array<{ bucket?: string; value: number }>,
   now: Date,
   source: 'native' | 'posthog',
 ): { answer: AnswerBlock; evidence: EvidenceBlock } {
   const sourceDefinition = metric.source as { agg?: 'sum' | 'avg' | 'min' | 'max' | 'p90' };
   const additive = metric.type === 'count'
     || (metric.type === 'value' && (sourceDefinition.agg ?? 'sum') === 'sum');
-  const latestValue = series.at(-1)?.value ?? 0;
+  const latestPoint = series.reduce<(typeof series)[number] | null>((latest, point) => {
+    if (!latest) return point;
+    if (!point.bucket || !latest.bucket) return point;
+    return point.bucket >= latest.bucket ? point : latest;
+  }, null);
+  const latestValue = latestPoint?.value ?? 0;
   const value = additive
     ? series.reduce((sum, point) => sum + point.value, 0)
     : latestValue;
-  const observedBuckets = series.filter((point) => point.value > 0).length;
-  const hasWindowObservations = metric.type === 'unique_actors'
-    ? observedBuckets > 0
-    : value !== 0;
+  const observedBuckets = new Set(series.map((point, index) => point.bucket ?? `row:${index}`)).size;
+  const earlierBuckets = Math.max(0, observedBuckets - 1);
+  const hasWindowObservations = series.length > 0;
   const unit: NonNullable<AnswerBlock['primary_value']>['unit'] = metric.type === 'count'
     || metric.type === 'unique_actors' || metric.type === 'state'
     ? 'count'
@@ -532,7 +539,7 @@ export function trendControlBlocks(
           : `${metric.name}: ${formatted(value)}`,
       takeaway: metric.type === 'unique_actors'
         ? latestValue === 0 && observedBuckets > 0
-          ? `0 unique actors matched the latest returned bucket; ${observedBuckets} earlier ${observedBuckets === 1 ? 'bucket has' : 'buckets have'} observations in the selected window.`
+          ? `0 unique actors matched the latest returned bucket; ${earlierBuckets} earlier ${earlierBuckets === 1 ? 'bucket has' : 'buckets have'} observations in the selected window.`
           : `${formatted(latestValue)} unique actors matched the latest returned bucket; the full series remains available for trend interpretation.`
         : additive
         ? `${formatted(value)} matched the registered metric in the selected window.`
@@ -546,13 +553,13 @@ export function trendControlBlocks(
       freshness: 'fresh',
       source_refs: [{ kind: 'metric', key: metric.key, purpose: metric.purpose }],
       aggregation,
-      sample: metric.type === 'unique_actors'
-        ? {
-            eligible: series.length,
+      sample: metric.type === 'count'
+        ? { eligible: null, observed: value, coverage: null }
+        : {
+            eligible: observedBuckets,
             observed: observedBuckets,
-            coverage: series.length > 0 ? observedBuckets / series.length : null,
-          }
-        : { eligible: null, observed: value, coverage: null },
+            coverage: observedBuckets > 0 ? 1 : null,
+          },
       warnings: source === 'posthog'
         ? [{ code: 'external_source', message: 'Computed from the configured PostHog source.' }]
         : [],

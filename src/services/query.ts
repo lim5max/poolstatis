@@ -1072,7 +1072,7 @@ export class QueryService {
           ? ({ kind: 'unique_actors' } as const)
           : ({ kind: 'value', property: source.value_property!, fn: source.agg ?? 'sum' } as const);
 
-    const series = await this.eventStore.trend({
+    const trendInput = {
       projectId,
       env: q.env,
       event: source.event,
@@ -1081,12 +1081,17 @@ export class QueryService {
       from,
       to,
       interval: q.interval,
-      ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
-    });
+    };
+    const [series, controlSeries] = q.breakdown
+      ? await Promise.all([
+          this.eventStore.trend({ ...trendInput, breakdownProperty: q.breakdown.property }),
+          this.eventStore.trend(trendInput),
+        ])
+      : await this.eventStore.trend(trendInput).then((result) => [result, result] as const);
     return {
       kind: 'trend',
       series,
-      ...trendControlBlocks(metric, q, series, now, 'native'),
+      ...trendControlBlocks(metric, q, controlSeries, now, 'native'),
       meta: meta({ source: 'native', ...(attributionNote ? { note: attributionNote } : {}) }),
     };
   }

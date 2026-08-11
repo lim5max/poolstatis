@@ -13,6 +13,12 @@ export interface IngestWarning {
   last_seen: string;
 }
 
+export interface IngestWarningWindowSummary {
+  kind: WarningKind;
+  count: number;
+  event_count: number;
+}
+
 /** One accumulated warning to upsert (count is how many occurred in this batch). */
 export interface WarningDelta {
   kind: WarningKind;
@@ -97,6 +103,37 @@ export async function listIngestWarnings(
   return rows.map((r) => ({
     signature_id: r.signature_id, kind: r.kind, event: r.event, detail: r.detail, sample: r.sample,
     count: Number(r.count), first_seen: new Date(r.first_seen).toISOString(), last_seen: new Date(r.last_seen).toISOString(),
+  }));
+}
+
+/** Privacy-safe occurrence totals for one bounded control-tower window. */
+export async function summarizeIngestWarningOccurrences(
+  pool: pg.Pool,
+  projectId: string,
+  filter: { env: string; from: Date; to: Date },
+): Promise<IngestWarningWindowSummary[]> {
+  const { rows } = await pool.query<{
+    kind: WarningKind;
+    count: string;
+    event_count: number;
+  }>(
+    `SELECT warning.kind,
+            sum(occurrence.count)::text AS count,
+            count(DISTINCT warning.event)::int AS event_count
+     FROM ingest_warning_occurrences occurrence
+     JOIN ingest_warnings warning ON warning.signature_id = occurrence.signature_id
+     WHERE warning.project_id = $1
+       AND warning.env = $2
+       AND occurrence.bucket >= date_trunc('hour', $3::timestamptz)
+       AND occurrence.bucket <= $4
+     GROUP BY warning.kind
+     ORDER BY warning.kind`,
+    [projectId, filter.env, filter.from, filter.to],
+  );
+  return rows.map((row) => ({
+    kind: row.kind,
+    count: Number(row.count),
+    event_count: Number(row.event_count),
   }));
 }
 

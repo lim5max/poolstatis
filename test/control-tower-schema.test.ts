@@ -38,7 +38,7 @@ describe('control tower serialization contracts', () => {
     });
     expect(result.evidence).toMatchObject({
       aggregation: 'latest returned bucket unique actors; bucket counts are not summed because actors can repeat',
-      sample: { eligible: 2, observed: 1, coverage: 0.5 },
+      sample: { eligible: 2, observed: 2, coverage: 1 },
     });
   });
 
