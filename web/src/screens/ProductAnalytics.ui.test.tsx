@@ -81,25 +81,37 @@ describe('Product answer-first surface', () => {
   });
 
   it('gives funnels a focused answer surface without the product template grid', async () => {
-    const current = productStore([{
-      id: 'f1', key: 'signup', name: 'Signup', goal: 'Find signup drop-off.',
-      steps: [
-        { metric_key: 'signup_started', label: 'Started' },
-        { metric_key: 'signup_completed', label: 'Completed' },
-      ],
-      window_seconds: 604800,
-    }]) as any;
+    const current = productStore([
+      {
+        id: 'f1', key: 'signup', name: 'Signup', goal: 'Find signup drop-off.',
+        steps: [
+          { metric_key: 'signup_started', label: 'Started' },
+          { metric_key: 'signup_completed', label: 'Completed' },
+        ],
+        window_seconds: 604800,
+      },
+      {
+        id: 'f2', key: 'checkout', name: 'Checkout', goal: 'Find checkout drop-off.',
+        steps: [
+          { metric_key: 'signup_started', label: 'Started' },
+          { metric_key: 'signup_completed', label: 'Completed' },
+        ],
+        window_seconds: 604800,
+      },
+    ]) as any;
     current.client.query
       .mockResolvedValueOnce(funnelResult([100, 40]))
       .mockResolvedValueOnce(funnelResult([80, 48]));
     mockedStore.mockReturnValue(current);
 
-    render(<MemoryRouter><ProductAnalytics surface="funnels" /></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/analyze/funnels?funnel=checkout&env=prod&from_step=0&to_step=1']}><ProductAnalytics surface="funnels" /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Funnels' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Answer templates' })).not.toBeInTheDocument();
     expect(screen.getByText('Activation funnel')).toBeInTheDocument();
     expect(screen.getByText('Edit funnel analysis')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Edit funnel analysis'));
+    expect(screen.getByRole('combobox', { name: 'Saved funnel' })).toHaveTextContent('Checkout · checkout');
 
     fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
     expect(await screen.findByText('Biggest loss')).toBeInTheDocument();
@@ -107,5 +119,6 @@ describe('Product answer-first surface', () => {
     expect(screen.getByText(/60 actors lost · 60% drop · \+20 pp vs previous period/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Investigate this step' })).toBeInTheDocument();
     expect(current.client.query).toHaveBeenCalledTimes(2);
+    expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({ kind: 'funnel', funnel: 'checkout', env: 'prod' }));
   });
 });

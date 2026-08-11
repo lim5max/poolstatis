@@ -51,6 +51,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const { client, project, env } = useStore();
   const [params] = useSearchParams();
   const funnelSurface = surface === 'funnels';
+  const requestedFunnel = funnelSurface ? params.get('funnel') ?? '' : '';
   const initialTemplate = funnelSurface
     ? ANALYSIS_TEMPLATES.find((template) => template.key === 'activation-funnel')!
     : ANALYSIS_TEMPLATES.find((template) => template.key === params.get('template') && resolveTemplateCapability(template.key, CORE_ANALYZE_CAPABILITIES).status === 'available')
@@ -71,7 +72,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       properties: properties.filter((property) => property.scope === 'event' && property.status === 'trusted'),
     };
   }, [project, env]);
-  const [resourceKey, setResourceKey] = useState('');
+  const [resourceKey, setResourceKey] = useState(requestedFunnel);
   const [range, setRange] = useState<TimeRangePreset>(template.defaultRange);
   const [interval, setInterval] = useState<QueryInterval>('day');
   const [metricView, setMetricView] = useState<MetricView>('trend');
@@ -87,14 +88,14 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
 
   useEffect(() => {
     runGeneration.current += 1;
-    setResourceKey('');
+    setResourceKey(requestedFunnel);
     setRun(null);
     setRunError(null);
     setRunning(false);
     return () => {
       runGeneration.current += 1;
     };
-  }, [project, env]);
+  }, [project, env, requestedFunnel]);
 
   const compatibleMetrics = useMemo(
     () => (registry.data?.metrics ?? []).filter((metric) => metric.type !== 'conversion' && metric.type !== 'state'),
