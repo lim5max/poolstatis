@@ -782,6 +782,16 @@ export interface ProjectWithStats {
   key_outcome_available: boolean;
   health: 'healthy' | 'needs_attention' | 'no_data';
   attention: string[];
+  health_evaluation: {
+    source: 'server';
+    evaluated_at: string;
+    guardrails: Array<{
+      id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'metric_review_queue';
+      state: 'pass' | 'fail' | 'not_applicable';
+      observed: number | null;
+      expectation: string;
+    }>;
+  };
 }
 
 export interface AccountMode {
@@ -1555,6 +1565,8 @@ export interface UsageControlResult extends ControlTowerResult {
     percent: 50 | 75 | 90 | 100;
     state: 'reached' | 'projected' | 'not_projected' | 'not_applicable';
     reached_or_projected_at: string | null;
+    notification_state: 'not_configured';
+    audit_source: 'usage_ledger';
   }>;
   contributors: Array<{
     project_slug: string;

@@ -37,6 +37,16 @@ describe('projects admin', () => {
       events_24h: expect.any(Number), events_7d: expect.any(Number), events_30d: expect.any(Number),
       key_outcome_available: expect.any(Boolean), health: expect.stringMatching(/^(healthy|needs_attention|no_data)$/),
       attention: expect.any(Array),
+      health_evaluation: {
+        source: 'server',
+        evaluated_at: expect.any(String),
+        guardrails: expect.arrayContaining([
+          expect.objectContaining({ id: 'recent_data', state: expect.stringMatching(/^(pass|fail)$/) }),
+          expect.objectContaining({ id: 'registered_coverage', state: expect.stringMatching(/^(pass|fail|not_applicable)$/) }),
+          expect.objectContaining({ id: 'active_outcome', state: expect.stringMatching(/^(pass|fail)$/) }),
+          expect.objectContaining({ id: 'metric_review_queue', state: expect.stringMatching(/^(pass|fail)$/) }),
+        ]),
+      },
     });
   });
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, TableScroll, WarningNote } from '../components/ui';
 import { useAsync, useStore } from '../store';
 import { Input } from '@/components/ui/input';
@@ -6,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, UsageControlResult } from '../api/types';
+import type { AccountMode, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, UsageControlResult } from '../api/types';
 
 function currentUtcMonth(): string {
   return new Date().toISOString().slice(0, 7);
@@ -247,7 +248,12 @@ function formatForecastDate(value: string | null): string | null {
     .format(new Date(value));
 }
 
-function UsageHero({ usage, planName, onReviewContributors }: { usage: UsageControlResult; planName: string | null; onReviewContributors: () => void }) {
+function UsageHero({ usage, planName, mode, onReviewContributors }: {
+  usage: UsageControlResult;
+  planName: string | null;
+  mode: AccountMode | null;
+  onReviewContributors: () => void;
+}) {
   const capped = usage.cap.state === 'finite' && usage.cap.value !== null;
   const quantity = typeof usage.answer.primary_value?.value === 'number' ? usage.answer.primary_value.value : null;
   const progress = capped && quantity !== null && usage.cap.value! > 0
@@ -290,7 +296,25 @@ function UsageHero({ usage, planName, onReviewContributors }: { usage: UsageCont
       </div>
       <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-2xl text-sm text-muted-foreground">{usage.cap.consequence_at_100_percent ?? 'Accepted events continue to be metered; configure an entitlement server-side if enforcement is required.'}</p>
-        <Button className="h-11 shrink-0" onClick={onReviewContributors}>Review contributors</Button>
+        <div className="flex flex-wrap gap-2">
+          {mode?.deployment.mode === 'self_host' && !capped && (
+            <Button asChild className="h-11"><Link to={mode.primary_action.href}>Configure cap</Link></Button>
+          )}
+          {mode?.deployment.mode === 'hosted' && (
+            <>
+              <Button asChild className="h-11"><Link to="/profile">Review plan</Link></Button>
+              <Button asChild variant="outline" className="h-11"><Link to="/automation">Set alert</Link></Button>
+            </>
+          )}
+          <Button
+            className="h-11 shrink-0"
+            variant={(mode?.deployment.mode === 'self_host' && !capped) || mode?.deployment.mode === 'hosted' ? 'outline' : 'default'}
+            onClick={onReviewContributors}
+          >Review contributors</Button>
+          {mode?.deployment.mode === 'self_host' && capped && (
+            <Button asChild variant="outline" className="h-11"><Link to={mode.primary_action.href}>Configure cap</Link></Button>
+          )}
+        </div>
       </div>
     </Panel>
   );
@@ -345,7 +369,13 @@ function UsageThresholds({ usage }: { usage: UsageControlResult }) {
       <div className="divide-y rounded-panel border">
         {usage.threshold_forecasts.map((threshold) => (
           <div key={threshold.percent} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
-            <div><span className="font-mono tabular-nums">{threshold.percent}%</span><span className="ml-2 text-muted-foreground">{THRESHOLD_MEANING[threshold.percent]}</span></div>
+            <div>
+              <div><span className="font-mono tabular-nums">{threshold.percent}%</span><span className="ml-2 text-muted-foreground">{THRESHOLD_MEANING[threshold.percent]}</span></div>
+              <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+                <span>Notification: {threshold.notification_state === 'not_configured' ? 'Not configured' : threshold.notification_state}</span>
+                <span>Audit: {threshold.audit_source.replace('_', ' ')}</span>
+              </div>
+            </div>
             <span className={threshold.state === 'reached' || threshold.state === 'projected' ? 'font-medium text-warning' : 'text-muted-foreground'}>
               {threshold.state === 'reached' ? `Reached${formatForecastDate(threshold.reached_or_projected_at) ? ` ${formatForecastDate(threshold.reached_or_projected_at)}` : ''}`
                 : threshold.state === 'projected' ? `Projected ${formatForecastDate(threshold.reached_or_projected_at)}`
@@ -369,6 +399,12 @@ export function Usage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const allowed = tokenKind === 'personal' || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
   const result = useAsync(() => client && allowed ? client.usageControl(currentPeriod) : Promise.resolve(null), [client, allowed, currentPeriod]);
+  const mode = useAsync(
+    () => client && allowed && typeof client.accountMode === 'function'
+      ? client.accountMode().catch(() => null)
+      : Promise.resolve(null),
+    [client, allowed],
+  );
   const activityError = validateUsageActivityRange(activitySelection);
   const activity = useAsync(
     () => client && allowed && historyOpen && !activityError ? client.usageActivity(activitySelection.from, activitySelection.to) : Promise.resolve(null),
@@ -396,6 +432,7 @@ export function Usage() {
           <UsageHero
             usage={usage}
             planName={account?.billing?.plan?.name ?? null}
+            mode={mode.data}
             onReviewContributors={() => document.getElementById('usage-contributors-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
           />
           {usage.attention.map((item) => <WarningNote key={item.id}>{item.title}: {item.impact}</WarningNote>)}

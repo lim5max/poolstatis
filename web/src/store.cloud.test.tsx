@@ -63,6 +63,15 @@ describe('hosted StoreProvider connection', () => {
       slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, proposed_metrics: 0, active_outcome_contracts: 0, funnels: 0,
       events_24h: 0, events_7d: 0, events_30d: 0, last_event_at: null, registered_coverage_30d: null,
       key_outcome_available: false, health: 'no_data', attention: ['No events in 30 days', 'No active measurement contract'],
+      health_evaluation: {
+        source: 'server', evaluated_at: '2026-08-11T12:00:00.000Z',
+        guardrails: [
+          { id: 'recent_data', state: 'fail', observed: 0, expectation: 'More than 0 accepted events in 30 days' },
+          { id: 'registered_coverage', state: 'not_applicable', observed: null, expectation: 'Registered coverage is at least 99%' },
+          { id: 'active_outcome', state: 'fail', observed: 0, expectation: 'At least 1 active measurement contract' },
+          { id: 'metric_review_queue', state: 'pass', observed: 0, expectation: 'No proposed metrics awaiting review' },
+        ],
+      },
     }];
     me.mockResolvedValue(account('owner'));
     listProjects.mockResolvedValue({ projects, scope: 'org' });

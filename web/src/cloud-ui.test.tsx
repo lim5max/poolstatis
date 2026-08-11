@@ -42,7 +42,7 @@ describe('cloud workspace project controls', () => {
 
   it('never offers organization project creation to a secret key session', () => {
     renderProjects();
-    expect(screen.queryByRole('button', { name: 'Create' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
   });
 
   it('offers project creation to a hosted owner and switches the selected project', () => {
@@ -59,7 +59,7 @@ describe('cloud workspace project controls', () => {
       account: { membership: { role: 'owner' } },
     } as never);
     renderProjects();
-    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New project' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Bravo' }));
     expect(setProject).toHaveBeenCalledWith('bravo');
   });
@@ -73,9 +73,10 @@ describe('cloud workspace project controls', () => {
       account: { membership: { role: 'admin' } },
     } as never);
     renderProjects();
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
     fireEvent.change(screen.getByLabelText('Slug'), { target: { value: 'new-project' } });
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New project' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     await waitFor(() => expect(createProject).toHaveBeenCalledWith({ slug: 'new-project', name: 'New project' }));
     await waitFor(() => expect(refreshProjects).toHaveBeenCalledOnce());
     expect(setProject).toHaveBeenCalledWith('new-project');
@@ -89,8 +90,9 @@ describe('cloud workspace project controls', () => {
       account: { membership: { role: 'owner' } },
     } as never);
     renderProjects();
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
     fireEvent.change(screen.getByLabelText('Slug'), { target: { value: 'new-project' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled();
     resolveCreate?.({ slug: 'new-project' });
     await waitFor(() => expect(refreshProjects).toHaveBeenCalledOnce());
@@ -102,7 +104,7 @@ describe('cloud workspace project controls', () => {
       account: null,
     } as never);
     renderProjects();
-    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New project' })).toBeInTheDocument();
   });
 
   it('keeps owner onboarding and project creation hidden for an empty hosted member workspace', () => {
@@ -111,7 +113,7 @@ describe('cloud workspace project controls', () => {
       account: { membership: { role: 'member' } },
     } as never);
     renderProjects();
-    expect(screen.queryByRole('button', { name: 'Create' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
     expect(screen.getByText('No projects in this workspace')).toBeInTheDocument();
     expect(screen.queryByText('Create your workspace')).not.toBeInTheDocument();
   });
@@ -299,10 +301,10 @@ describe('organization usage ledger', () => {
       cap: { state: 'finite', value: 2000, remaining: 800, consequence_at_100_percent: 'A batch that would exceed the limit is rejected.' },
       pace: { observed_days: 7, events_per_day_7d: 40, projected_cycle_end: 1800, confidence: 'sufficient' },
       threshold_forecasts: [
-        { percent: 50, state: 'reached', reached_or_projected_at: `${period}-12T00:00:00.000Z` },
-        { percent: 75, state: 'projected', reached_or_projected_at: `${period}-20T00:00:00.000Z` },
-        { percent: 90, state: 'projected', reached_or_projected_at: `${period}-26T00:00:00.000Z` },
-        { percent: 100, state: 'not_projected', reached_or_projected_at: null },
+        { percent: 50, state: 'reached', reached_or_projected_at: `${period}-12T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 75, state: 'projected', reached_or_projected_at: `${period}-20T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 90, state: 'projected', reached_or_projected_at: `${period}-26T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 100, state: 'not_projected', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
       ],
       contributors: [{
         project_slug: 'alpha', project_name: 'Alpha', environment: 'prod',
@@ -398,6 +400,7 @@ describe('organization usage ledger', () => {
       contributors: [],
       threshold_forecasts: [50, 75, 90, 100].map((percent) => ({
         percent: percent as 50 | 75 | 90 | 100, state: 'not_applicable' as const, reached_or_projected_at: null,
+        notification_state: 'not_configured' as const, audit_source: 'usage_ledger' as const,
       })),
     }));
     await screen.findByText(/No stored events in/);

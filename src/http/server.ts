@@ -21,7 +21,7 @@ import type { SetupTaskProvider } from '../services/setupTaskProvider.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
   createApiKey, createProject, deleteProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
-  listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
+  evaluateProjectHealth, listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
 } from '../services/projects.js';
 import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
 import {
@@ -876,14 +876,20 @@ function registerPlatformRoutes(
     }
     try {
       const project = await createProject(ctx.pool, req.auth.orgId, body.slug, body.name);
+      const evaluatedHealth = evaluateProjectHealth({
+        events30d: 0,
+        registeredCoverage30d: null,
+        activeOutcomeContracts: 0,
+        proposedMetrics: 0,
+      });
       // A new project has no data yet — return the same shape as the list (stats zeroed).
       return reply.status(201).send({
         slug: project.slug, name: project.name, timezone: project.timezone,
         active_metrics: 0, proposed_metrics: 0, active_outcome_contracts: 0, funnels: 0,
         events_24h: 0, events_7d: 0, events_30d: 0,
         last_event_at: null, registered_coverage_30d: null,
-        key_outcome_available: false, health: 'no_data',
-        attention: ['No events in 30 days', 'No active measurement contract'],
+        key_outcome_available: false,
+        ...evaluatedHealth,
       });
     } catch (err) {
       if ((err as { code?: string }).code === '23505') {

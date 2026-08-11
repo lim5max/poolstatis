@@ -87,6 +87,8 @@ export const usageControlResultSchema = controlTowerResultSchema.extend({
     percent: z.union([z.literal(50), z.literal(75), z.literal(90), z.literal(100)]),
     state: z.enum(['reached', 'projected', 'not_projected', 'not_applicable']),
     reached_or_projected_at: z.string().datetime().nullable(),
+    notification_state: z.literal('not_configured'),
+    audit_source: z.literal('usage_ledger'),
   }).strict()),
   contributors: z.array(z.object({
     project_slug: z.string(),
@@ -253,12 +255,13 @@ export async function getOrganizationUsageControl(
       return { ...row, cumulative };
     });
     const thresholdForecasts: UsageControlResult['threshold_forecasts'] = percents.map((percent) => {
+      const notification = { notification_state: 'not_configured' as const, audit_source: 'usage_ledger' as const };
       if (hardLimit === null) {
-        return { percent, state: 'not_applicable', reached_or_projected_at: null };
+        return { percent, state: 'not_applicable', reached_or_projected_at: null, ...notification };
       }
       const target = hardLimit * percent / 100;
       if (hardLimit === 0) {
-        return { percent, state: 'reached', reached_or_projected_at: start.toISOString() };
+        return { percent, state: 'reached', reached_or_projected_at: start.toISOString(), ...notification };
       }
       if (quantity >= target) {
         const crossing = cumulativeFacts.find((row) => row.cumulative >= target);
@@ -266,16 +269,17 @@ export async function getOrganizationUsageControl(
           percent,
           state: 'reached',
           reached_or_projected_at: crossing ? new Date(crossing.at).toISOString() : null,
+          ...notification,
         };
       }
       if (!currentPeriod || pace === null || pace <= 0 || projectedCycleEnd === null || projectedCycleEnd < target) {
-        return { percent, state: 'not_projected', reached_or_projected_at: null };
+        return { percent, state: 'not_projected', reached_or_projected_at: null, ...notification };
       }
       const daysUntil = Math.ceil((target - quantity) / pace);
       const projectedAt = new Date(anchorDay.getTime() + daysUntil * DAY_MS);
       return projectedAt < endExclusive
-        ? { percent, state: 'projected', reached_or_projected_at: projectedAt.toISOString() }
-        : { percent, state: 'not_projected', reached_or_projected_at: null };
+        ? { percent, state: 'projected', reached_or_projected_at: projectedAt.toISOString(), ...notification }
+        : { percent, state: 'not_projected', reached_or_projected_at: null, ...notification };
     });
     const contributors = contributorRows.rows.map((row) => {
       const accepted = safeUsageNumber(row.quantity);

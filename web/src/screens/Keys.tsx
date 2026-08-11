@@ -212,7 +212,7 @@ export function Keys() {
           title={`Revoke ${revoking.token}?`}
           tone="warn"
           confirmLabel="Revoke"
-          body="Anything using this key stops working immediately. Create a replacement before revoking if it is still in use."
+          body={`Scope: ${revoking.scope}${revoking.env ? ` · ${revoking.env}` : ''}. Permissions: ${credentialPermissions(revoking.kind)} Authentication with this key fails immediately. Create and verify a replacement before revoking if it is still in use.`}
           error={revokeError ?? undefined}
           onCancel={() => {
             setRevokeError(null);

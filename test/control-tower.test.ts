@@ -193,10 +193,10 @@ describe('organization usage control', () => {
       cap: { state: 'finite', value: 100, remaining: 30, consequence_at_100_percent: expect.any(String) },
       pace: { observed_days: 2, events_per_day_7d: 10, projected_cycle_end: expect.any(Number), confidence: 'sufficient' },
       threshold_forecasts: [
-        expect.objectContaining({ percent: 50, state: 'reached', reached_or_projected_at: expect.any(String) }),
-        expect.objectContaining({ percent: 75, state: 'projected', reached_or_projected_at: expect.any(String) }),
-        expect.objectContaining({ percent: 90, state: 'projected', reached_or_projected_at: expect.any(String) }),
-        expect.objectContaining({ percent: 100, state: 'projected', reached_or_projected_at: expect.any(String) }),
+        expect.objectContaining({ percent: 50, state: 'reached', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
+        expect.objectContaining({ percent: 75, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
+        expect.objectContaining({ percent: 90, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
+        expect.objectContaining({ percent: 100, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
       ],
       contributors: expect.arrayContaining([
         expect.objectContaining({
@@ -240,10 +240,10 @@ describe('organization usage control', () => {
         cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
         pace: { observed_days: 0, events_per_day_7d: null, projected_cycle_end: null, confidence: 'insufficient' },
         threshold_forecasts: [
-          { percent: 50, state: 'not_applicable', reached_or_projected_at: null },
-          { percent: 75, state: 'not_applicable', reached_or_projected_at: null },
-          { percent: 90, state: 'not_applicable', reached_or_projected_at: null },
-          { percent: 100, state: 'not_applicable', reached_or_projected_at: null },
+          { percent: 50, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 75, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 90, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 100, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
         ],
         contributors: [],
       });

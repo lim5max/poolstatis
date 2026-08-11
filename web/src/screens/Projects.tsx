@@ -9,7 +9,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import type { SemanticProjectComparison } from '../api/types';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DisclosureSummary } from '@/components/disclosure';
+import type { ProjectWithStats, SemanticProjectComparison } from '../api/types';
 
 export function Projects() {
   const { projects, project, setProject, tokenKind, projectScope, account, client, refreshProjects, env } = useStore();
@@ -19,6 +21,7 @@ export function Projects() {
   const open = (slug: string) => { setProject(slug); nav('/registry'); };
   const [deleteTarget, setDeleteTarget] = useState<{ slug: string; name: string } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const healthy = projects.filter((item) => item.health === 'healthy').length;
   const attention = projects.filter((item) => item.health === 'needs_attention').length;
   const noData = projects.filter((item) => item.health === 'no_data').length;
@@ -46,10 +49,15 @@ export function Projects() {
     <div className="space-y-4">
       <Panel
         title={<>Project portfolio <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{projects.length} in this {projectScope === 'project' ? 'key scope' : 'workspace'}</span></>}
-        right={projectScope === 'project' ? <span className="text-xs text-muted-foreground">secret key scope</span> : null}
+        right={(
+          <div className="flex items-center gap-2">
+            {projectScope === 'project' && <span className="text-xs text-muted-foreground">secret key scope</span>}
+            {canCreate && client && <Button size="sm" onClick={() => setCreateOpen(true)}>New project</Button>}
+          </div>
+        )}
       >
         {projects.length > 0 && <div className="mb-4 grid grid-cols-3 overflow-hidden rounded-control border text-center"><PortfolioStat label="Healthy" value={healthy} /><PortfolioStat label="Needs attention" value={attention} /><PortfolioStat label="No data" value={noData} /></div>}
-        {projects.length === 0 ? <EmptyState headline={tokenKind === 'user' ? 'No projects in this workspace' : 'No projects'} lead={tokenKind === 'user' ? 'Ask an owner or admin to create one.' : 'Create one below or use the CLI.'} /> : (
+        {projects.length === 0 ? <EmptyState headline={tokenKind === 'user' ? 'No projects in this workspace' : 'No projects'} lead={tokenKind === 'user' ? 'Ask an owner or admin to create one.' : 'Use New project above or create one with the CLI.'} /> : (
           <TableScroll><Table>
             <TableHeader>
               <TableRow><TableHead>Project</TableHead><TableHead>Health</TableHead><TableHead>Last event</TableHead><TableHead>Current usage</TableHead><TableHead>Key outcome</TableHead><TableHead>Attention</TableHead><TableHead /></TableRow>
@@ -58,7 +66,10 @@ export function Projects() {
               {projects.map((p) => (
                 <TableRow key={p.slug}>
                   <TableCell><div className="font-medium flex items-center gap-2">{p.name}{p.slug === project && <Badge className="text-xs">selected</Badge>}</div><div className="text-xs text-muted-foreground">{p.slug} · {p.timezone}</div></TableCell>
-                  <TableCell><Badge variant={p.health === 'healthy' ? 'default' : 'outline'}>{p.health === 'healthy' ? 'Healthy' : p.health === 'needs_attention' ? 'Needs attention' : 'No data'}</Badge></TableCell>
+                  <TableCell>
+                    <Badge variant={p.health === 'healthy' ? 'default' : 'outline'}>{p.health === 'healthy' ? 'Healthy' : p.health === 'needs_attention' ? 'Needs attention' : 'No data'}</Badge>
+                    <ProjectHealthDetails evaluation={p.health_evaluation} />
+                  </TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{p.last_event_at ? fmtRelative(p.last_event_at) : 'Never'}</TableCell>
                   <TableCell><div className="tabular-nums">{fmtNum(p.events_30d ?? 0)} <span className="text-xs text-muted-foreground">events · 30d</span></div><div className="text-xs text-muted-foreground">{fmtNum(p.events_24h ?? 0)} · 24h / {fmtNum(p.events_7d ?? 0)} · 7d</div></TableCell>
                   <TableCell><Badge variant={p.key_outcome_available ? 'outline' : 'secondary'}>{p.key_outcome_available ? `${p.active_outcome_contracts} active contract${p.active_outcome_contracts === 1 ? '' : 's'}` : 'Unavailable'}</Badge><div className="mt-1 text-xs text-muted-foreground">{p.active_metrics} metrics · {p.funnels} funnels</div></TableCell>
@@ -84,7 +95,13 @@ export function Projects() {
         )}
       </Panel>
       {canCompare && client && <ProjectComparison projects={projects} env={env} compare={(input) => client.compareProjects(input)} />}
-      {canCreate && <CreateProject onCreated={async (created) => { await refreshProjects(); setProject(created.slug); }} create={(b) => client!.createProject(b)} />}
+      {createOpen && canCreate && client && (
+        <CreateProject
+          onCancel={() => setCreateOpen(false)}
+          onCreated={async (created) => { await refreshProjects(); setProject(created.slug); setCreateOpen(false); }}
+          create={(body) => client.createProject(body)}
+        />
+      )}
       {deleteTarget && (
         <DangerConfirm
           title={`Delete ${deleteTarget.name}?`}
@@ -105,6 +122,31 @@ export function Projects() {
 
 function PortfolioStat({ label, value }: { label: string; value: number }) {
   return <div className="border-r p-3 last:border-r-0"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-xl font-semibold tabular-nums">{value}</div></div>;
+}
+
+function ProjectHealthDetails({ evaluation }: { evaluation: ProjectWithStats['health_evaluation'] | undefined }) {
+  if (!evaluation) return <div className="mt-1 text-xs text-muted-foreground">Server guardrails unavailable</div>;
+  return (
+    <details className="mt-1 max-w-64 text-xs text-muted-foreground">
+      <DisclosureSummary className="cursor-pointer underline decoration-muted-foreground/60 underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        {evaluation.guardrails.length} server guardrails
+      </DisclosureSummary>
+      <ul className="mt-2 space-y-2 rounded-md border p-2">
+        {evaluation.guardrails.map((guardrail) => (
+          <li key={guardrail.id}>
+            <div className="font-medium text-foreground">{guardrail.expectation}</div>
+            <div>{guardrail.state === 'not_applicable' ? 'Not applicable' : guardrail.state === 'pass' ? 'Pass' : 'Needs attention'} · {formatGuardrailObserved(guardrail)}</div>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function formatGuardrailObserved(guardrail: ProjectWithStats['health_evaluation']['guardrails'][number]): string {
+  if (guardrail.observed === null) return 'Observed unavailable';
+  if (guardrail.id === 'registered_coverage') return `Observed ${Math.round(guardrail.observed * 100)}%`;
+  return `Observed ${fmtNum(guardrail.observed)}`;
 }
 
 function ProjectComparison({
@@ -208,7 +250,11 @@ function ProjectComparison({
   );
 }
 
-function CreateProject({ create, onCreated }: { create: (b: { slug: string; name: string }) => Promise<{ slug: string }>; onCreated: (project: { slug: string }) => Promise<void> }) {
+function CreateProject({ create, onCreated, onCancel }: {
+  create: (body: { slug: string; name: string }) => Promise<{ slug: string }>;
+  onCreated: (project: { slug: string }) => Promise<void>;
+  onCancel: () => void;
+}) {
   const [slug, setSlug] = useState('');
   const [name, setName] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -219,13 +265,22 @@ function CreateProject({ create, onCreated }: { create: (b: { slug: string; name
     catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
-    <Panel title="New project">
-      <div className="flex flex-col gap-3.5 sm:flex-row sm:items-end">
-        <div className="flex-1 space-y-1.5"><Label htmlFor="project-slug" className="text-xs font-medium text-muted-foreground">Slug</Label><Input id="project-slug" placeholder="my-app" value={slug} onChange={(e) => setSlug(e.target.value)} /></div>
-        <div className="flex-1 space-y-1.5"><Label htmlFor="project-name" className="text-xs font-medium text-muted-foreground">Name</Label><Input id="project-name" placeholder="My App" value={name} onChange={(e) => setName(e.target.value)} /></div>
-        <Button onClick={submit} disabled={busy || !slug.trim()}>{busy ? <><Loader2 className="size-4 animate-spin" /><span>Creating…</span></> : 'Create'}</Button>
-      </div>
-      {err && <div className="mt-3"><ErrorNote>{err}</ErrorNote></div>}
-    </Panel>
+    <Dialog open onOpenChange={(open) => !open && !busy && onCancel()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="serif text-xl font-normal">New project</DialogTitle>
+          <DialogDescription>Create a separate analytics boundary with its own registry, data, and keys.</DialogDescription>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <div className="space-y-1.5"><Label htmlFor="project-slug" className="text-xs font-medium text-muted-foreground">Slug</Label><Input id="project-slug" placeholder="my-app" value={slug} onChange={(event) => setSlug(event.target.value)} /></div>
+          <div className="space-y-1.5"><Label htmlFor="project-name" className="text-xs font-medium text-muted-foreground">Name</Label><Input id="project-name" placeholder="My App" value={name} onChange={(event) => setName(event.target.value)} /></div>
+          {err && <ErrorNote>{err}</ErrorNote>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
+            <Button type="submit" disabled={busy || !slug.trim()}>{busy ? <><Loader2 className="size-4 animate-spin" /><span>Creating…</span></> : 'Create project'}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

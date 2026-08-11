@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
 import { Usage, usageMonthPresetRange } from './Usage';
@@ -67,10 +68,10 @@ describe('Usage month range', () => {
       cap: { state: 'finite', value: 1_000, remaining: 380, consequence_at_100_percent: 'New accepted-event writes are rejected.' },
       pace: { observed_days: 3, events_per_day_7d: 62, projected_cycle_end: 1_922, confidence: 'sufficient' },
       threshold_forecasts: [
-        { percent: 50, state: 'reached', reached_or_projected_at: '2026-08-09T00:00:00.000Z' },
-        { percent: 75, state: 'projected', reached_or_projected_at: '2026-08-13T00:00:00.000Z' },
-        { percent: 90, state: 'projected', reached_or_projected_at: '2026-08-15T00:00:00.000Z' },
-        { percent: 100, state: 'projected', reached_or_projected_at: '2026-08-17T00:00:00.000Z' },
+        { percent: 50, state: 'reached', reached_or_projected_at: '2026-08-09T00:00:00.000Z', notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 75, state: 'projected', reached_or_projected_at: '2026-08-13T00:00:00.000Z', notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 90, state: 'projected', reached_or_projected_at: '2026-08-15T00:00:00.000Z', notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 100, state: 'projected', reached_or_projected_at: '2026-08-17T00:00:00.000Z', notification_state: 'not_configured', audit_source: 'usage_ledger' },
       ],
       contributors: [{
         project_slug: 'alpha', project_name: 'Alpha', environment: 'prod', accepted_events: 620,
@@ -100,6 +101,8 @@ describe('Usage month range', () => {
     expect(screen.getByText('1,922')).toBeInTheDocument();
     expect(screen.getByText('+25%')).toBeInTheDocument();
     expect(screen.getAllByText('Projected Aug 17, 2026')).toHaveLength(2);
+    expect(screen.getAllByText('Notification: Not configured')).toHaveLength(4);
+    expect(screen.getAllByText('Audit: usage ledger')).toHaveLength(4);
     expect(usageControl).toHaveBeenCalledOnce();
     expect(usageControl).toHaveBeenCalledWith(monthOffset(0));
     expect(usage).not.toHaveBeenCalled();
@@ -126,6 +129,8 @@ describe('Usage month range', () => {
         percent: threshold.percent,
         state: 'not_applicable',
         reached_or_projected_at: null,
+        notification_state: 'not_configured',
+        audit_source: 'usage_ledger',
       })),
     });
 
@@ -134,6 +139,25 @@ describe('Usage month range', () => {
     expect(await screen.findByText('No hard cap configured')).toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(screen.getByText(/not shown as unlimited/)).toBeInTheDocument();
+  });
+
+  it('uses self-hosted usage actions without implying a hosted plan mutation', async () => {
+    mockedStore.mockReturnValue({
+      tokenKind: 'personal', account: null,
+      client: {
+        usageControl, usageActivity, usageRange,
+        accountMode: vi.fn().mockResolvedValue({
+          deployment: { mode: 'self_host', hosted_account: 'not_configured' },
+          primary_action: { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
+        }),
+      },
+    } as never);
+
+    render(<MemoryRouter><Usage /></MemoryRouter>);
+
+    expect(await screen.findByRole('link', { name: 'Configure cap' })).toHaveAttribute('href', '/setup');
+    expect(screen.getByRole('button', { name: 'Review contributors' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Review plan' })).not.toBeInTheDocument();
   });
 
   it('defaults to the current UTC month and exposes current/last/3/6 month presets', async () => {

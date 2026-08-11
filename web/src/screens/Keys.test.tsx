@@ -144,6 +144,23 @@ describe('Keys', () => {
     expect(within(dialog).getByText(/Read and manage one project/)).toBeInTheDocument();
   });
 
+  it('states the exact credential scope and immediate impact before revoke', async () => {
+    renderKeys();
+
+    const projectToken = await screen.findByRole('button', { name: 'View sk_...cafe details' });
+    const row = projectToken.closest('tr');
+    expect(row).not.toBeNull();
+    const actions = within(row!).getByRole('button', { name: 'More actions' });
+    actions.focus();
+    fireEvent.keyDown(actions, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Revoke key' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Revoke sk_...cafe?' });
+    expect(dialog).toHaveTextContent('Scope: alpha only.');
+    expect(dialog).toHaveTextContent('Read and manage one project; cannot access sibling projects.');
+    expect(dialog).toHaveTextContent('Authentication with this key fails immediately');
+  });
+
   it('does not offer an organization-wide personal token in a project-scoped session', async () => {
     mockedStore.mockReturnValue({
       client: { keys, issueKey, revokeKey },

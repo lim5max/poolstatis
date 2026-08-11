@@ -203,6 +203,70 @@ export interface ProjectWithStats extends Pick<Project, 'slug' | 'name' | 'timez
   key_outcome_available: boolean;
   health: 'healthy' | 'needs_attention' | 'no_data';
   attention: string[];
+  health_evaluation: ProjectHealthEvaluation;
+}
+
+export interface ProjectHealthEvaluation {
+  source: 'server';
+  evaluated_at: string;
+  guardrails: Array<{
+    id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'metric_review_queue';
+    state: 'pass' | 'fail' | 'not_applicable';
+    observed: number | null;
+    expectation: string;
+  }>;
+}
+
+export function evaluateProjectHealth(input: {
+  events30d: number;
+  registeredCoverage30d: number | null;
+  activeOutcomeContracts: number;
+  proposedMetrics: number;
+}, evaluatedAt = new Date()): Pick<ProjectWithStats, 'health' | 'attention' | 'health_evaluation'> {
+  const guardrails: ProjectHealthEvaluation['guardrails'] = [
+    {
+      id: 'recent_data',
+      state: input.events30d > 0 ? 'pass' : 'fail',
+      observed: input.events30d,
+      expectation: 'More than 0 accepted events in 30 days',
+    },
+    {
+      id: 'registered_coverage',
+      state: input.registeredCoverage30d === null
+        ? 'not_applicable'
+        : input.registeredCoverage30d >= 0.99 ? 'pass' : 'fail',
+      observed: input.registeredCoverage30d,
+      expectation: 'Registered coverage is at least 99%',
+    },
+    {
+      id: 'active_outcome',
+      state: input.activeOutcomeContracts > 0 ? 'pass' : 'fail',
+      observed: input.activeOutcomeContracts,
+      expectation: 'At least 1 active measurement contract',
+    },
+    {
+      id: 'metric_review_queue',
+      state: input.proposedMetrics === 0 ? 'pass' : 'fail',
+      observed: input.proposedMetrics,
+      expectation: 'No proposed metrics awaiting review',
+    },
+  ];
+  const attention: string[] = [];
+  if (guardrails[0]!.state === 'fail') attention.push('No events in 30 days');
+  if (guardrails[2]!.state === 'fail') attention.push('No active measurement contract');
+  if (guardrails[1]!.state === 'fail') attention.push('Off-standard event volume');
+  if (guardrails[3]!.state === 'fail') {
+    attention.push(`${input.proposedMetrics} metric${input.proposedMetrics === 1 ? '' : 's'} awaiting review`);
+  }
+  return {
+    health: input.events30d === 0 ? 'no_data' : attention.length > 0 ? 'needs_attention' : 'healthy',
+    attention,
+    health_evaluation: {
+      source: 'server',
+      evaluated_at: evaluatedAt.toISOString(),
+      guardrails,
+    },
+  };
 }
 
 export async function listProjectsWithStats(
@@ -237,6 +301,7 @@ export async function listProjectsWithStats(
     (await eventStore.projectPortfolioStats(rows.map((row) => row.id as string)))
       .map((stats) => [stats.project_id, stats]),
   );
+  const evaluatedAt = new Date();
   return rows.map((row) => {
     const activeMetrics = Number(row.active_metrics);
     const proposedMetrics = Number(row.proposed_metrics);
@@ -250,11 +315,12 @@ export async function listProjectsWithStats(
     };
     const events30d = events.events_30d;
     const coverage = events30d === 0 ? null : events.registered_events_30d / events30d;
-    const attention: string[] = [];
-    if (events30d === 0) attention.push('No events in 30 days');
-    if (activeOutcomeContracts === 0) attention.push('No active measurement contract');
-    if (coverage !== null && coverage < 0.99) attention.push('Off-standard event volume');
-    if (proposedMetrics > 0) attention.push(`${proposedMetrics} metric${proposedMetrics === 1 ? '' : 's'} awaiting review`);
+    const evaluatedHealth = evaluateProjectHealth({
+      events30d,
+      registeredCoverage30d: coverage,
+      activeOutcomeContracts,
+      proposedMetrics,
+    }, evaluatedAt);
     return {
       slug: row.slug,
       name: row.name,
@@ -269,8 +335,7 @@ export async function listProjectsWithStats(
       last_event_at: events.last_event_at,
       registered_coverage_30d: coverage,
       key_outcome_available: activeOutcomeContracts > 0,
-      health: events30d === 0 ? 'no_data' : attention.length > 0 ? 'needs_attention' : 'healthy',
-      attention,
+      ...evaluatedHealth,
     };
   });
 }
