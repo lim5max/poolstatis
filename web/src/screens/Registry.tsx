@@ -39,7 +39,7 @@ export function Registry() {
   }, [focusedFunnel, focusedMetric]);
   const { data, error, loading, reload } = useAsync(async () => {
     const schema = await client!.schema(project!, env);
-    const [experiments, usageEntries] = await Promise.all([
+    const [experiments, usageEntries, savedAnswers, releases] = await Promise.all([
       typeof client!.experiments === 'function' ? client!.experiments(project!).catch(() => null) : Promise.resolve(null),
       Promise.all(schema.metrics.map(async (metric) => {
         if (typeof client!.metricUsage !== 'function') return [metric.key, null] as const;
@@ -49,9 +49,18 @@ export function Registry() {
           return [metric.key, null] as const;
         }
       })),
+      typeof client!.analysisViews === 'function'
+        ? client!.analysisViews(project!, { env, status: 'active' }).catch(() => null)
+        : Promise.resolve(null),
+      typeof client!.releases === 'function'
+        ? client!.releases(project!, { env }).catch(() => null)
+        : Promise.resolve(null),
     ]);
     const usages = new Map<string, MetricUsage | null>(usageEntries);
-    return { ...schema, registry_health: buildRegistryHealth(schema.metrics, schema.funnels, usages, experiments) };
+    return {
+      ...schema,
+      registry_health: buildRegistryHealth(schema.metrics, schema.funnels, usages, experiments, savedAnswers, releases),
+    };
   }, [project, env]);
 
   if (loading) return <Loading what="reading registry…" />;
@@ -209,9 +218,11 @@ function MetricsTable({
       <div className="flex items-center px-5 py-3.5 border-b">
         <h3 className="serif text-lg flex items-center gap-2">Metrics {proposedCount > 0 && <Badge variant="outline" className="font-sans">{proposedCount} awaiting activation</Badge>}</h3>
       </div>
-      <div className="grid grid-cols-3 border-b bg-muted/20 text-center">
+      <div className="grid grid-cols-2 border-b bg-muted/20 text-center sm:grid-cols-5">
+        <RegistryStat label="Healthy" value={health.healthy} note="Active, observed and used" />
         <RegistryStat label="Proposed" value={health.proposed} note="Needs explicit activation" />
         <RegistryStat label="Incomplete" value={health.incomplete} note="Active, no source evidence · 30d" />
+        <RegistryStat label="Deprecated" value={health.deprecated} note="Retained for semantic history" />
         <RegistryStat label="Unused" value={health.unused} note={health.usageUnavailable > 0 ? `${health.usageUnavailable} need evidence refresh` : 'No saved funnel, insight or experiment'} />
       </div>
       <Toolbar

@@ -10,6 +10,8 @@ import type {
   ObservedEvent,
   PersonalToken,
   PropertyDefinition,
+  Release,
+  SavedAnswer,
   SourceConnection,
 } from '../api/types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from './visualization';
@@ -247,7 +249,9 @@ export function buildRegistryHealth(
   funnels: Funnel[],
   usages: Map<string, MetricUsage | null>,
   experiments: Array<{ key: string; primary_metric_key: string; secondary_metric_keys: string[] }> | null = [],
-): { proposed: number; incomplete: number; unused: number; usageUnavailable: number; rows: RegistryMetricHealth[] } {
+  savedAnswers: SavedAnswer[] | null = [],
+  releases: Release[] | null = [],
+): { healthy: number; proposed: number; incomplete: number; deprecated: number; unused: number; usageUnavailable: number; rows: RegistryMetricHealth[] } {
   const rows = metrics.map((metric): RegistryMetricHealth => {
     const usage = usages.get(metric.key) ?? null;
     const observedEvents = usage ? usage.observed_events.reduce((sum, item) => sum + item.count, 0) : null;
@@ -255,6 +259,8 @@ export function buildRegistryHealth(
       ...(usage?.used_by.funnels.map((item) => `Funnel · ${item.name}`) ?? funnels.filter((funnel) => funnel.steps.some((step) => step.metric_key === metric.key)).map((funnel) => `Funnel · ${funnel.name}`)),
       ...(usage?.used_by.insights.map((item) => `Insight · ${item.title}`) ?? []),
       ...(experiments?.filter((experiment) => experiment.primary_metric_key === metric.key || experiment.secondary_metric_keys.includes(metric.key)).map((experiment) => `Experiment · ${experiment.key}`) ?? []),
+      ...(savedAnswers?.filter((answer) => savedAnswerMetricRefs(answer).includes(metric.key)).map((answer) => `Saved answer · ${answer.title}`) ?? []),
+      ...(releases?.filter((release) => release.contract_snapshot.primary_metric_key === metric.key || release.contract_snapshot.guardrail_metric_keys.includes(metric.key)).map((release) => `Release · ${release.commit_sha.slice(0, 7)}`) ?? []),
     ];
     const answerSurfaces = metric.status === 'active' && metric.type !== 'conversion' && metric.type !== 'state'
       ? ['Product answer', ...(metricSourceEvents(metric).length > 0 ? ['Retention answer', 'People activity filter'] : [])]
@@ -264,7 +270,7 @@ export function buildRegistryHealth(
       incomplete: metric.status === 'active' && observedEvents === 0,
       unused: metric.status !== 'active' || explicit.length > 0
         ? false
-        : usage !== null && experiments !== null
+        : usage !== null && experiments !== null && savedAnswers !== null && releases !== null
           ? true
           : null,
       usedByAnswers: [...new Set([...answerSurfaces, ...explicit])],
@@ -272,12 +278,25 @@ export function buildRegistryHealth(
     };
   });
   return {
+    healthy: rows.filter((row) => {
+      const metric = metrics.find((candidate) => candidate.key === row.key);
+      return metric?.status === 'active' && !row.incomplete && row.unused === false;
+    }).length,
     proposed: metrics.filter((metric) => metric.status === 'proposed').length,
     incomplete: rows.filter((row) => row.incomplete).length,
+    deprecated: metrics.filter((metric) => metric.status === 'deprecated').length,
     unused: rows.filter((row) => row.unused === true).length,
     usageUnavailable: rows.filter((row) => row.unused === null).length,
     rows,
   };
+}
+
+function savedAnswerMetricRefs(answer: SavedAnswer): string[] {
+  const source = answer.visualization_spec.source;
+  const primary = source.kind === 'metric' ? [source.key] : [];
+  const evidence = answer.evidence.source_refs.flatMap((ref) =>
+    ref.kind === 'metric' && typeof ref.key === 'string' ? [ref.key] : []);
+  return [...new Set([...primary, ...evidence])];
 }
 
 export type CredentialHealth = 'healthy' | 'review' | 'revoked';

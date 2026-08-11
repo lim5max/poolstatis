@@ -126,6 +126,9 @@ describe('live customer screen UX', () => {
     }));
     render(<TooltipProvider><MemoryRouter><Registry /></MemoryRouter></TooltipProvider>);
     expect(await screen.findByText('Landing visits')).toBeInTheDocument();
+    for (const label of ['Healthy', 'Proposed', 'Incomplete', 'Deprecated', 'Unused']) {
+      expect(screen.getByText(label, { exact: true })).toBeInTheDocument();
+    }
     expect(screen.queryByText('landing_visits', { exact: true })).not.toBeInTheDocument();
   });
 

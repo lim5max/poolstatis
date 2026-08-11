@@ -59,6 +59,42 @@ describe('semantic health helpers', () => {
     expect(health.rows[0]?.unused).toBeNull();
   });
 
+  it('reports healthy and deprecated registry definitions explicitly', () => {
+    const active = { key: 'active', status: 'active', type: 'count', source: { event: 'active' } } as never;
+    const deprecated = { key: 'old', status: 'deprecated', type: 'count', source: { event: 'old' } } as never;
+    const usages = new Map([
+      ['active', { observed_events: [{ event: 'active', count: 4 }], used_by: { funnels: [{ name: 'Activation' }], insights: [] } } as never],
+      ['old', { observed_events: [], used_by: { funnels: [], insights: [] } } as never],
+    ]);
+
+    expect(buildRegistryHealth([active, deprecated], [], usages)).toMatchObject({
+      healthy: 1,
+      deprecated: 1,
+      incomplete: 0,
+    });
+  });
+
+  it('lists concrete saved-answer, release and experiment consumers', () => {
+    const metric = { key: 'activation', status: 'active', type: 'count', source: { event: 'activation' } } as never;
+    const usages = new Map([['activation', {
+      observed_events: [{ event: 'activation', count: 4 }], used_by: { funnels: [], insights: [] },
+    } as never]]);
+    const health = buildRegistryHealth(
+      [metric],
+      [],
+      usages,
+      [{ key: 'activation-test', primary_metric_key: 'activation', secondary_metric_keys: [] }],
+      [{ id: 'answer-1', title: 'Activation health', visualization_spec: { source: { kind: 'metric', key: 'activation' } }, evidence: { source_refs: [] } } as never],
+      [{ id: 'release-1', commit_sha: 'abc1234', contract_snapshot: { primary_metric_key: 'activation', guardrail_metric_keys: [] } } as never],
+    );
+
+    expect(health.rows[0]?.usedByAnswers).toEqual(expect.arrayContaining([
+      'Saved answer · Activation health',
+      'Release · abc1234',
+      'Experiment · activation-test',
+    ]));
+  });
+
   it('makes rotation replacement-first and reserves revoked for actual revocation', () => {
     const result = credentialHealth({ created_at: '2025-01-01T00:00:00Z', last_used_at: '2026-08-10T00:00:00Z', revoked_at: null }, new Date('2026-08-11T00:00:00Z'));
     expect(result.status).toBe('review');
