@@ -115,7 +115,22 @@ export function EmptyState({ headline, lead, action }: { headline: string; lead?
 }
 
 export function Loading({ what }: { what?: string }) {
-  return <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground" role="status" aria-live="polite" aria-busy="true"><Loader2 className="size-4 animate-spin" /> {what ?? 'Loading…'}</div>;
+  const label = what ?? 'Loading…';
+  return (
+    <div
+      className="space-y-4 rounded-panel border bg-card p-5"
+      role="status"
+      aria-label={label}
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <span className="sr-only">{label}</span>
+      <div data-slot="loading-skeleton" aria-hidden="true" className="h-4 w-28 animate-pulse rounded bg-muted motion-reduce:animate-none" />
+      <div data-slot="loading-skeleton" aria-hidden="true" className="h-8 max-w-sm animate-pulse rounded bg-muted motion-reduce:animate-none" />
+      <div data-slot="loading-skeleton" aria-hidden="true" className="h-4 w-full max-w-2xl animate-pulse rounded bg-muted motion-reduce:animate-none" />
+      <div data-slot="loading-skeleton" aria-hidden="true" className="h-40 w-full animate-pulse rounded-panel bg-muted/70 motion-reduce:animate-none" />
+    </div>
+  );
 }
 
 export function ErrorNote({ children }: { children: ReactNode }) {

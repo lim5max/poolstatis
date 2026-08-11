@@ -27,6 +27,12 @@ const metric = {
   source: { event: 'landing.page_viewed' }, status: 'active',
   owner: null, deprecation_reason: null, deprecated_at: null,
 } as const;
+const guardrailMetric = {
+  ...metric,
+  id: 'm2', key: 'checkout_errors', name: 'Checkout errors',
+  purpose: 'Detect whether a product change increases accepted checkout errors.',
+  source: { event: 'checkout.error' },
+} as const;
 
 function store(client: Record<string, unknown>) {
   return {
@@ -76,6 +82,40 @@ describe('live customer screen UX', () => {
     expect(screen.getByText('signup_completed')).toBeInTheDocument();
   });
 
+  it('opens the exact funnel requested by a registry repair link', async () => {
+    mockedStore.mockReturnValue(store({
+      schema: vi.fn().mockResolvedValue({
+        metrics: [], metric_categories: [], entity_types: [], observed_events_30d: [], properties: [], identity: {},
+        sources: [], project: { slug: 'alpha', name: 'Alpha' }, env: 'prod',
+        funnels: [{
+          id: 'f1', key: 'signup', name: 'Signup', goal: 'Measure completed accounts.', window_seconds: 604800,
+          steps: [{ metric_key: 'landing_visits', label: 'Landing viewed' }, { metric_key: 'signup_completed', label: 'Signup completed' }],
+        }],
+      }),
+    }));
+
+    render(<TooltipProvider><MemoryRouter initialEntries={['/registry?funnel=signup']}><Registry /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByRole('tab', { name: /Funnels/ })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('button', { name: /Hide Signup steps/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('signup_completed')).toBeInTheDocument();
+  });
+
+  it('filters to the exact metric requested by a registry repair link', async () => {
+    mockedStore.mockReturnValue(store({
+      schema: vi.fn().mockResolvedValue({
+        metrics: [metric, guardrailMetric], metric_categories: [], entity_types: [], observed_events_30d: [], properties: [], identity: {},
+        sources: [], funnels: [], project: { slug: 'alpha', name: 'Alpha' }, env: 'prod',
+      }),
+    }));
+
+    render(<TooltipProvider><MemoryRouter initialEntries={['/registry?metric=landing_visits']}><Registry /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByDisplayValue('landing_visits')).toBeInTheDocument();
+    expect(screen.getByText('Landing visits')).toBeInTheDocument();
+    expect(screen.queryByText('Checkout errors')).not.toBeInTheDocument();
+  });
+
   it('omits a metric key when it only repeats the human-readable name', async () => {
     mockedStore.mockReturnValue(store({
       schema: vi.fn().mockResolvedValue({
@@ -86,6 +126,9 @@ describe('live customer screen UX', () => {
     }));
     render(<TooltipProvider><MemoryRouter><Registry /></MemoryRouter></TooltipProvider>);
     expect(await screen.findByText('Landing visits')).toBeInTheDocument();
+    for (const label of ['Healthy', 'Proposed', 'Incomplete', 'Deprecated', 'Unused']) {
+      expect(screen.getByText(label, { exact: true })).toBeInTheDocument();
+    }
     expect(screen.queryByText('landing_visits', { exact: true })).not.toBeInTheDocument();
   });
 
@@ -676,6 +719,11 @@ describe('live customer screen UX', () => {
     }));
     render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
     expect(await screen.findByRole('heading', { name: 'Experiments & flags' })).toBeInTheDocument();
+    expect(await screen.findByText('Prepare the first safe change')).toBeInTheDocument();
+    expect(screen.getByText('1/4 ready')).toBeInTheDocument();
+    expect(screen.getByText('Exposure verification after launch')).toBeInTheDocument();
+    expect(screen.getByText(/Exposure stays unverified while the flag is a draft/)).toBeInTheDocument();
+    expect(screen.getByText('Server launch readiness')).toBeInTheDocument();
     expect(screen.queryByRole('navigation', { name: 'Ship views' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Safe rollout/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /A\/B experiment/ })).toBeInTheDocument();
@@ -725,7 +773,7 @@ describe('live customer screen UX', () => {
     mockedStore.mockReturnValue(store({
       flags: vi.fn().mockResolvedValue([]),
       experiments: vi.fn().mockResolvedValue([]),
-      metrics: vi.fn().mockResolvedValue([metric]),
+      metrics: vi.fn().mockResolvedValue([metric, guardrailMetric]),
       prepareExperiment,
     }));
     render(<TooltipProvider><MemoryRouter><Experiments /></MemoryRouter></TooltipProvider>);
@@ -736,13 +784,18 @@ describe('live customer screen UX', () => {
     const metricSelect = screen.getByRole('combobox', { name: 'Experiment primary metric' });
     fireEvent.keyDown(metricSelect, { key: 'ArrowDown' });
     fireEvent.click(await screen.findByRole('option', { name: /Landing visits/ }));
+    const guardrailSelect = screen.getByRole('combobox', { name: 'Experiment guardrail metric' });
+    fireEvent.keyDown(guardrailSelect, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Checkout errors/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Prepare drafts' }));
 
     await waitFor(() => expect(prepareExperiment).toHaveBeenCalledWith('alpha', expect.objectContaining({
       env: 'prod',
       control_variant_key: 'control',
       flag: expect.objectContaining({ key: 'shorter_signup_flag' }),
-      experiment: expect.objectContaining({ key: 'shorter_signup', primary_metric_key: 'landing_visits' }),
+      experiment: expect.objectContaining({
+        key: 'shorter_signup', primary_metric_key: 'landing_visits', secondary_metric_keys: ['checkout_errors'],
+      }),
     })));
   });
 
@@ -868,11 +921,48 @@ describe('live customer screen UX', () => {
     expect(await screen.findByText(/Last accepted capture/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'View click details' })).toHaveAttribute('href', '#experience-evidence');
     expect(screen.getByText(/aggregate maps · no DOM replay/)).toBeInTheDocument();
-    expect(screen.getByText('Capture the first page version')).toBeInTheDocument();
+    expect(screen.getByText('Complete aggregate friction readiness')).toBeInTheDocument();
+    expect(screen.getByText('Immutable deploy snapshot')).toBeInTheDocument();
     expect(screen.getByText('Add a deploy snapshot')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Load aggregate clicks' }));
     expect(await screen.findByText('checkout.submit')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: /4 accepted clicks/ })).toBeInTheDocument();
+  });
+
+  it('does not combine route, capture, and snapshot signals from different Experience surfaces', async () => {
+    mockedStore.mockReturnValue(store({
+      experienceSurfaces: vi.fn().mockResolvedValue([
+        {
+          id: 's-route', key: 'checkout', name: 'Checkout', purpose: 'Understand checkout friction.',
+          status: 'active', created_at: '2026-07-01', updated_at: '2026-07-03', last_capture_at: null,
+        },
+        {
+          id: 's-capture', key: 'account', name: 'Account', purpose: 'Understand account friction.',
+          status: 'active', created_at: '2026-07-01', updated_at: '2026-07-02', last_capture_at: '2026-07-27T10:00:00.000Z',
+        },
+      ]),
+      experienceRoutes: vi.fn().mockResolvedValue([{
+        id: 'r1', surface_key: 'checkout', key: 'checkout', name: 'Checkout', path_pattern: '/checkout',
+        created_at: '2026-07-01', updated_at: '2026-07-01',
+      }]),
+      experienceSnapshots: vi.fn().mockResolvedValue([{
+        id: 'snapshot-1', surface_key: 'checkout', route_key: 'checkout', env: 'prod', version: 'v1',
+        device: 'desktop', release_hash: 'abcdef1234567', mime_type: 'image/png', byte_size: 1024,
+        width: 1440, height: 1800, viewport_width: 1440, viewport_height: 900,
+        document_width: 1440, document_height: 1800, captured_at: '2026-07-27T09:00:00.000Z',
+        expires_at: '2026-10-27T09:00:00.000Z', created_at: '2026-07-27T09:00:00.000Z',
+        evidence_ref: 'experience_snapshot:snapshot-1', stale: false,
+      }]),
+      visualExperience: vi.fn().mockRejectedValue(new Error('not needed for readiness test')),
+    }));
+
+    render(<Experience />);
+
+    expect(await screen.findByText('Complete aggregate friction readiness')).toBeInTheDocument();
+    expect(screen.getByText('3/4 ready')).toBeInTheDocument();
+    expect(screen.getByText(/Checkout is the most complete/)).toHaveTextContent('Remaining checks stay bound to this surface.');
+    expect(screen.getByText('Accepted aggregate capture').closest('li')).toHaveTextContent('Instrument one route on this surface');
+    expect(screen.queryByText('4/4 ready')).not.toBeInTheDocument();
   });
 
   it('turns an empty Visual Experience project into one agent-first next action', async () => {
@@ -882,7 +972,7 @@ describe('live customer screen UX', () => {
       experienceSnapshots: vi.fn().mockResolvedValue([]),
     }));
 
-    const { container } = render(<Experience />);
+    render(<Experience />);
 
     expect(await screen.findByText('Set up Browser Experience')).toBeInTheDocument();
     expect(screen.queryByText('No active surface')).not.toBeInTheDocument();
@@ -903,6 +993,7 @@ describe('live customer screen UX', () => {
     const configuration = screen.getByText(/Capture configuration and session details/).closest('details');
     expect(configuration).toHaveAttribute('open');
     expect(screen.getByText('New capture surface')).toBeInTheDocument();
-    expect(container.querySelector('.text-xs')).toBeNull();
+    expect(screen.getByRole('list', { name: 'Set up Browser Experience prerequisites' })).toBeInTheDocument();
+    expect(screen.getByText('First real friction readout')).toBeInTheDocument();
   });
 });

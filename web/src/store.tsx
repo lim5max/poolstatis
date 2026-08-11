@@ -276,26 +276,46 @@ export function useStore(): Store {
   return s;
 }
 
+function sameAsyncDeps(left: unknown[], right: unknown[]): boolean {
+  return left.length === right.length && left.every((value, index) => Object.is(value, right[index]));
+}
+
 /** Small async-data hook with loading/error, re-running when deps change. */
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
   data: T | null; error: string | null; loading: boolean; reload: () => void;
 } {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   const [nonce, setNonce] = useState(0);
+  const requestDeps = [...deps];
+  const [snapshot, setSnapshot] = useState<{
+    deps: unknown[];
+    data: T | null;
+    error: string | null;
+    loading: boolean;
+  }>({ deps: [], data: null, error: null, loading: false });
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
-    setError(null);
+    const effectDeps = [...deps];
+    setSnapshot((previous) => sameAsyncDeps(previous.deps, effectDeps)
+      ? { ...previous, error: null, loading: true }
+      : { deps: effectDeps, data: null, error: null, loading: true });
     fn()
-      .then((d) => alive && setData(d))
-      .catch((e) => alive && setError(e?.message ?? 'failed'))
-      .finally(() => alive && setLoading(false));
+      .then((data) => alive && setSnapshot({ deps: effectDeps, data, error: null, loading: false }))
+      .catch((error) => alive && setSnapshot((previous) => ({
+        deps: effectDeps,
+        data: sameAsyncDeps(previous.deps, effectDeps) ? previous.data : null,
+        error: error?.message ?? 'failed',
+        loading: false,
+      })));
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce]);
 
-  return { data, error, loading, reload: () => setNonce((n) => n + 1) };
+  const current = sameAsyncDeps(snapshot.deps, requestDeps);
+  return {
+    data: current ? snapshot.data : null,
+    error: current ? snapshot.error : null,
+    loading: current ? snapshot.loading : true,
+    reload: () => setNonce((n) => n + 1),
+  };
 }

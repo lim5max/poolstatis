@@ -140,7 +140,11 @@ describe('encrypted webhook outbox and decision inbox', () => {
       name: 'failing_ops', url: `${host}/fail`, authorization: 'Bearer failing-secret',
     });
     const queued = await api(env, env.secretToken, 'POST', path(`/webhooks/${failedDestination.body.id}/test`), {});
-    const now = new Date();
+    // Drive the worker from the persisted schedule instead of comparing the
+    // runner and Postgres container clocks at the millisecond boundary. The
+    // JSON timestamp is millisecond-precision while Postgres keeps
+    // microseconds, so advance one millisecond past the persisted boundary.
+    const now = new Date(new Date(queued.body.next_attempt_at).getTime() + 1);
     const outbox = worker({ maxAttempts: 2, baseRetryMs: 1_000, maxRetryMs: 1_000 });
     expect(await outbox.runOnce(now)).toMatchObject({ claimed: 1, failed: 1 });
     let delivery = (await api(env, env.secretToken, 'GET', path('/webhook-deliveries'))).body.deliveries

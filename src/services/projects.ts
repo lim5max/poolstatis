@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { generateToken, type KeyKind } from '../keys.js';
 import { notFound } from '../errors.js';
+import type { EventStore } from '../stores/eventStore.js';
 
 export interface Project {
   id: string;
@@ -101,7 +102,10 @@ export interface ApiKeyRow {
   label: string | null;
   masked_token: string;
   created_at: string;
+  last_used_at: string | null;
   revoked_at: string | null;
+  credential_policy: CredentialRotationPolicy;
+  rotation_recommendation: CredentialRotationRecommendation;
 }
 
 export interface PersonalApiKeyRow {
@@ -111,6 +115,89 @@ export interface PersonalApiKeyRow {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  credential_policy: CredentialRotationPolicy;
+  rotation_recommendation: CredentialRotationRecommendation;
+}
+
+export interface CredentialRotationPolicy {
+  id: 'poolstatis_core.credential_rotation';
+  version: 1;
+  source: 'poolstatis_core_default';
+  mode: 'advisory';
+  thresholds: {
+    age_review_days: 180;
+    idle_review_days: 30;
+    unused_review_days: 7;
+  };
+}
+
+export interface CredentialRotationRecommendation {
+  status: 'healthy' | 'review' | 'revoked';
+  code: 'active' | 'new' | 'age_review' | 'idle_review' | 'unused_review' | 'revoked';
+  label: string;
+  recommendation: string;
+  evaluated_at: string;
+  evidence: { age_days: number; idle_days: number | null };
+}
+
+export const CORE_CREDENTIAL_ROTATION_POLICY: CredentialRotationPolicy = {
+  id: 'poolstatis_core.credential_rotation',
+  version: 1,
+  source: 'poolstatis_core_default',
+  mode: 'advisory',
+  thresholds: {
+    age_review_days: 180,
+    idle_review_days: 30,
+    unused_review_days: 7,
+  },
+};
+
+export function evaluateCredentialRotation(
+  item: { created_at: string | Date; last_used_at: string | Date | null; revoked_at: string | Date | null },
+  evaluatedAt = new Date(),
+): CredentialRotationRecommendation {
+  const ageDays = elapsedWholeDays(evaluatedAt, item.created_at);
+  const idleDays = item.last_used_at ? elapsedWholeDays(evaluatedAt, item.last_used_at) : null;
+  const evidence = { age_days: ageDays, idle_days: idleDays };
+  const evaluated_at = evaluatedAt.toISOString();
+
+  if (item.revoked_at) {
+    return {
+      status: 'revoked', code: 'revoked', label: 'Revoked', evaluated_at, evidence,
+      recommendation: 'Audit retained; this credential cannot authenticate.',
+    };
+  }
+  if (ageDays >= CORE_CREDENTIAL_ROTATION_POLICY.thresholds.age_review_days) {
+    return {
+      status: 'review', code: 'age_review', label: 'Review age', evaluated_at, evidence,
+      recommendation: 'Core advisory age threshold reached. Create and verify a replacement before revoking this key.',
+    };
+  }
+  if (idleDays !== null && idleDays >= CORE_CREDENTIAL_ROTATION_POLICY.thresholds.idle_review_days) {
+    return {
+      status: 'review', code: 'idle_review', label: 'Review access', evaluated_at, evidence,
+      recommendation: 'Core advisory inactivity threshold reached. Confirm the owner and revoke if this integration is abandoned.',
+    };
+  }
+  if (idleDays === null && ageDays >= CORE_CREDENTIAL_ROTATION_POLICY.thresholds.unused_review_days) {
+    return {
+      status: 'review', code: 'unused_review', label: 'Never used', evaluated_at, evidence,
+      recommendation: 'Core advisory unused threshold reached. Verify the intended owner or revoke the unused key.',
+    };
+  }
+  return item.last_used_at
+    ? {
+        status: 'healthy', code: 'active', label: 'Healthy', evaluated_at, evidence,
+        recommendation: 'No Core advisory rotation signal from age or activity.',
+      }
+    : {
+        status: 'healthy', code: 'new', label: 'Ready', evaluated_at, evidence,
+        recommendation: 'New credential; verify it before revoking any predecessor.',
+      };
+}
+
+function elapsedWholeDays(now: Date, value: string | Date): number {
+  return Math.max(0, Math.floor((now.getTime() - new Date(value).getTime()) / 86_400_000));
 }
 
 /** Personal credentials are scoped to their issuing hosted user and never reveal plaintext. */
@@ -126,6 +213,7 @@ export async function listPersonalApiKeys(
      ORDER BY created_at DESC`,
     [orgId, userId],
   );
+  const evaluatedAt = new Date();
   return rows.map((row) => ({
     id: row.id,
     label: row.label,
@@ -133,6 +221,8 @@ export async function listPersonalApiKeys(
     created_at: row.created_at,
     last_used_at: row.last_used_at,
     revoked_at: row.revoked_at,
+    credential_policy: CORE_CREDENTIAL_ROTATION_POLICY,
+    rotation_recommendation: evaluateCredentialRotation(row, evaluatedAt),
   }));
 }
 
@@ -154,10 +244,11 @@ export async function revokePersonalApiKey(
 /** Keys for a project, masked — the token itself is shown only once at creation. */
 export async function listApiKeys(pool: pg.Pool, projectId: string): Promise<ApiKeyRow[]> {
   const { rows } = await pool.query(
-    `SELECT id, kind, env, label, token_prefix, token_suffix, created_at, revoked_at
+    `SELECT id, kind, env, label, token_prefix, token_suffix, created_at, last_used_at, revoked_at
      FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC`,
     [projectId],
   );
+  const evaluatedAt = new Date();
   return rows.map((row) => ({
     id: row.id,
     kind: row.kind,
@@ -167,7 +258,10 @@ export async function listApiKeys(pool: pg.Pool, projectId: string): Promise<Api
       ? `${row.token_prefix ?? (row.kind === 'ingest' ? 'pk_' : 'sk_')}...${row.token_suffix}`
       : `${row.token_prefix ?? (row.kind === 'ingest' ? 'pk_' : 'sk_')}...`,
     created_at: row.created_at,
+    last_used_at: row.last_used_at,
     revoked_at: row.revoked_at,
+    credential_policy: CORE_CREDENTIAL_ROTATION_POLICY,
+    rotation_recommendation: evaluateCredentialRotation(row, evaluatedAt),
   }));
 }
 
@@ -189,21 +283,255 @@ export async function revokeApiKey(
 
 export interface ProjectWithStats extends Pick<Project, 'slug' | 'name' | 'timezone'> {
   active_metrics: number;
+  proposed_metrics: number;
+  active_outcome_contracts: number;
   funnels: number;
+  events_24h: number;
+  events_7d: number;
   events_30d: number;
+  last_event_at: string | null;
+  registered_coverage_30d: number | null;
+  key_outcome_available: boolean;
+  health: 'healthy' | 'needs_attention' | 'no_data';
+  attention: string[];
+  health_evaluation: ProjectHealthEvaluation;
 }
 
-export async function listProjectsWithStats(pool: pg.Pool, orgId: string): Promise<ProjectWithStats[]> {
+export interface ProjectPortfolioRow extends ProjectWithStats {
+  environment: string;
+  current_usage: {
+    meter: 'events_stored';
+    period: string;
+    accepted_events: number;
+    last_ingest_at: string | null;
+    source: 'usage_ledger';
+    basis: 'ingest_time';
+  };
+}
+
+export interface ProjectPortfolioResult {
+  schema_version: 1;
+  generated_at: string;
+  scope: {
+    credential: 'organization' | 'project';
+    environment: string;
+    usage_cycle: { from: string; to: string; timezone: 'UTC'; basis: 'ingest_time' };
+  };
+  projects: ProjectPortfolioRow[];
+}
+
+export interface ProjectHealthEvaluation {
+  source: 'server';
+  evaluated_at: string;
+  guardrails: Array<{
+    id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'metric_review_queue';
+    state: 'pass' | 'fail' | 'not_applicable';
+    observed: number | null;
+    expectation: string;
+  }>;
+}
+
+export function evaluateProjectHealth(input: {
+  events30d: number;
+  registeredCoverage30d: number | null;
+  activeOutcomeContracts: number;
+  proposedMetrics: number;
+}, evaluatedAt = new Date()): Pick<ProjectWithStats, 'health' | 'attention' | 'health_evaluation'> {
+  const guardrails: ProjectHealthEvaluation['guardrails'] = [
+    {
+      id: 'recent_data',
+      state: input.events30d > 0 ? 'pass' : 'fail',
+      observed: input.events30d,
+      expectation: 'More than 0 accepted events in 30 days',
+    },
+    {
+      id: 'registered_coverage',
+      state: input.registeredCoverage30d === null
+        ? 'not_applicable'
+        : input.registeredCoverage30d >= 0.99 ? 'pass' : 'fail',
+      observed: input.registeredCoverage30d,
+      expectation: 'Registered coverage is at least 99%',
+    },
+    {
+      id: 'active_outcome',
+      state: input.activeOutcomeContracts > 0 ? 'pass' : 'fail',
+      observed: input.activeOutcomeContracts,
+      expectation: 'At least 1 active measurement contract',
+    },
+    {
+      id: 'metric_review_queue',
+      state: input.proposedMetrics === 0 ? 'pass' : 'fail',
+      observed: input.proposedMetrics,
+      expectation: 'No proposed metrics awaiting review',
+    },
+  ];
+  const attention: string[] = [];
+  if (guardrails[0]!.state === 'fail') attention.push('No events in 30 days');
+  if (guardrails[2]!.state === 'fail') attention.push('No active measurement contract');
+  if (guardrails[1]!.state === 'fail') attention.push('Off-standard event volume');
+  if (guardrails[3]!.state === 'fail') {
+    attention.push(`${input.proposedMetrics} metric${input.proposedMetrics === 1 ? '' : 's'} awaiting review`);
+  }
+  return {
+    health: input.events30d === 0 ? 'no_data' : attention.length > 0 ? 'needs_attention' : 'healthy',
+    attention,
+    health_evaluation: {
+      source: 'server',
+      evaluated_at: evaluatedAt.toISOString(),
+      guardrails,
+    },
+  };
+}
+
+export async function listProjectsWithStats(
+  pool: pg.Pool,
+  eventStore: EventStore,
+  orgId: string,
+  options: { env?: string; projectId?: string; evaluatedAt?: Date } = {},
+): Promise<ProjectWithStats[]> {
+  const params: unknown[] = [orgId];
+  const projectPredicate = options.projectId === undefined
+    ? ''
+    : ` AND p.id = $${params.push(options.projectId)}`;
   const { rows } = await pool.query(
-    `SELECT p.slug, p.name, p.timezone,
-       (SELECT count(*) FROM metrics m WHERE m.project_id = p.id AND m.status = 'active')::int AS active_metrics,
-       (SELECT count(*) FROM funnels f WHERE f.project_id = p.id)::int AS funnels,
-       (SELECT count(*) FROM events e WHERE e.project_id = p.id
-          AND e."timestamp" >= now() - interval '30 days')::int AS events_30d
-     FROM projects p WHERE p.org_id = $1 ORDER BY p.created_at`,
-    [orgId],
+    `SELECT p.id, p.slug, p.name, p.timezone,
+       metric_stats.active_metrics,
+       metric_stats.proposed_metrics,
+       funnel_stats.funnels,
+       contract_stats.active_outcome_contracts
+     FROM projects p
+     CROSS JOIN LATERAL (
+       SELECT
+         count(*) FILTER (WHERE status = 'active')::int AS active_metrics,
+         count(*) FILTER (WHERE status = 'proposed')::int AS proposed_metrics
+       FROM metrics WHERE project_id = p.id
+     ) metric_stats
+     CROSS JOIN LATERAL (
+       SELECT count(*)::int AS funnels FROM funnels WHERE project_id = p.id
+     ) funnel_stats
+     CROSS JOIN LATERAL (
+       SELECT count(*) FILTER (WHERE status = 'active')::int AS active_outcome_contracts
+       FROM measurement_contracts WHERE project_id = p.id
+     ) contract_stats
+     WHERE p.org_id = $1${projectPredicate} ORDER BY p.created_at`,
+    params,
   );
-  return rows;
+  const eventStats = new Map(
+    (await eventStore.projectPortfolioStats(rows.map((row) => row.id as string), options.env))
+      .map((stats) => [stats.project_id, stats]),
+  );
+  const evaluatedAt = options.evaluatedAt ?? new Date();
+  return rows.map((row) => {
+    const activeMetrics = Number(row.active_metrics);
+    const proposedMetrics = Number(row.proposed_metrics);
+    const activeOutcomeContracts = Number(row.active_outcome_contracts);
+    const events = eventStats.get(row.id) ?? {
+      events_24h: 0,
+      events_7d: 0,
+      events_30d: 0,
+      registered_events_30d: 0,
+      last_event_at: null,
+    };
+    const events30d = events.events_30d;
+    const coverage = events30d === 0 ? null : events.registered_events_30d / events30d;
+    const evaluatedHealth = evaluateProjectHealth({
+      events30d,
+      registeredCoverage30d: coverage,
+      activeOutcomeContracts,
+      proposedMetrics,
+    }, evaluatedAt);
+    return {
+      slug: row.slug,
+      name: row.name,
+      timezone: row.timezone,
+      active_metrics: activeMetrics,
+      proposed_metrics: proposedMetrics,
+      active_outcome_contracts: activeOutcomeContracts,
+      funnels: Number(row.funnels),
+      events_24h: events.events_24h,
+      events_7d: events.events_7d,
+      events_30d: events30d,
+      last_event_at: events.last_event_at,
+      registered_coverage_30d: coverage,
+      key_outcome_available: activeOutcomeContracts > 0,
+      ...evaluatedHealth,
+    };
+  });
+}
+
+function safeUsageQuantity(value: string | number): number {
+  const quantity = Number(value);
+  if (!Number.isSafeInteger(quantity) || quantity < 0) {
+    throw new Error('portfolio usage cannot be represented as a non-negative safe integer');
+  }
+  return quantity;
+}
+
+export async function getProjectPortfolio(
+  pool: pg.Pool,
+  eventStore: EventStore,
+  orgId: string,
+  env: string,
+  credential: 'organization' | 'project',
+  projectId?: string,
+  now = new Date(),
+): Promise<ProjectPortfolioResult> {
+  const cycleFrom = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const cycleTo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const period = cycleFrom.toISOString().slice(0, 7);
+  const projects = await listProjectsWithStats(pool, eventStore, orgId, {
+    env,
+    ...(projectId ? { projectId } : {}),
+    evaluatedAt: now,
+  });
+  const usageParams: unknown[] = [orgId, env, cycleFrom.toISOString().slice(0, 10)];
+  const projectPredicate = projectId === undefined
+    ? ''
+    : ` AND l.project_id = $${usageParams.push(projectId)}`;
+  const usage = await pool.query<{
+    project_slug: string;
+    quantity: string;
+    last_ingest_at: Date | string;
+  }>(
+    `SELECT p.slug AS project_slug, sum(l.quantity)::bigint::text AS quantity, max(l.ingested_at) AS last_ingest_at
+     FROM usage_ledger l
+     JOIN projects p ON p.org_id = l.org_id AND p.id = l.project_id
+     WHERE l.org_id = $1 AND l.env = $2 AND l.meter_key = 'events_stored'
+       AND l.period_start = $3::date${projectPredicate}
+     GROUP BY p.slug`,
+    usageParams,
+  );
+  const usageByProject = new Map(usage.rows.map((row) => [row.project_slug, row]));
+
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    scope: {
+      credential,
+      environment: env,
+      usage_cycle: {
+        from: cycleFrom.toISOString(),
+        to: cycleTo.toISOString(),
+        timezone: 'UTC',
+        basis: 'ingest_time',
+      },
+    },
+    projects: projects.map((project) => {
+      const usageRow = usageByProject.get(project.slug);
+      return {
+        ...project,
+        environment: env,
+        current_usage: {
+          meter: 'events_stored',
+          period,
+          accepted_events: safeUsageQuantity(usageRow?.quantity ?? '0'),
+          last_ingest_at: usageRow ? new Date(usageRow.last_ingest_at).toISOString() : null,
+          source: 'usage_ledger',
+          basis: 'ingest_time',
+        },
+      };
+    }),
+  };
 }
 
 export async function getProjectBySlug(

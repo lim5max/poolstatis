@@ -24,10 +24,16 @@ import {
   webSessionsQuerySchema, webSessionQuerySchema, pageEngagementQuerySchema,
   updateExperimentSchema, updateFeatureFlagSchema,
   updateMetricCategorySchema, updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
+  metricDefinitionSchema,
 } from '../schemas.js';
 import { INSTRUMENTATION_STANDARD } from './standard.js';
 import { BROWSER_ANALYTICS_STANDARD } from './browserStandard.js';
 import { ACTORS_STANDARD } from './actorsStandard.js';
+import {
+  insightFeedScheduleInputSchema, monitorPolicyInputSchema, notificationDestinationInputSchema, notificationDestinationLifecycleSchema,
+  resourceLifecycleSchema, reviseInsightFeedScheduleSchema,
+  reviseMonitorPolicySchema,
+} from '../automationSchemas.js';
 
 export interface McpConfig { baseUrl: string; token: string; }
 
@@ -119,9 +125,45 @@ function jsonTool(
 
 jsonTool(
   'list_projects',
-  'List projects this token can access.',
+  'List projects this token can access with registry counts and all-environment recent event health for bootstrap selection.',
   {},
   wrap(() => api('GET', '/api/v1/projects')),
+);
+
+jsonTool(
+  'get_project_portfolio',
+  'Read environment-scoped project health and current UTC-cycle accepted usage from the immutable ingest-time usage ledger.',
+  { env: z.string().min(1).max(50).default('prod') },
+  wrap(({ env }) => api('GET', `/api/v1/projects/portfolio?env=${encodeURIComponent(env)}`)),
+);
+
+jsonTool(
+  'list_project_keys',
+  'List masked project credentials with environment, last-used evidence and revocation state. Plaintext and hashes are never returned; rotate replacement-first.',
+  { project },
+  wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/keys`)),
+);
+
+jsonTool(
+  'get_account_mode',
+  'Read the server-derived deployment mode, authenticated scope and bounded account/portfolio capabilities. Self-host never pretends hosted profile or billing controls are configured.',
+  {},
+  wrap(() => api('GET', '/api/v1/account-mode')),
+);
+
+jsonTool(
+  'compare_projects',
+  'Compare one active semantic metric across two to eight projects only when key, purpose, type, aggregation, fingerprint, environment and UTC window match. Incompatible definitions return unavailable without values.',
+  {
+    metric_key: z.string().regex(/^[a-z][a-z0-9_]*$/),
+    projects: z.array(z.string().regex(/^[a-z][a-z0-9-]*$/)).min(2).max(8),
+    environment: z.string().min(1).max(100),
+    window: z.object({
+      from: z.string().datetime({ offset: true }),
+      to: z.string().datetime({ offset: true }),
+    }),
+  },
+  wrap((input) => api('POST', '/api/v1/projects/compare', input)),
 );
 
 jsonTool(
@@ -130,6 +172,56 @@ jsonTool(
   { project, env: z.string().default('prod') },
   wrap(({ project: slug, env }) => api('GET', `/api/v1/projects/${slug}/schema?env=${encodeURIComponent(env)}`)),
 );
+
+// ===== Control tower automation =====
+
+jsonTool('get_automation_capabilities',
+  'Read truthful built-in delivery capability. External providers remain not_configured until an extension is installed.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/capabilities`)));
+jsonTool('create_notification_destination', 'Create an in-product or extension-ready outbox destination.',
+  { project, destination: notificationDestinationInputSchema },
+  wrap(({ project: slug, destination }) => api('POST', `/api/v1/projects/${slug}/automation/destinations`, destination)));
+jsonTool('list_notification_destinations', 'List privacy-safe notification destinations for one project.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/destinations`)));
+jsonTool('set_notification_destination_status', 'Enable or disable one project notification destination with immutable audit.',
+  { project, id: z.string().uuid(), change: notificationDestinationLifecycleSchema },
+  wrap(({ project: slug, id, change }) => api('PATCH', `/api/v1/projects/${slug}/automation/destinations/${id}`, change)));
+jsonTool('create_monitor_policy', 'Create a versioned metric monitor. A breach may freeze a proposal but never changes traffic.',
+  { project, policy: monitorPolicyInputSchema },
+  wrap(({ project: slug, policy }) => api('POST', `/api/v1/projects/${slug}/monitors`, policy)));
+jsonTool('list_monitor_policies', 'List current project monitor policy heads and frozen current revisions.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/monitors`)));
+jsonTool('get_monitor_policy', 'Read one current monitor policy head and revision.',
+  { project, id: z.string().uuid() }, wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/monitors/${id}`)));
+jsonTool('update_monitor_policy', 'Append a monitor revision using optimistic version control.',
+  { project, id: z.string().uuid(), change: reviseMonitorPolicySchema },
+  wrap(({ project: slug, id, change }) => api('PATCH', `/api/v1/projects/${slug}/monitors/${id}`, change)));
+jsonTool('set_monitor_policy_status', 'Pause, resume or irreversibly archive a monitor policy.',
+  { project, id: z.string().uuid(), change: resourceLifecycleSchema },
+  wrap(({ project: slug, id, change }) => api('POST', `/api/v1/projects/${slug}/monitors/${id}/lifecycle`, change)));
+jsonTool('list_monitor_findings', 'List immutable, privacy-safe threshold findings.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/findings`)));
+jsonTool('create_insight_feed_schedule', 'Create a timezone-aware scheduled semantic metric feed.',
+  { project, schedule: insightFeedScheduleInputSchema },
+  wrap(({ project: slug, schedule }) => api('POST', `/api/v1/projects/${slug}/insight-feed/schedules`, schedule)));
+jsonTool('list_insight_feed_schedules', 'List scheduled semantic feed definitions.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/insight-feed/schedules`)));
+jsonTool('get_insight_feed_schedule', 'Read one scheduled feed head and current immutable revision.',
+  { project, id: z.string().uuid() }, wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/insight-feed/schedules/${id}`)));
+jsonTool('update_insight_feed_schedule', 'Append a timezone-aware feed schedule revision.',
+  { project, id: z.string().uuid(), change: reviseInsightFeedScheduleSchema },
+  wrap(({ project: slug, id, change }) => api('PATCH', `/api/v1/projects/${slug}/insight-feed/schedules/${id}`, change)));
+jsonTool('set_insight_feed_schedule_status', 'Pause, resume or irreversibly archive a scheduled feed.',
+  { project, id: z.string().uuid(), change: resourceLifecycleSchema },
+  wrap(({ project: slug, id, change }) => api('POST', `/api/v1/projects/${slug}/insight-feed/schedules/${id}/lifecycle`, change)));
+jsonTool('list_insight_feed_snapshots', 'List immutable scheduled insight answers with evidence and definition fingerprints.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/insight-feed/snapshots`)));
+jsonTool('list_automation_proposals', 'Read frozen pause or rollback proposals. MCP is read-only for proposal review; a signed-in workspace owner or admin must approve or reject in the admin.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/proposals`)));
+jsonTool('list_automation_inbox', 'List delivered in-product automation notifications.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/inbox`)));
+jsonTool('list_notification_deliveries', 'List delivery state, retries and explicit extension-ready outcomes without credentials.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/deliveries`)));
 
 jsonTool(
   'get_onboarding_status',
@@ -142,6 +234,107 @@ jsonTool(
     });
     return api('GET', `/api/v1/projects/${slug}/onboarding/status?env=${encodeURIComponent(env)}`);
   }),
+);
+
+jsonTool(
+  'get_control_tower',
+  'Read the server-owned project answer, prioritized attention, evidence and safe next actions. Raw warning samples and actor identifiers are excluded.',
+  {
+    project,
+    env: z.string().default('prod'),
+    range: z.enum(['7d', '30d', '90d']).default('30d'),
+  },
+  wrap(({ project: slug, env, range }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/control-tower?env=${encodeURIComponent(env)}&range=${range}`,
+  )),
+);
+
+jsonTool(
+  'get_usage_control',
+  'Read organization-scoped accepted-event usage, UTC cycle cap, seven-day pace, threshold forecasts and project/environment contributors. This MCP call requires an owner/admin organization-wide personal token; the same REST read also accepts a hosted owner/admin user session. Project secret keys are rejected.',
+  { period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).describe('UTC month in YYYY-MM format') },
+  wrap(({ period }) => api('GET', `/api/v1/me/usage/control?period=${encodeURIComponent(period)}`)),
+);
+
+// ===== Saved / official answers and measurement readiness =====
+
+jsonTool(
+  'create_saved_answer',
+  'Persist one validated, versioned VisualizationSpec with its Answer and Evidence snapshots. The server rejects SQL, prompts, credentials, raw actor ids and event payloads.',
+  { project, view: z.record(z.unknown()) },
+  wrap(({ project: slug, view }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/analysis-views`,
+    view,
+  )),
+);
+
+jsonTool(
+  'list_saved_answers',
+  'List saved answers for one exact project and environment. Optional status and official filters are server-owned.',
+  {
+    project,
+    env: z.string().default('prod'),
+    status: z.enum(['active', 'archived']).optional(),
+    official: z.boolean().optional(),
+  },
+  wrap(({ project: slug, env, status, official }) => {
+    const query = new URLSearchParams({ env });
+    if (status) query.set('status', status);
+    if (official !== undefined) query.set('official', String(official));
+    return api('GET', `/api/v1/projects/${slug}/analysis-views?${query}`);
+  }),
+);
+
+jsonTool(
+  'get_saved_answer',
+  'Read one saved answer and its append-only bounded audit metadata.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/analysis-views/${id}`)),
+);
+
+jsonTool(
+  'update_saved_answer',
+  'Update an active saved answer. VisualizationSpec, Answer and Evidence snapshots must be replaced together.',
+  { project, id: z.string().uuid(), patch: z.record(z.unknown()) },
+  wrap(({ project: slug, id, patch }) => api(
+    'PATCH',
+    `/api/v1/projects/${slug}/analysis-views/${id}`,
+    patch,
+  )),
+);
+
+jsonTool(
+  'archive_saved_answer',
+  'Archive a saved answer through its audited lifecycle. Archived answers are read-only and cannot remain official.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/analysis-views/${id}/archive`,
+    {},
+  )),
+);
+
+jsonTool(
+  'set_saved_answer_official',
+  'Mark or unmark an active saved answer as official. Only an authenticated workspace owner/admin credential is authorized.',
+  { project, id: z.string().uuid(), official: z.boolean() },
+  wrap(({ project: slug, id, official }) => api(
+    'PUT',
+    `/api/v1/projects/${slug}/analysis-views/${id}/official`,
+    { official },
+  )),
+);
+
+jsonTool(
+  'get_measurement_readiness',
+  'Read server-ranked tracking-plan, property, identity and data-source readiness with affected saved-answer ids and one exact repair action.',
+  { project, env: z.string().default('prod') },
+  wrap(({ project: slug, env }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/readiness?env=${encodeURIComponent(env)}`,
+  )),
 );
 
 // ===== Measurement trust =====
@@ -510,9 +703,38 @@ jsonTool(
 
 jsonTool(
   'update_metric',
-  'Update a registry metric: rename, refine purpose, change source, tags, or status proposed/active. Use deprecate_metric when retiring a metric.',
-  { project, key: z.string(), patch: updateMetricSchema },
+  'Update cosmetic taxonomy/status fields for a registry metric. Semantic purpose/source changes require preview_metric_definition followed by a human-confirmed admin apply. Use deprecate_metric when retiring a metric.',
+  { project, key: z.string(), patch: updateMetricSchema.omit({ purpose: true, source: true }).strict() },
   wrap(({ project: slug, key, patch }) => api('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, patch)),
+);
+
+jsonTool(
+  'get_metric_definition',
+  'Read the current semantic fingerprint, immutable revision history and bounded dependency impact for one metric.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/metrics/${encodeURIComponent(key)}/definition`,
+  )),
+);
+
+jsonTool(
+  'preview_metric_definition',
+  'Validate a proposed purpose/source change and return its semantic fingerprint, changed fields, dependency impact and human confirmation action. This tool never applies the change.',
+  {
+    project,
+    key: z.string(),
+    expected_revision: z.number().int().positive().optional(),
+    definition: metricDefinitionSchema,
+  },
+  wrap(({ project: slug, key, expected_revision, definition }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/metrics/${encodeURIComponent(key)}/definition/preview`,
+    {
+      ...(expected_revision === undefined ? {} : { expected_revision }),
+      definition,
+    },
+  )),
 );
 
 jsonTool(
@@ -921,7 +1143,7 @@ jsonTool(
 
 jsonTool(
   'list_actors',
-  'List bounded query-time canonical actors with exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. activityMetric must be a registry metric key; unsupported actor property filters fail closed.',
+  'List bounded query-time canonical actors in an explicit factual order, with the exact evidence window, exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. Purpose-backed activation, stall, risk and segment ranking is unavailable; activityMetric must be a registry metric key and unsupported actor property filters fail closed.',
   { project, query: actorsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, {
     kind: 'actors',
@@ -1107,6 +1329,35 @@ jsonTool(
     const suffix = qs.size ? `?${qs}` : '';
     return api('GET', `/api/v1/projects/${slug}/ingest-warnings${suffix}`);
   }),
+);
+
+jsonTool(
+  'get_data_health',
+  'Read project/environment accepted and rejected trends for 24 hourly and 7 daily buckets, bounded opaque warning signatures, affected answer ids, improvements, proven healthy signals, and exact repair/verify actions. The response excludes raw warning details, payloads, properties, samples and actor ids; only currently registered event names may be exposed.',
+  { project, env: z.string().default('prod') },
+  wrap(({ project: slug, env }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/data-health?env=${encodeURIComponent(env)}`,
+  )),
+);
+
+jsonTool(
+  'verify_data_health_fix',
+  'Verify one bounded warning signature after a repair. Compares the current server count/last-seen watermark with the exact earlier watermark and returns resolved or still_occurring without exposing warning detail or payload data.',
+  {
+    project,
+    env: z.string().default('prod'),
+    signature_id: z.string().uuid(),
+    watermark: z.object({
+      count: z.number().int().nonnegative(),
+      last_seen: z.string().datetime({ offset: true }),
+    }).strict(),
+  },
+  wrap(({ project: slug, ...body }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/data-health/verify`,
+    body,
+  )),
 );
 
 jsonTool(

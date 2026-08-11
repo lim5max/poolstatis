@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { Add, Check, Loader2, Target } from '@/components/icons';
 import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, fmtNum, fmtPct } from '../components/ui';
@@ -10,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DisclosureSummary } from '@/components/disclosure';
 import { cn } from '@/lib/utils';
+import { GuidedFirstValue } from '../components/guided-first-value';
 import {
   SHIP_STAGES,
   SHIP_STAGE_LABELS,
@@ -70,6 +72,7 @@ export function Experiments() {
   const [flags, experiments, metrics] = data;
   const visibleFlags = flags.filter((flag) => flag.env === env || flag.env === null);
   const visibleExperiments = experiments.filter((experiment) => experiment.env === env || experiment.env === null);
+  const eligibleMetrics = experimentEligibleMetrics(metrics);
 
   return (
     <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
@@ -79,6 +82,44 @@ export function Experiments() {
           Prepare and run traffic changes, then record the outcome after real exposure evidence.
         </p>
       </header>
+
+      {visibleExperiments.length === 0 && (
+        <GuidedFirstValue
+          title="Prepare the first safe change"
+          outcome="A change starts as an environment-scoped draft. Poolstatis launches traffic only after the server verifies allocation, control, active outcome metrics, and experiment ownership."
+          checks={[
+            {
+              label: 'Primary outcome metric',
+              ready: eligibleMetrics.length > 0,
+              detail: eligibleMetrics.length > 0 ? `${eligibleMetrics.length} active native ${eligibleMetrics.length === 1 ? 'metric is' : 'metrics are'} eligible.` : 'Activate a native count or unique-actor metric with a real purpose.',
+            },
+            {
+              label: 'Guardrail metric',
+              ready: eligibleMetrics.length > 1,
+              detail: eligibleMetrics.length > 1 ? 'A separate active metric can detect collateral regression.' : 'Add a second eligible metric so success cannot hide damage elsewhere.',
+            },
+            {
+              label: 'Exposure verification after launch',
+              ready: false,
+              detail: 'Before launch, verify stable distinct_id wiring and server readiness. Exposure stays unverified while the flag is a draft; after a separately approved launch, run one controlled evaluation and read the system event back.',
+            },
+            {
+              label: 'Server launch readiness',
+              ready: false,
+              detail: `Drafts stay inert in ${env}. The server readiness read-back plus code and identity confirmation happen only after preparation.`,
+            },
+          ]}
+          action={<Button onClick={() => setIntent('experiment')} disabled={eligibleMetrics.length < 2}><Target className="size-4" />Start safe experiment</Button>}
+          agentTask={experimentSetupTask(project!, env, eligibleMetrics)}
+          referenceTitle="First real experiment readout"
+          referenceItems={[
+            'Frozen flag variants and metric definitions',
+            'Exposure and conversion counts per variant',
+            'Primary outcome plus guardrail evidence',
+            'Human-recorded decision with rollout unchanged by default',
+          ]}
+        />
+      )}
 
       <Panel title="What do you want to do?">
         <div className="grid gap-3 md:grid-cols-3">
@@ -171,14 +212,14 @@ function PrepareExperimentForm({
   const [key, setKey] = useState('');
   const [hypothesis, setHypothesis] = useState('');
   const [metricKey, setMetricKey] = useState('');
+  const [guardrailMetricKey, setGuardrailMetricKey] = useState('');
   const [controlPayload, setControlPayload] = useState('');
   const [treatmentPayload, setTreatmentPayload] = useState('');
   const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const eligibleMetrics = metrics.filter((metric) => metric.status === 'active'
-    && (metric.type === 'count' || metric.type === 'unique_actors')
-    && (metric.source.data_source === undefined || metric.source.data_source === 'native'));
+  const eligibleMetrics = experimentEligibleMetrics(metrics);
+  const guardrailMetrics = eligibleMetrics.filter((metric) => metric.key !== metricKey);
   const flagKey = key ? `${key}_flag` : '';
 
   const updateName = (value: string) => {
@@ -210,6 +251,7 @@ function PrepareExperimentForm({
           name: name.trim(),
           hypothesis: hypothesis.trim(),
           primary_metric_key: metricKey,
+          secondary_metric_keys: [guardrailMetricKey],
         },
       });
       onCreated();
@@ -220,7 +262,8 @@ function PrepareExperimentForm({
     }
   };
 
-  const valid = /^[a-z][a-z0-9_]*$/.test(key) && name.trim() && hypothesis.trim().length >= 10 && metricKey;
+  const valid = /^[a-z][a-z0-9_]*$/.test(key) && name.trim() && hypothesis.trim().length >= 10
+    && metricKey && guardrailMetricKey && metricKey !== guardrailMetricKey;
 
   return (
     <Panel title="Prepare an A/B experiment" right={<Badge variant="outline">{env}</Badge>}>
@@ -241,12 +284,18 @@ function PrepareExperimentForm({
         </div>
         <div className="space-y-3">
           <Field label="Success metric">
-            <Select value={metricKey} onValueChange={setMetricKey}>
+            <Select value={metricKey} onValueChange={(value) => { setMetricKey(value); if (value === guardrailMetricKey) setGuardrailMetricKey(''); }}>
               <SelectTrigger aria-label="Experiment primary metric"><SelectValue placeholder="Choose an active metric" /></SelectTrigger>
               <SelectContent>{eligibleMetrics.map((metric) => <SelectItem key={metric.id} value={metric.key}>{metric.name} · {metric.key}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
-          {eligibleMetrics.length === 0 && <ErrorNote>Activate a count or unique-actor metric in Registry first.</ErrorNote>}
+          <Field label="Guardrail metric">
+            <Select value={guardrailMetricKey} onValueChange={setGuardrailMetricKey} disabled={!metricKey}>
+              <SelectTrigger aria-label="Experiment guardrail metric"><SelectValue placeholder="Choose a different active metric" /></SelectTrigger>
+              <SelectContent>{guardrailMetrics.map((metric) => <SelectItem key={metric.id} value={metric.key}>{metric.name} · {metric.key}</SelectItem>)}</SelectContent>
+            </Select>
+          </Field>
+          {eligibleMetrics.length < 2 && <ErrorNote>Activate two native count or unique-actor metrics: one outcome and one guardrail.</ErrorNote>}
           <div className="rounded-md border bg-muted/20 p-3 text-sm leading-relaxed text-muted-foreground">
             Poolstatis creates one dedicated draft flag with 50/50 control and treatment. No traffic changes until readiness passes and you launch it.
           </div>
@@ -267,7 +316,7 @@ function PrepareExperimentForm({
         <span className="text-sm text-muted-foreground">Creates drafts only · selected environment: <code>{env}</code></span>
         <div className="flex gap-2">
           <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button onClick={submit} disabled={!valid || busy || eligibleMetrics.length === 0}>
+          <Button onClick={submit} disabled={!valid || busy || eligibleMetrics.length < 2}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : <Target className="size-4" />}Prepare drafts
           </Button>
         </div>
@@ -403,7 +452,7 @@ function ExperimentBoard({
   ].filter((group) => group.items.length > 0);
 
   if (experiments.length === 0) {
-    return <Panel><EmptyState headline="No experiments" lead="choose A/B experiment above to prepare one safe draft" /></Panel>;
+    return null;
   }
 
   return (
@@ -425,6 +474,29 @@ function ExperimentBoard({
       ))}
     </div>
   );
+}
+
+function experimentEligibleMetrics(metrics: Metric[]): Metric[] {
+  return metrics.filter((metric) => metric.status === 'active'
+    && (metric.type === 'count' || metric.type === 'unique_actors')
+    && (metric.source.data_source === undefined || metric.source.data_source === 'native'));
+}
+
+function experimentSetupTask(project: string, env: string, metrics: Metric[]): string {
+  const metricSummary = metrics.length > 0
+    ? metrics.map((metric) => `${metric.key}: ${metric.purpose}`).join('\n')
+    : 'No eligible active native metrics exist yet.';
+  return `Prepare a safe Poolstatis experiment for project "${project}" in environment "${env}".
+
+Eligible metrics read from the server:
+${metricSummary}
+
+1. Inspect the real product change and state one falsifiable hypothesis.
+2. Select one active native count or unique-actor metric as the primary outcome and a different active metric as the guardrail. Do not invent or activate metrics without reviewing their purpose and source evidence.
+3. Use prepare_experiment to create one environment-scoped draft flag and draft experiment. Keep a control variant, full deterministic allocation, and distinct_id as the rollout unit.
+4. Wire the product to evaluate the exact flag with a stable distinct_id, but keep exposure explicitly unverified while the flag is a draft.
+5. Run check_experiment_readiness and report every failed check. Do not launch, change traffic, conclude, or ship a variant without explicit human approval.
+6. Only after a separate human-approved launch, evaluate the flag once for a synthetic test actor without personal data and read the server-recorded $feature_flag_called event back. Preserve frozen definitions and treat the result as experiment evidence; recording a decision must not silently change rollout.`;
 }
 
 function ExperimentCard({
@@ -481,6 +553,10 @@ function ExperimentCard({
           {!busy && experiment.status !== 'draft' && <Button variant="outline" size="sm" onClick={showResults}>View evidence</Button>}
           {!busy && !legacyAllEnvironments && experiment.status === 'running' && <Button size="sm" onClick={() => setShowDecision(true)}>Record decision</Button>}
         </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2 border-t pt-3" aria-label={`${experiment.name} lifecycle links`}>
+        <Button asChild variant="outline" size="sm"><Link to={`/changes?experiment=${encodeURIComponent(experiment.key)}`}>Open in Ship</Link></Button>
+        <Button asChild variant="outline" size="sm"><Link to={`/decisions?experiment=${encodeURIComponent(experiment.key)}`}>Open in Decisions</Link></Button>
       </div>
       {legacyAllEnvironments && (
         <p className="mt-3 text-sm text-muted-foreground">Legacy all-environment experiments are read only here. Review every environment before using the legacy conclude operation.</p>

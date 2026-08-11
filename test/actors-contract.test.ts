@@ -216,7 +216,7 @@ describe('actors Query DSL contract', () => {
     });
   });
 
-  it('returns stable opaque keyset pages for every supported order', async () => {
+  it('returns stable opaque keyset pages for every supported factual order', async () => {
     for (const order of ['last_seen_desc', 'first_seen_desc', 'events_desc']) {
       const first = await actors({ order, limit: 1 });
       expect(first.status).toBe(200);
@@ -239,7 +239,7 @@ describe('actors Query DSL contract', () => {
     expect(invalid.body.error.code).toBe('actors_cursor_invalid');
   });
 
-  it('applies trailing-30d, limit=50 and last_seen order defaults', async () => {
+  it('applies trailing-30d, limit=50 and truthful last-seen order defaults', async () => {
     const result = await api(env, env.secretToken, 'POST', `${project()}/query`, {
       kind: 'actors',
       env: 'prod',
@@ -252,6 +252,56 @@ describe('actors Query DSL contract', () => {
       limit: 50,
       order: 'last_seen_desc',
     });
+    expect(result.body.meta.provenance.ordering).toMatchObject({
+      selected: 'last_seen_desc',
+      input: 'last_seen',
+      relative_to: 'the exact query window',
+    });
+    expect(result.body.meta.capabilities.interesting_categories).toEqual({
+      recently_activated: {
+        available: false,
+        requires: 'purpose_backed_activation_metric_or_funnel',
+      },
+      stalled: {
+        available: false,
+        requires: 'purpose_backed_stall_definition',
+      },
+      at_risk: {
+        available: false,
+        requires: 'purpose_backed_risk_definition',
+      },
+      changed_segment: {
+        available: false,
+        requires: 'trusted_canonical_actor_property_source',
+      },
+    });
+    expect(result.body.meta.capabilities.identity_profile).toMatchObject({
+      available: false,
+    });
+    expect(result.body.meta.capabilities.outcome_rank).toMatchObject({
+      available: false,
+    });
+    expect(result.body.actors[0]).toMatchObject({
+      order_reason: 'last_seen_in_window',
+      rank_evidence_window: {
+        from: result.body.meta.date_range.from,
+        to: result.body.meta.date_range.to,
+      },
+    });
+    expect(result.body.actors.every((actor: any) => (
+      actor.order_reason === 'last_seen_in_window'
+      && actor.rank_evidence_window.from === result.body.meta.date_range.from
+      && actor.rank_evidence_window.to === result.body.meta.date_range.to
+    ))).toBe(true);
+    expect(result.body.actors[0]).not.toHaveProperty('interesting_score');
+    expect(result.body.actors[0]).not.toHaveProperty('rank_reasons');
+    expect(result.body.meta.provenance).not.toHaveProperty('interesting_rank');
+  });
+
+  it('rejects the unsupported generic interesting order', async () => {
+    const result = await actors({ order: 'interesting_desc' });
+    expect(result.status).toBe(400);
+    expect(result.body.error.code).toBe('validation_error');
   });
 
   it('rejects empty IDs, oversized limits and cursors bound to another order', async () => {

@@ -32,7 +32,22 @@ describe('projects admin', () => {
     expect(res.status).toBe(200);
     expect(res.body.scope).toBe('org');
     const p = res.body.projects.find((x: any) => x.slug === env.projectSlug);
-    expect(p).toMatchObject({ active_metrics: expect.any(Number), funnels: expect.any(Number), events_30d: expect.any(Number) });
+    expect(p).toMatchObject({
+      active_metrics: expect.any(Number), proposed_metrics: expect.any(Number), active_outcome_contracts: expect.any(Number), funnels: expect.any(Number),
+      events_24h: expect.any(Number), events_7d: expect.any(Number), events_30d: expect.any(Number),
+      key_outcome_available: expect.any(Boolean), health: expect.stringMatching(/^(healthy|needs_attention|no_data)$/),
+      attention: expect.any(Array),
+      health_evaluation: {
+        source: 'server',
+        evaluated_at: expect.any(String),
+        guardrails: expect.arrayContaining([
+          expect.objectContaining({ id: 'recent_data', state: expect.stringMatching(/^(pass|fail)$/) }),
+          expect.objectContaining({ id: 'registered_coverage', state: expect.stringMatching(/^(pass|fail|not_applicable)$/) }),
+          expect.objectContaining({ id: 'active_outcome', state: expect.stringMatching(/^(pass|fail)$/) }),
+          expect.objectContaining({ id: 'metric_review_queue', state: expect.stringMatching(/^(pass|fail)$/) }),
+        ]),
+      },
+    });
   });
 
   it('scopes a secret key to its own project', async () => {
@@ -148,13 +163,40 @@ describe('projects admin', () => {
 });
 
 describe('api key admin', () => {
-  it('lists the project keys (masked, no token)', async () => {
+  it('lists masked project keys with a versioned Core advisory rotation recommendation', async () => {
+    const issued = await api(env, env.secretToken, 'POST', `${P()}/keys`, { kind: 'secret', label: 'rotation-boundary' });
+    await env.pool.query(
+      `UPDATE api_keys SET created_at = now() - interval '181 days', last_used_at = now() - interval '1 day'
+       WHERE id = $1`,
+      [issued.body.id],
+    );
+
     const res = await api(env, env.secretToken, 'GET', `${P()}/keys`);
     expect(res.status).toBe(200);
     expect(res.body.keys.length).toBeGreaterThanOrEqual(3); // ingest prod, ingest dev, secret
     expect(res.body.keys[0]).not.toHaveProperty('token');
     expect(res.body.keys[0]).not.toHaveProperty('token_hash');
+    expect(res.body.keys[0]).toHaveProperty('last_used_at');
     expect(res.body.keys[0].masked_token).toMatch(/^(pk|sk)_\.\.\.[a-f0-9]{4}$/);
+    expect(res.body.keys.some((key: any) => key.kind === 'secret' && key.last_used_at)).toBe(true);
+    const boundary = res.body.keys.find((key: any) => key.id === issued.body.id);
+    expect(boundary).toMatchObject({
+      credential_policy: {
+        id: 'poolstatis_core.credential_rotation',
+        version: 1,
+        source: 'poolstatis_core_default',
+        mode: 'advisory',
+        thresholds: { age_review_days: 180, idle_review_days: 30, unused_review_days: 7 },
+      },
+      rotation_recommendation: {
+        status: 'review',
+        code: 'age_review',
+        label: 'Review age',
+        evaluated_at: expect.any(String),
+        evidence: { age_days: 181, idle_days: 1 },
+      },
+    });
+    expect(boundary.rotation_recommendation.recommendation).toMatch(/create and verify/i);
   });
 
   it('issues an ingest key and returns the token exactly once', async () => {

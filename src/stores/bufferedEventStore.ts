@@ -1,5 +1,7 @@
 import { ApiError } from '../errors.js';
 import type {
+  AcceptedIngestTrendPoint,
+  AcceptedIngestTrendQuery,
   ActorSummary,
   ActorActivityQuery,
   ActorActivityResult,
@@ -48,6 +50,7 @@ import type {
   WebSessionResult,
   PageEngagementQuery,
   WebPageEngagementResult,
+  ProjectPortfolioEventStats,
 } from './eventStore.js';
 
 export interface BufferedEventStoreOptions {
@@ -153,6 +156,10 @@ export class BufferedEventStore implements EventStore {
     });
   }
 
+  acceptedIngestTrend(q: AcceptedIngestTrendQuery): Promise<AcceptedIngestTrendPoint[]> {
+    return this.inner.acceptedIngestTrend(q);
+  }
+
   trend(q: TrendQuery): Promise<TrendPoint[]> {
     return this.inner.trend(q);
   }
@@ -253,8 +260,15 @@ export class BufferedEventStore implements EventStore {
     return this.inner.metricAggregate(q);
   }
 
-  entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]> {
+  entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<{
+    issues: EntityStatusEvidence[];
+    matchedEntities: number;
+  }> {
     return this.inner.entityStatusEvidence(q);
+  }
+
+  projectPortfolioStats(projectIds: string[], env?: string): Promise<ProjectPortfolioEventStats[]> {
+    return this.inner.projectPortfolioStats(projectIds, env);
   }
 
   purge(projectId: string, env?: string, distinctId?: string): Promise<number> {

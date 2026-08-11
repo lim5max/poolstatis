@@ -22,8 +22,12 @@
 ### Контекст
 
 ```
-list_projects()                      → [{slug, name, env_list, events_30d}]
+list_projects()                      → bootstrap project list and all-environment event health
+get_project_portfolio(env?)          → env-scoped health plus current-cycle accepted usage
+get_account_mode()                   → deployment, credential scope, role, capabilities
 get_project_schema(project)          → то же, что ресурс schema (для клиентов без resources)
+compare_projects({metric_key, projects[2..8], environment, window})
+  → ready + values или unavailable + причины без значений
 ```
 
 ### Historical data and corrections
@@ -64,7 +68,11 @@ update_metric_category(project, key, {name?, description?, color?})
 delete_metric_category(project, key)
   // system definitions locked; referenced custom category returns 409
 
-update_metric(project, key, patch)   // включая активацию {status:'active'} и tags
+update_metric(project, key, patch)   // name/category/tags/status; включая {status:'active'}
+get_metric_definition(project, key)
+  // fingerprint + append-only revision history + bounded dependency impact
+preview_metric_definition(project, key, {expected_revision?, definition:{purpose,source}})
+  // read-only preview; semantic apply остаётся подтверждаемым действием в admin UI/REST
 deprecate_metric(project, key, reason)
 explain_metric_usage(project, key, {env?, since_days?})
 delete_metric(project, key)          // hard delete; отказ, если на метрику ссылается воронка
@@ -269,6 +277,11 @@ resolve_insight(project, id, {status: 'ack'|'resolved'})
    previewed historical backfill из доверенной базы продукта; это не замена SDK
    и не способ генерировать текущий трафик из чата.
 4. **Запись метаданных безопасна по умолчанию.** Всё, что создаёт агент, рождается `proposed`; активация — отдельное действие, которое владелец может оставить за собой. Retirement идёт через `deprecate_metric(reason)`, чтобы следующий агент видел, почему метрика больше не используется.
+5. **Семантическое изменение сначала объясняется.** MCP может прочитать историю и
+   подготовить preview purpose/source с dependency impact, но не содержит
+   `apply_metric_definition`. Подтверждение и optimistic apply остаются в
+   авторизованном human admin flow. Legacy REST PATCH сохраняется для
+   совместимости и всё равно пишет `legacy_update` revision.
 
 ## Транспорт
 

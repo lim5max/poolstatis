@@ -51,6 +51,15 @@ export interface Config {
     leaseMs: number;
     requestTimeoutMs: number;
   };
+  controlTowerAutomation: {
+    enabled: boolean;
+    intervalMs: number;
+    batchSize: number;
+    maxAttempts: number;
+    baseRetryMs: number;
+    maxRetryMs: number;
+    leaseMs: number;
+  };
   mcpRunner: {
     command: string;
     args: string[];
@@ -427,6 +436,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       maxRetryMs: positiveInt(env.WEBHOOK_OUTBOX_MAX_RETRY_MS, 3_600_000, 'WEBHOOK_OUTBOX_MAX_RETRY_MS'),
       leaseMs: positiveInt(env.WEBHOOK_OUTBOX_LEASE_MS, 300_000, 'WEBHOOK_OUTBOX_LEASE_MS'),
       requestTimeoutMs: positiveInt(env.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000, 'WEBHOOK_REQUEST_TIMEOUT_MS', 60_000),
+    },
+    controlTowerAutomation: {
+      enabled: booleanValue(env.CONTROL_TOWER_AUTOMATION_ENABLED, true, 'CONTROL_TOWER_AUTOMATION_ENABLED'),
+      intervalMs: positiveInt(env.CONTROL_TOWER_AUTOMATION_INTERVAL_MS, 60_000, 'CONTROL_TOWER_AUTOMATION_INTERVAL_MS'),
+      batchSize: positiveInt(env.CONTROL_TOWER_AUTOMATION_BATCH_SIZE, 25, 'CONTROL_TOWER_AUTOMATION_BATCH_SIZE', 500),
+      maxAttempts: positiveInt(env.CONTROL_TOWER_AUTOMATION_MAX_ATTEMPTS, 8, 'CONTROL_TOWER_AUTOMATION_MAX_ATTEMPTS', 100),
+      baseRetryMs: positiveInt(env.CONTROL_TOWER_AUTOMATION_BASE_RETRY_MS, 60_000, 'CONTROL_TOWER_AUTOMATION_BASE_RETRY_MS'),
+      maxRetryMs: positiveInt(env.CONTROL_TOWER_AUTOMATION_MAX_RETRY_MS, 3_600_000, 'CONTROL_TOWER_AUTOMATION_MAX_RETRY_MS'),
+      leaseMs: positiveInt(env.CONTROL_TOWER_AUTOMATION_LEASE_MS, 300_000, 'CONTROL_TOWER_AUTOMATION_LEASE_MS'),
     },
     mcpRunner: {
       command: mcpCommand,

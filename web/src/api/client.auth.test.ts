@@ -8,6 +8,13 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
+function jsonResponseWithRequestId(body: unknown, status: number, requestId: string): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json', 'x-request-id': requestId },
+  });
+}
+
 describe('PoolstatisClient hosted session recovery', () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -100,5 +107,18 @@ describe('PoolstatisClient hosted session recovery', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a server request ID in the typed and user-visible error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponseWithRequestId({
+      error: { code: 'internal_error', message: 'request failed' },
+    }, 500, 'req-support-123'));
+    const client = new PoolstatisClient('https://api.example.test', 'sk_static');
+
+    await expect(client.listProjects()).rejects.toMatchObject({
+      code: 'internal_error',
+      requestId: 'req-support-123',
+      message: 'request failed (Request ID: req-support-123)',
+    });
   });
 });

@@ -8,6 +8,13 @@ import {
 } from '../schemas.js';
 import { ApiError, badRequest, notFound } from '../errors.js';
 import { assertMetricCategory } from './metricCategories.js';
+import {
+  appendMetricDefinitionRevision,
+  ensureMetricDefinitionRevision,
+  metricSemanticDefinition,
+  metricSemanticFingerprint,
+  nextMetricDefinitionRevision,
+} from './metricSemantics.js';
 
 type Queryable = pg.Pool | pg.PoolClient;
 
@@ -65,17 +72,21 @@ export async function registerMetric(
       );
     }
   }
+  const ownsTransaction = isPool(pool);
+  const client = ownsTransaction ? await pool.connect() : pool;
   try {
-    const { rows } = await pool.query(
+    if (ownsTransaction) await client.query('BEGIN');
+    const { rows } = await client.query(
       `INSERT INTO metrics (project_id, key, name, purpose, category, tags, type, source, owner)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${METRIC_COLS}`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (project_id, key) DO NOTHING
+       RETURNING ${METRIC_COLS}`,
       [projectId, input.key, input.name, input.purpose, input.category ?? null,
        normalizeTags(input.tags), input.type, JSON.stringify(source), owner],
     );
-    return rows[0];
-  } catch (err) {
-    if (isUniqueViolation(err)) {
-      const existing = await getMetric(pool, projectId, input.key);
+    const metric = rows[0] as Metric | undefined;
+    if (!metric) {
+      const existing = await getMetric(client, projectId, input.key);
       throw new ApiError(
         409,
         'metric_key_taken',
@@ -83,7 +94,25 @@ export async function registerMetric(
         'use update_metric to change it, or pick a different key',
       );
     }
-    throw err;
+    const definition = metricSemanticDefinition(metric);
+    const revision = await nextMetricDefinitionRevision(client, projectId, metric.key);
+    await appendMetricDefinitionRevision(
+      client,
+      projectId,
+      metric,
+      revision,
+      'created',
+      definition,
+      metricSemanticFingerprint(definition),
+      owner ?? 'api:register_metric',
+    );
+    if (ownsTransaction) await client.query('COMMIT');
+    return metric;
+  } catch (error) {
+    if (ownsTransaction) await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    if (ownsTransaction) client.release();
   }
 }
 
@@ -92,49 +121,81 @@ export async function updateMetric(
   projectId: string,
   key: string,
   patch: UpdateMetricInput,
+  actor = 'compatibility:update_metric',
 ): Promise<Metric> {
-  const existing = await getMetric(pool, projectId, key);
-  if (patch.category !== undefined) {
-    await assertMetricCategory(pool, projectId, patch.category);
-  }
-  if ((patch as { status?: string }).status === 'deprecated') {
-    throw badRequest(
-      'use_deprecate_metric',
-      'deprecated metrics must include a retirement reason',
-      'call deprecate_metric or POST /metrics/{key}/deprecate with a reason so future agents understand why it was retired',
+  const ownsTransaction = isPool(pool);
+  const client = ownsTransaction ? await pool.connect() : pool;
+  try {
+    if (ownsTransaction) await client.query('BEGIN');
+    const existingResult = await client.query(
+      `SELECT ${METRIC_COLS} FROM metrics
+       WHERE project_id = $1 AND key = $2 FOR UPDATE`,
+      [projectId, key],
     );
+    const existing = existingResult.rows[0] as Metric | undefined;
+    if (!existing) throw notFound('metric');
+    if (patch.category !== undefined) {
+      await assertMetricCategory(client, projectId, patch.category);
+    }
+    if ((patch as { status?: string }).status === 'deprecated') {
+      throw badRequest(
+        'use_deprecate_metric',
+        'deprecated metrics must include a retirement reason',
+        'call deprecate_metric or POST /metrics/{key}/deprecate with a reason so future agents understand why it was retired',
+      );
+    }
+    const validatedSource = patch.source !== undefined
+      ? metricSourceSchemas[existing.type].parse(patch.source)
+      : undefined;
+    if (validatedSource !== undefined) {
+      await assertMetricSourceConnection(client, projectId, existing.type, validatedSource);
+    }
+    const currentRevision = await ensureMetricDefinitionRevision(client, projectId, existing, actor);
+    const { rows } = await client.query(
+      `UPDATE metrics SET
+         name = COALESCE($3, name),
+         purpose = COALESCE($4, purpose),
+         category = CASE WHEN $5::boolean THEN $6 ELSE category END,
+         status = COALESCE($7, status),
+         source = COALESCE($8, source),
+         tags = COALESCE($9, tags),
+         deprecation_reason = CASE WHEN $7 IN ('active', 'proposed') THEN NULL ELSE deprecation_reason END,
+         deprecated_at = CASE WHEN $7 IN ('active', 'proposed') THEN NULL ELSE deprecated_at END,
+         updated_at = now()
+       WHERE project_id = $1 AND key = $2
+       RETURNING ${METRIC_COLS}`,
+      [projectId, key, patch.name ?? null, patch.purpose ?? null,
+       patch.category !== undefined, patch.category ?? null,
+       patch.status ?? null,
+       validatedSource !== undefined ? JSON.stringify(validatedSource) : null,
+       patch.tags !== undefined ? normalizeTags(patch.tags) : null],
+    );
+    const updated = rows[0] as Metric;
+    const definition = metricSemanticDefinition(updated);
+    const fingerprint = metricSemanticFingerprint(definition);
+    if (fingerprint !== currentRevision.fingerprint) {
+      await appendMetricDefinitionRevision(
+        client,
+        projectId,
+        updated,
+        currentRevision.revision + 1,
+        'legacy_update',
+        definition,
+        fingerprint,
+        actor,
+      );
+    }
+    if (ownsTransaction) await client.query('COMMIT');
+    return updated;
+  } catch (error) {
+    if (ownsTransaction) await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    if (ownsTransaction) client.release();
   }
-  const validatedSource = patch.source !== undefined
-    ? metricSourceSchemas[existing.type].parse(patch.source)
-    : undefined;
-  if (validatedSource !== undefined) {
-    await assertMetricSourceConnection(pool, projectId, existing.type, validatedSource);
-  }
-  const { rows } = await pool.query(
-    `UPDATE metrics SET
-       name = COALESCE($3, name),
-       purpose = COALESCE($4, purpose),
-       category = CASE WHEN $5::boolean THEN $6 ELSE category END,
-       status = COALESCE($7, status),
-       source = COALESCE($8, source),
-       tags = COALESCE($9, tags),
-       deprecation_reason = CASE WHEN $7 IN ('active', 'proposed') THEN NULL ELSE deprecation_reason END,
-       deprecated_at = CASE WHEN $7 IN ('active', 'proposed') THEN NULL ELSE deprecated_at END,
-       updated_at = now()
-     WHERE project_id = $1 AND key = $2
-     RETURNING ${METRIC_COLS}`,
-    [projectId, key, patch.name ?? null, patch.purpose ?? null,
-     patch.category !== undefined, patch.category ?? null,
-     patch.status ?? null,
-     validatedSource !== undefined ? JSON.stringify(validatedSource) : null,
-     patch.tags !== undefined ? normalizeTags(patch.tags) : null],
-  );
-  // The metric can disappear between getMetric and the UPDATE.
-  if (!rows[0]) throw notFound('metric');
-  return rows[0];
 }
 
-async function assertMetricSourceConnection(
+export async function assertMetricSourceConnection(
   pool: Queryable,
   projectId: string,
   type: Metric['type'],
@@ -372,4 +433,8 @@ export async function registeredEventNames(pool: pg.Pool, projectId: string): Pr
 
 function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
+}
+
+function isPool(db: Queryable): db is pg.Pool {
+  return typeof (db as pg.PoolClient).release !== 'function';
 }

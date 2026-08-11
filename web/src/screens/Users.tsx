@@ -11,6 +11,7 @@ import { AnswerCanvas } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
 import {
   actorStatusLabel,
+  type ActorOrderReason,
   rangeDateFrom,
   type ActorIdentityStatus,
   type ActorOrder,
@@ -36,17 +37,22 @@ export function Users() {
     () => client!.metrics(project!, { status: 'active' }),
     [project, env],
   );
-  const actors = useAsync<ActorsResult>(() => client!.operationalQuery<ActorsResult>(project!, {
-    kind: 'actors',
-    env,
-    from: rangeDateFrom(range),
-    limit: PAGE_LIMIT,
-    order,
-    ...(cursor ? { cursor } : {}),
-    ...(search ? { search: { kind: 'exact_id', value: search } } : {}),
-    propertyFilters: [],
-    ...(activityMetric ? { activityMetric } : {}),
-  }), [project, env, range, order, search, activityMetric, cursor]);
+  const actorScopeKey = JSON.stringify([project, env, range, order, search, activityMetric, cursor ?? null]);
+  const actorScope = useMemo(() => ({ client, key: actorScopeKey }), [client, actorScopeKey]);
+  const actors = useAsync<{ scope: typeof actorScope; result: ActorsResult }>(async () => ({
+    scope: actorScope,
+    result: await client!.operationalQuery<ActorsResult>(project!, {
+      kind: 'actors',
+      env,
+      from: rangeDateFrom(range),
+      limit: PAGE_LIMIT,
+      order,
+      ...(cursor ? { cursor } : {}),
+      ...(search ? { search: { kind: 'exact_id', value: search } } : {}),
+      propertyFilters: [],
+      ...(activityMetric ? { activityMetric } : {}),
+    }),
+  }), [actorScope]);
 
   useEffect(() => {
     setCursorStack([null]);
@@ -56,6 +62,9 @@ export function Users() {
     () => (metrics.data ?? []).filter(isNativeEventMetric),
     [metrics.data],
   );
+  const actorData = !actors.loading && !actors.error && actors.data?.scope === actorScope
+    ? actors.data.result
+    : null;
 
   const applySearch = (event: FormEvent) => {
     event.preventDefault();
@@ -66,7 +75,7 @@ export function Users() {
     <div className="space-y-5">
       <header>
         <h1 className="serif text-3xl sm:text-4xl">People</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Anonymous visitors and identified users, resolved from immutable events and active identity links.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Bounded actor aggregates resolved from immutable events and explicit identity links.</p>
       </header>
 
       <AnswerCanvas>
@@ -128,13 +137,15 @@ export function Users() {
 
       {actors.loading && <Loading what="resolving canonical actors…" />}
       {actors.error && <ErrorNote>{actors.error}</ErrorNote>}
-      {actors.data && (
-        <AnswerCanvas>
+      {actorData && (
+        <>
+          <PeopleDataHealth capabilities={actorData.meta.capabilities} />
+          <AnswerCanvas>
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
             <h2 className="text-sm font-semibold">People</h2>
-            <span className="text-xs text-muted-foreground">Page {page + 1} · max {PAGE_LIMIT}</span>
+            <span className="text-xs text-muted-foreground">Bounded observed activity only · page {page + 1}</span>
           </div>
-          {actors.data.actors.length === 0 ? (
+          {actorData.actors.length === 0 ? (
             <EmptyState
               headline="No actors"
               lead={search ? 'No canonical population contains this exact ID in the selected period.' : 'No events matched this scope.'}
@@ -146,27 +157,36 @@ export function Users() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Person</TableHead>
-                      <TableHead>Status</TableHead>
+                      <TableHead>Order evidence</TableHead>
                       <TableHead>First seen</TableHead>
                       <TableHead>Last seen</TableHead>
-                      <TableHead className="text-right">Sessions</TableHead>
-                      <TableHead>Outcome</TableHead>
+                      {actorData.meta.capabilities.session_count.project_capability
+                        && <TableHead className="text-right">Sessions</TableHead>}
                       <TableHead>Registered activity</TableHead>
                       <TableHead><span className="sr-only">Open</span></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {actors.data.actors.map((actor) => (
+                    {actorData.actors.map((actor) => (
                       <TableRow key={actor.distinct_id}>
                         <TableCell>
                           <div className="max-w-56 truncate font-mono text-xs" title={actor.distinct_id}>{actor.distinct_id}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">{fmtNum(actor.total_events)} events · {actor.active_days} active days</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                            <span>{fmtNum(actor.total_events)} events · {actor.active_days} active days</span>
+                            {(actor.identity_status === 'linked' || actor.identity_status === 'ambiguous')
+                              && <IdentityBadge status={actor.identity_status} />}
+                          </div>
                         </TableCell>
-                        <TableCell><IdentityBadge status={actor.identity_status} /></TableCell>
+                        <TableCell>
+                          <OrderEvidence
+                            reason={actor.order_reason}
+                            window={actor.rank_evidence_window ?? actorData.meta.date_range}
+                          />
+                        </TableCell>
                         <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(actor.first_seen)}</TableCell>
                         <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(actor.last_seen)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{actor.session_count ?? 'Unavailable'}</TableCell>
-                        <TableCell><Badge variant={activityMetric ? 'default' : 'outline'}>{activityMetric ? 'Observed' : 'Not assessed'}</Badge></TableCell>
+                        {actorData.meta.capabilities.session_count.project_capability
+                          && <TableCell className="text-right tabular-nums">{actor.session_count ?? '—'}</TableCell>}
                         <TableCell>
                           <div className="flex max-w-xs flex-wrap gap-1">
                             {actor.top_events.slice(0, 2).map((event) => (
@@ -201,9 +221,9 @@ export function Users() {
                 <Button
                   variant="outline"
                   className="h-11 md:h-9"
-                  disabled={!actors.data.meta.next_cursor}
+                  disabled={!actorData.meta.next_cursor}
                   onClick={() => {
-                    const next = actors.data?.meta.next_cursor;
+                    const next = actorData.meta.next_cursor;
                     if (next) setCursorStack((current) => [...current, next]);
                   }}
                 >
@@ -214,12 +234,62 @@ export function Users() {
           )}
           <details className="group/disclosure border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
             <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center py-3 font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">How people are resolved</DisclosureSummary>
-            Activity properties remain redacted. Property filters and pinned properties stay unavailable until a deterministic trusted canonical actor-property source exists.
+            Activity properties remain redacted. Exact-ID lookup accepts a canonical or raw actor ID and returns only its canonical bounded aggregate.
+            Rows use only the explicit Last seen, First seen, or Event volume order selected above. Activation, stall, risk and segment changes are not ranked until a purpose-backed definition exists.
           </details>
-        </AnswerCanvas>
+          </AnswerCanvas>
+        </>
       )}
     </div>
   );
+}
+
+const ORDER_REASON_LABELS: Record<ActorOrderReason, string> = {
+  last_seen_in_window: 'Ordered by last seen in this window',
+  first_seen_in_window: 'Ordered by first seen in this window',
+  event_volume_in_window: 'Ordered by event volume in this window',
+};
+
+function OrderEvidence({ reason, window }: {
+  reason: ActorOrderReason;
+  window: { from: string; to: string };
+}) {
+  return <div className="max-w-sm">
+    <Badge variant="outline" className="whitespace-normal text-left font-normal">{ORDER_REASON_LABELS[reason]}</Badge>
+    <div className="mt-1.5 whitespace-nowrap text-xs text-muted-foreground">
+      Evidence window: {formatDate(window.from)}–{formatDate(window.to)}
+    </div>
+  </div>;
+}
+
+function PeopleDataHealth({ capabilities }: { capabilities: ActorsResult['meta']['capabilities'] }) {
+  return <AnswerCanvas>
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3 sm:px-5">
+      <div>
+        <h2 className="text-sm font-semibold">People data health</h2>
+        <p className="mt-1 text-xs text-muted-foreground">One place for capability limits; rows stay focused on observed evidence.</p>
+      </div>
+      <Badge variant="secondary">Observed activity only</Badge>
+    </div>
+    <ul className="grid gap-3 p-4 text-sm sm:p-5 lg:grid-cols-3">
+      <li className="rounded-control border p-3">
+        <span className="font-medium">Identity enrichment is unavailable.</span>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{capabilities.identity_profile.reason}</p>
+      </li>
+      <li className="rounded-control border p-3">
+        <span className="font-medium">Canonical actor properties are unavailable.</span>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{capabilities.property_filters.reason}</p>
+      </li>
+      <li className="rounded-control border p-3">
+        <span className="font-medium">Activation, stall, risk and segment-change ranking are unavailable.</span>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{capabilities.outcome_rank.reason}</p>
+      </li>
+      {!capabilities.session_count.project_capability && <li className="rounded-control border p-3 lg:col-span-3">
+        <span className="font-medium">Session counts are hidden.</span>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Canonical Browser session evidence is not available for this project.</p>
+      </li>}
+    </ul>
+  </AnswerCanvas>;
 }
 
 export function IdentityBadge({ status }: { status: ActorIdentityStatus }) {
@@ -240,4 +310,8 @@ function isNativeEventMetric(metric: Metric): boolean {
 
 function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(value));
 }

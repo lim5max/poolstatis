@@ -5,6 +5,7 @@ import { Projects } from './screens/Projects';
 import { Profile } from './screens/Profile';
 import { Usage } from './screens/Usage';
 import { useStore } from './store';
+import type { UsageControlResult } from './api/types';
 
 vi.mock('./store', async (importOriginal) => ({ ...(await importOriginal<typeof import('./store')>()), useStore: vi.fn() }));
 const { logout, hostedAuth } = vi.hoisted(() => {
@@ -41,7 +42,7 @@ describe('cloud workspace project controls', () => {
 
   it('never offers organization project creation to a secret key session', () => {
     renderProjects();
-    expect(screen.queryByRole('button', { name: 'Create' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
   });
 
   it('offers project creation to a hosted owner and switches the selected project', () => {
@@ -58,7 +59,7 @@ describe('cloud workspace project controls', () => {
       account: { membership: { role: 'owner' } },
     } as never);
     renderProjects();
-    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New project' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Bravo' }));
     expect(setProject).toHaveBeenCalledWith('bravo');
   });
@@ -72,9 +73,10 @@ describe('cloud workspace project controls', () => {
       account: { membership: { role: 'admin' } },
     } as never);
     renderProjects();
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
     fireEvent.change(screen.getByLabelText('Slug'), { target: { value: 'new-project' } });
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New project' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     await waitFor(() => expect(createProject).toHaveBeenCalledWith({ slug: 'new-project', name: 'New project' }));
     await waitFor(() => expect(refreshProjects).toHaveBeenCalledOnce());
     expect(setProject).toHaveBeenCalledWith('new-project');
@@ -88,8 +90,9 @@ describe('cloud workspace project controls', () => {
       account: { membership: { role: 'owner' } },
     } as never);
     renderProjects();
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
     fireEvent.change(screen.getByLabelText('Slug'), { target: { value: 'new-project' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled();
     resolveCreate?.({ slug: 'new-project' });
     await waitFor(() => expect(refreshProjects).toHaveBeenCalledOnce());
@@ -101,7 +104,7 @@ describe('cloud workspace project controls', () => {
       account: null,
     } as never);
     renderProjects();
-    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New project' })).toBeInTheDocument();
   });
 
   it('keeps owner onboarding and project creation hidden for an empty hosted member workspace', () => {
@@ -110,7 +113,7 @@ describe('cloud workspace project controls', () => {
       account: { membership: { role: 'member' } },
     } as never);
     renderProjects();
-    expect(screen.queryByRole('button', { name: 'Create' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
     expect(screen.getByText('No projects in this workspace')).toBeInTheDocument();
     expect(screen.queryByText('Create your workspace')).not.toBeInTheDocument();
   });
@@ -261,20 +264,75 @@ describe('hosted profile and personal token lifecycle', () => {
 });
 
 describe('organization usage ledger', () => {
-  const usage = vi.fn();
+  const usageControl = vi.fn();
   const usageActivity = vi.fn();
   const usageRange = vi.fn();
+
+  function usageControlResult(overrides: Partial<UsageControlResult> = {}): UsageControlResult {
+    const period = new Date().toISOString().slice(0, 7);
+    return {
+      schema_version: 1,
+      request_id: 'usage-test-request',
+      generated_at: `${period}-15T12:00:00.000Z`,
+      scope: {
+        organization_id: 'organization-1',
+        window: { from: `${period}-01T00:00:00.000Z`, to: `${period}-28T23:59:59.999Z`, timezone: 'UTC' },
+      },
+      answer: {
+        state: 'ready',
+        headline: '1,200 accepted events this cycle',
+        takeaway: 'Usage remains below the configured hard limit.',
+        primary_value: { value: 1200, unit: 'count', formatted: '1,200' },
+        why_it_matters: 'The workspace can keep ingesting without a limit breach.',
+      },
+      attention: [],
+      evidence: {
+        state: 'trusted',
+        as_of: `${period}-15T12:00:00.000Z`,
+        freshness: 'fresh',
+        source_refs: [{ kind: 'usage_ledger', meter: 'events_stored' }],
+        warnings: [],
+        unavailable_reasons: [],
+      },
+      primary_action: { id: 'review-contributors', kind: 'navigate', label: 'Review contributors', href: '#usage-contributors-title' },
+      secondary_actions: [],
+      meter: 'events_stored',
+      cycle: { from: `${period}-01T00:00:00.000Z`, to: `${period}-28T23:59:59.999Z`, timezone: 'UTC' },
+      cap: { state: 'finite', value: 2000, remaining: 800, consequence_at_100_percent: 'A batch that would exceed the limit is rejected.' },
+      pace: { observed_days: 7, events_per_day_7d: 40, projected_cycle_end: 1800, confidence: 'sufficient' },
+      threshold_forecasts: [
+        { percent: 50, state: 'reached', reached_or_projected_at: `${period}-12T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 75, state: 'projected', reached_or_projected_at: `${period}-20T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 90, state: 'projected', reached_or_projected_at: `${period}-26T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 100, state: 'not_projected', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+      ],
+      contributors: [{
+        project_slug: 'alpha', project_name: 'Alpha', environment: 'prod',
+        accepted_events: 1200, share: 1, change_7d: 0.1, last_ingest_at: `${period}-15T11:55:00.000Z`,
+      }],
+      reconciliation: {
+        metered_quantity: 1200,
+        attributed_quantity: 1200,
+        difference: 0,
+        unattributed_quantity: 0,
+        overattributed_quantity: 0,
+        state: 'reconciled',
+      },
+      ...overrides,
+    };
+  }
 
   function usageStore() {
     return {
       tokenKind: 'user',
       account: { membership: { role: 'owner' } },
-      client: { usage, usageActivity, usageRange },
+      client: { usageControl, usageActivity, usageRange },
     } as never;
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
+    usageControl.mockResolvedValue(usageControlResult());
     usageActivity.mockResolvedValue({
       meter: 'events_stored', date_from: '2026-07-01', date_to: '2026-07-30', quantity: '42',
       source: 'usage_ledger', timezone: 'UTC', projects: [],
@@ -292,13 +350,10 @@ describe('organization usage ledger', () => {
   });
 
   it('separates accepted-event activity ranges from the monthly quota ledger', async () => {
-    usage.mockResolvedValue({
-      meter: 'events_stored', period: '2026-07', quantity: 1200, hard_limit: 2000,
-      warning_thresholds: [], warnings: [], projects: [],
-    });
     mockedStore.mockReturnValue(usageStore());
     render(<Usage />);
 
+    fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     expect(await screen.findByRole('heading', { name: 'Accepted-event activity' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Last 7 days' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Last 30 days' })).toHaveAttribute('aria-pressed', 'true');
@@ -310,16 +365,13 @@ describe('organization usage ledger', () => {
     await waitFor(() => expect(usageActivity).toHaveBeenCalledTimes(2));
     const [from, to] = usageActivity.mock.calls[1] as [string, string];
     expect(Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)).toBe(6 * 24 * 60 * 60 * 1000);
-    expect(screen.getByText('Current monthly quota')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Monthly usage history' })).toBeInTheDocument();
   });
 
   it('validates custom activity dates before making another request', async () => {
-    usage.mockResolvedValue({
-      meter: 'events_stored', period: '2026-07', quantity: 0, hard_limit: null,
-      warning_thresholds: [], warnings: [], projects: [],
-    });
     mockedStore.mockReturnValue(usageStore());
     render(<Usage />);
+    fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageActivity).toHaveBeenCalledOnce());
 
     fireEvent.change(screen.getByLabelText('Activity from'), { target: { value: '' } });
@@ -328,44 +380,59 @@ describe('organization usage ledger', () => {
   });
 
   it('uses a strict UTC calendar month and renders the events_stored ledger with a mobile-safe breakdown', async () => {
-    usage.mockResolvedValue({
-      meter: 'events_stored', period: '2026-07', quantity: 1200, hard_limit: 2000,
-      warning_thresholds: [1000, 1800], warnings: [{ threshold: 1000, quantity: 1200 }],
-      projects: [{ id: 'project-1', slug: 'alpha', name: 'Alpha', quantity: 1200, environments: [{ env: 'prod', quantity: 1100 }, { env: 'staging', quantity: 100 }] }],
-    });
+    const expectedMonth = new Date().toISOString().slice(0, 7);
     mockedStore.mockReturnValue(usageStore());
     render(<Usage />);
-    const expectedMonth = new Date().toISOString().slice(0, 7);
-    await waitFor(() => expect(usage).toHaveBeenCalledWith(expectedMonth));
+    await waitFor(() => expect(usageControl).toHaveBeenCalledWith(expectedMonth));
     expect(screen.getByText(`${expectedMonth} UTC`)).toBeInTheDocument();
-    expect(screen.getByText('events_stored')).toBeInTheDocument();
-    expect(screen.getByText(/Warning threshold reached: 1,000 events\./)).toBeInTheDocument();
-    expect(screen.getByTestId('usage-ledger-rail')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '1,200 accepted events this cycle' })).toBeInTheDocument();
+    expect(screen.getByText(/^Reached /)).toBeInTheDocument();
+    expect(screen.getAllByText(/^Projected /)).not.toHaveLength(0);
     expect(screen.getByTestId('usage-breakdown-scroll')).toHaveClass('overflow-x-auto');
+    expect(screen.getByRole('img', { name: '60 percent of the configured hard limit used' })).toBeInTheDocument();
     expect(screen.queryByText(/MTU|price|seat/i)).not.toBeInTheDocument();
   });
 
   it('states loading, error, and empty usage states without implying product analytics', async () => {
     let resolveUsage: ((value: unknown) => void) | undefined;
-    usage.mockReturnValue(new Promise((resolve) => { resolveUsage = resolve; }));
+    usageControl.mockReturnValue(new Promise((resolve) => { resolveUsage = resolve; }));
     mockedStore.mockReturnValue(usageStore());
     const view = render(<Usage />);
     expect(screen.getByText('Loading usage ledger…')).toBeInTheDocument();
-    resolveUsage?.({ meter: 'events_stored', period: '2026-07', quantity: 0, hard_limit: null, warning_thresholds: [], warnings: [], projects: [] });
+    resolveUsage?.(usageControlResult({
+      answer: {
+        state: 'empty', headline: 'No stored events this cycle', takeaway: 'No accepted events were stored.',
+        primary_value: { value: 0, unit: 'count', formatted: '0' }, why_it_matters: 'There is no current-cycle usage to review.',
+      },
+      cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
+      contributors: [],
+      threshold_forecasts: [50, 75, 90, 100].map((percent) => ({
+        percent: percent as 50 | 75 | 90 | 100, state: 'not_applicable' as const, reached_or_projected_at: null,
+        notification_state: 'not_configured' as const, audit_source: 'usage_ledger' as const,
+      })),
+    }));
     await screen.findByText(/No stored events in/);
     view.unmount();
 
-    usage.mockRejectedValue(new Error('usage read failed'));
+    usageControl.mockRejectedValue(new Error('usage read failed'));
     render(<Usage />);
     await screen.findByText(/usage read failed/);
   });
 
   it('renders a zero hard cap without invalid ledger geometry and calls the cap reached', async () => {
-    usage.mockResolvedValue({ meter: 'events_stored', period: '2026-07', quantity: 0, hard_limit: 0, warning_thresholds: [], warnings: [], projects: [] });
+    usageControl.mockResolvedValue(usageControlResult({
+      answer: {
+        state: 'ready', headline: 'No events can be accepted', takeaway: 'The configured hard limit is zero.',
+        primary_value: { value: 0, unit: 'count', formatted: '0' }, why_it_matters: 'Every non-empty batch would exceed the hard limit.',
+      },
+      cap: { state: 'finite', value: 0, remaining: 0, consequence_at_100_percent: 'At 0 events, a batch that would exceed the limit is rejected.' },
+      contributors: [],
+    }));
     mockedStore.mockReturnValue(usageStore());
     render(<Usage />);
-    await screen.findByText('Hard limit reached — 0 event limit');
-    expect(screen.getByTestId('usage-ledger-rail').innerHTML).not.toContain('NaN');
-    expect(screen.getByLabelText('Hard limit 0')).toHaveStyle({ left: '0%' });
+    await screen.findByText('Hard limit reached');
+    const meter = screen.getByRole('img', { name: '0 percent of the configured hard limit used' });
+    expect(meter.innerHTML).not.toContain('NaN');
+    expect(screen.getAllByText('At 0 events, a batch that would exceed the limit is rejected.')).toHaveLength(2);
   });
 });

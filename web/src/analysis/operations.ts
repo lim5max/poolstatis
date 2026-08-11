@@ -16,6 +16,10 @@ export type WebDimension =
   | 'timezone'
   | 'country';
 export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+export type ActorOrderReason =
+  | 'last_seen_in_window'
+  | 'first_seen_in_window'
+  | 'event_volume_in_window';
 export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
 
 interface WebQueryBase {
@@ -179,6 +183,8 @@ export interface ActorListItem {
   top_events: Array<{ event: string; count: number }>;
   pinned_properties: Record<string, unknown>;
   identity_status: ActorIdentityStatus;
+  order_reason: ActorOrderReason;
+  rank_evidence_window: { from: string; to: string };
 }
 
 export interface ActorsResult {
@@ -197,11 +203,24 @@ export interface ActorsResult {
         unavailable_value: null;
         project_capability: boolean;
       };
+      identity_profile: { available: false; reason: string };
+      outcome_rank: { available: false; reason: string };
+      interesting_categories: {
+        recently_activated: { available: false; requires: 'purpose_backed_activation_metric_or_funnel' };
+        stalled: { available: false; requires: 'purpose_backed_stall_definition' };
+        at_risk: { available: false; requires: 'purpose_backed_risk_definition' };
+        changed_segment: { available: false; requires: 'trusted_canonical_actor_property_source' };
+      };
     };
     provenance: {
       identity_status: string;
       top_events: { registered_only: true; limit: 8 };
       pinned_properties: { source: null; fail_closed: true };
+      ordering: {
+        selected: ActorOrder;
+        input: 'last_seen' | 'first_seen' | 'total_events';
+        relative_to: string;
+      };
     };
   };
 }

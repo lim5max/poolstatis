@@ -24,6 +24,7 @@ import {
   createOrganization,
   createProject,
 } from '../src/services/projects.js';
+import { analysisViewInput } from './analysis-view-fixtures.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -161,7 +162,7 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe(
-        '035_project_intents.sql',
+        '039_data_health_control.sql',
       );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
@@ -195,6 +196,18 @@ describe('hosted policy migration role topology', () => {
       );
       await deploy.query(
         'SELECT poolstatis_prepare_project_intent_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_analysis_views_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_control_tower_automation_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_metric_definition_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_data_health_role_grants()',
       );
       await deploy.query(
         'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
@@ -287,6 +300,12 @@ describe('hosted policy migration role topology', () => {
         'SELECT count(*)::int AS count FROM project_intents',
       )).resolves.toMatchObject({ rows: [{ count: 0 }] });
       await expect(coreRuntime.query(
+        'SELECT count(*)::int AS count FROM metric_definition_revisions',
+      )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+      await expect(coreRuntime.query(
+        'SELECT count(*)::int AS count FROM ingest_warning_occurrences',
+      )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+      await expect(coreRuntime.query(
         'SELECT count(*)::int AS count FROM setup_task_feedback',
       )).resolves.toMatchObject({ rows: [{ count: 0 }] });
 
@@ -321,7 +340,7 @@ describe('hosted policy migration role topology', () => {
       });
       const api = async (
         bearer: string,
-        method: 'GET' | 'POST' | 'PUT',
+        method: 'GET' | 'POST' | 'PUT' | 'PATCH',
         url: string,
         payload?: unknown,
       ) => {
@@ -400,11 +419,44 @@ describe('hosted policy migration role topology', () => {
         source: { event: 'isolated.event' },
       });
       expect(metric.status).toBe(201);
+      const activatedMetric = await api(
+        token,
+        'PATCH',
+        '/api/v1/projects/isolated-project/metrics/isolated_events',
+        { status: 'active' },
+      );
+      expect(activatedMetric.status).toBe(200);
+      const savedAnswer = await api(
+        token,
+        'POST',
+        '/api/v1/projects/isolated-project/analysis-views',
+        analysisViewInput('isolated-project', 'prod', 'isolated_events'),
+      );
+      expect(savedAnswer.status).toBe(201);
+      const officialAnswer = await api(
+        token,
+        'PUT',
+        `/api/v1/projects/isolated-project/analysis-views/${savedAnswer.body.view.id}/official`,
+        { official: true },
+      );
+      expect(officialAnswer.status).toBe(200);
+      await expect(coreRuntime.query(
+        `UPDATE analysis_view_audit SET action = 'archived'
+         WHERE analysis_view_id = $1`,
+        [savedAnswer.body.view.id],
+      )).rejects.toMatchObject({ code: '42501' });
       const ingested = await api(ingestKey.body.token, 'POST', '/i/v1/events', {
         events: [{ event: 'isolated.event', distinct_id: 'isolated-actor' }],
       });
       expect(ingested.status).toBe(200);
       expect(ingested.body.accepted).toBe(1);
+      const dataHealth = await api(
+        token,
+        'GET',
+        '/api/v1/projects/isolated-project/data-health?env=prod',
+      );
+      expect(dataHealth.status).toBe(200);
+      expect(dataHealth.body.summary.accepted_24h).toBe(1);
       const storedPartition = await deploy.query<{ partition: string }>(
         `SELECT tableoid::regclass::text AS partition
          FROM events WHERE event = 'isolated.event'`,
@@ -481,7 +533,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '035_project_intents.sql',
+        last_migration: '039_data_health_control.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -565,6 +617,10 @@ describe('hosted policy migration role topology', () => {
       await selfHost.query('SELECT poolstatis_prepare_metric_taxonomy_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_event_management_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_project_intent_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_analysis_views_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_control_tower_automation_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_metric_definition_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_data_health_role_grants()');
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(selfHost, new Date(), 12);
       await ensureRetentionIndexes(selfHost);
@@ -707,7 +763,7 @@ describe('hosted policy migration role topology', () => {
       );
       const applied = await migrateWithEvidence(selfHost);
       expect(applied.at(-1)).toBe(
-        '035_project_intents.sql',
+        '039_data_health_control.sql',
       );
       const topology = await selfHost.query<{
         superuser: boolean;

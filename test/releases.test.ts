@@ -142,6 +142,39 @@ describe('immutable release provenance', () => {
       .toEqual(['planned', 'deployed', 'observing', 'cancelled']);
     expect(detail.body.revisions.every((revision: { snapshot: { commit_sha: string } }) => revision.snapshot.commit_sha === 'b'.repeat(40))).toBe(true);
   });
+
+  test('selects the nearest decision-eligible release on the server with deterministic tie-breakers', async () => {
+    const earlierDue = await api(env, env.secretToken, 'POST', path(env, '/releases'), {
+      idempotency_key: 'decision-nearest-first',
+      contract_key: 'shorter_onboarding', env: 'decision-queue', repository: 'acme/product',
+      commit_sha: 'c'.repeat(40), deployed_at: '2026-07-19T00:00:00.000Z', status: 'deployed',
+    });
+    const laterCreatedButLaterDue = await api(env, env.secretToken, 'POST', path(env, '/releases'), {
+      idempotency_key: 'decision-nearest-second',
+      contract_key: 'shorter_onboarding', env: 'decision-queue', repository: 'acme/product',
+      commit_sha: 'd'.repeat(40), deployed_at: '2026-07-20T00:00:00.000Z', status: 'deployed',
+    });
+    expect(earlierDue.status).toBe(201);
+    expect(laterCreatedButLaterDue.status).toBe(201);
+
+    const nearest = await api(
+      env,
+      env.secretToken,
+      'GET',
+      path(env, '/releases?env=decision-queue&decision_eligible=nearest'),
+    );
+    expect(nearest.status).toBe(200);
+    expect(nearest.body.releases).toEqual([
+      expect.objectContaining({ id: earlierDue.body.id, status: 'deployed' }),
+    ]);
+    const crossProject = await api(
+      env,
+      env.secretToken,
+      'GET',
+      path(other, '/releases?env=decision-queue&decision_eligible=nearest'),
+    );
+    expect(crossProject.status).toBe(404);
+  });
 });
 
 function path(env: TestEnv, suffix: string) {

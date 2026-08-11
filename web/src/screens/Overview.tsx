@@ -1,11 +1,12 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { ErrorNote, Loading, fmtNum, fmtRelative } from '@/components/ui';
 import { AnswerCanvas, type EvidenceTrust, type KpiItem } from '@/components/analytics';
+import { DisclosureSummary } from '@/components/disclosure';
 import { formatDurationMs, webPageMetric, type WebAnalyticsResult } from '../analysis/operations';
-import type { Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
+import type { AttentionItem, ControlTowerAction, ControlTowerResult, Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
 import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
 import type { ProjectMode } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
@@ -50,7 +51,8 @@ export function Overview() {
   const homeScope = `${project ?? ''}\u0000${env}`;
   const home = useAsync(async () => {
     try {
-      const [intent, metrics, funnels, schema] = await Promise.all([
+      const [controlTower, intent, metrics, funnels, schema] = await Promise.all([
+        client!.controlTower(project!, env, '30d'),
         readProjectIntent(client as unknown as IntentCapableClient, project!),
         client!.metrics(project!, { status: 'active' }),
         client!.funnels(project!),
@@ -63,7 +65,9 @@ export function Overview() {
         || (intent?.project_mode === 'both' && prefersWebsite(intent.primary_goal_id))
         ? pageMetric
         : primaryMetric;
-      const homeFunnel = pickHomeFunnel(funnels, intent?.primary_goal_id ?? null, funnelAnchor?.key ?? null);
+      const homeFunnel = controlTower.home_funnel_key === undefined
+        ? pickHomeFunnel(funnels, intent?.primary_goal_id ?? null, funnelAnchor?.key ?? null)
+        : funnels.find((funnel) => funnel.key === controlTower.home_funnel_key) ?? null;
       const productAnswersEnabled = intent?.project_mode !== 'website';
       const websiteAnswersEnabled = intent?.project_mode !== 'product';
       const [product, website] = await Promise.all([
@@ -75,7 +79,17 @@ export function Overview() {
         ),
         readWebsiteAnswer(client!, project!, env, websiteAnswersEnabled ? pageMetric : null),
       ]);
-      return { scope: homeScope, value: { intent, product, website, schema }, error: null as string | null };
+      return {
+        scope: homeScope,
+        value: {
+          intent,
+          product,
+          website,
+          schema,
+          controlTower,
+        },
+        error: null as string | null,
+      };
     } catch (caught) {
       return { scope: homeScope, value: null, error: (caught as Error).message };
     }
@@ -98,12 +112,13 @@ export function Overview() {
   if (scopedHome?.error) return <ErrorNote>{scopedHome.error}</ErrorNote>;
   if (!homeData) return <Loading what="reading current answers…" />;
 
-  const { intent, product, website, schema } = homeData;
+  const { intent, product, website, schema, controlTower } = homeData;
   const mode = intent?.project_mode ?? null;
-  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} project={project!} env={env} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
-  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} project={project!} env={env} telemetryUserId={account?.user?.id} />;
+  const attention = controlTower.attention;
+  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   if (mode === 'both' && intent) {
-    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   }
 
   // A missing intent row is legacy/unset. Keep the project useful and never
@@ -112,12 +127,21 @@ export function Overview() {
     <div className="space-y-5">
       <PageHeader
         title="Home"
-        answer="Project mode is not set. Your existing answers and data remain available."
-        action={<Button asChild className="h-11"><Link to={website.overview ? '/analyze/web' : '/analyze/product'} onClick={() => trackHomeAction('open_current_answer', account?.user?.id)}>Open current answer <ArrowRight className="size-4" /></Link></Button>}
+        answer={website.overview
+          ? websiteLead(website)
+          : product.metric
+            ? `${product.metric.name} is the clearest active outcome available for this project.`
+            : controlTower.answer.takeaway}
       />
-      <div className="rounded-panel border border-dashed bg-card px-4 py-3 text-sm text-muted-foreground">
-        Legacy project · choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
-      </div>
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />
+      <details className="rounded-panel border bg-card">
+        <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-4 py-3 text-sm font-medium">
+          Project settings
+        </DisclosureSummary>
+        <p className="border-t px-4 py-3 text-sm text-muted-foreground">
+          Project mode is not set. Choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
+        </p>
+      </details>
       {website.overview
         ? <WebsiteAnswerCanvas answer={website} product={product} schema={schema} env={env} onRetry={home.reload} />
         : <ProductAnswerCanvas answer={product} schema={schema} env={env} />}
@@ -125,38 +149,137 @@ export function Overview() {
   );
 }
 
-function WebsiteHome({ answer, product, schema, project, env, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; project: string; env: string; telemetryUserId?: string | null; onRetry: () => void }) {
+function AttentionQueue({ result, items, telemetryUserId, onRetry }: {
+  result: ControlTowerResult;
+  items: AttentionItem[];
+  telemetryUserId?: string | null;
+  onRetry: () => void;
+}) {
+  const visibleItems = items.length > 0 ? items.slice(0, 3) : [guardrailItem(result)];
+  const remainingItems = items.slice(3);
+  return (
+    <section aria-labelledby="attention-title">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <div>
+          <h2 id="attention-title" className="text-sm font-semibold">Needs attention</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Highest-impact server-backed signal first.</p>
+        </div>
+        <span className="font-mono text-sm text-muted-foreground">{items.length}</span>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-3">
+        {visibleItems.map((item, index) => (
+          <AttentionCard key={item.id} item={item} primary={index === 0} telemetryUserId={telemetryUserId} onRetry={onRetry} />
+        ))}
+      </div>
+      {remainingItems.length > 0 && (
+        <details className="mt-3 rounded-panel border bg-card">
+          <DisclosureSummary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-medium">
+            <span>View all {items.length} signals</span>
+            <span className="font-mono text-muted-foreground">+{remainingItems.length}</span>
+          </DisclosureSummary>
+          <div className="grid gap-3 border-t p-3 lg:grid-cols-3">
+            {remainingItems.map((item) => (
+              <AttentionCard key={item.id} item={item} primary={false} telemetryUserId={telemetryUserId} onRetry={onRetry} />
+            ))}
+          </div>
+        </details>
+      )}
+    </section>
+  );
+}
+
+function AttentionCard({ item, primary, telemetryUserId, onRetry }: {
+  item: AttentionItem;
+  primary: boolean;
+  telemetryUserId?: string | null;
+  onRetry: () => void;
+}) {
+  return (
+    <article className={`min-w-0 rounded-panel border bg-card p-4 ${item.severity === 'critical' || item.severity === 'high' ? 'border-destructive/45' : item.severity === 'medium' ? 'border-warning/45' : ''}`}>
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span className="font-medium">{severityLabel(item.severity)}</span>
+        <span className="text-muted-foreground">{item.evidence.freshness === 'fresh' ? fmtRelative(item.evidence.as_of) : item.evidence.freshness}</span>
+      </div>
+      <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
+      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
+      <p className="mt-3 border-t pt-3 text-sm"><span className="font-medium">Impact:</span> <span className="text-muted-foreground">{item.impact}</span></p>
+      <AttentionAction action={item.primary_action} primary={primary} telemetryUserId={telemetryUserId} onRetry={onRetry} />
+    </article>
+  );
+}
+
+function guardrailItem(result: ControlTowerResult): AttentionItem {
+  return {
+    id: 'control-tower.evaluated',
+    rule_id: 'control-tower.evaluated',
+    rule_version: 1,
+    severity: 'info',
+    state: result.answer.state === 'unavailable' || result.answer.state === 'error' ? 'unavailable' : 'resolved',
+    title: result.answer.headline,
+    reason: result.answer.takeaway,
+    impact: result.answer.why_it_matters,
+    affected: [],
+    evidence: result.evidence,
+    primary_action: result.primary_action,
+  };
+}
+
+function AttentionAction({ action, primary, telemetryUserId, onRetry }: {
+  action: ControlTowerAction;
+  primary: boolean;
+  telemetryUserId?: string | null;
+  onRetry: () => void;
+}) {
+  if (action.kind === 'navigate') {
+    return (
+      <Button asChild variant={primary ? 'default' : 'outline'} className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto">
+        <Link to={action.href} onClick={() => trackHomeAction(actionTelemetry(action.href), telemetryUserId)}>
+          {action.label} <ArrowRight className="size-4" />
+        </Link>
+      </Button>
+    );
+  }
+  if (action.kind === 'retry') {
+    return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto" onClick={onRetry}>{action.label}</Button>;
+  }
+  return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto" disabled>{action.label}</Button>;
+}
+
+function severityLabel(severity: AttentionItem['severity']) {
+  if (severity === 'critical') return 'Critical';
+  if (severity === 'high' || severity === 'medium') return 'Attention';
+  if (severity === 'low') return 'Watch';
+  return 'Evaluated';
+}
+
+function actionTelemetry(href: string): TelemetryHomeAction {
+  if (href === '/analyze/web') return 'open_web';
+  if (href === '/analyze/product' || href === '/analyze/funnels') return 'explore_product';
+  if (href === '/registry') return 'review_outcomes';
+  if (href === '/measurement') return 'open_definitions';
+  return 'open_current_answer';
+}
+
+function WebsiteHome({ answer, product, schema, env, controlTower, attention, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = websiteLead(answer);
-  const dashboard = useDashboardLayout(`${project}:${env}:website`, WEBSITE_KPIS);
-  const ready = Boolean(answer.metric);
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Home"
-        answer={lead}
-        action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to={ready ? '/analyze/web' : '/measurement'} onClick={() => trackHomeAction(ready ? 'open_web' : 'open_definitions', telemetryUserId)}>{ready ? 'Open Web' : 'Set up Web'} <ArrowRight className="size-4" /></Link></Button></div>}
-      />
-      {dashboard.open && <DashboardSettings ids={WEBSITE_KPIS} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
-      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} order={dashboard.order} onRetry={onRetry} />
+      <PageHeader title="Home" answer={lead} />
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
+      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} onRetry={onRetry} />
     </div>
   );
 }
 
-function ProductHome({ answer, schema, project, env, telemetryUserId }: { answer: ProductAnswer; schema: ProjectSchema | null; project: string; env: string; telemetryUserId?: string | null }) {
+function ProductHome({ answer, schema, env, controlTower, attention, telemetryUserId, onRetry }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = answer.metric
     ? `${answer.metric.name} is the clearest active outcome available for this project.`
     : 'Events may be arriving, but no active outcome is defined yet.';
-  const definitions = productDashboardDefinitions(answer);
-  const dashboard = useDashboardLayout(`${project}:${env}:product`, definitions);
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Home"
-        answer={lead}
-        action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to={answer.metric ? '/analyze/product' : '/registry'} onClick={() => trackHomeAction(answer.metric ? 'explore_product' : 'review_outcomes', telemetryUserId)}>{answer.metric ? 'Explore Product' : 'Review outcomes'} <ArrowRight className="size-4" /></Link></Button></div>}
-      />
-      {dashboard.open && <DashboardSettings ids={definitions} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
-      <ProductAnswerCanvas answer={answer} schema={schema} env={env} order={dashboard.order} />
+      <PageHeader title="Home" answer={lead} />
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
+      <ProductAnswerCanvas answer={answer} schema={schema} env={env} />
     </div>
   );
 }
@@ -167,7 +290,9 @@ function BothHome({
   websiteFirst,
   schema,
   env,
+  controlTower,
   telemetryUserId,
+  attention,
   onRetry,
 }: {
   answer: WebsiteAnswer | ProductAnswer;
@@ -175,7 +300,9 @@ function BothHome({
   websiteFirst: boolean;
   schema: ProjectSchema | null;
   env: string;
+  controlTower: ControlTowerResult;
   telemetryUserId?: string | null;
+  attention: AttentionItem[];
   onRetry: () => void;
 }) {
   const identityState = schema === null
@@ -193,8 +320,8 @@ function BothHome({
           : identityLinked
             ? 'Identity evidence exists. Poolstatis still requires a registered cross-surface funnel before claiming an acquisition-to-activation path.'
             : 'Website and product activity are not linked yet.'}
-        action={<Button asChild className="h-11"><Link to={identityLinked ? (websiteFirst ? '/analyze/web' : '/analyze/product') : '/measurement'} onClick={() => trackHomeAction(identityLinked ? 'open_primary_answer' : 'review_identity', telemetryUserId)}>{identityLinked ? 'Open primary answer' : 'Review identity'} <ArrowRight className="size-4" /></Link></Button>}
       />
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
       <div className="flex max-w-full gap-1 overflow-x-auto rounded-control border bg-card p-1" aria-label="Both mode surfaces">
         <span className="flex min-h-11 items-center rounded-control bg-secondary px-4 text-sm font-medium">All</span>
         <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to="/analyze/web">Website</Link>
@@ -233,13 +360,11 @@ const PRODUCT_KPIS = [
 ] as const;
 const REVENUE_KPI = { id: 'revenue', label: 'Revenue' } as const;
 
-type DashboardDefinition = ReadonlyArray<{ id: string; label: string }>;
-
-function productDashboardDefinitions(answer: ProductAnswer): DashboardDefinition {
+function productDashboardDefinitions(answer: ProductAnswer) {
   return answer.revenueMetric ? [...PRODUCT_KPIS, REVENUE_KPI] : PRODUCT_KPIS;
 }
 
-function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPIS.slice(0, 4).map((item) => item.id), onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; order?: string[]; onRetry: () => void }) {
+function WebsiteAnswerCanvas({ answer, product, schema, env, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; onRetry: () => void }) {
   const activity = recentObservedEvents(schema);
   const lastEvent = activity?.[0] ?? null;
   const answerUnavailable = Boolean(answer.metric && !answer.overview);
@@ -250,26 +375,23 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPI
     note: item.id === 'last_event' ? lastEvent?.event ?? activityNote(activity) : answerUnavailable ? 'Website answer unavailable' : 'Connect website measurement',
   }));
   if (!answer.metric || !answer.overview) {
-    const nextAction = answerUnavailable
-      ? { title: 'Retry website answers', body: 'The last request failed without changing your measurement setup.', onClick: onRetry, label: 'Try again' }
-      : { title: 'Connect website measurement', body: 'Activate the canonical page-view definition, then open one real page.', href: '/measurement', label: 'Set up Web' };
     return (
       <>
-        <HomeKpiStrip items={orderDashboardItems(emptyItems, order)} />
+        <HomeKpiStrip items={emptyItems.slice(0, 4)} />
         <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} />
         <HomeSummary
           funnel={product.funnel}
           funnelResult={product.funnelResult}
           activity={activity}
-          nextAction={nextAction}
         />
+        {answerUnavailable && <Button variant="outline" className="h-11" onClick={onRetry}>Retry website answers</Button>}
       </>
     );
   }
   const { overview } = answer;
   return (
     <>
-      <HomeKpiStrip items={orderDashboardItems([
+      <HomeKpiStrip items={[
         { id: 'visitors', label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved people' },
         { id: 'sessions', label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'canonical sessions' },
         { id: 'page_views', label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted views' },
@@ -277,37 +399,35 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPI
         { id: 'average_duration', label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? null : formatDurationMs(overview.summary.average_session_duration_ms), note: 'complete sessions' },
         { id: 'engaged_rate', label: 'Engagement rate', value: answer.overview.engagement.engaged_rate == null ? null : `${Math.round(answer.overview.engagement.engaged_rate * 100)}%`, note: 'measured sessions' },
         { id: 'bounce_rate', label: 'Bounce rate', value: answer.overview.engagement.bounce_rate == null ? null : `${Math.round(answer.overview.engagement.bounce_rate * 100)}%`, note: 'measured sessions' },
-      ], order)} />
+      ].slice(0, 4)} />
       <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? overview.summary.page_views} env={env} />
       <HomeSummary
         funnel={product.funnel}
         funnelResult={product.funnelResult}
         activity={activity}
-        nextAction={nextHomeAction({ measurementReady: true, funnel: product.funnel, funnelResult: product.funnelResult, activity })}
       />
     </>
   );
 }
 
-function ProductAnswerCanvas({ answer, schema, env, order = productDashboardDefinitions(answer).slice(0, 4).map((item) => item.id) }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; order?: string[] }) {
+function ProductAnswerCanvas({ answer, schema, env }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string }) {
   const activity = recentObservedEvents(schema);
   const lastEvent = activity?.[0] ?? null;
   const definitions = productDashboardDefinitions(answer);
   if (!answer.metric) {
     return (
       <>
-        <HomeKpiStrip items={orderDashboardItems(definitions.map((item) => ({
+        <HomeKpiStrip items={definitions.map((item) => ({
           ...item,
           value: item.id === 'last_event' && lastEvent ? fmtRelative(lastEvent.last_seen) : null,
           fallback: item.id === 'last_event' ? activityFallback(activity) : 'Not configured',
           note: item.id === 'last_event' ? lastEvent?.event ?? activityNote(activity) : 'Define a measurable outcome',
-        })), order)} />
+        })).slice(0, 4)} />
         <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} />
         <HomeSummary
           funnel={answer.funnel}
           funnelResult={answer.funnelResult}
           activity={activity}
-          nextAction={{ title: 'Define a product outcome', body: 'Activate one metric that represents meaningful product value.', href: '/registry', label: 'Review outcomes' }}
         />
       </>
     );
@@ -319,20 +439,19 @@ function ProductAnswerCanvas({ answer, schema, env, order = productDashboardDefi
   const finalStep = answer.funnelResult?.steps.at(-1) ?? null;
   return (
     <>
-      <HomeKpiStrip items={orderDashboardItems([
+      <HomeKpiStrip items={[
         { id: 'outcome', label: answer.metric.name, value: metricValue, note: 'current 30-day outcome' },
         { id: 'people', label: 'Observed people', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_actors) : null, note: 'resolved actors' },
         { id: 'activation', label: 'Activation', value: finalStep?.conversion_from_start === null || finalStep?.conversion_from_start === undefined ? null : `${Math.round(finalStep.conversion_from_start * 100)}%`, note: answer.funnel?.name ?? 'saved funnel required' },
         { id: 'last_event', label: 'Last event', value: lastEvent ? fmtRelative(lastEvent.last_seen) : null, fallback: activityFallback(activity), note: lastEvent?.event ?? activityNote(activity) },
         { id: 'events', label: 'Event volume', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_events) : null, note: 'accepted observations' },
         ...(answer.revenueMetric ? [{ id: 'revenue', label: answer.revenueMetric.name, value: revenueValue, fallback: 'Unavailable', note: 'active revenue outcome' }] : []),
-      ], order)} />
+      ].slice(0, 4)} />
       <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? null} env={env} />
       <HomeSummary
         funnel={answer.funnel}
         funnelResult={answer.funnelResult}
         activity={activity}
-        nextAction={nextHomeAction({ measurementReady: true, funnel: answer.funnel, funnelResult: answer.funnelResult, activity })}
       />
     </>
   );
@@ -366,19 +485,10 @@ function HomeEvidence({ trust, eventCount, env }: { trust: EvidenceTrust; eventC
   );
 }
 
-interface HomeNextAction {
-  title: string;
-  body: string;
-  href?: string;
-  onClick?: () => void;
-  label: string;
-}
-
-function HomeSummary({ funnel, funnelResult, activity, nextAction }: {
+function HomeSummary({ funnel, funnelResult, activity }: {
   funnel: Funnel | null;
   funnelResult: FunnelQueryResult | null;
   activity: ObservedEvent[] | null;
-  nextAction: HomeNextAction;
 }) {
   return (
     <AnswerCanvas className="mt-5">
@@ -431,48 +541,8 @@ function HomeSummary({ funnel, funnelResult, activity, nextAction }: {
           )}
         </section>
       </div>
-
-      <div className="flex flex-col gap-3 border-t px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold">Next action</div>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground"><span className="font-medium text-foreground">{nextAction.title}.</span> {nextAction.body}</p>
-        </div>
-        {nextAction.onClick ? (
-          <Button variant="outline" className="h-11 self-start sm:self-auto" onClick={nextAction.onClick}>
-            {nextAction.label}
-          </Button>
-        ) : (
-          <Button asChild variant="outline" className="h-11 self-start sm:self-auto">
-            <Link to={nextAction.href!}>{nextAction.label} <ArrowRight className="size-4" /></Link>
-          </Button>
-        )}
-      </div>
     </AnswerCanvas>
   );
-}
-
-function nextHomeAction(input: {
-  measurementReady: boolean;
-  funnel: Funnel | null;
-  funnelResult: FunnelQueryResult | null;
-  activity: ObservedEvent[] | null;
-}): HomeNextAction {
-  if (!input.measurementReady) {
-    return { title: 'Connect measurement', body: 'Register one meaningful outcome before reading results.', href: '/setup', label: 'Open Setup' };
-  }
-  if (input.activity === null) {
-    return { title: 'Check project data', body: 'Open Setup to verify the current environment and connection.', href: '/setup', label: 'Open Setup' };
-  }
-  if (input.activity.length === 0) {
-    return { title: 'Send one real event', body: 'Run the product once and confirm that Poolstatis receives it.', href: '/setup', label: 'Open Setup' };
-  }
-  if (!input.funnel) {
-    return { title: 'Define the first funnel', body: 'Connect recent activity to one measurable goal.', href: '/setup', label: 'Create with agent' };
-  }
-  if (!input.funnelResult) {
-    return { title: 'Check funnel data', body: 'The saved funnel result is unavailable right now.', href: '/analyze/funnels', label: 'Open funnel' };
-  }
-  return { title: 'Review the biggest drop-off', body: 'Open the saved funnel for the full step-by-step breakdown.', href: '/analyze/funnels', label: 'Review funnel' };
 }
 
 function recentObservedEvents(schema: ProjectSchema | null): ObservedEvent[] | null {
@@ -499,89 +569,13 @@ function funnelStepValue(actors: number, conversionFromStart: number | null) {
   return `${Math.round(conversionFromStart * 1_000) / 10}% from start`;
 }
 
-function useDashboardLayout(scope: string, definitions: DashboardDefinition) {
-  const defaults = definitions.slice(0, 4).map((item) => item.id);
-  const available = definitions.map((item) => item.id);
-  const storageKey = `poolstatis.home.cards.${scope}`;
-  const [open, setOpen] = useState(false);
-  const [order, setOrder] = useState<string[]>(() => readDashboardOrder(storageKey, defaults, available));
-  const persist = (next: string[]) => {
-    setOrder(next);
-    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* storage can be blocked */ }
-  };
-  return {
-    open,
-    order,
-    toggle: () => setOpen((value) => !value),
-    change: (slot: number, id: string) => {
-      const next = [...order];
-      const previousSlot = next.indexOf(id);
-      if (previousSlot === slot) return;
-      if (previousSlot === -1) next[slot] = id;
-      else [next[slot], next[previousSlot]] = [next[previousSlot]!, next[slot]!];
-      persist(next);
-    },
-    reset: () => persist(defaults),
-  };
-}
-
-function readDashboardOrder(storageKey: string, defaults: string[], available: string[]) {
-  try {
-    const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
-    if (Array.isArray(saved) && saved.length === 4 && new Set(saved).size === 4 && saved.every((id) => typeof id === 'string' && available.includes(id))) {
-      return saved as string[];
-    }
-  } catch { /* use the useful default dashboard */ }
-  return defaults;
-}
-
-function DashboardSettings({ ids, order, onChange, onReset }: {
-  ids: DashboardDefinition;
-  order: string[];
-  onChange(slot: number, id: string): void;
-  onReset(): void;
-}) {
+function PageHeader({ title, answer }: { title: string; answer: string }) {
   return (
-    <section role="region" aria-label="Dashboard settings" className="rounded-panel border bg-card p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">Dashboard settings</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Choose the order of the four answers shown first.</p>
-        </div>
-        <Button variant="ghost" size="sm" onClick={onReset}>Reset</Button>
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {order.map((id, slot) => (
-          <label key={`${slot}:${id}`} className="grid gap-1.5 text-sm font-medium">
-            Card {slot + 1}
-            <select
-              aria-label={`Card ${slot + 1}`}
-              className="h-11 rounded-field border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              value={id}
-              onChange={(event) => onChange(slot, event.target.value)}
-            >
-              {ids.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-          </label>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function orderDashboardItems<T extends KpiItem & { id: string }>(items: T[], order: string[]): KpiItem[] {
-  const byId = new Map(items.map((item) => [item.id, item]));
-  return order.map((id) => byId.get(id)).filter((item): item is T => Boolean(item));
-}
-
-function PageHeader({ title, answer, action }: { title: string; answer: string; action: ReactNode }) {
-  return (
-    <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <header>
       <div className="max-w-3xl">
         <h1 className="serif text-3xl sm:text-4xl">{title}</h1>
         <p className="mt-2 text-base leading-relaxed text-muted-foreground">{answer}</p>
       </div>
-      <div className="shrink-0">{action}</div>
     </header>
   );
 }
@@ -707,7 +701,7 @@ function metricAnswerValue(metric: Metric, trend: TrendQueryResult | null, trust
 
 function evidenceTrust(trust: MeasurementTrust | null, unavailable: boolean): EvidenceTrust {
   if (unavailable || !trust) return 'unavailable';
-  return trust.status === 'trusted' ? 'trusted' : 'partial';
+  return trust.status === 'trusted' ? 'trusted' : 'blocked';
 }
 
 function websiteLead(answer: WebsiteAnswer) {

@@ -40,6 +40,18 @@ if (process.argv.includes('--help')) {
     await migrationPool.query(
       'SELECT poolstatis_prepare_project_intent_role_grants()',
     );
+    await migrationPool.query(
+      'SELECT poolstatis_prepare_analysis_views_role_grants()',
+    );
+    await migrationPool.query(
+      'SELECT poolstatis_prepare_control_tower_automation_role_grants()',
+    );
+    await migrationPool.query(
+      'SELECT poolstatis_prepare_metric_definition_role_grants()',
+    );
+    await migrationPool.query(
+      'SELECT poolstatis_prepare_data_health_role_grants()',
+    );
     const now = new Date();
     const retention = await migrationPool.query<{ months: number }>(
       'SELECT COALESCE(max(retention_months), 12)::int AS months FROM projects',

@@ -24,6 +24,7 @@ import {
   createTrustedProxyCountryResolver,
 } from '../services/country.js';
 import { OpenRouterSetupTaskProvider } from '../services/setupTaskProvider.js';
+import { ControlTowerAutomation, startControlTowerAutomation } from '../services/controlTowerAutomation.js';
 
 const config = loadConfig();
 const hostedPolicyRequired = config.auth?.requireOrganizationPolicy === true;
@@ -99,6 +100,7 @@ let retentionWorker: ReturnType<typeof startRetentionWorker> | null = null;
 let releaseMonitorWorker: ReturnType<typeof startReleaseMonitor> | null = null;
 let webhookOutboxWorker: ReturnType<typeof startWebhookOutbox> | null = null;
 let experienceArtifactRetention: ReturnType<typeof startExperienceArtifactRetention> | null = null;
+let controlTowerAutomationWorker: ReturnType<typeof startControlTowerAutomation> | null = null;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let maintenanceTask: Promise<void> | null = null;
 
@@ -175,6 +177,26 @@ const prepareMaintenance = async (): Promise<void> => {
         onError: (error) => console.error('release monitor failed', error),
       });
     }
+    if (config.controlTowerAutomation.enabled && !controlTowerAutomationWorker && !stopping) {
+      const automationContext = createContext(maintenancePool, { ingestBuffer: false, queryCache: false,
+        ...(config.connectorEncryptionKey ? { connectorEncryptionKey: config.connectorEncryptionKey } : {}) });
+      const automation = new ControlTowerAutomation(maintenancePool, automationContext.query, {
+        batchSize: config.controlTowerAutomation.batchSize,
+        maxAttempts: config.controlTowerAutomation.maxAttempts,
+        baseRetryMs: config.controlTowerAutomation.baseRetryMs,
+        maxRetryMs: config.controlTowerAutomation.maxRetryMs,
+        leaseMs: config.controlTowerAutomation.leaseMs,
+        actor: 'worker:control-tower-automation',
+      });
+      controlTowerAutomationWorker = startControlTowerAutomation(automation, {
+        intervalMs: config.controlTowerAutomation.intervalMs,
+        onResult: (result) => {
+          const claimed = result.monitors.claimed + result.feeds.claimed + result.notifications.claimed;
+          if (claimed > 0) console.log(JSON.stringify({ maintenance: 'control-tower-automation', ...result }));
+        },
+        onError: (error) => console.error('control tower automation failed', error),
+      });
+    }
     if (config.webhookOutbox.enabled && config.connectorEncryptionKey && !webhookOutboxWorker && !stopping) {
       const outbox = new WebhookOutbox(maintenancePool, config.connectorEncryptionKey, {
         batchSize: config.webhookOutbox.batchSize,
@@ -221,6 +243,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     await retentionWorker?.stop();
     await releaseMonitorWorker?.stop();
     await webhookOutboxWorker?.stop();
+    await controlTowerAutomationWorker?.stop();
     await experienceArtifactRetention?.stop();
     await maintenancePool.end();
     await pool.end();

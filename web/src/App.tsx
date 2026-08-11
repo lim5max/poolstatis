@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -18,6 +18,7 @@ import {
   Menu,
   Plug,
   Ruler,
+  Settings,
   TaskDone,
   TestTube,
   UserCircle,
@@ -52,12 +53,17 @@ import { Changes } from './screens/Changes';
 import { Decisions } from './screens/Decisions';
 import { Profile } from './screens/Profile';
 import { Usage } from './screens/Usage';
+import { SavedAnswers } from './screens/SavedAnswers';
+import { ControlTower } from './screens/ControlTower';
 import { AuthPortal } from './screens/AuthPortal';
+import type { ControlTowerResult, UsageControlResult } from './api/types';
 
 export const NAV_ICONS: Record<string, PoolstatisIcon> = {
+  Attention: LayoutGrid,
   Home: LayoutGrid,
   Product: ChartAnalysis,
   Funnels: Funnel,
+  Saved: TaskDone,
   Web: Globe,
   People: UserGroup,
   Ship: GitCommit,
@@ -71,6 +77,7 @@ export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Changes: GitCommit,
   Experiments: TestTube,
   Decisions: TaskDone,
+  Automations: Settings,
   Data: Database,
   Registry: Catalogue,
   Measurement: Ruler,
@@ -85,6 +92,7 @@ const TITLES: Record<string, string> = {
   '/projects': 'Projects',
   '/analyze/product': 'Product',
   '/analyze/funnels': 'Funnels',
+  '/analyze/saved': 'Saved answers',
   '/usage': 'Usage',
   '/profile': 'Profile',
   '/analyze/web': 'Web',
@@ -97,6 +105,7 @@ const TITLES: Record<string, string> = {
   '/experience': 'Experience',
   '/changes': 'Ship',
   '/decisions': 'Decisions',
+  '/automation': 'Automations',
   '/setup': 'Setup',
   '/onboarding': 'Onboarding',
 };
@@ -105,7 +114,8 @@ const titleFor = (path: string) => (
     ? 'Actor profile'
     : TITLES[path] ?? 'Poolstatis'
 );
-const isProjectScoped = (path: string) => path === '/' || path.startsWith('/analyze') || path.startsWith('/setup') || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions');
+const FALLBACK_ROUTE_HEADINGS = new Set(['/projects', '/profile', '/registry', '/data', '/keys', '/experience']);
+const isProjectScoped = (path: string) => path === '/' || path.startsWith('/analyze') || path.startsWith('/setup') || path.startsWith('/registry') || path.startsWith('/measurement') || path.startsWith('/data') || path.startsWith('/keys') || path.startsWith('/experiments') || path.startsWith('/experience') || path.startsWith('/changes') || path.startsWith('/decisions') || path.startsWith('/automation');
 const SIDEBAR_KEY = 'poolstatis.sidebar.collapsed';
 const loadSidebarState = () => {
   try { return localStorage.getItem(SIDEBAR_KEY) === 'true'; } catch { return false; }
@@ -122,8 +132,9 @@ export function App() {
 }
 
 function AdminApp() {
-  const { client, project } = useStore();
+  const { client, project, env } = useStore();
   const navigation = useProjectNavigation(client, project);
+  const signals = useShellSignals(client, project, env);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadSidebarState);
   const toggleSidebar = () => {
@@ -150,15 +161,15 @@ function AdminApp() {
       </a>
       <div className="min-h-screen bg-background md:flex md:h-screen">
         <MobileTopbar />
-        <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} navigation={navigation} />
-        <MobileNavDrawer navigation={navigation} onNavigate={() => setMobileNavOpen(false)} />
+        <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} navigation={navigation} signals={signals} />
+        <MobileNavDrawer navigation={navigation} signals={signals} onNavigate={() => setMobileNavOpen(false)} />
         <Main />
       </div>
     </Dialog>
   );
 }
 
-function Sidebar({ collapsed, onToggle, navigation }: { collapsed: boolean; onToggle: () => void; navigation: ProjectNavigation }) {
+function Sidebar({ collapsed, onToggle, navigation, signals }: { collapsed: boolean; onToggle: () => void; navigation: ProjectNavigation; signals: ShellSignals }) {
   return (
     <aside
       className={cn(
@@ -186,7 +197,7 @@ function Sidebar({ collapsed, onToggle, navigation }: { collapsed: boolean; onTo
         </Button>
       </div>
       <nav className={cn('min-h-0 flex-1 overflow-y-auto', collapsed ? 'px-2' : 'px-3')} aria-label="Customer admin">
-        <NavGroups collapsed={collapsed} navigation={navigation} />
+        <NavGroups collapsed={collapsed} navigation={navigation} signals={signals} />
       </nav>
       <ConnectionFooter collapsed={collapsed} />
     </aside>
@@ -209,7 +220,7 @@ function MobileTopbar() {
   );
 }
 
-function MobileNavDrawer({ onNavigate, navigation }: { onNavigate: () => void; navigation: ProjectNavigation }) {
+function MobileNavDrawer({ onNavigate, navigation, signals }: { onNavigate: () => void; navigation: ProjectNavigation; signals: ShellSignals }) {
   return (
     <DialogContent
       showCloseButton={false}
@@ -232,7 +243,7 @@ function MobileNavDrawer({ onNavigate, navigation }: { onNavigate: () => void; n
           </DialogClose>
         </div>
         <nav className="flex-1 px-3" aria-label="Customer admin">
-          <NavGroups navigation={navigation} onNavigate={onNavigate} />
+          <NavGroups navigation={navigation} signals={signals} onNavigate={onNavigate} />
         </nav>
         <ConnectionFooter onDisconnect={onNavigate} />
       </aside>
@@ -240,12 +251,12 @@ function MobileNavDrawer({ onNavigate, navigation }: { onNavigate: () => void; n
   );
 }
 
-function NavGroups({ navigation, onNavigate, collapsed = false }: { navigation: ProjectNavigation; onNavigate?: () => void; collapsed?: boolean }) {
+function NavGroups({ navigation, signals, onNavigate, collapsed = false }: { navigation: ProjectNavigation; signals: ShellSignals; onNavigate?: () => void; collapsed?: boolean }) {
   return (
     <>
       <div className="mb-1">
         {navigation.primary.map((item) => (
-          <NavigationRow key={item.label} item={item} collapsed={collapsed} onNavigate={onNavigate} />
+          <NavigationRow key={item.label} item={item} signal={signals[item.label]} collapsed={collapsed} onNavigate={onNavigate} />
         ))}
       </div>
       <SecondaryNavigation navigation={navigation} collapsed={collapsed} onNavigate={onNavigate} />
@@ -258,15 +269,28 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
-  const items = [
-    ...navigation.secondary,
-    { label: 'Usage', to: '/usage', availability: 'available' as const },
-    { label: 'Profile', to: '/profile', availability: 'available' as const },
-  ];
   if (collapsed) {
     return (
       <div className="mt-2 border-t pt-2">
-        <NavigationRow item={{ label: 'Definitions', to: '/measurement', availability: 'available' }} collapsed onNavigate={onNavigate} />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm" className="mx-auto flex" aria-label="Data & settings" title="Data & settings">
+              <Catalogue className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="right" align="start" className="min-w-44">
+            {navigation.secondary.map((item) => {
+              const Icon = NAV_ICONS[item.label] ?? LayoutGrid;
+              return item.availability === 'available' && item.to ? (
+                <DropdownMenuItem key={item.label} asChild>
+                  <NavLink to={item.to} onClick={onNavigate}><Icon className="size-4" />{item.label}</NavLink>
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem key={item.label} disabled title={item.reason}><Icon className="size-4" />{item.label}</DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     );
   }
@@ -277,14 +301,15 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
         Data &amp; settings
       </DisclosureSummary>
       <div className="mt-1 border-l pl-2">
-        {items.map((item) => <NavigationRow key={item.label} item={item} collapsed={false} onNavigate={onNavigate} />)}
+        {navigation.secondary.map((item) => <NavigationRow key={item.label} item={item} collapsed={false} onNavigate={onNavigate} />)}
       </div>
     </details>
   );
 }
 
-function NavigationRow({ item, collapsed, onNavigate }: {
+function NavigationRow({ item, signal, collapsed, onNavigate }: {
   item: NavigationItem;
+  signal?: ShellSignal;
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
@@ -322,8 +347,94 @@ function NavigationRow({ item, collapsed, onNavigate }: {
     >
       <Icon className="size-4 shrink-0" />
       <span className={collapsed ? 'sr-only' : undefined}>{item.label}</span>
+      {signal && (
+        <span
+          aria-hidden="true"
+          title={`${item.label}: ${signal.label}`}
+          className={cn(
+            'ml-auto max-w-32 truncate rounded-full px-1.5 py-0.5 text-xs font-medium tabular-nums',
+            collapsed && 'max-w-8 px-1',
+            signal.tone === 'warning'
+              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+              : signal.tone === 'danger'
+                ? 'bg-destructive/10 text-destructive'
+                : 'bg-muted text-muted-foreground',
+          )}
+        >
+          {collapsed && signal.label.includes('this cycle') ? '•' : signal.label}
+        </span>
+      )}
     </NavLink>
   );
+}
+
+type ShellSignalTone = 'neutral' | 'warning' | 'danger';
+interface ShellSignal { label: string; tone: ShellSignalTone }
+type ShellSignals = Partial<Record<string, ShellSignal>>;
+
+function useShellSignals(
+  client: ReturnType<typeof useStore>['client'],
+  project: string | null,
+  env: string,
+): ShellSignals {
+  const [signals, setSignals] = useState<ShellSignals>({});
+  useEffect(() => {
+    let current = true;
+    setSignals((existing) => Object.keys(existing).length > 0 ? {} : existing);
+    if (!client || !project) return () => { current = false; };
+    const period = new Date().toISOString().slice(0, 7);
+    const signalClient = client as unknown as {
+      controlTower?: (slug: string, targetEnv: string, range: '30d') => Promise<ControlTowerResult>;
+      usageControl?: (targetPeriod: string) => Promise<UsageControlResult>;
+    };
+    const readAttention = typeof signalClient.controlTower === 'function'
+      ? () => signalClient.controlTower!(project, env, '30d')
+      : null;
+    const readUsage = typeof signalClient.usageControl === 'function'
+      ? () => signalClient.usageControl!(period)
+      : null;
+    if (!readAttention && !readUsage) return () => { current = false; };
+    void Promise.all([
+      readAttention
+        ? readAttention().catch(() => null)
+        : Promise.resolve(null),
+      readUsage
+        ? readUsage().catch(() => null)
+        : Promise.resolve(null),
+    ]).then(([attention, usage]) => {
+      if (!current) return;
+      const next: ShellSignals = {};
+      const attentionSignal = attentionNavigationSignal(attention);
+      if (attentionSignal) next.Home = attentionSignal;
+      if (usage) next.Usage = usageNavigationSignal(usage);
+      setSignals(next);
+    });
+    return () => { current = false; };
+  }, [client, env, project]);
+  return signals;
+}
+
+function attentionNavigationSignal(control: Pick<ControlTowerResult, 'attention'> | null): ShellSignal | null {
+  const count = control?.attention.filter((item) => item.state === 'open').length ?? 0;
+  return count > 0 ? { label: String(count), tone: 'warning' } : null;
+}
+
+export function usageNavigationSignal(usage: Pick<UsageControlResult, 'cap' | 'answer'>): ShellSignal {
+  if (usage.cap.state !== 'finite' || usage.cap.value === null) {
+    return { label: `${formatCycleQuantity(usage.answer.primary_value?.value)} this cycle`, tone: 'neutral' };
+  }
+  const used = Math.max(0, usage.cap.value - (usage.cap.remaining ?? usage.cap.value));
+  const ratio = usage.cap.value === 0 ? 0 : used / usage.cap.value;
+  return {
+    label: `${Math.round(ratio * 100)}%`,
+    tone: ratio >= 1 ? 'danger' : ratio >= 0.75 ? 'warning' : 'neutral',
+  };
+}
+
+function formatCycleQuantity(value: number | string | null | undefined): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return new Intl.NumberFormat('en-US').format(value);
+  if (typeof value === 'string' && /^\d+$/.test(value)) return new Intl.NumberFormat('en-US').format(BigInt(value));
+  return 'Unknown';
 }
 
 function ConnectionFooter({ onDisconnect, collapsed = false }: { onDisconnect?: () => void; collapsed?: boolean }) {
@@ -334,13 +445,16 @@ function ConnectionFooter({ onDisconnect, collapsed = false }: { onDisconnect?: 
     onDisconnect?.();
   };
   return (
-    <div className={cn('mt-2 border-t pt-3', collapsed ? 'flex justify-center px-2' : 'flex items-center justify-between px-5')}>
+    <div aria-label="Account navigation" className={cn('mt-2 border-t pt-3', collapsed ? 'flex justify-center gap-1 px-2' : 'flex items-center justify-between gap-2 px-5')}>
       {!collapsed && <span className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className={cn('size-1.5 rounded-full', client ? 'bg-muted-foreground' : 'bg-destructive')} /> {tokenKind ?? 'admin'} key session
       </span>}
-      <Button variant="ghost" size={collapsed ? 'icon-sm' : 'sm'} className={cn('text-xs text-muted-foreground', !collapsed && 'h-7')} onClick={handleDisconnect} aria-label={collapsed ? 'Disconnect admin session' : undefined}>
-        {collapsed ? <X className="size-4" /> : 'disconnect'}
-      </Button>
+      <div className="flex items-center gap-1">
+        <AccountProfileLink collapsed={collapsed} onNavigate={onDisconnect} />
+        <Button variant="ghost" size={collapsed ? 'icon-sm' : 'sm'} className={cn('text-xs text-muted-foreground', !collapsed && 'h-7')} onClick={handleDisconnect} aria-label={collapsed ? 'Disconnect admin session' : undefined}>
+          {collapsed ? <X className="size-4" /> : 'disconnect'}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -354,23 +468,55 @@ function HostedConnectionFooter({ onDisconnect, collapsed = false }: { onDisconn
     void logout();
   };
   return (
-    <div className={cn('mt-2 border-t pt-3', collapsed ? 'flex justify-center px-2' : 'flex items-center justify-between px-5')}>
+    <div aria-label="Account navigation" className={cn('mt-2 border-t pt-3', collapsed ? 'flex justify-center gap-1 px-2' : 'flex items-center justify-between gap-2 px-5')}>
       {!collapsed && <span className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className={cn('size-1.5 rounded-full', client ? 'bg-muted-foreground' : 'bg-destructive')} /> hosted session
       </span>}
-      <Button variant="ghost" size={collapsed ? 'icon-sm' : 'sm'} className={cn('text-xs text-muted-foreground', !collapsed && 'h-7')} onClick={handleDisconnect} aria-label={collapsed ? 'Sign out' : undefined}>
-        {collapsed ? <X className="size-4" /> : 'sign out'}
-      </Button>
+      <div className="flex items-center gap-1">
+        <AccountProfileLink collapsed={collapsed} onNavigate={onDisconnect} />
+        <Button variant="ghost" size={collapsed ? 'icon-sm' : 'sm'} className={cn('text-xs text-muted-foreground', !collapsed && 'h-7')} onClick={handleDisconnect} aria-label={collapsed ? 'Sign out' : undefined}>
+          {collapsed ? <X className="size-4" /> : 'sign out'}
+        </Button>
+      </div>
     </div>
+  );
+}
+
+function AccountProfileLink({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
+  return (
+    <NavLink
+      to="/profile"
+      onClick={onNavigate}
+      aria-label={collapsed ? 'Profile' : undefined}
+      className={({ isActive }) => cn(
+        'flex items-center rounded-control text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/10 hover:text-sidebar-foreground',
+        collapsed ? 'size-8 justify-center' : 'h-7 gap-1.5 px-2',
+        isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
+      )}
+    >
+      <UserCircle className="size-4" />
+      {!collapsed && <span>Profile</span>}
+    </NavLink>
   );
 }
 
 function Main() {
   const loc = useLocation();
   const navigate = useNavigate();
+  const mainRef = useRef<HTMLElement>(null);
   const { projects, project, setProject, env } = useStore();
   const title = titleFor(loc.pathname);
   const showProject = isProjectScoped(loc.pathname);
+  const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    const heading = main.querySelector<HTMLElement>('h1');
+    const focusTarget = heading ?? main;
+    if (focusTarget === heading) heading.tabIndex = -1;
+    focusTarget.focus();
+  }, [loc.pathname]);
 
   return (
     <div className="min-h-0 min-w-0 flex-1 md:h-screen md:overflow-y-auto">
@@ -404,8 +550,9 @@ function Main() {
           </div>
         </div>
       </div>
-      <motion.main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-7xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
-        initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
+      <motion.main ref={mainRef} id="main-content" tabIndex={-1} className="mx-auto w-full max-w-7xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
+        initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={reduceMotion ? { duration: 0 } : { duration: 0.26, ease: 'easeOut' }}>
+        {FALLBACK_ROUTE_HEADINGS.has(loc.pathname) && <h1 className="sr-only">{title}</h1>}
         <SetupResumeBanner path={loc.pathname} />
         <Routes>
           <Route path="/" element={<Guarded><Overview /></Guarded>} />
@@ -415,6 +562,7 @@ function Main() {
           <Route path="/usage" element={<Usage />} />
           <Route path="/analyze/product" element={<Guarded><ProductAnalytics /></Guarded>} />
           <Route path="/analyze/funnels" element={<Guarded><ProductAnalytics surface="funnels" /></Guarded>} />
+          <Route path="/analyze/saved" element={<Guarded><SavedAnswers /></Guarded>} />
           <Route path="/analyze/web" element={<Guarded><WebAnalytics /></Guarded>} />
           <Route path="/analyze/users" element={<Guarded><Users /></Guarded>} />
           <Route path="/analyze/users/:distinctId" element={<Guarded><Person /></Guarded>} />
@@ -427,6 +575,7 @@ function Main() {
           <Route path="/experience" element={<Guarded><Experience /></Guarded>} />
           <Route path="/changes" element={<Guarded><Changes /></Guarded>} />
           <Route path="/decisions" element={<Guarded><Decisions /></Guarded>} />
+          <Route path="/automation" element={<Guarded><ControlTower /></Guarded>} />
           <Route path="/setup" element={<Setup />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

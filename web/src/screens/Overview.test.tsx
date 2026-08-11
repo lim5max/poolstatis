@@ -34,11 +34,63 @@ const productMetric = {
   source: { event: 'product.used' },
 } as const;
 
+function controlTowerResponse() {
+  return {
+    schema_version: 1,
+    request_id: 'control-request',
+    generated_at: '2026-08-06T00:00:00.000Z',
+    scope: {
+      project_slug: 'alpha',
+      environment: 'prod',
+      window: { from: '2026-07-07T00:00:00.000Z', to: '2026-08-06T00:00:00.000Z', timezone: 'UTC' },
+    },
+    answer: {
+      state: 'partial',
+      headline: '1 item needs attention',
+      takeaway: 'The server found a measurement blocker.',
+      primary_value: { value: 1, unit: 'count', formatted: '1' },
+      why_it_matters: 'Server ordering must be identical in REST, MCP, and the UI.',
+    },
+    attention: [{
+      id: 'server.measurement.blocked',
+      rule_id: 'server.measurement.blocked',
+      rule_version: 3,
+      severity: 'high',
+      state: 'open',
+      title: 'Server-ordered measurement blocker',
+      reason: 'This item exists only in the canonical control-tower response.',
+      impact: 'The primary outcome cannot be trusted until the blocker is reviewed.',
+      affected: [{ kind: 'metric', ref: 'web_page_views' }],
+      evidence: {
+        state: 'blocked',
+        as_of: '2026-08-06T00:00:00.000Z',
+        freshness: 'fresh',
+        source_refs: [{ kind: 'operator_rule', rule_id: 'server.measurement.blocked', rule_version: 3 }],
+        warnings: [],
+        unavailable_reasons: [],
+      },
+      primary_action: { id: 'review_definition', kind: 'navigate', label: 'Review definition', href: '/registry' },
+    }],
+    evidence: {
+      state: 'blocked',
+      as_of: '2026-08-06T00:00:00.000Z',
+      freshness: 'fresh',
+      source_refs: [{ kind: 'operator_rule', rule_id: 'server.measurement.blocked', rule_version: 3 }],
+      warnings: [],
+      unavailable_reasons: [],
+    },
+    primary_action: { id: 'review_definition', kind: 'navigate', label: 'Review definition', href: '/registry' },
+    secondary_actions: [],
+  };
+}
+
 function websiteClient(intent: 'website' | 'both' | null = 'website', activeLinks = 0) {
   return {
+    controlTower: vi.fn().mockResolvedValue(controlTowerResponse()),
     projectIntent: vi.fn().mockResolvedValue({ intent: intent ? { project_mode: intent, goal_ids: ['website_traffic'], primary_goal_id: 'website_traffic' } : null }),
     metrics: vi.fn().mockResolvedValue([webMetric]),
     funnels: vi.fn().mockResolvedValue([]),
+    onboardingStatus: vi.fn().mockResolvedValue({ complete: true, gates: [], next_blocker: null, final_result: null }),
     schema: vi.fn().mockResolvedValue({ identity: { active_links: activeLinks } }),
     operationalQuery: vi.fn().mockResolvedValue({
       kind: 'web_analytics',
@@ -71,15 +123,94 @@ function setStore(client: Record<string, unknown>, project = 'alpha', env = 'pro
   } as never);
 }
 
-describe('goal-aware Home', () => {
+describe('goal-aware Attention', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
     window.localStorage.clear();
   });
 
+  it('renders the server-owned attention order instead of recomputing it in React', async () => {
+    const client = websiteClient() as Record<string, any>;
+    const server = controlTowerResponse();
+    client.controlTower.mockResolvedValue({
+      ...server,
+      attention: [
+        server.attention[0],
+        {
+          ...server.attention[0],
+          id: 'server.funnel.blocked',
+          title: 'Server-ordered funnel blocker',
+          reason: 'The saved path has an unavailable step.',
+          impact: 'The conversion answer remains partial.',
+          evidence: { ...server.evidence, as_of: '2026-08-05T00:00:00.000Z', freshness: 'stale' },
+          primary_action: { id: 'review_funnel', kind: 'navigate', label: 'Review funnel', href: '/analyze/funnels' },
+        },
+        {
+          ...server.attention[0],
+          id: 'server.usage.watch',
+          title: 'Server-ordered usage watch',
+          reason: 'Accepted volume is approaching the configured threshold.',
+          impact: 'Ingest may be constrained if the pace continues.',
+          evidence: { ...server.evidence, as_of: '2026-08-04T00:00:00.000Z', freshness: 'fresh' },
+          primary_action: { id: 'review_usage', kind: 'navigate', label: 'Review usage', href: '/usage' },
+        },
+        {
+          ...server.attention[0],
+          id: 'server.release.watch',
+          title: 'Server-ordered release watch',
+          reason: 'A release still needs a bounded evidence review.',
+          impact: 'The decision remains open until the evidence is reviewed.',
+          evidence: { ...server.evidence, as_of: '2026-08-03T00:00:00.000Z', freshness: 'fresh' },
+          primary_action: { id: 'review_release', kind: 'navigate', label: 'Review release', href: '/changes' },
+        },
+      ],
+    });
+    setStore(client);
+
+    render(<MemoryRouter><Overview /></MemoryRouter>);
+
+    expect(await screen.findByRole('heading', { name: 'Server-ordered measurement blocker' })).toBeInTheDocument();
+    expect(screen.getByText('This item exists only in the canonical control-tower response.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Review definition/ })).toHaveAttribute('href', '/registry');
+    expect(screen.getByRole('link', { name: /Review funnel/ })).toHaveAttribute('href', '/analyze/funnels');
+    expect(screen.getByRole('link', { name: /Review usage/ })).toHaveAttribute('href', '/usage');
+    expect(screen.getByRole('link', { name: /Review definition/ })).toHaveAttribute('data-variant', 'default');
+    expect(screen.getByRole('link', { name: /Review funnel/ })).toHaveAttribute('data-variant', 'outline');
+    expect(screen.getByRole('link', { name: /Review usage/ })).toHaveAttribute('data-variant', 'outline');
+    expect(screen.getByText('View all 4 signals')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('View all 4 signals'));
+    expect(screen.getByRole('link', { name: /Review release/ })).toHaveAttribute('href', '/changes');
+    expect(screen.getByText('stale')).toBeInTheDocument();
+    expect(client.controlTower).toHaveBeenCalledOnce();
+    expect(client.controlTower).toHaveBeenCalledWith('alpha', 'prod', '30d');
+  });
+
   it('renders a website answer from server facts with trust and responsive structure', async () => {
     const client = websiteClient() as Record<string, any>;
+    const server = controlTowerResponse();
+    client.controlTower.mockResolvedValue({
+      ...server,
+      home_funnel_key: 'website_signup',
+      attention: [{
+        ...server.attention[0],
+        id: 'funnel.biggest_loss.website_signup',
+        rule_id: 'funnel.biggest_loss',
+        rule_version: 1,
+        severity: 'medium',
+        title: 'Biggest loss: Visited → Started signup',
+        reason: '5 actors were lost at this step (62.5%).',
+        impact: 'See whether qualified visitors begin signup.',
+        affected: [{ kind: 'funnel', ref: 'website_signup' }],
+        evidence: {
+          ...server.evidence,
+          state: 'trusted',
+          source_refs: [{ kind: 'funnel', key: 'website_signup', goal: 'See whether qualified visitors begin signup.' }],
+        },
+        primary_action: { id: 'investigate_funnel_step', kind: 'navigate', label: 'Investigate step', href: '/analyze/funnels' },
+      }],
+      primary_action: { id: 'investigate_funnel_step', kind: 'navigate', label: 'Investigate step', href: '/analyze/funnels' },
+    });
     client.schema.mockResolvedValue({
       identity: { active_links: 0 },
       observed_events_30d: [
@@ -88,6 +219,16 @@ describe('goal-aware Home', () => {
       ],
     });
     client.funnels.mockResolvedValue([{
+      id: 'unrelated-funnel',
+      key: 'a_unrelated',
+      name: 'Unrelated path',
+      goal: 'Keep this alphabetical fallback out of the Home snapshot.',
+      steps: [
+        { metric_key: 'web_page_views', label: 'Visited' },
+        { metric_key: 'web_page_views', label: 'Returned' },
+      ],
+      window_seconds: 86_400,
+    }, {
       id: 'signup-funnel',
       key: 'website_signup',
       name: 'Visit to signup',
@@ -115,7 +256,8 @@ describe('goal-aware Home', () => {
     const view = render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Customize dashboard' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Customize dashboard' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Biggest loss: Visited → Started signup' })).toBeInTheDocument();
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
     expect(outcomes).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
     expect(outcomes.children).toHaveLength(4);
@@ -129,21 +271,25 @@ describe('goal-aware Home', () => {
     expect(screen.getByText('37.5% from start')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Recent activity' })).toBeInTheDocument();
     expect(screen.getByText('20 events')).toBeInTheDocument();
-    expect(screen.getByText('Next action')).toBeInTheDocument();
+    expect(screen.queryByText('Next action')).not.toBeInTheDocument();
     expect(screen.queryByRole('img', { name: 'Trend chart' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Top sources' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Top pages' })).not.toBeInTheDocument();
     expect(view.container.querySelector('.text-xs')).toBeNull();
     expect(client.query).toHaveBeenCalledTimes(1);
-    expect(client.query).toHaveBeenCalledWith('alpha', expect.objectContaining({ kind: 'funnel' }));
+    expect(client.query).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      kind: 'funnel',
+      funnel: 'website_signup',
+      env: 'prod',
+    }));
     await waitFor(() => expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toEqual([
       ['home.answer_viewed', { template_id: 'website_overview', trust: 'trusted' }, { distinctId: 'home-user' }],
     ]));
     view.rerender(<MemoryRouter><Overview /></MemoryRouter>);
     expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toHaveLength(1);
-    fireEvent.click(screen.getByRole('link', { name: /Open Web/ }));
+    fireEvent.click(screen.getByRole('link', { name: /Investigate step/ }));
     expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.next_action_clicked')).toEqual([
-      ['home.next_action_clicked', { action_id: 'open_web' }, { distinctId: 'home-user' }],
+      ['home.next_action_clicked', { action_id: 'explore_product' }, { distinctId: 'home-user' }],
     ]);
     view.unmount();
 
@@ -158,8 +304,25 @@ describe('goal-aware Home', () => {
     await waitFor(() => expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toHaveLength(2));
   });
 
-  it('keeps a useful four-card Home when website measurement is not configured yet', async () => {
-    const client = websiteClient();
+  it('keeps a useful four-card outcome strip when website measurement is not configured yet', async () => {
+    const client = websiteClient() as Record<string, any>;
+    const server = controlTowerResponse();
+    client.controlTower.mockResolvedValue({
+      ...server,
+      attention: [{
+        ...server.attention[0],
+        id: 'onboarding.first_event_observed',
+        rule_id: 'onboarding.first_event_observed',
+        rule_version: 1,
+        severity: 'low',
+        title: 'No first event verified',
+        reason: 'No accepted product event has been observed.',
+        impact: 'Answers cannot be computed until a real event is stored.',
+        affected: [{ kind: 'project', ref: 'alpha:prod' }],
+        primary_action: { id: 'send_first_event', kind: 'navigate', label: 'Send an event', href: '/setup' },
+      }],
+      primary_action: { id: 'send_first_event', kind: 'navigate', label: 'Send an event', href: '/setup' },
+    });
     client.metrics.mockResolvedValue([]);
     setStore(client);
 
@@ -173,12 +336,8 @@ describe('goal-aware Home', () => {
     expect(within(outcomes).getByText('Last event')).toBeInTheDocument();
     expect(within(outcomes).getAllByText('Not configured')).toHaveLength(3);
     expect(within(outcomes).getByText('No events')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Customize dashboard' }));
-    expect(await screen.findByRole('region', { name: 'Dashboard settings' })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Card 1'), { target: { value: 'engaged_rate' } });
-    expect(within(outcomes).getByText('Engagement rate')).toBeInTheDocument();
-    expect(within(outcomes).queryByText('Visitors')).not.toBeInTheDocument();
-    expect(localStorage.getItem('poolstatis.home.cards.alpha:prod:website')).toContain('engaged_rate');
+    expect(screen.queryByRole('button', { name: 'Customize dashboard' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Send an event/ })).toHaveAttribute('href', '/setup');
   });
 
   it('keeps a temporary web answer failure distinct from missing measurement', async () => {
@@ -189,12 +348,11 @@ describe('goal-aware Home', () => {
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByText('Website answers are temporarily unavailable.')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Open Web/ })).toHaveAttribute('href', '/analyze/web');
     expect(screen.queryByRole('link', { name: /Set up Web/ })).not.toBeInTheDocument();
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
     expect(within(outcomes).getAllByText('Unavailable').length).toBeGreaterThan(0);
     expect(within(outcomes).queryByText('Not configured')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry website answers' }));
     expect(await screen.findByText('8 people visited. organic brought the most measured traffic.')).toBeInTheDocument();
     expect(client.operationalQuery).toHaveBeenCalledTimes(2);
   });
@@ -221,9 +379,9 @@ describe('goal-aware Home', () => {
 
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
-    expect(await screen.findByText('Check funnel data.')).toBeInTheDocument();
-    expect(screen.getByText('The saved funnel result is unavailable right now.')).toBeInTheDocument();
-    expect(screen.queryByText('Review the biggest drop-off.')).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.queryByText(/Biggest loss:/)).not.toBeInTheDocument();
+    expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0);
   });
 
   it('keeps null intent as a usable legacy project without assigning a mode', async () => {
@@ -231,8 +389,11 @@ describe('goal-aware Home', () => {
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.getByText(/Project mode is not set/)).toBeInTheDocument();
-    expect(screen.getByText(/Nothing has been inferred/)).toBeInTheDocument();
+    expect(screen.queryByText(/Project mode is not set/)).not.toBeVisible();
+    expect(screen.queryByText(/Nothing has been inferred/)).not.toBeVisible();
+    fireEvent.click(screen.getByText('Project settings'));
+    expect(screen.getByText(/Project mode is not set/)).toBeVisible();
+    expect(screen.getByText(/Nothing has been inferred/)).toBeVisible();
   });
 
   it('does not claim a cross-surface path without identity evidence', async () => {
@@ -258,7 +419,6 @@ describe('goal-aware Home', () => {
     expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0);
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Customize dashboard' }));
-    expect(screen.queryByRole('option', { name: 'Revenue' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Customize dashboard' })).not.toBeInTheDocument();
   });
 });

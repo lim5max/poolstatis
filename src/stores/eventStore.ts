@@ -64,6 +64,19 @@ export interface TrendPoint {
   breakdown_value?: string;
 }
 
+export interface AcceptedIngestTrendQuery {
+  projectId: string;
+  env: string;
+  from: Date;
+  to: Date;
+  interval: 'hour' | 'day';
+}
+
+export interface AcceptedIngestTrendPoint {
+  bucket: string;
+  accepted: number;
+}
+
 export interface WebAnalyticsQuery {
   projectId: string;
   env: string;
@@ -226,6 +239,11 @@ export interface ActorSummary {
 export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
 export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
 
+export type ActorOrderReason =
+  | 'last_seen_in_window'
+  | 'first_seen_in_window'
+  | 'event_volume_in_window';
+
 export interface ActorListItem {
   distinct_id: string;
   raw_actor_count: number;
@@ -237,6 +255,8 @@ export interface ActorListItem {
   top_events: Array<{ event: string; count: number }>;
   pinned_properties: Record<string, unknown>;
   identity_status: ActorIdentityStatus;
+  order_reason: ActorOrderReason;
+  rank_evidence_window: { from: string; to: string };
 }
 
 /** Internal detail fields retained for Person compatibility, not Actors DSL output. */
@@ -440,6 +460,16 @@ export interface EntityStatusEvidence {
   entity_updated_at: string;
 }
 
+/** Bounded event evidence used by the organization project portfolio. */
+export interface ProjectPortfolioEventStats {
+  project_id: string;
+  events_24h: number;
+  events_7d: number;
+  events_30d: number;
+  registered_events_30d: number;
+  last_event_at: string | null;
+}
+
 export interface EntityStatusEvidenceQuery {
   projectId: string;
   env: string;
@@ -620,6 +650,8 @@ export interface EventStore {
   append(events: StorableEvent[]): Promise<AppendResult>;
   /** Returns `duplicate` when the batch was already durably appended. */
   appendIdempotent(batch: IdempotentAppend): Promise<AppendResult>;
+  /** Accepted physical event volume by durable ingest time, never event time. */
+  acceptedIngestTrend(q: AcceptedIngestTrendQuery): Promise<AcceptedIngestTrendPoint[]>;
   trend(q: TrendQuery): Promise<TrendPoint[]>;
   webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult>;
   webSessions(q: WebSessionsQuery): Promise<WebSessionsResult>;
@@ -647,7 +679,11 @@ export interface EventStore {
   eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;
   measurementCoverage(q: MeasurementCoverageQuery): Promise<MeasurementCoverage>;
   metricAggregate(q: MetricAggregateQuery): Promise<MetricAggregate>;
-  entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]>;
+  entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<{
+    issues: EntityStatusEvidence[];
+    matchedEntities: number;
+  }>;
+  projectPortfolioStats(projectIds: string[], env?: string): Promise<ProjectPortfolioEventStats[]>;
   /**
    * Hard-delete events for a project. Optionally scope to one env and/or a
    * single actor (distinct_id) — the latter powers person-level deletion.

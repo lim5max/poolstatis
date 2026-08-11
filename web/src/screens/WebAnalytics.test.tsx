@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import type { Metric } from '../api/types';
 import { useStore } from '../store';
-import { WebAnalytics } from './WebAnalytics';
+import { WebAnalytics, hasAcceptedCanonicalPageViews, hasWebOutcome } from './WebAnalytics';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -15,6 +16,7 @@ vi.mock('../analysis/charts', () => ({
 }));
 
 const mockedStore = vi.mocked(useStore);
+const routerFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
 const metric = {
   id: 'web',
@@ -29,6 +31,15 @@ const metric = {
   owner: null,
   deprecation_reason: null,
   deprecated_at: null,
+} as const;
+const webOutcome = {
+  ...metric,
+  id: 'signup-completed',
+  key: 'signup_completed',
+  name: 'Signup completed',
+  purpose: 'Count completed signup outcomes attributed only by explicit product evidence.',
+  tags: ['surface:web'],
+  source: { event: 'signup.completed' },
 } as const;
 
 const property = (key: string, enumValues: string[] | null = null) => ({
@@ -58,6 +69,7 @@ describe('Web analytics partial availability', () => {
   const proposeAcquisitionProperties = vi.fn();
   const properties = vi.fn();
   const trend = vi.fn();
+  const operationalQuery = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -73,7 +85,7 @@ describe('Web analytics partial availability', () => {
       ],
       meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null },
     });
-    const operationalQuery = vi.fn().mockImplementation((_project, query) => {
+    operationalQuery.mockImplementation((_project, query) => {
       if (query.kind === 'web_analytics') {
         return Promise.resolve({
           kind: 'web_analytics',
@@ -217,7 +229,7 @@ describe('Web analytics partial availability', () => {
   it('keeps traffic, UTM source and sessions visible when routes are unavailable', async () => {
     render(
       <TooltipProvider>
-        <MemoryRouter>
+        <MemoryRouter future={routerFuture}>
           <WebAnalytics />
         </MemoryRouter>
       </TooltipProvider>,
@@ -227,35 +239,170 @@ describe('Web analytics partial availability', () => {
     expect(within(screen.getByText('resolved actors').parentElement!).getByText('8')).toBeInTheDocument();
     expect(within(screen.getByText('actor + session ID').parentElement!).getByText('11')).toBeInTheDocument();
     expect(within(screen.getByText('accepted canonical views').parentElement!).getByText('20')).toBeInTheDocument();
-    expect(screen.getByText('telegram')).toBeInTheDocument();
-    expect(screen.getByText('Route setup required')).toBeInTheDocument();
+    expect(screen.queryByText('telegram')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load traffic breakdown' }));
+    expect(await screen.findByText('telegram')).toBeInTheDocument();
+    expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_sessions')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));
+    await screen.findByRole('link', { name: 'actor-1' });
     const actorLink = screen.getByRole('link', { name: 'actor-1' });
     expect(actorLink).toHaveClass('text-foreground', 'hover:bg-muted');
     expect(actorLink).not.toHaveClass('text-primary');
 
     expect(screen.getByText(/Observed · Unavailable · 20 events ·/)).toBeInTheDocument();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Pages' }), { key: 'Enter' });
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Pages' }), { button: 0, ctrlKey: false });
+    });
 
-    expect(screen.getByText('Pages unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Pages unavailable')).toBeInTheDocument();
     expect(screen.getAllByText('Visitors').length).toBeGreaterThan(0);
     expect(screen.queryByText('telegram')).not.toBeInTheDocument();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Countries' }), { key: 'Enter' });
-    expect(screen.getByText('Countries unavailable')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Countries' }), { button: 0, ctrlKey: false });
+    });
+    expect(await screen.findByText('Countries unavailable')).toBeInTheDocument();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Medium' }), { key: 'Enter' });
-    expect(screen.getByText('Medium unavailable')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Medium' }), { button: 0, ctrlKey: false });
+    });
+    expect(await screen.findByText('Medium unavailable')).toBeInTheDocument();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Conversions' }), { key: 'Enter' });
-    expect(screen.getByText('Choose a conversion to measure')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Conversions' }), { button: 0, ctrlKey: false });
+    });
+    expect(await screen.findByText('Choose a conversion to measure')).toBeInTheDocument();
     expect(screen.getByText(/will not display a zero/)).toBeInTheDocument();
+  });
+
+  it('leads a ready Web workspace with a trusted answer and previous-period delta before the chart', async () => {
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com',
+      env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webOutcome]),
+        properties,
+        operationalQuery,
+        query: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } }),
+        measurementTrust: vi.fn().mockResolvedValue({ status: 'trusted', primary_metric: { observed_events: 20 }, blockers: [], warnings: [] }),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    const answer = await screen.findByRole('heading', { name: 'Web health' });
+    expect(screen.getByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+    expect(await screen.findByText('No change versus the previous 30 days.')).toBeInTheDocument();
+    expect(await screen.findByText(/Trusted measurement/)).toBeInTheDocument();
+    const chart = await screen.findByTestId('web-trend');
+    expect(answer.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_analytics')).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([expect.objectContaining({ date_from: '-30d' })]),
+        expect.arrayContaining([expect.objectContaining({ date_from: '-60d', date_to: '-30d' })]),
+      ]),
+    );
+  });
+
+  it('keeps the current Web health answer when the previous-period comparison is unavailable', async () => {
+    const partialOperationalQuery = vi.fn((project, query) => {
+      if (query.kind === 'web_analytics' && query.date_to === '-30d') return Promise.reject(new Error('previous unavailable'));
+      return operationalQuery(project, query);
+    });
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webOutcome]), properties,
+        operationalQuery: partialOperationalQuery,
+        query: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } }),
+        measurementTrust: vi.fn().mockResolvedValue({ status: 'trusted', primary_metric: { observed_events: 20 }, blockers: [], warnings: [] }),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+    expect(await screen.findByText('Previous-period comparison is unavailable.')).toBeInTheDocument();
+    expect(await screen.findByTestId('web-trend')).toBeInTheDocument();
+  });
+
+  it('renders the current headline before slow secondary reads and loads source only on request', async () => {
+    const overview = await operationalQuery('y1blin-com', {
+      kind: 'web_analytics',
+      metric: metric.key,
+      date_from: '-30d',
+      filters: [],
+      env: 'prod',
+      dimensions: [],
+    });
+    operationalQuery.mockClear();
+    const isolatedOperationalQuery = vi.fn((_project, query) => {
+      if (query.kind === 'web_analytics' && query.date_to === '-30d') return new Promise(() => undefined);
+      if (query.kind === 'web_analytics' && query.dimensions?.includes('source')) return new Promise(() => undefined);
+      if (query.kind === 'web_analytics') return Promise.resolve(overview);
+      throw new Error(`Unexpected query kind: ${query.kind}`);
+    });
+    const slowTrend = vi.fn(() => new Promise(() => undefined));
+    const slowTrust = vi.fn(() => new Promise(() => undefined));
+    const slowReadiness = vi.fn(() => new Promise(() => undefined));
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com',
+      env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webOutcome]),
+        properties,
+        operationalQuery: isolatedOperationalQuery,
+        query: slowTrend,
+        measurementTrust: slowTrust,
+        measurementReadiness: slowReadiness,
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+    expect(screen.getByText('Previous-period comparison is loading.')).toBeInTheDocument();
+    expect(isolatedOperationalQuery.mock.calls.filter(([, query]) => query.dimensions?.includes('source'))).toHaveLength(0);
+    expect(screen.queryByText('telegram')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load traffic breakdown' }));
+    await waitFor(() => expect(isolatedOperationalQuery.mock.calls.filter(([, query]) => query.dimensions?.includes('source'))).toHaveLength(1));
+    expect(screen.getByText('Loading Sources breakdown…')).toBeInTheDocument();
+    expect(screen.getByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+  });
+
+  it('does not keep prior-scope KPI data visible while a new project registry is loading', async () => {
+    const view = render(
+      <TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Load traffic breakdown' }));
+    await screen.findByText('telegram');
+    mockedStore.mockReturnValue({
+      project: 'beta',
+      env: 'prod',
+      client: {
+        metrics: vi.fn(() => new Promise(() => undefined)),
+        properties: vi.fn().mockResolvedValue(trustedProperties),
+        operationalQuery,
+        query: vi.fn(),
+      },
+    } as never);
+
+    await act(async () => {
+      view.rerender(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    });
+
+    expect(screen.getByLabelText('Loading web analytics')).toBeInTheDocument();
+    expect(screen.queryByText('telegram')).not.toBeInTheDocument();
+    expect(screen.queryByText('20')).not.toBeInTheDocument();
   });
 
   it('repairs legacy route and UTM definitions from Web', async () => {
     properties.mockResolvedValueOnce([]);
     render(
-      <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
+      <TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>,
     );
 
     expect(await screen.findByText('Finish web setup')).toBeInTheDocument();
@@ -269,10 +416,9 @@ describe('Web analytics partial availability', () => {
 
   it('shows trusted UTM term values from the canonical Web response', async () => {
     render(
-      <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
+      <TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>,
     );
-    await screen.findByText('telegram');
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'UTM term' }), { key: 'Enter' });
+    fireEvent.keyDown(await screen.findByRole('tab', { name: 'UTM term' }), { key: 'Enter' });
     expect(await screen.findByText('launch')).toBeInTheDocument();
     expect(trend).not.toHaveBeenCalled();
     expect(screen.getByText('5')).toBeInTheDocument();
@@ -280,7 +426,7 @@ describe('Web analytics partial availability', () => {
 
   it('repairs a UTM-only gap without changing the trusted route vocabulary', async () => {
     properties.mockResolvedValueOnce(trustedProperties.filter((item) => item.key !== '$utm_term'));
-    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('Finish web setup')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add UTM definitions' }));
@@ -305,7 +451,7 @@ describe('Web analytics partial availability', () => {
 
     render(
       <TooltipProvider>
-        <MemoryRouter>
+        <MemoryRouter future={routerFuture}>
           <WebAnalytics />
         </MemoryRouter>
       </TooltipProvider>,
@@ -315,6 +461,10 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('Visitors')).toBeInTheDocument();
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('Sources & UTM')).toBeInTheDocument();
+    expect(screen.getAllByText('Waiting for setup')).toHaveLength(4);
+    expect(screen.getAllByText('Requires an accepted canonical page view')).toHaveLength(2);
+    expect(screen.getByText('Requires trusted acquisition definitions')).toBeInTheDocument();
+    expect(screen.queryByText('—')).not.toBeInTheDocument();
     expect(screen.queryByText('Period')).not.toBeInTheDocument();
     const create = screen.getByRole('button', { name: 'Create web tracking plan' });
     expect(create).toBeDisabled();
@@ -332,7 +482,7 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByRole('link', { name: 'Review and activate' })).toHaveAttribute('href', '/registry');
   });
 
-  it('keeps the UTM workspace available before canonical page views are activated', async () => {
+  it('keeps acquisition secondary until canonical page views are activated', async () => {
     const acquisitionMetric = {
       ...metric,
       id: 'landing-visits',
@@ -351,11 +501,54 @@ describe('Web analytics partial availability', () => {
       },
     } as never);
 
-    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('Add website analytics')).toBeInTheDocument();
-    expect(screen.getByText('Acquisition / UTM')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Run UTM report' })).toBeEnabled();
-    expect(screen.getByRole('combobox', { name: 'Acquisition metric' })).toHaveTextContent('Landing visits');
+    expect(screen.getByText('Web setup order')).toBeInTheDocument();
+    expect(screen.getByText('1. Canonical page views')).toBeInTheDocument();
+    expect(screen.queryByText('Acquisition / UTM')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run UTM report' })).not.toBeInTheDocument();
+  });
+
+  it('links missing web definitions to the exact affected saved answer', async () => {
+    mockedStore.mockReturnValue({
+      project: 'alpha',
+      env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([]),
+        properties: vi.fn().mockResolvedValue([]),
+        measurementReadiness: vi.fn().mockResolvedValue({
+          groups: [{
+            key: 'properties',
+            gaps: [{ definition_ref: '$utm_source', affected_answer_ids: ['answer-web-conversion'] }],
+          }],
+        }),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByRole('link', { name: 'answer-web-conversion' })).toHaveAttribute(
+      'href',
+      '/analyze/saved?answer=answer-web-conversion',
+    );
+  });
+});
+
+describe('Web setup readiness', () => {
+  it('requires accepted page views in the selected period for canonical readiness', () => {
+    expect(hasAcceptedCanonicalPageViews(0)).toBe(false);
+    expect(hasAcceptedCanonicalPageViews(1)).toBe(true);
+  });
+
+  it('requires an active outcome explicitly mapped to the web surface', () => {
+    const canonical = { ...metric, tags: [...metric.tags] } satisfies Metric;
+    const unrelated = { ...canonical, id: 'revenue', key: 'revenue', type: 'value' as const, tags: ['surface:bot'] } satisfies Metric;
+    const webOutcome = { ...unrelated, tags: ['surface:web'] } satisfies Metric;
+    const webConversion = { ...webOutcome, type: 'conversion' as const } satisfies Metric;
+
+    expect(hasWebOutcome([canonical, unrelated])).toBe(false);
+    expect(hasWebOutcome([canonical, webOutcome])).toBe(true);
+    expect(hasWebOutcome([canonical, webConversion])).toBe(true);
   });
 });

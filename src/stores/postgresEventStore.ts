@@ -1,6 +1,8 @@
 import type pg from 'pg';
 import type {
   AppendResult,
+  AcceptedIngestTrendPoint,
+  AcceptedIngestTrendQuery,
   BackfillRecord,
   BackfillResult,
   EventRevisionInput,
@@ -55,6 +57,7 @@ import type {
   PageEngagementQuery,
   WebPageEngagement,
   WebPageEngagementResult,
+  ProjectPortfolioEventStats,
 } from './eventStore.js';
 import { andFilters, compileFilters, numericPropSql } from './filters.js';
 import { ApiError } from '../errors.js';
@@ -136,6 +139,22 @@ export class PostgresEventStore implements EventStore {
     } finally {
       client.release();
     }
+  }
+
+  async acceptedIngestTrend(q: AcceptedIngestTrendQuery): Promise<AcceptedIngestTrendPoint[]> {
+    const { rows } = await this.pool.query<{ bucket: Date; accepted: string }>(
+      `SELECT date_trunc($5, ingested_at) AS bucket, count(*)::text AS accepted
+       FROM events
+       WHERE project_id = $1 AND env = $2 AND ingested_at >= $3 AND ingested_at < $4
+         AND NOT is_system AND event_source <> 'system'
+       GROUP BY 1
+       ORDER BY 1`,
+      [q.projectId, q.env, q.from, q.to, q.interval],
+    );
+    return rows.map((row) => ({
+      bucket: row.bucket.toISOString(),
+      accepted: Number(row.accepted),
+    }));
   }
 
   /**
@@ -2061,6 +2080,12 @@ export class PostgresEventStore implements EventStore {
         })),
         pinned_properties: {},
         identity_status: row.identity_status,
+        order_reason: q.order === 'first_seen_desc'
+          ? 'first_seen_in_window'
+          : q.order === 'events_desc'
+            ? 'event_volume_in_window'
+            : 'last_seen_in_window',
+        rank_evidence_window: { from: q.from.toISOString(), to: q.to.toISOString() },
       })),
       hasMore,
     };
@@ -2350,9 +2375,75 @@ export class PostgresEventStore implements EventStore {
     };
   }
 
-  async entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]> {
-    if (q.specs.length === 0) return [];
-    const { rows } = await this.pool.query(
+  async projectPortfolioStats(projectIds: string[], env?: string): Promise<ProjectPortfolioEventStats[]> {
+    if (projectIds.length === 0) return [];
+    const params: unknown[] = [projectIds];
+    const envPredicate = env === undefined ? '' : ` AND env = $${params.push(env)}`;
+    const { rows } = await this.pool.query<{
+      project_id: string;
+      events_24h: number;
+      events_7d: number;
+      events_30d: number;
+      registered_events_30d: number;
+      last_event_at: Date | null;
+    }>(
+      `WITH requested AS (
+         SELECT unnest($1::uuid[]) AS project_id
+       )
+       SELECT requested.project_id,
+         COALESCE(recent.events_24h, 0)::int AS events_24h,
+         COALESCE(recent.events_7d, 0)::int AS events_7d,
+         COALESCE(recent.events_30d, 0)::int AS events_30d,
+         COALESCE(recent.registered_events_30d, 0)::int AS registered_events_30d,
+         latest.last_event_at
+       FROM requested
+       LEFT JOIN LATERAL (
+         SELECT
+           count(*) FILTER (WHERE "timestamp" >= now() - interval '24 hours')::int AS events_24h,
+           count(*) FILTER (WHERE "timestamp" >= now() - interval '7 days')::int AS events_7d,
+           count(*)::int AS events_30d,
+           count(*) FILTER (WHERE registered)::int AS registered_events_30d
+         FROM events
+         WHERE project_id = requested.project_id
+           ${envPredicate}
+           AND "timestamp" >= now() - interval '30 days'
+       ) recent ON true
+       LEFT JOIN LATERAL (
+         SELECT "timestamp" AS last_event_at
+         FROM events
+         WHERE project_id = requested.project_id
+           ${envPredicate}
+         ORDER BY "timestamp" DESC
+         LIMIT 1
+       ) latest ON true`,
+      params,
+    );
+    return rows.map((row) => ({
+      project_id: row.project_id,
+      events_24h: Number(row.events_24h),
+      events_7d: Number(row.events_7d),
+      events_30d: Number(row.events_30d),
+      registered_events_30d: Number(row.registered_events_30d),
+      last_event_at: row.last_event_at?.toISOString() ?? null,
+    }));
+  }
+
+  async entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<{
+    issues: EntityStatusEvidence[];
+    matchedEntities: number;
+  }> {
+    if (q.specs.length === 0) return { issues: [], matchedEntities: 0 };
+    const { rows } = await this.pool.query<{
+      entity_type: string | null;
+      entity_id: string | null;
+      current_status: string | null;
+      event: string | null;
+      expected_status: string | null;
+      last_event_at: Date | null;
+      evidence_events: number | null;
+      entity_updated_at: Date | null;
+      matched_entities: number;
+    }>(
       `WITH expected AS (
          SELECT event, entity_type, expected_status
          FROM jsonb_to_recordset($3::jsonb)
@@ -2376,39 +2467,53 @@ export class PostgresEventStore implements EventStore {
            AND events.env = $2
            AND events."timestamp" >= now() - make_interval(days => $4)
          GROUP BY expected.entity_type, entity_id, events.event, expected.expected_status
-       )
-       SELECT
-         matched.entity_type,
-         matched.entity_id,
-         entities.properties->>'status' AS current_status,
-         matched.event,
-         matched.expected_status,
-         matched.last_event_at,
-         matched.evidence_events,
-         entities.updated_at AS entity_updated_at
-       FROM matched
-       JOIN entities
+       ),
+       comparable AS (
+         SELECT
+           matched.entity_type,
+           matched.entity_id,
+           entities.properties->>'status' AS current_status,
+           matched.event,
+           matched.expected_status,
+           matched.last_event_at,
+           matched.evidence_events,
+           entities.updated_at AS entity_updated_at
+         FROM matched
+         JOIN entities
          ON entities.project_id = $1
         AND entities.env = $2
         AND entities.entity_type = matched.entity_type
         AND entities.entity_id = matched.entity_id
-       WHERE matched.entity_id IS NOT NULL
-         AND entities.properties->>'status' IS NOT NULL
-         AND lower(entities.properties->>'status') <> matched.expected_status
-       ORDER BY last_event_at DESC
-       LIMIT $5`,
+         WHERE matched.entity_id IS NOT NULL
+           AND entities.properties->>'status' IS NOT NULL
+       ), issues AS (
+         SELECT * FROM comparable
+         WHERE lower(current_status) <> expected_status
+         ORDER BY last_event_at DESC
+         LIMIT $5
+       ), summary AS (
+         SELECT count(*)::int AS matched_entities FROM comparable
+       )
+       SELECT issues.*, summary.matched_entities
+       FROM summary LEFT JOIN issues ON true
+       ORDER BY issues.last_event_at DESC NULLS LAST`,
       [q.projectId, q.env, JSON.stringify(q.specs), q.sinceDays, q.limit],
     );
-    return rows.map((r) => ({
-      entity_type: r.entity_type,
-      entity_id: r.entity_id,
-      current_status: r.current_status,
-      event: r.event,
-      expected_status: r.expected_status,
-      last_event_at: toIso(r.last_event_at),
-      evidence_events: Number(r.evidence_events),
-      entity_updated_at: toIso(r.entity_updated_at),
-    }));
+    const issues = rows.flatMap((r): EntityStatusEvidence[] => {
+      if (!r.entity_type || !r.entity_id || !r.current_status || !r.event
+        || !r.expected_status || !r.last_event_at || !r.entity_updated_at) return [];
+      return [{
+        entity_type: r.entity_type,
+        entity_id: r.entity_id,
+        current_status: r.current_status,
+        event: r.event,
+        expected_status: r.expected_status,
+        last_event_at: toIso(r.last_event_at),
+        evidence_events: Number(r.evidence_events),
+        entity_updated_at: toIso(r.entity_updated_at),
+      }];
+    });
+    return { issues, matchedEntities: Number(rows[0]?.matched_entities ?? 0) };
   }
 
   /**

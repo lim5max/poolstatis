@@ -39,6 +39,9 @@ import {
   requireActorCursorSigningKey,
 } from './actorCursors.js';
 import { actorCursorSecurity, resolveActorIdentity } from './identity.js';
+import {
+  funnelControlBlocks, trendControlBlocks, type AnswerBlock, type EvidenceBlock, type FunnelSummary,
+} from './controlTower.js';
 
 const SESSION_ATTRIBUTION_NOTE = 'Session landing attribution: this associates events with the tagged landing in the same browser session; it is not causal campaign credit.';
 const WEB_DIMENSIONS = {
@@ -192,7 +195,7 @@ interface VisualCompareAgentContext {
 }
 
 export type QueryResult =
-  | { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value?: string }>; meta: QueryMeta }
+  | { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value?: string }>; answer: AnswerBlock; evidence: EvidenceBlock; meta: QueryMeta }
   | {
       kind: 'web_analytics';
       summary: {
@@ -258,6 +261,9 @@ export type QueryResult =
         conversion_from_prev: number;
         conversion_from_start: number;
       }>;
+      summary: FunnelSummary;
+      answer: AnswerBlock;
+      evidence: EvidenceBlock;
       meta: QueryMeta;
     }
   | { kind: 'entities'; entities: Array<{ entity_id: string; properties: Record<string, unknown>; updated_at: string }>; meta: QueryMeta }
@@ -281,11 +287,24 @@ export type QueryResult =
             unavailable_value: null;
             project_capability: boolean;
           };
+          identity_profile: { available: false; reason: string };
+          outcome_rank: { available: false; reason: string };
+          interesting_categories: {
+            recently_activated: { available: false; requires: 'purpose_backed_activation_metric_or_funnel' };
+            stalled: { available: false; requires: 'purpose_backed_stall_definition' };
+            at_risk: { available: false; requires: 'purpose_backed_risk_definition' };
+            changed_segment: { available: false; requires: 'trusted_canonical_actor_property_source' };
+          };
         };
         provenance: {
           identity_status: string;
           top_events: { registered_only: true; limit: 8 };
           pinned_properties: { source: null; fail_closed: true };
+          ordering: {
+            selected: import('../stores/eventStore.js').ActorOrder;
+            input: 'last_seen' | 'first_seen' | 'total_events';
+            relative_to: string;
+          };
         };
       };
     }
@@ -996,6 +1015,13 @@ export class QueryService {
       return {
         kind: 'trend',
         series: [{ bucket: now.toISOString(), value: count }],
+        ...trendControlBlocks(
+          metric,
+          q,
+          [{ value: count }],
+          now,
+          'native',
+        ),
         meta: meta({ source: 'native', note: 'state metrics are snapshots of current entity state, not time series' }),
       };
     }
@@ -1032,7 +1058,12 @@ export class QueryService {
         interval: q.interval,
         ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
       });
-      return { kind: 'trend', series, meta: meta({ source: 'posthog', ...(attributionNote ? { note: attributionNote } : {}) }) };
+      return {
+        kind: 'trend',
+        series,
+        ...trendControlBlocks(metric, q, series, now, 'posthog'),
+        meta: meta({ source: 'posthog', ...(attributionNote ? { note: attributionNote } : {}) }),
+      };
     }
     const agg =
       metric.type === 'count'
@@ -1041,7 +1072,7 @@ export class QueryService {
           ? ({ kind: 'unique_actors' } as const)
           : ({ kind: 'value', property: source.value_property!, fn: source.agg ?? 'sum' } as const);
 
-    const series = await this.eventStore.trend({
+    const trendInput = {
       projectId,
       env: q.env,
       event: source.event,
@@ -1050,9 +1081,19 @@ export class QueryService {
       from,
       to,
       interval: q.interval,
-      ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
-    });
-    return { kind: 'trend', series, meta: meta({ source: 'native', ...(attributionNote ? { note: attributionNote } : {}) }) };
+    };
+    const [series, controlSeries] = q.breakdown
+      ? await Promise.all([
+          this.eventStore.trend({ ...trendInput, breakdownProperty: q.breakdown.property }),
+          this.eventStore.trend(trendInput),
+        ])
+      : await this.eventStore.trend(trendInput).then((result) => [result, result] as const);
+    return {
+      kind: 'trend',
+      series,
+      ...trendControlBlocks(metric, q, controlSeries, now, 'native'),
+      meta: meta({ source: 'native', ...(attributionNote ? { note: attributionNote } : {}) }),
+    };
   }
 
   private async funnel(projectId: string, q: FunnelQueryInput, now: Date): Promise<QueryResult> {
@@ -1068,10 +1109,12 @@ export class QueryService {
 
     let stepDefs: Array<{ label: string; metric: Metric }>;
     let windowSeconds: number;
+    let funnelGoal: string | undefined;
 
     if (q.funnel) {
       const funnel = await getFunnel(this.pool, projectId, q.funnel);
       windowSeconds = funnel.window_seconds;
+      funnelGoal = funnel.goal;
       stepDefs = await Promise.all(
         funnel.steps.map(async (s) => ({
           label: s.label,
@@ -1120,7 +1163,11 @@ export class QueryService {
       );
     }
     let counts: number[];
+    let previousCounts: number[];
     let resultSource: 'native' | 'posthog' = 'native';
+    const durationMs = Math.max(0, to.getTime() - from.getTime());
+    const previousTo = from;
+    const previousFrom = new Date(from.getTime() - durationMs);
     if (sources[0]?.dataSource === 'posthog') {
       const connectionIds = new Set(sources.map((source) => source.connectionId));
       const connectionId = sources[0].connectionId;
@@ -1130,39 +1177,68 @@ export class QueryService {
           'all PostHog funnel metrics must use one available connection',
         );
       }
-      counts = await this.posthog.funnel({
-        projectId,
-        connectionId,
-        metricKeys: stepDefs.map(({ metric }) => metric.key),
-        steps: sources.map(({ event, filters }) => ({ event, filters })),
-        windowSeconds,
-        from,
-        to,
-      });
+      [counts, previousCounts] = await Promise.all([
+        this.posthog.funnel({
+          projectId,
+          connectionId,
+          metricKeys: stepDefs.map(({ metric }) => metric.key),
+          steps: sources.map(({ event, filters }) => ({ event, filters })),
+          windowSeconds,
+          from,
+          to,
+        }),
+        this.posthog.funnel({
+          projectId,
+          connectionId,
+          metricKeys: stepDefs.map(({ metric }) => metric.key),
+          steps: sources.map(({ event, filters }) => ({ event, filters })),
+          windowSeconds,
+          from: previousFrom,
+          to: previousTo,
+        }),
+      ]);
       resultSource = 'posthog';
     } else {
-      counts = await this.eventStore.funnel({
-        projectId,
-        env: q.env,
-        windowSeconds,
-        from,
-        to,
-        steps: sources.map(({ event, filters }) => ({ event, filters })),
-      });
+      [counts, previousCounts] = await Promise.all([
+        this.eventStore.funnel({
+          projectId,
+          env: q.env,
+          windowSeconds,
+          from,
+          to,
+          steps: sources.map(({ event, filters }) => ({ event, filters })),
+        }),
+        this.eventStore.funnel({
+          projectId,
+          env: q.env,
+          windowSeconds,
+          from: previousFrom,
+          to: previousTo,
+          steps: sources.map(({ event, filters }) => ({ event, filters })),
+        }),
+      ]);
     }
 
     const first = counts[0] ?? 0;
+    const steps = counts.map((actors, i) => ({
+      label: stepDefs[i]!.label,
+      metric_key: stepDefs[i]!.metric.key,
+      purpose: stepDefs[i]!.metric.purpose,
+      category: stepDefs[i]!.metric.category,
+      actors,
+      conversion_from_prev: i === 0 ? 1 : ratio(actors, counts[i - 1]!),
+      conversion_from_start: i === 0 ? 1 : ratio(actors, first),
+    }));
+    const previousSteps = previousCounts.map((actors, i) => ({
+      label: stepDefs[i]!.label,
+      metric_key: stepDefs[i]!.metric.key,
+      purpose: stepDefs[i]!.metric.purpose,
+      actors,
+    }));
     return {
       kind: 'funnel',
-      steps: counts.map((actors, i) => ({
-        label: stepDefs[i]!.label,
-        metric_key: stepDefs[i]!.metric.key,
-        purpose: stepDefs[i]!.metric.purpose,
-        category: stepDefs[i]!.metric.category,
-        actors,
-        conversion_from_prev: i === 0 ? 1 : ratio(actors, counts[i - 1]!),
-        conversion_from_start: i === 0 ? 1 : ratio(actors, first),
-      })),
+      steps,
+      ...funnelControlBlocks(q, steps, now, resultSource, funnelGoal, previousSteps),
       meta: {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },
@@ -1314,11 +1390,46 @@ export class QueryService {
             unavailable_value: null,
             project_capability: trustedBrowserSessions,
           },
+          identity_profile: {
+            available: false,
+            reason: 'Only explicit server-owned identity links are available; no canonical actor profile source is configured.',
+          },
+          outcome_rank: {
+            available: false,
+            reason: 'No purpose-backed activation, stall or risk definition is selected for this actors query.',
+          },
+          interesting_categories: {
+            recently_activated: {
+              available: false,
+              requires: 'purpose_backed_activation_metric_or_funnel',
+            },
+            stalled: {
+              available: false,
+              requires: 'purpose_backed_stall_definition',
+            },
+            at_risk: {
+              available: false,
+              requires: 'purpose_backed_risk_definition',
+            },
+            changed_segment: {
+              available: false,
+              requires: 'trusted_canonical_actor_property_source',
+            },
+          },
         },
         provenance: {
           identity_status: 'linked requires active server-owned link provenance or multiple observed raw IDs; otherwise unknown unless a link conflict is detected',
           top_events: { registered_only: true, limit: 8 },
           pinned_properties: { source: null, fail_closed: true },
+          ordering: {
+            selected: q.order,
+            input: q.order === 'events_desc'
+              ? 'total_events'
+              : q.order === 'first_seen_desc'
+                ? 'first_seen'
+                : 'last_seen',
+            relative_to: 'the exact query window',
+          },
         },
       },
     };

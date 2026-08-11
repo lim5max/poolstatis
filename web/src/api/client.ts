@@ -1,13 +1,14 @@
 import type {
-  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, PreparedExperiment, ProjectIntent, ProjectIntentInput, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse,
-  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
+  AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataHealthResult, DataHealthVerifyInput, DataHealthVerifyResult, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
+  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectPortfolioResult, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
 import type { OperationalQueryInput, OperationalQueryResult, PersonResult } from '../analysis/operations';
+import { decodeControlTowerResult, decodeUsageControlResult } from './control-tower-decoder';
 
 export class ApiError extends Error {
-  constructor(public code: string, message: string, public hint?: string, public status?: number) {
-    super(message);
+  constructor(public code: string, message: string, public hint?: string, public status?: number, public requestId?: string) {
+    super(requestId ? `${message} (Request ID: ${requestId})` : message);
   }
 }
 
@@ -17,7 +18,7 @@ export interface AccessTokenRequest {
 
 export type AccessTokenProvider = (request?: AccessTokenRequest) => Promise<string>;
 
-type ApiErrorDetails = { code?: string; message?: string; hint?: string };
+type ApiErrorDetails = { code?: string; message?: string; hint?: string; requestId?: string };
 
 function apiErrorDetails(json: unknown): ApiErrorDetails | null {
   if (!json || typeof json !== 'object') return null;
@@ -35,7 +36,10 @@ function apiErrorDetails(json: unknown): ApiErrorDetails | null {
       ? record.message
       : typeof record.error_description === 'string' ? record.error_description : undefined;
   const hint = typeof candidate.hint === 'string' ? candidate.hint : undefined;
-  return { ...(code ? { code } : {}), ...(message ? { message } : {}), ...(hint ? { hint } : {}) };
+  const requestId = typeof candidate.request_id === 'string'
+    ? candidate.request_id
+    : typeof record.request_id === 'string' ? record.request_id : undefined;
+  return { ...(code ? { code } : {}), ...(message ? { message } : {}), ...(hint ? { hint } : {}), ...(requestId ? { requestId } : {}) };
 }
 
 function isSessionNotFound(status: number, details: ApiErrorDetails | null): boolean {
@@ -103,7 +107,8 @@ export class PoolstatisClient {
     const json = await res.json().catch(() => null);
     if (!res.ok) {
       const e = apiErrorDetails(json);
-      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
+      const requestId = e?.requestId ?? res.headers.get('x-request-id') ?? undefined;
+      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status, requestId);
     }
     return json as T;
   }
@@ -120,7 +125,8 @@ export class PoolstatisClient {
     if (!res.ok) {
       const json = await res.json().catch(() => null);
       const e = apiErrorDetails(json);
-      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
+      const requestId = e?.requestId ?? res.headers.get('x-request-id') ?? undefined;
+      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status, requestId);
     }
     return res;
   }
@@ -135,6 +141,11 @@ export class PoolstatisClient {
 
   usage(period: string) {
     return this.req<OrganizationUsage>('GET', `/api/v1/me/usage?period=${encodeURIComponent(period)}`);
+  }
+
+  usageControl(period: string) {
+    return this.req<unknown>('GET', `/api/v1/me/usage/control?period=${encodeURIComponent(period)}`)
+      .then(decodeUsageControlResult);
   }
 
   usageRange(from: string, to: string) {
@@ -154,9 +165,29 @@ export class PoolstatisClient {
     return this.req<HostedOnboardingResult>('POST', '/api/v1/onboarding', body);
   }
 
+  accountMode() {
+    return this.req<AccountMode>('GET', '/api/v1/account-mode');
+  }
+
   // ---- projects ----
   listProjects() {
     return this.req<{ projects: ProjectWithStats[]; scope: 'org' | 'project' }>('GET', '/api/v1/projects');
+  }
+
+  projectPortfolio(env: string) {
+    return this.req<ProjectPortfolioResult>(
+      'GET',
+      `/api/v1/projects/portfolio?env=${encodeURIComponent(env)}`,
+    );
+  }
+
+  compareProjects(body: {
+    metric_key: string;
+    projects: string[];
+    environment: string;
+    window: { from: string; to: string };
+  }) {
+    return this.req<SemanticProjectComparison>('POST', '/api/v1/projects/compare', body);
   }
 
   createProject(body: { slug: string; name: string }) {
@@ -173,8 +204,74 @@ export class PoolstatisClient {
     return this.req<ProjectSchema>('GET', `/api/v1/projects/${slug}/schema?env=${encodeURIComponent(env)}`);
   }
 
+  analysisViews(slug: string, filter: {
+    env: string; status?: SavedAnswer['status']; official?: boolean;
+  }) {
+    const query = new URLSearchParams({ env: filter.env });
+    if (filter.status) query.set('status', filter.status);
+    if (filter.official !== undefined) query.set('official', String(filter.official));
+    return this.req<{ views: SavedAnswer[] }>(
+      'GET',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views?${query}`,
+    ).then((response) => response.views);
+  }
+
+  analysisView(slug: string, id: string) {
+    return this.req<{ view: SavedAnswer; audit: SavedAnswerAudit[] }>(
+      'GET',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views/${encodeURIComponent(id)}`,
+    );
+  }
+
+  createAnalysisView(slug: string, body: CreateSavedAnswerInput) {
+    return this.req<{ view: SavedAnswer }>(
+      'POST',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views`,
+      body,
+    ).then((response) => response.view);
+  }
+
+  updateAnalysisView(slug: string, id: string, patch: UpdateSavedAnswerInput) {
+    return this.req<{ view: SavedAnswer }>(
+      'PATCH',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views/${encodeURIComponent(id)}`,
+      patch,
+    ).then((response) => response.view);
+  }
+
+  archiveAnalysisView(slug: string, id: string) {
+    return this.req<{ view: SavedAnswer }>(
+      'POST',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views/${encodeURIComponent(id)}/archive`,
+      {},
+    ).then((response) => response.view);
+  }
+
+  setAnalysisViewOfficial(slug: string, id: string, official: boolean) {
+    return this.req<{ view: SavedAnswer }>(
+      'PUT',
+      `/api/v1/projects/${encodeURIComponent(slug)}/analysis-views/${encodeURIComponent(id)}/official`,
+      { official },
+    ).then((response) => response.view);
+  }
+
+  measurementReadiness(slug: string, env = 'prod') {
+    return this.req<MeasurementReadiness>(
+      'GET',
+      `/api/v1/projects/${encodeURIComponent(slug)}/readiness?env=${encodeURIComponent(env)}`,
+    );
+  }
+
   onboardingStatus(slug: string, env = 'prod') {
     return this.req<DecisionLoopOnboardingStatus>('GET', `/api/v1/projects/${slug}/onboarding/status?env=${encodeURIComponent(env)}`);
+  }
+
+  controlTower(slug: string, env = 'prod', range: '7d' | '30d' | '90d' = '30d') {
+    const query = new URLSearchParams({ env, range });
+    return this.req<unknown>(
+      'GET',
+      `/api/v1/projects/${encodeURIComponent(slug)}/control-tower?${query}`,
+    ).then(decodeControlTowerResult);
   }
 
   projectIntent(slug: string) {
@@ -270,10 +367,17 @@ export class PoolstatisClient {
     return this.req<{ filename: string; yaml: string }>('GET', `/api/v1/projects/${slug}/contracts/export`);
   }
 
-  releases(slug: string, filter: { env?: string; status?: ReleaseStatus } = {}) {
+  releases(slug: string, filter: {
+    env?: string;
+    status?: ReleaseStatus;
+    experiment_key?: string;
+    decision_eligible?: 'nearest';
+  } = {}) {
     const qs = new URLSearchParams();
     if (filter.env) qs.set('env', filter.env);
     if (filter.status) qs.set('status', filter.status);
+    if (filter.experiment_key) qs.set('experiment_key', filter.experiment_key);
+    if (filter.decision_eligible) qs.set('decision_eligible', filter.decision_eligible);
     return this.req<{ releases: Release[] }>('GET', `/api/v1/projects/${slug}/releases${qs.size ? `?${qs}` : ''}`)
       .then((response) => response.releases);
   }
@@ -284,17 +388,39 @@ export class PoolstatisClient {
     );
   }
 
+  registerRelease(slug: string, body: {
+    idempotency_key: string;
+    contract_key: string;
+    env: string;
+    repository: string;
+    branch?: string;
+    commit_sha: string;
+    pr_url?: string;
+    deployed_at: string;
+    status: 'deployed';
+  }) {
+    return this.req<Release & { idempotent: boolean }>(
+      'POST', `/api/v1/projects/${slug}/releases`, body,
+    );
+  }
+
   evaluateRelease(slug: string, id: string) {
     return this.req<{ evidence: EvidenceSet; decision: Decision; idempotent: boolean }>(
       'POST', `/api/v1/projects/${slug}/releases/${id}/evaluate`, {},
     );
   }
 
-  decisions(slug: string, filter: { env?: string; status?: Decision['status']; release_id?: string } = {}) {
+  decisions(slug: string, filter: {
+    env?: string;
+    status?: Decision['status'];
+    release_id?: string;
+    experiment_key?: string;
+  } = {}) {
     const qs = new URLSearchParams();
     if (filter.env) qs.set('env', filter.env);
     if (filter.status) qs.set('status', filter.status);
     if (filter.release_id) qs.set('release_id', filter.release_id);
+    if (filter.experiment_key) qs.set('experiment_key', filter.experiment_key);
     return this.req<{ decisions: Decision[] }>('GET', `/api/v1/projects/${slug}/decisions${qs.size ? `?${qs}` : ''}`)
       .then((response) => response.decisions);
   }
@@ -432,6 +558,43 @@ export class PoolstatisClient {
     const qs = new URLSearchParams({ env: q.env });
     if (q.sinceDays !== undefined) qs.set('since_days', String(q.sinceDays));
     return this.req<MetricUsage>('GET', `/api/v1/projects/${slug}/metrics/${key}/usage?${qs}`);
+  }
+
+  metricDefinition(slug: string, key: string) {
+    return this.req<MetricDefinitionDetail>(
+      'GET',
+      `/api/v1/projects/${encodeURIComponent(slug)}/metrics/${encodeURIComponent(key)}/definition`,
+    );
+  }
+
+  previewMetricDefinition(slug: string, key: string, body: {
+    expected_revision?: number;
+    definition: { purpose: string; source: Record<string, unknown> };
+  }) {
+    return this.req<MetricDefinitionPreview>(
+      'POST',
+      `/api/v1/projects/${encodeURIComponent(slug)}/metrics/${encodeURIComponent(key)}/definition/preview`,
+      body,
+    );
+  }
+
+  applyMetricDefinition(slug: string, key: string, body: {
+    expected_revision: number;
+    expected_fingerprint: string;
+    confirm_impact: true;
+    definition: { purpose: string; source: Record<string, unknown> };
+  }) {
+    return this.req<{
+      applied: true;
+      previous_revision: number;
+      revision: number;
+      current: MetricDefinitionDetail['current'];
+      impact: MetricDefinitionDetail['impact'];
+    }>(
+      'POST',
+      `/api/v1/projects/${encodeURIComponent(slug)}/metrics/${encodeURIComponent(key)}/definition/apply`,
+      body,
+    );
   }
 
   setMetricTags(slug: string, key: string, tags: string[]) {
@@ -793,6 +956,21 @@ export class PoolstatisClient {
     return this.req<DataQualityResponse>('GET', `/api/v1/projects/${slug}/data-quality?${qs}`);
   }
 
+  dataHealth(slug: string, env = 'prod') {
+    return this.req<DataHealthResult>(
+      'GET',
+      `/api/v1/projects/${slug}/data-health?env=${encodeURIComponent(env)}`,
+    );
+  }
+
+  verifyDataHealthFix(slug: string, body: DataHealthVerifyInput) {
+    return this.req<DataHealthVerifyResult>(
+      'POST',
+      `/api/v1/projects/${slug}/data-health/verify`,
+      body,
+    );
+  }
+
   // ---- keys (admin) ----
   keys(slug: string) {
     return this.req<{ keys: ApiKeyRow[] }>('GET', `/api/v1/projects/${slug}/keys`).then((r) => r.keys);
@@ -830,6 +1008,63 @@ export class PoolstatisClient {
   clearIngestWarnings(slug: string, env?: string) {
     const suffix = env ? `?env=${encodeURIComponent(env)}` : '';
     return this.req<{ cleared: number }>('DELETE', `/api/v1/projects/${slug}/ingest-warnings${suffix}`);
+  }
+
+  // ---- control tower automation ----
+  automationCapabilities(slug: string) {
+    return this.req<{ in_product: 'configured'; outbox: 'configured'; external: 'not_configured' }>('GET', `/api/v1/projects/${slug}/automation/capabilities`);
+  }
+  notificationDestinations(slug: string) {
+    return this.req<{ destinations: NotificationDestination[] }>('GET', `/api/v1/projects/${slug}/automation/destinations`).then((r) => r.destinations);
+  }
+  createNotificationDestination(slug: string, body: { key: string; name: string; kind: 'in_product' | 'outbox' }) {
+    return this.req<NotificationDestination>('POST', `/api/v1/projects/${slug}/automation/destinations`, body);
+  }
+  setNotificationDestinationStatus(slug: string, id: string, status: NotificationDestination['status']) {
+    return this.req<NotificationDestination>('PATCH', `/api/v1/projects/${slug}/automation/destinations/${id}`, { status });
+  }
+  monitorPolicies(slug: string) {
+    return this.req<{ policies: MonitorPolicy[] }>('GET', `/api/v1/projects/${slug}/monitors`).then((r) => r.policies);
+  }
+  createMonitorPolicy(slug: string, body: Record<string, unknown>) {
+    return this.req<MonitorPolicy>('POST', `/api/v1/projects/${slug}/monitors`, body);
+  }
+  setMonitorPolicyStatus(slug: string, id: string, expectedVersion: number, status: MonitorPolicy['status']) {
+    return this.req<MonitorPolicy>('POST', `/api/v1/projects/${slug}/monitors/${id}/lifecycle`, { expected_version: expectedVersion, status });
+  }
+  insightFeedSchedules(slug: string) {
+    return this.req<{ schedules: InsightFeedSchedule[] }>('GET', `/api/v1/projects/${slug}/insight-feed/schedules`).then((r) => r.schedules);
+  }
+  createInsightFeedSchedule(slug: string, body: Record<string, unknown>) {
+    return this.req<InsightFeedSchedule>('POST', `/api/v1/projects/${slug}/insight-feed/schedules`, body);
+  }
+  setInsightFeedScheduleStatus(slug: string, id: string, expectedVersion: number, status: InsightFeedSchedule['status']) {
+    return this.req<InsightFeedSchedule>('POST', `/api/v1/projects/${slug}/insight-feed/schedules/${id}/lifecycle`, { expected_version: expectedVersion, status });
+  }
+  automationProposals(slug: string) {
+    return this.req<{ proposals: AutomationProposal[] }>('GET', `/api/v1/projects/${slug}/automation/proposals`).then((r) => r.proposals);
+  }
+  reviewAutomationProposal(slug: string, id: string, decision: 'approve' | 'reject', confirmationFingerprint: string, rationale: string) {
+    return this.req<{
+      proposal: AutomationProposal;
+      review: { actor: string; role: 'owner' | 'admin' };
+      execution: { state: string; mutation: string };
+    }>(
+      'POST', `/api/v1/projects/${slug}/automation/proposals/${id}/${decision}`,
+      { confirmation_fingerprint: confirmationFingerprint, rationale },
+    );
+  }
+  monitorFindings(slug: string) {
+    return this.req<{ findings: MonitorFinding[] }>('GET', `/api/v1/projects/${slug}/automation/findings`).then((r) => r.findings);
+  }
+  insightFeedSnapshots(slug: string) {
+    return this.req<{ snapshots: InsightFeedSnapshot[] }>('GET', `/api/v1/projects/${slug}/insight-feed/snapshots`).then((r) => r.snapshots);
+  }
+  automationInbox(slug: string) {
+    return this.req<{ notifications: AutomationInboxNotification[] }>('GET', `/api/v1/projects/${slug}/automation/inbox`).then((r) => r.notifications);
+  }
+  notificationDeliveries(slug: string) {
+    return this.req<{ deliveries: NotificationDelivery[] }>('GET', `/api/v1/projects/${slug}/automation/deliveries`).then((r) => r.deliveries);
   }
 
   // ---- docs ----

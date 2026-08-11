@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App, NAV_ICONS } from './App';
+import { App, NAV_ICONS, usageNavigationSignal } from './App';
 import { useStore } from './store';
 import {
   Browser,
@@ -55,8 +55,43 @@ function baseStore() {
       operationalQuery: vi.fn().mockResolvedValue({
         kind: 'actors',
         actors: [],
-        next_cursor: null,
-        meta: { computed_at: '2026-08-06T00:00:00.000Z' },
+        meta: {
+          computed_at: '2026-08-06T00:00:00.000Z',
+          date_range: { from: '2026-07-07T00:00:00.000Z', to: '2026-08-06T00:00:00.000Z' },
+          sampling: null,
+          source: 'native',
+          limit: 50,
+          order: 'last_seen_desc',
+          next_cursor: null,
+          activity_metric: null,
+          capabilities: {
+            property_filters: { available: false, reason: 'No canonical actor-property source.' },
+            pinned_properties: { available: false, reason: 'No approved pinned-property source.' },
+            session_count: {
+              source: 'canonical_browser_sessions',
+              unavailable_value: null,
+              project_capability: false,
+            },
+            identity_profile: { available: false, reason: 'Only explicit identity links are available.' },
+            outcome_rank: { available: false, reason: 'No purpose-backed outcome is selected.' },
+            interesting_categories: {
+              recently_activated: { available: false, requires: 'purpose_backed_activation_metric_or_funnel' },
+              stalled: { available: false, requires: 'purpose_backed_stall_definition' },
+              at_risk: { available: false, requires: 'purpose_backed_risk_definition' },
+              changed_segment: { available: false, requires: 'trusted_canonical_actor_property_source' },
+            },
+          },
+          provenance: {
+            identity_status: 'Only explicit links are classified.',
+            top_events: { registered_only: true, limit: 8 },
+            pinned_properties: { source: null, fail_closed: true },
+            ordering: {
+              selected: 'last_seen_desc',
+              input: 'last_seen',
+              relative_to: 'the exact query window',
+            },
+          },
+        },
       }),
     },
     baseUrl: 'https://api.poolstatis.test',
@@ -88,13 +123,37 @@ describe('customer admin shell', () => {
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeInTheDocument();
   });
 
+  it('keeps every Data & settings route reachable when the desktop navigation is collapsed', async () => {
+    render(<MemoryRouter><App /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse navigation' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Data & settings' }), { key: 'ArrowDown' });
+
+    for (const name of ['Definitions', 'Events', 'Registry', 'Experience', 'Experiments', 'Decisions', 'Automations', 'Keys']) {
+      expect(await screen.findByRole('menuitem', { name })).toBeInTheDocument();
+    }
+  });
+
+  it('provides one focusable route heading for control screens that do not own a visible title', async () => {
+    render(<MemoryRouter initialEntries={['/data']}><App /></MemoryRouter>);
+
+    const heading = await screen.findByRole('heading', { name: 'Events', level: 1 });
+    await waitFor(() => expect(heading).toHaveFocus());
+  });
+
   it('keeps answer jobs primary and control surfaces behind Data & settings', () => {
     render(<MemoryRouter><App /></MemoryRouter>);
     expect(screen.getAllByText('Home').length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText('Answers')).not.toBeInTheDocument();
     expect(screen.getByText('Data & settings')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /^(Home|Web|Product|Funnels|People|Ship|Setup)$/ })).toHaveLength(7);
+    expect(screen.getAllByRole('link', { name: /^(Home|Web|Product|Funnels|Saved|People|Ship|Usage|Setup)$/ })).toHaveLength(9);
     expect(screen.getByRole('link', { name: 'Funnels' })).toHaveAttribute('href', '/analyze/funnels');
+    expect(screen.getByRole('link', { name: 'Saved' })).toHaveAttribute('href', '/analyze/saved');
+    const settings = screen.getByText('Data & settings').closest('details');
+    expect(settings).not.toBeNull();
+    fireEvent.click(screen.getByText('Data & settings'));
+    expect(screen.getByRole('link', { name: 'Automations' })).toHaveAttribute('href', '/automation');
+    expect(within(settings!).queryByRole('link', { name: 'Profile' })).not.toBeInTheDocument();
+    expect(within(screen.getByLabelText('Account navigation')).getByRole('link', { name: 'Profile' })).toHaveAttribute('href', '/profile');
   });
 
   it('keeps an unfinished project recoverable after the user navigates away from onboarding', async () => {
@@ -129,7 +188,36 @@ describe('customer admin shell', () => {
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Product' })).not.toBeInTheDocument());
     expect(screen.getByRole('link', { name: 'Web' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Funnels' })).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /^(Home|Web|Funnels|People|Ship|Setup)$/ })).toHaveLength(6);
+    expect(screen.getAllByRole('link', { name: /^(Home|Web|Funnels|Saved|People|Ship|Usage|Setup)$/ })).toHaveLength(8);
+  });
+
+  it('shows server-owned attention and finite usage signals in the shell', async () => {
+    const current = baseStore() as any;
+    current.client.controlTower = vi.fn().mockResolvedValue({
+      attention: [
+        { id: 'a1', state: 'open' },
+        { id: 'a2', state: 'open' },
+        { id: 'a3', state: 'resolved' },
+      ],
+    });
+    current.client.usageControl = vi.fn().mockResolvedValue({
+      cap: { state: 'finite', value: 1_000, remaining: 200 },
+      answer: { primary_value: { value: 800 } },
+    });
+    mockedStore.mockReturnValue(current);
+
+    render(<MemoryRouter><App /></MemoryRouter>);
+
+    await waitFor(() => expect(within(screen.getByRole('link', { name: 'Home' })).getByText('2')).toBeInTheDocument());
+    const usageSignal = within(screen.getByRole('link', { name: 'Usage' })).getByText('80%');
+    expect(usageSignal).toHaveClass('text-amber-700');
+  });
+
+  it('keeps an unconfigured cap neutral and names only real cycle volume', () => {
+    expect(usageNavigationSignal({
+      cap: { state: 'not_configured', value: null, remaining: null },
+      answer: { primary_value: { value: 1_234 } },
+    } as never)).toEqual({ label: '1,234 this cycle', tone: 'neutral' });
   });
 
   it('uses semantic Hugeicons and readable neutral hover text', () => {
@@ -216,5 +304,16 @@ describe('customer admin shell', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument());
     expect(trigger).toHaveFocus();
+  });
+
+  it('moves keyboard focus to the main content after route navigation', async () => {
+    render(<MemoryRouter initialEntries={['/analyze/web']}><App /></MemoryRouter>);
+    const usage = screen.getAllByRole('link', { name: 'Usage' })[0]!;
+    usage.focus();
+    fireEvent.click(usage);
+
+    const main = document.getElementById('main-content');
+    await waitFor(() => expect(main).toHaveFocus());
+    expect(main).toHaveAttribute('tabindex', '-1');
   });
 });

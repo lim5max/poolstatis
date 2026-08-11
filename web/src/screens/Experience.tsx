@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Add, Check, Copy, GridView, Loader2 } from '@/components/icons';
+import { Add, GridView, Loader2 } from '@/components/icons';
+import { Badge } from '@/components/ui/badge';
 import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, Stat, fmtNum } from '../components/ui';
 import { Button } from '@/components/ui/button';
@@ -9,6 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { DisclosureSummary } from '@/components/disclosure';
+import { GuidedFirstValue } from '../components/guided-first-value';
+import { EvidenceLine, KpiStrip, type EvidenceTrust } from '../components/analytics';
 import type {
   ExperienceRoute,
   InteractionMapResponse,
@@ -22,6 +25,7 @@ import type {
 export function Experience() {
   const { client, project, env, availableEnvs, setEnv } = useStore();
   const configurationRef = useRef<HTMLDetailsElement>(null);
+  const snapshotRef = useRef<HTMLDivElement>(null);
   const { data, error, loading, reload } = useAsync(
     () => Promise.all([
       client!.experienceSurfaces(project!, env),
@@ -38,11 +42,13 @@ export function Experience() {
   const activeSurfaces = data.surfaces.filter((item) => item.status === 'active');
   const activeSurfaceKeys = new Set(activeSurfaces.map((item) => item.key));
   const setupReady = data.routes.some((item) => activeSurfaceKeys.has(item.surface_key));
+  const experienceReady = deriveExperienceReadiness(data.surfaces, data.routes, data.snapshots).complete;
   const openManualSetup = () => {
     if (!configurationRef.current) return;
     configurationRef.current.open = true;
-    configurationRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    configurationRef.current.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
   };
+  const openSnapshotSetup = () => snapshotRef.current?.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
 
   return (
     <div className="space-y-4">
@@ -67,25 +73,19 @@ export function Experience() {
         </div>
       </Panel>
 
-      {!setupReady && (
+      {!experienceReady && (
         <ExperienceSetupGate
           project={project!}
           env={env}
           surfaces={data.surfaces}
+          routes={data.routes}
+          snapshots={data.snapshots}
           onManualSetup={openManualSetup}
+          onSnapshotSetup={openSnapshotSetup}
         />
       )}
 
-      {setupReady && data.snapshots.length === 0
-        ? (
-          <Panel title="No visual evidence yet">
-            <EmptyState
-              headline="Capture the first page version"
-              lead="Declare a surface and route, then upload a PNG or WebP deploy snapshot. Interaction events stay separate."
-            />
-          </Panel>
-        )
-        : setupReady ? (
+      {setupReady && data.snapshots.length > 0 ? (
           <VisualExplorer
             surfaces={data.surfaces}
             routes={data.routes}
@@ -95,12 +95,14 @@ export function Experience() {
         ) : null}
 
       {setupReady && (
-        <SnapshotSetup
-          surfaces={activeSurfaces}
-          routes={data.routes}
-          env={env}
-          onChanged={reload}
-        />
+        <div ref={snapshotRef} className="scroll-mt-4">
+          <SnapshotSetup
+            surfaces={activeSurfaces}
+            routes={data.routes}
+            env={env}
+            onChanged={reload}
+          />
+        </div>
       )}
 
       {setupReady && <AggregateClickEvidence surfaces={activeSurfaces} env={env} />}
@@ -123,59 +125,105 @@ export function Experience() {
   );
 }
 
+function preferredScrollBehavior(): ScrollBehavior {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+}
+
 function ExperienceSetupGate({
   project,
   env,
   surfaces,
+  routes,
+  snapshots,
   onManualSetup,
+  onSnapshotSetup,
 }: {
   project: string;
   env: string;
   surfaces: ExperienceSurface[];
+  routes: ExperienceRoute[];
+  snapshots: ExperienceSnapshot[];
   onManualSetup: () => void;
+  onSnapshotSetup: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
-  const [copyFailed, setCopyFailed] = useState(false);
-  const hasArchivedSurface = surfaces.some((item) => item.status !== 'active');
+  const readiness = deriveExperienceReadiness(surfaces, routes, snapshots);
+  const { anchor, activeCount, hasRoute, hasCapture, hasSnapshot } = readiness;
   const task = experienceSetupTask(project, env, surfaces);
+  return <GuidedFirstValue
+    title={hasRoute ? 'Complete aggregate friction readiness' : 'Set up Browser Experience'}
+    outcome="Build a privacy-safe friction readout from accepted aggregate clicks, scroll reach, and stable developer labels. Poolstatis never captures DOM, page text, form values, pointer paths, or session replay."
+    checks={[
+      {
+        label: 'Purposeful active surface',
+        ready: Boolean(anchor),
+        detail: anchor ? `${anchor.surface.name} is the most complete of ${activeCount} active ${activeCount === 1 ? 'surface' : 'surfaces'}. Remaining checks stay bound to this surface.` : 'Declare which UX decision this aggregate evidence should inform.',
+      },
+      {
+        label: 'Finite canonical routes',
+        ready: hasRoute,
+        detail: hasRoute ? `${anchor!.routes.length} safe route ${anchor!.routes.length === 1 ? 'key is' : 'keys are'} registered for ${anchor!.surface.name}.` : 'Register stable route keys on this surface; raw URLs and query strings are not accepted evidence.',
+      },
+      {
+        label: 'Accepted aggregate capture',
+        ready: hasCapture,
+        detail: hasCapture ? `The server has accepted Browser Experience evidence for ${anchor!.surface.name} in this environment.` : 'Instrument one route on this surface and verify a server-accepted click, scroll, or section event.',
+      },
+      {
+        label: 'Immutable deploy snapshot',
+        ready: hasSnapshot,
+        detail: hasSnapshot ? `${anchor!.snapshots.length} ${anchor!.snapshots.length === 1 ? 'snapshot anchors' : 'snapshots anchor'} a registered ${anchor!.surface.name} route to a page version.` : 'Upload the exact PNG or WebP for a registered route on this surface so Poolstatis does not guess the visual background.',
+      },
+    ]}
+    action={hasRoute
+      ? <Button onClick={hasSnapshot ? onManualSetup : onSnapshotSetup}>{hasSnapshot ? 'Review capture setup' : 'Add deploy snapshot'}</Button>
+      : <Button onClick={onManualSetup}>Set up manually</Button>}
+    agentTask={task}
+    referenceTitle="First real friction readout"
+    referenceItems={[
+      'Accepted sessions and actors for one route/version/device',
+      'Labelled click concentration without element text',
+      'Named-section reach and aggregate drop-off',
+      'Snapshot freshness, caveats, and non-causal interpretation',
+    ]}
+    referenceSource={{
+      label: 'Visual Experience Maps v1 evidence model',
+      href: 'https://github.com/lim5max/poolstatis/blob/main/docs/10-visual-experience-maps.md#evidence-model',
+    }}
+  />;
+}
 
-  const copyTask = async () => {
-    try {
-      await navigator.clipboard.writeText(task);
-      setCopyFailed(false);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1400);
-    } catch {
-      setCopyFailed(true);
-    }
+function deriveExperienceReadiness(
+  surfaces: ExperienceSurface[],
+  routes: ExperienceRoute[],
+  snapshots: ExperienceSnapshot[],
+) {
+  const candidates = surfaces
+    .filter((surface) => surface.status === 'active')
+    .map((surface) => {
+      const surfaceRoutes = routes.filter((route) => route.surface_key === surface.key);
+      const routeKeys = new Set(surfaceRoutes.map((route) => route.key));
+      const surfaceSnapshots = snapshots.filter((snapshot) => (
+        snapshot.surface_key === surface.key && routeKeys.has(snapshot.route_key)
+      ));
+      const score = Number(surfaceRoutes.length > 0)
+        + Number(Boolean(surface.last_capture_at))
+        + Number(surfaceSnapshots.length > 0);
+      return { surface, routes: surfaceRoutes, snapshots: surfaceSnapshots, score };
+    })
+    .sort((left, right) => right.score - left.score
+      || new Date(right.surface.updated_at).getTime() - new Date(left.surface.updated_at).getTime());
+  const anchor = candidates[0];
+  const hasRoute = Boolean(anchor && anchor.routes.length > 0);
+  const hasCapture = Boolean(anchor?.surface.last_capture_at);
+  const hasSnapshot = Boolean(anchor && anchor.snapshots.length > 0);
+  return {
+    anchor,
+    activeCount: candidates.length,
+    hasRoute,
+    hasCapture,
+    hasSnapshot,
+    complete: Boolean(anchor && hasRoute && hasCapture && hasSnapshot),
   };
-
-  return (
-    <Panel title="Set up Browser Experience">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div className="max-w-2xl">
-          <p className="font-medium text-foreground">Give your coding agent one task.</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {hasArchivedSurface
-              ? 'No surface accepts new capture. The task creates a fresh active surface, adds safe routes, and verifies one real event.'
-              : 'It will create a purposeful surface, add safe routes, connect the SDK, and verify one real event.'}
-          </p>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Button onClick={() => void copyTask()}>
-            {copied ? <Check className="size-4" aria-hidden="true" /> : <Copy className="size-4" aria-hidden="true" />}
-            {copied ? 'Task copied' : 'Copy agent task'}
-          </Button>
-          <Button variant="outline" onClick={onManualSetup}>Set up manually</Button>
-        </div>
-      </div>
-      {copyFailed && (
-        <div className="mt-3">
-          <ErrorNote>Copy was blocked by the browser. Open manual setup below or allow clipboard access and try again.</ErrorNote>
-        </div>
-      )}
-    </Panel>
-  );
 }
 
 function experienceSetupTask(project: string, env: string, surfaces: ExperienceSurface[]): string {
@@ -192,7 +240,8 @@ ${knownSurfaces}
 3. Reuse the Poolstatis client and SDK version already compatible with this project. Add BrowserExperience from @poolstatis/sdk/experience only where browser code runs. Do not upgrade the SDK unless compatibility with the existing ingest contract is verified.
 4. Keep the product key in the local environment where it is already saved. Do not ask me to paste or expose any key in chat, source code, logs, screenshots, or git.
 5. Capture only normalized coordinates and stable developer labels such as data-poolstatis-label and data-poolstatis-section. Never capture DOM, text, form values, raw URLs, query strings, pointer paths, or session replay.
-6. Run the relevant tests and build, open one real route in "${env}", and verify that Poolstatis accepted a real Browser Experience event. Report the files changed and the server-side verification. Do not call the setup complete from a local mock alone.`;
+6. Upload the exact deploy PNG or WebP with its stable route, version, device, viewport and release hash through the Poolstatis admin or Platform API. Never substitute a snapshot from another release.
+7. Run the relevant tests and build, open one real route in "${env}", and verify that Poolstatis accepted a real Browser Experience event. Read the surface, route, capture recency and snapshot metadata back from the server. Report the files changed and the server-side verification. Do not call the setup complete from a local mock alone.`;
 }
 
 function VisualExplorer({
@@ -338,14 +387,17 @@ function VisualExplorer({
   };
 
   return (
-    <div id="visual-experience-map" className="scroll-mt-4">
-      <Panel
-        title="Page evidence"
-        right={result?.snapshot?.stale
-          ? <span className="text-sm text-amber-700">Snapshot may be stale</span>
-          : <span className="text-sm text-muted-foreground">Exact version + layout</span>}
-      >
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
+    <>
+      <ExperienceFrictionAnswer result={result} comparison={comparison} busy={busy} error={error} env={env} />
+      {comparison && <ComparisonStrip comparison={comparison} />}
+      <div id="visual-experience-map" className="scroll-mt-4">
+        <Panel
+          title="Page evidence"
+          right={result?.snapshot?.stale
+            ? <span className="text-sm text-amber-700">Snapshot may be stale</span>
+            : <span className="text-sm text-muted-foreground">Exact version + layout</span>}
+        >
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
         <Filter label="Surface">
           <Select value={surface} onValueChange={setSurface}>
             <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
@@ -380,9 +432,9 @@ function VisualExplorer({
             </SelectContent>
           </Select>
         </Filter>
-      </div>
+          </div>
 
-      <div className="mt-3 flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mt-3 flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">
           {comparisonTarget
             ? (
@@ -401,24 +453,137 @@ function VisualExplorer({
               ? 'Compare versions'
               : 'Compare unavailable'}
         </Button>
-      </div>
+          </div>
 
-      <div className="mt-3">
+          <div className="mt-3">
         <Tabs value={mode} onValueChange={(value) => setMode(value as 'clicks' | 'scroll')}>
           <TabsList>
             <TabsTrigger value="clicks">Click intensity</TabsTrigger>
             <TabsTrigger value="scroll">Scroll reach</TabsTrigger>
           </TabsList>
         </Tabs>
-      </div>
+          </div>
 
-      {busy && <div className="mt-4"><Loading what="aligning events to the snapshot…" /></div>}
-      {error && <div className="mt-4"><ErrorNote>{error}</ErrorNote></div>}
-      {!busy && result && <VisualResult result={result} mode={mode} />}
-      {comparison && <ComparisonStrip comparison={comparison} />}
-      </Panel>
-    </div>
+          {busy && <div className="mt-4"><Loading what="aligning events to the snapshot…" /></div>}
+          {error && <div className="mt-4"><ErrorNote>{error}</ErrorNote></div>}
+          {!busy && result && <VisualResult result={result} mode={mode} />}
+        </Panel>
+      </div>
+    </>
   );
+}
+
+function ExperienceFrictionAnswer({
+  result,
+  comparison,
+  busy,
+  error,
+  env,
+}: {
+  result: VisualExperienceResponse | null;
+  comparison: VisualExperienceCompareResponse | null;
+  busy: boolean;
+  error: string | null;
+  env: string;
+}) {
+  if (busy) {
+    return (
+      <section aria-label="Aggregate friction answer">
+        <Panel title="Aggregate friction answer" right={<Badge variant="outline">Reading evidence</Badge>}>
+          <Loading what="deriving the aggregate friction answer…" />
+        </Panel>
+      </section>
+    );
+  }
+  if (error || !result) {
+    return (
+      <section aria-label="Aggregate friction answer">
+        <Panel title="Aggregate friction answer" right={<Badge variant="outline">Evidence unavailable</Badge>}>
+          <p className="text-sm text-muted-foreground">
+            {error ?? 'No server evidence is available for this exact surface, route, version, device, and period.'}
+          </p>
+        </Panel>
+      </section>
+    );
+  }
+
+  const context = result.agent_context;
+  const decrease = context.largest_section_reach_decreases[0];
+  const comparisonChange = comparison?.agent_context.largest_section_changes[0];
+  const trust = experienceEvidenceTrust(result);
+  const trustLabel = trust === 'trusted'
+    ? 'Trusted evidence'
+    : trust === 'partial'
+      ? 'Partial evidence'
+      : 'Evidence unavailable';
+  const readiness = trust === 'trusted'
+    ? 'Evidence ready'
+    : trust === 'partial'
+      ? 'Review caveats'
+      : 'No evidence';
+  const takeaway = context.data_quality.status === 'empty'
+    ? 'No accepted aggregate experience events match this exact evidence cohort.'
+    : decrease
+      ? `The largest observed adjacent reach decrease is ${decrease.from_section} → ${decrease.to_section}: ${decrease.session_count_decrease} fewer sessions (${decrease.percentage_point_decrease} pp).`
+      : 'No adjacent section reach decrease is available in this bounded cohort.';
+
+  return (
+    <section aria-label="Aggregate friction answer">
+      <Panel title="Aggregate friction answer" right={<Badge variant={trust === 'trusted' ? 'default' : 'outline'}>{trustLabel}</Badge>}>
+        <p className="max-w-3xl text-lg font-semibold leading-snug">{takeaway}</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Purpose: <span className="text-foreground">{context.scope.purpose}</span>
+        </p>
+        {comparisonChange && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Explicit cohort delta: <code>{comparisonChange.section}</code>{' '}
+            {signed(comparisonChange.percentage_points)} pp from {comparisonChange.baseline_percentage}% to {comparisonChange.comparison_percentage}%.
+          </p>
+        )}
+        <div className="mt-4">
+          <KpiStrip items={[
+            {
+              label: 'Adjacent reach delta',
+              value: decrease ? `−${decrease.percentage_point_decrease} pp` : null,
+              fallback: 'Not available',
+              note: decrease ? `${decrease.from_section} → ${decrease.to_section}` : 'No ordered section decrease returned',
+            },
+            { label: 'Sessions', value: context.sample_size.sessions, note: 'Exact selected cohort' },
+            { label: 'Actors', value: context.sample_size.actors, note: 'Aggregate distinct actors' },
+            {
+              label: 'Readiness',
+              value: readiness,
+              note: `${context.data_quality.status} quality · ${context.snapshot_coverage.status} snapshot`,
+            },
+          ]} />
+        </div>
+        <EvidenceLine trust={trust} eventCount={context.sample_size.events} env={env} className="mt-3">
+          <p>
+            Scope: <code>{context.scope.surface}</code> · <code>{context.scope.route}</code> ·{' '}
+            <code>{context.scope.version}</code> · {context.scope.device}. Computed {result.meta.computed_at} for{' '}
+            {result.meta.date_range.from} through {result.meta.date_range.to}.
+          </p>
+          <p className="mt-1">
+            Snapshot: {context.snapshot_coverage.status}; viewport {context.snapshot_coverage.exact_viewport_match ? 'matched exactly' : 'not matched exactly'}.
+          </p>
+          {context.data_quality.caveats.length > 0 && (
+            <ul className="mt-1 list-disc space-y-1 pl-4">
+              {context.data_quality.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)}
+            </ul>
+          )}
+          <p className="mt-1">{result.causality}</p>
+        </EvidenceLine>
+      </Panel>
+    </section>
+  );
+}
+
+function experienceEvidenceTrust(result: VisualExperienceResponse): EvidenceTrust {
+  const { data_quality: quality, snapshot_coverage: snapshot } = result.agent_context;
+  if (quality.status === 'empty' || result.agent_context.sample_size.events === 0) return 'unavailable';
+  return quality.status === 'ok' && snapshot.status === 'fresh' && snapshot.exact_viewport_match
+    ? 'trusted'
+    : 'partial';
 }
 
 function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode: 'clicks' | 'scroll' }) {
@@ -616,7 +781,7 @@ function SectionDropoff({ sections, total }: { sections: VisualExperienceRespons
 function ComparisonStrip({ comparison }: { comparison: VisualExperienceCompareResponse }) {
   const target = `${comparison.comparison.version} · ${comparison.comparison.device}`;
   return (
-    <div className="mt-4 rounded-md border bg-muted/30 p-4">
+    <div className="rounded-md border bg-muted/30 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-sm font-medium">Compared with {target}</div>

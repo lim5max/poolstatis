@@ -91,6 +91,20 @@ describe('personal token lifecycle', () => {
       created_at: expect.any(String),
       last_used_at: null,
       revoked_at: null,
+      credential_policy: {
+        id: 'poolstatis_core.credential_rotation',
+        version: 1,
+        source: 'poolstatis_core_default',
+        mode: 'advisory',
+        thresholds: { age_review_days: 180, idle_review_days: 30, unused_review_days: 7 },
+      },
+      rotation_recommendation: expect.objectContaining({
+        status: 'healthy',
+        code: 'new',
+        label: 'Ready',
+        evaluated_at: expect.any(String),
+        evidence: { age_days: 0, idle_days: null },
+      }),
     }));
     expect(JSON.stringify(listed.body)).not.toContain(created.body.token);
 

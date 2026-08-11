@@ -1,11 +1,17 @@
-import { type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { Loader2 } from '@/components/icons';
 import { DisclosureSummary } from '@/components/disclosure';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-export type EvidenceTrust = 'trusted' | 'partial' | 'unavailable';
+export type EvidenceTrust = 'trusted' | 'partial' | 'blocked' | 'unavailable';
 
 function evidenceTrustLabel(trust: EvidenceTrust) {
-  return trust === 'trusted' ? 'Trusted' : trust === 'partial' ? 'Partial' : 'Unavailable';
+  if (trust === 'trusted') return 'Trusted';
+  if (trust === 'partial') return 'Partial';
+  if (trust === 'blocked') return 'Blocked';
+  return 'Unavailable';
 }
 
 export function EvidenceLine({
@@ -26,7 +32,7 @@ export function EvidenceLine({
       <span
         className={cn(
           'size-2 shrink-0 rounded-full',
-          trust === 'trusted' ? 'bg-success' : trust === 'partial' ? 'bg-warning' : 'bg-muted-foreground/60',
+          trust === 'trusted' ? 'bg-success' : trust === 'partial' ? 'bg-warning' : trust === 'blocked' ? 'bg-destructive' : 'bg-muted-foreground/60',
         )}
         aria-hidden="true"
       />
@@ -101,4 +107,92 @@ export function RankedRows({
 
 export function AnswerCanvas({ children, className }: { children: ReactNode; className?: string }) {
   return <section className={cn('overflow-hidden rounded-dialog border bg-card', className)}>{children}</section>;
+}
+
+export function CanonicalAnswer({
+  takeaway,
+  comparison,
+  trust,
+  eventCount,
+  env,
+  purpose,
+  followUp,
+  followUpTask,
+  saveState,
+  saveVariant = 'default',
+  onSave,
+  chart,
+  evidence,
+}: {
+  takeaway: string;
+  comparison: string;
+  trust: EvidenceTrust;
+  eventCount: number | null;
+  env: string;
+  purpose: string;
+  followUp: string;
+  followUpTask: string;
+  saveState: 'idle' | 'saving' | 'saved' | 'error';
+  saveVariant?: 'default' | 'outline';
+  onSave: () => void;
+  chart: ReactNode;
+  evidence: ReactNode;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [manualCopy, setManualCopy] = useState(false);
+  const copyTask = async () => {
+    try {
+      await navigator.clipboard.writeText(followUpTask);
+      setCopied(true);
+      setManualCopy(false);
+    } catch {
+      setManualCopy(true);
+    }
+  };
+  return (
+    <AnswerCanvas className="border-l-4 border-l-primary">
+      <section aria-label="Canonical answer">
+        <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:p-5">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-muted-foreground">Takeaway</div>
+            <p className="mt-1 text-lg font-semibold leading-snug">{takeaway}</p>
+            <p className="mt-3 text-sm"><span className="font-medium">Purpose:</span> <span className="text-muted-foreground">{purpose}</span></p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Observed · {evidenceTrustLabel(trust)} · {eventCount === null ? 'event count unavailable' : `${eventCount.toLocaleString()} events`} · <code>{env}</code>
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">Next question: {followUp}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button type="button" variant={saveVariant} className="h-11" onClick={onSave} disabled={saveState === 'saving' || saveState === 'saved'}>
+                {saveState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
+                {saveState === 'saved' ? 'Answer saved' : saveState === 'saving' ? 'Saving answer…' : 'Save answer'}
+              </Button>
+              <Button type="button" variant="outline" className="h-11" onClick={() => void copyTask()}>
+                {copied ? 'Follow-up task copied' : 'Copy follow-up task'}
+              </Button>
+            </div>
+            {saveState === 'error' && <p role="alert" className="mt-2 text-sm text-destructive">The answer could not be saved. Check access and try again.</p>}
+          </div>
+          <div className="flex flex-wrap gap-2 sm:justify-end">
+            <Badge variant={trust === 'trusted' ? 'default' : trust === 'blocked' ? 'destructive' : 'outline'}>
+              {trust === 'trusted' ? 'Trusted evidence' : trust === 'partial' ? 'Partial evidence' : trust === 'blocked' ? 'Blocked evidence' : 'Evidence unavailable'}
+            </Badge>
+            <Badge variant="outline">{comparison}</Badge>
+          </div>
+        </div>
+        <div className="border-t">{chart}</div>
+        <details className="border-t">
+          <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-4 py-3 text-sm font-medium sm:px-5">
+            Evidence
+          </DisclosureSummary>
+          <div className="border-t px-4 py-3 text-sm leading-relaxed text-muted-foreground sm:px-5">{evidence}</div>
+        </details>
+        {manualCopy && (
+          <div className="border-t p-4 sm:p-5">
+            <p role="alert" className="mb-2 text-sm text-muted-foreground">Clipboard access was blocked. Copy the prepared follow-up task manually.</p>
+            <pre tabIndex={0} className="max-h-72 overflow-auto whitespace-pre-wrap rounded-panel border bg-background p-4 text-sm">{followUpTask}</pre>
+          </div>
+        )}
+      </section>
+    </AnswerCanvas>
+  );
 }

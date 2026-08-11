@@ -41,7 +41,7 @@ try {
   ];
   for (const m of metrics) {
     await registerMetric(pool, pid, m, 'seed');
-    await updateMetric(pool, pid, m.key, { status: 'active' });
+    await updateMetric(pool, pid, m.key, { status: 'active' }, 'seed');
   }
   await defineFunnel(pool, pid, {
     key: 'activation', name: 'Activation funnel', goal: 'Take a new signup to their first export and then a paid checkout.',

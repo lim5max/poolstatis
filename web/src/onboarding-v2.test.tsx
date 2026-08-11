@@ -27,7 +27,7 @@ const pendingProof = {
     { key: 'data_source_connected', complete: true, required: true, evidence: {}, blocker: null, next_action: null },
     { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: 'No event.', next_action: 'Send one event.' },
   ],
-  next_blocker: null,
+  next_blocker: { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: 'No event.', next_action: 'Send one event.' },
   final_result: null,
 };
 
@@ -579,7 +579,7 @@ describe('condensed Setup', () => {
         { key: 'data_source_connected', complete: false, required: true, evidence: {}, blocker: 'No key.', next_action: 'Create a key.' },
         { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: 'No event.', next_action: 'Send one event.' },
       ],
-      next_blocker: null,
+      next_blocker: { key: 'data_source_connected', complete: false, required: true, evidence: {}, blocker: 'No key.', next_action: 'Create a key.' },
       final_result: null,
     };
     mockedStore.mockReturnValue({
@@ -597,12 +597,47 @@ describe('condensed Setup', () => {
     render(<MemoryRouter><Setup /></MemoryRouter>);
 
     const progress = await screen.findByRole('list', { name: 'Connection progress' });
+    expect(screen.queryByRole('heading', { name: 'Create a product key' })).not.toBeInTheDocument();
+    expect(document.querySelectorAll('button[data-variant="default"]:not(:disabled)')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Open connection' }));
     const keyStep = await screen.findByRole('heading', { name: 'Create a product key' });
     const status = screen.getByLabelText('Setup status');
     expect(screen.getByText('Next: Create and save a product key')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Continue setup' })).not.toBeInTheDocument();
+    expect(document.querySelectorAll('button[data-variant="default"]:not(:disabled)')).toHaveLength(1);
     expect(progress.compareDocumentPosition(keyStep) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(keyStep.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('pauses first-event polling while the tab is hidden and resumes with an immediate read-back', async () => {
+    vi.useFakeTimers();
+    const onboardingStatus = vi.fn().mockResolvedValue(pendingProof);
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus,
+        projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+
+    const view = render(<MemoryRouter><Setup /></MemoryRouter>);
+    await act(async () => { await Promise.resolve(); });
+    expect(onboardingStatus).toHaveBeenCalledTimes(1);
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    expect(onboardingStatus).toHaveBeenCalledTimes(1);
+
+    hidden.mockReturnValue(false);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); await Promise.resolve(); });
+    expect(onboardingStatus).toHaveBeenCalledTimes(2);
+    await act(async () => { vi.advanceTimersByTime(5_000); await Promise.resolve(); });
+    expect(onboardingStatus).toHaveBeenCalledTimes(3);
+
+    view.unmount();
+    hidden.mockRestore();
+    vi.useRealTimers();
   });
 
   it('resumes at the agent task when the server proves a product key exists', async () => {
@@ -622,6 +657,7 @@ describe('condensed Setup', () => {
 
     render(<MemoryRouter><Setup /></MemoryRouter>);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Send first event' }));
     expect(await screen.findByText('Next: Copy one setup task to your agent')).toBeInTheDocument();
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', {
@@ -666,9 +702,9 @@ describe('condensed Setup', () => {
 
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
-    expect(await screen.findByText('Metrics need review')).toBeInTheDocument();
+    expect(await screen.findByText('Review the registry')).toBeInTheDocument();
     expect(screen.getByText('No active metric has verified source evidence.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Review proposed metrics' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review registry' })).toBeInTheDocument();
     expect(screen.queryByText('No product key yet')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy fix task' })).not.toBeInTheDocument();
     await waitFor(() => expect(telemetryEvents('onboarding.blocked')).toHaveLength(1));
@@ -681,6 +717,109 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('beta') as never);
     render(<MemoryRouter><Setup /></MemoryRouter>);
     await waitFor(() => expect(telemetryEvents('onboarding.blocked')).toHaveLength(2));
+  });
+
+  it('collapses completed connection into exact timestamped evidence and advances to registry review', async () => {
+    const proof = {
+      ...connectedProof,
+      gates: [
+        {
+          key: 'data_source_connected', complete: true, required: true,
+          evidence: { native: true, native_key_created_at: '2026-08-11T09:58:00.000Z' },
+          blocker: null, next_action: null,
+        },
+        ...connectedProof.gates.filter((gate) => gate.key !== 'data_source_connected'),
+        {
+          key: 'metrics_activated', complete: false, required: true, evidence: {},
+          blocker: 'No active metric has verified source evidence.', next_action: 'Review and activate a metric.',
+        },
+      ],
+      next_blocker: {
+        key: 'metrics_activated', complete: false, required: true, evidence: {},
+        blocker: 'No active metric has verified source evidence.', next_action: 'Review and activate a metric.',
+      },
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(proof),
+        projectIntent: vi.fn().mockResolvedValue({ intent: { project_mode: 'product', goal_ids: ['activation'], custom_goal: null } }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    expect(await screen.findByText('Review the registry')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review registry' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Create a product key' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Server read-back/)).toHaveTextContent(/ms/);
+    const evidence = screen.getByRole('list', { name: 'Setup gate evidence' });
+    expect(within(evidence).getByText('Data source connected')).toBeInTheDocument();
+    expect(within(evidence).getByText('native_key_created_at')).toBeInTheDocument();
+    expect(within(evidence).getByText('2026-08-11T09:58:00.000Z')).toBeInTheDocument();
+    expect(within(evidence).getAllByText(/Evidence as of/).length).toBeGreaterThan(0);
+  });
+
+  it('keeps copied MCP config unverified until the server reports a real agent tool call', async () => {
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(connectedProof),
+        projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'pt_private_token', tokenKind: 'personal',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 1 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    const status = await screen.findByLabelText('Setup status');
+    fireEvent.click(within(status).getByRole('button', { name: 'Connect' }));
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Copy config for Codex' })));
+
+    expect(within(status).getByText('Agent access').parentElement).toHaveTextContent('Optional');
+    expect(screen.getByText(/marks MCP connected only after that real tool call/)).toBeInTheDocument();
+    expect(screen.queryByText('Agent access verified')).not.toBeInTheDocument();
+  });
+
+  it('shows the verified funnel or outcome read-back after the decision loop completes', async () => {
+    const completed = {
+      complete: true,
+      gates: [
+        ...connectedProof.gates,
+        { key: 'metrics_activated', complete: true, required: true, evidence: { metric_key: 'activation_completed' }, blocker: null, next_action: null },
+        { key: 'data_quality_accepted', complete: true, required: true, evidence: { issues: 0 }, blocker: null, next_action: null },
+        { key: 'first_query_produced', complete: true, required: true, evidence: { query_run_id: 'query-1', source: 'native', created_at: '2026-08-11T10:00:00.000Z' }, blocker: null, next_action: null },
+        { key: 'first_decision_saved', complete: true, required: true, evidence: { insight_id: 'insight-1', created_at: '2026-08-11T10:02:00.000Z' }, blocker: null, next_action: null },
+      ],
+      next_blocker: null,
+      final_result: {
+        metric_key: 'activation_completed',
+        metric_purpose: 'Measure completed activation after the setup funnel.',
+        query_window: { from: '2026-08-04T00:00:00.000Z', to: '2026-08-11T00:00:00.000Z' },
+        source: 'native',
+        next_action: 'Keep the shorter setup and monitor the guardrail.',
+      },
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue(completed),
+        projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 1, funnels: 1, events_30d: 10 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+
+    const result = await screen.findByRole('region', { name: 'Verified first outcome' });
+    expect(result).toHaveTextContent('activation_completed');
+    expect(result).toHaveTextContent('Measure completed activation after the setup funnel.');
+    expect(result).toHaveTextContent('2026-08-04T00:00:00.000Z');
+    expect(result).toHaveTextContent('Keep the shorter setup and monitor the guardrail.');
   });
 
   it('copies a server fix task and records only the normalized server gate key', async () => {
@@ -714,7 +853,7 @@ describe('condensed Setup', () => {
     } as never);
 
     render(<MemoryRouter><Setup /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy answer task' }));
 
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', {
       agent_id: 'codex',
@@ -756,7 +895,7 @@ describe('condensed Setup', () => {
     } as never);
 
     render(<MemoryRouter><Setup /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy answer task' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('credential-like text');
     expect(screen.queryByText(/pk_live_secret_value/)).not.toBeInTheDocument();
@@ -788,7 +927,7 @@ describe('condensed Setup', () => {
     } as never);
 
     render(<MemoryRouter><Setup /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy decision task' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Select the task below');
     expect(screen.getByText(setupTask().task)).toHaveAttribute('tabindex', '0');
@@ -920,13 +1059,13 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('alpha') as never);
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy fix task' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy answer task' }));
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', expect.any(Object)));
 
     mockedStore.mockReturnValue(storeFor('beta') as never);
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Beta · prod')).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Copy fix task' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Copy answer task' })).toBeInTheDocument();
 
     await act(async () => {
       resolveAlpha(setupTask('codex', 'first_query_produced'));
@@ -937,7 +1076,7 @@ describe('condensed Setup', () => {
     expect(feedback).not.toHaveBeenCalled();
     expect(telemetryEvents('onboarding.task_generated')).toHaveLength(0);
     expect(telemetryEvents('onboarding.task_copied')).toHaveLength(0);
-    expect(screen.queryByText('Fix task copied')).not.toBeInTheDocument();
+    expect(screen.queryByText('Task copied')).not.toBeInTheDocument();
   });
 
   it('clears one-time key and error state when project or environment changes', async () => {
@@ -947,7 +1086,10 @@ describe('condensed Setup', () => {
         { key: 'data_source_connected', complete: false, required: true, evidence: {}, blocker: null, next_action: null },
         { key: 'first_event_observed', complete: false, required: true, evidence: {}, blocker: null, next_action: null },
       ],
-      next_blocker: null,
+      next_blocker: {
+        key: 'data_source_connected', complete: false, required: true, evidence: {},
+        blocker: 'No product key.', next_action: 'Create a product key.',
+      },
       final_result: null,
     };
     const issueKey = vi.fn()
@@ -970,6 +1112,7 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('alpha') as never);
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Open connection' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Create product key' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Alpha key failed');
 
@@ -977,12 +1120,14 @@ describe('condensed Setup', () => {
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Beta · prod')).toBeInTheDocument();
     expect(screen.queryByText('Alpha key failed')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open connection' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Create product key' }));
     expect(await screen.findByRole('button', { name: 'Copy .env line' })).toBeInTheDocument();
 
     mockedStore.mockReturnValue(storeFor('alpha', 'dev') as never);
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Alpha · dev')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open connection' }));
     expect(await screen.findByRole('button', { name: 'Create product key' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy .env line' })).not.toBeInTheDocument();
   });
@@ -1008,6 +1153,7 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('alpha') as never);
     const view = render(<MemoryRouter><Setup /></MemoryRouter>);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Send first event' }));
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('alpha', { agent_id: 'codex', prefer_llm: false, env: 'prod' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Claude Code' }));
@@ -1016,6 +1162,7 @@ describe('condensed Setup', () => {
     mockedStore.mockReturnValue(storeFor('beta', 'dev') as never);
     view.rerender(<MemoryRouter><Setup /></MemoryRouter>);
     expect(await screen.findByText('Beta · dev')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Send first event' }));
     expect(await screen.findByRole('radio', { name: 'Codex' })).toBeChecked();
     await waitFor(() => expect(requestTask).toHaveBeenCalledWith('beta', { agent_id: 'codex', prefer_llm: false, env: 'dev' }));
   });

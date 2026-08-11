@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { DataHealthControl } from '../components/data-health-control';
 import type {
   BackfillPreview, DataQualityIssue, EntityRow, EventRevisionPatch, EventRevisionPreview, FilterOp,
   ObservedEvent, SampleEvent, SampleFilter,
@@ -38,6 +39,7 @@ export function Data() {
   const [tab, setTab] = useState(params.get('tab') ?? 'health');
   const eventParam = params.get('event') ?? undefined;
   const actorParam = params.get('distinct_id') ?? undefined;
+  const signatureParam = params.get('signature') ?? undefined;
   const schema = useAsync(() => client!.schema(project!, env), [project, env]);
   if (schema.loading) return <Loading what="reading data…" />;
   if (schema.error) return <RecoverableError onRetry={schema.reload}>{schema.error}</RecoverableError>;
@@ -57,7 +59,7 @@ export function Data() {
         </div>
         <EnvSelect />
       </div>
-      <TabsContent value="health"><Health observed={schema.data.observed_events_30d} /></TabsContent>
+      <TabsContent value="health"><Health focusedSignature={signatureParam} observed={schema.data.observed_events_30d} /></TabsContent>
       <TabsContent value="events"><EventStream initialEvent={eventParam} initialActor={actorParam} observed={schema.data.observed_events_30d} /></TabsContent>
       <TabsContent value="backfill"><BackfillManager /></TabsContent>
       <TabsContent value="entities"><Entities types={schema.data.entity_types.map((t) => t.name)} /></TabsContent>
@@ -66,25 +68,34 @@ export function Data() {
   );
 }
 
-function Health({ observed }: { observed: ObservedEvent[] }) {
+function Health({ observed, focusedSignature }: { observed: ObservedEvent[]; focusedSignature?: string }) {
   const { client, project, env } = useStore();
   const quality = useAsync(() => client!.dataQuality(project!, { env, limit: 50 }), [project, env]);
   const events = [...observed].sort((a, b) => b.count - a.count);
   const total = events.reduce((s, e) => s + e.count, 0);
   const weighted = events.reduce((s, e) => s + e.count * e.registered_share, 0);
-  const coverage = total ? weighted / total : 1;
+  const coverage = total > 0 ? weighted / total : null;
   const wild = events.filter((e) => e.registered_share < 0.999);
   const qualityIssues = quality.loading || quality.error ? undefined : quality.data?.issues;
+  const qualityChecked = quality.loading || quality.error ? undefined : quality.data?.checked;
   const issueCount = quality.error ? 'error' : quality.loading ? '…' : (qualityIssues?.length ?? 0);
   return (
     <div className="space-y-4">
+      <DataHealthControl focusedSignature={focusedSignature} />
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <Stat label="Instrumentation coverage" value={fmtPct(coverage)} sub="of 30-day volume" />
+        <Stat
+          label="Instrumentation coverage"
+          value={coverage === null ? 'Unavailable' : fmtPct(coverage)}
+          sub={coverage === null
+            ? <><span>No accepted 30-day events. </span><Link to="/setup" className="underline underline-offset-2">Send the first event</Link></>
+            : 'of 30-day volume'}
+        />
         <Stat label="Off-standard names" value={wild.length} sub="no matching active metric" />
         <Stat label="Entity conflicts" value={quality.loading ? '…' : issueCount} sub="events vs current status" />
         <Stat label="Distinct events" value={events.length} sub={`${fmtNum(total)} total · 30d`} />
       </div>
-      <DataQualityPanel loading={quality.loading} error={quality.error} issues={qualityIssues} />
+      {quality.loading && <Loading what="classifying entity consistency…" />}
+      <DataQualityPanel loading={quality.loading} error={quality.error} issues={qualityIssues} checked={qualityChecked} />
       <Panel title="Observed events · 30 days">
         {events.length === 0 ? <EmptyState headline="No events yet" lead="send some to the ingest API to see them here" /> : (
           <div className="overflow-x-auto">
@@ -108,13 +119,27 @@ function Health({ observed }: { observed: ObservedEvent[] }) {
   );
 }
 
-function DataQualityPanel({ loading, error, issues }: { loading: boolean; error: string | null; issues?: DataQualityIssue[] }) {
+function DataQualityPanel({
+  loading,
+  error,
+  issues,
+  checked,
+}: {
+  loading: boolean;
+  error: string | null;
+  issues?: DataQualityIssue[];
+  checked?: { terminal_event_specs: number; evidence_rows: number };
+}) {
   return (
     <Panel title="Entity/event consistency">
       {loading && <Loading />}
       {error && <ErrorNote>{error}</ErrorNote>}
-      {issues && (issues.length === 0 ? (
-        <EmptyState headline="No conflicts" lead="terminal events match current entity status" />
+      {issues && (issues.length === 0 ? checked?.terminal_event_specs === 0 ? (
+        <EmptyState headline="Not evaluated" lead="no supported terminal entity event is registered" />
+      ) : checked?.evidence_rows === 0 ? (
+        <EmptyState headline="No comparable evidence" lead="terminal rules exist, but no event and current entity status could be matched" />
+      ) : (
+        <EmptyState headline="No conflicts" lead={`${checked?.evidence_rows ?? 0} comparable entity records match terminal events`} />
       ) : (
         <div className="overflow-x-auto">
           <Table>

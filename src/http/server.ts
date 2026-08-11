@@ -10,12 +10,18 @@ import {
   requireOrganizationWriteReadiness, updateAuthenticatedProfile, type McpRunnerConfig,
 } from '../services/accounts.js';
 import { getProjectIntent, recordSetupTaskFeedback, upsertProjectIntent } from '../services/projectIntents.js';
+import {
+  analysisViewCreateSchema, analysisViewOfficialSchema, analysisViewUpdateSchema,
+  archiveAnalysisView, createAnalysisView, getAnalysisView, listAnalysisViews,
+  setAnalysisViewOfficial, updateAnalysisView, type AnalysisViewCredential,
+} from '../services/analysisViews.js';
+import { getMeasurementReadiness } from '../services/measurementReadiness.js';
 import { generateSetupTask } from '../services/setupTask.js';
 import type { SetupTaskProvider } from '../services/setupTaskProvider.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
   createApiKey, createProject, deleteProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
-  listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
+  evaluateProjectHealth, getProjectPortfolio, listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
 } from '../services/projects.js';
 import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
 import {
@@ -29,7 +35,13 @@ import { deleteEntities, getIdentityEntity, upsertEntities } from '../services/e
 import { createInsight, listInsights, setInsightStatus } from '../services/insights.js';
 import { clearIngestWarnings, listIngestWarnings, type WarningKind } from '../services/warnings.js';
 import { listDataQualityIssues } from '../services/dataQuality.js';
+import { getProjectDataHealth, verifyProjectDataHealthFix } from '../services/dataHealth.js';
 import { explainMetricUsage } from '../services/metricUsage.js';
+import {
+  applyMetricDefinition, getMetricDefinition, previewMetricDefinition,
+} from '../services/metricDefinitions.js';
+import { compareProjects, requireOrganizationComparisonAccess } from '../services/projectComparison.js';
+import { accountModeForAuth } from '../services/accountMode.js';
 import { getProjectSchema } from '../services/schema.js';
 import {
   archiveFeatureFlag, createFeatureFlag, evaluateFeatureFlag, listFeatureFlags, updateFeatureFlag,
@@ -65,8 +77,12 @@ import {
   approveAction, getAction, listActions, prepareAction, rejectAction, retryAction,
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
+import { registerAutomationRoutes } from './automationRoutes.js';
 import type { OutboundPolicyOptions } from '../security/outbound.js';
-import { getOrganizationUsage, getOrganizationUsageActivity, getOrganizationUsageRange } from '../services/usage.js';
+import {
+  getOrganizationUsage, getOrganizationUsageActivity, getOrganizationUsageControl, getOrganizationUsageRange,
+} from '../services/usage.js';
+import { getProjectControlTower } from '../services/controlTower.js';
 import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
 import {
   acknowledgeOnboardingGate, getOnboardingStatus, recordAgentObservation, recordQueryRun,
@@ -79,6 +95,7 @@ import {
   deprecateMetricSchema, applyExperimentDecisionSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, prepareExperimentSchema, rejectDecisionActionSchema, reviewDecisionSchema,
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
+  metricDefinitionApplySchema, metricDefinitionPreviewSchema, semanticProjectComparisonSchema,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
   browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usageDateSchema, usageMonthRangeSchema, usagePeriodSchema,
 } from '../schemas.js';
@@ -166,6 +183,32 @@ function authOwner(auth: AuthContext): string {
   return auth.keyId ? `key:${auth.keyId}` : `user:${auth.userId}`;
 }
 
+export interface HumanAutomationReviewer {
+  actor: string;
+  role: 'owner' | 'admin';
+}
+
+/** Automation proposal review is a human control, never an API-key capability. */
+export function requireHumanAutomationReviewer(auth: AuthContext): HumanAutomationReviewer {
+  if (auth.kind !== 'user' || !auth.userId) {
+    throw new ApiError(
+      403,
+      'human_user_required',
+      'automation proposals can only be approved or rejected by an authenticated human user',
+      'open the admin with a signed-in workspace owner or admin; API keys and MCP remain read-only for proposals',
+    );
+  }
+  if (auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+    throw new ApiError(
+      403,
+      'insufficient_role',
+      'this workspace role cannot review automation proposals',
+      'ask a workspace owner or admin to review the frozen proposal',
+    );
+  }
+  return { actor: authOwner(auth), role: auth.userRole };
+}
+
 /** Hosted identities fail closed without a current owner/admin role. */
 export function hasOrganizationManagementRole(auth: AuthContext): boolean {
   if (auth.kind === 'user') {
@@ -249,6 +292,15 @@ function requireOrganizationManagementAccess(auth: AuthContext): void {
       'ask an owner or admin to upgrade your workspace role',
     );
   }
+}
+
+function analysisViewCredential(auth: AuthContext): AnalysisViewCredential {
+  if (auth.kind === 'ingest') throw new ApiError(403, 'wrong_key_kind', 'ingest keys cannot manage saved answers');
+  return {
+    kind: auth.kind,
+    role: auth.userRole === 'owner' || auth.userRole === 'admin' ? auth.userRole : null,
+    canSetOfficial: hasOrganizationManagementRole(auth),
+  };
 }
 
 function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number, name: string): number {
@@ -472,7 +524,10 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         const route = req.routeOptions.url;
         if (route === '/api/v1/me' || route === '/api/v1/onboarding') {
           requireKind(req.auth, 'user');
+        } else if (route === '/api/v1/account-mode') {
+          requireKind(req.auth, 'secret', 'personal', 'user');
         } else if (route === '/api/v1/me/usage'
+          || route === '/api/v1/me/usage/control'
           || route === '/api/v1/me/usage/activity'
           || route === '/api/v1/me/usage/range') {
           requireUsageReadAccess(req.auth);
@@ -529,7 +584,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
 
   registerIngestRoutes(app, ctx);
   registerAccountRoutes(app, ctx, publicUrl, mcpRunner);
-  registerPlatformRoutes(app, ctx, publicUrl, options.setupTaskProvider);
+  registerPlatformRoutes(app, ctx, publicUrl, options.setupTaskProvider, Boolean(options.auth));
   return app;
 }
 
@@ -716,6 +771,7 @@ function registerPlatformRoutes(
   ctx: AppContext,
   publicUrl: string,
   setupTaskProvider?: SetupTaskProvider,
+  hosted = false,
 ): void {
   const platform = (req: FastifyRequest) => {
     requirePlatformAccess(req.auth);
@@ -733,6 +789,28 @@ function registerPlatformRoutes(
     return project;
   };
 
+  registerAutomationRoutes(app, ctx, {
+    platform,
+    resolveProject,
+    actor: (req) => authOwner(req.auth),
+    humanReviewer: (req) => requireHumanAutomationReviewer(req.auth),
+  });
+
+  app.get('/api/v1/account-mode', async (req) => {
+    requireKind(req.auth, 'secret', 'personal', 'user');
+    return accountModeForAuth(req.auth, hosted);
+  });
+
+  app.post('/api/v1/projects/compare', async (req) => {
+    requireOrganizationComparisonAccess(req.auth);
+    return compareProjects(
+      ctx.pool,
+      ctx.query,
+      req.auth,
+      semanticProjectComparisonSchema.parse(req.body),
+    );
+  });
+
   app.get('/api/v1/me/usage', async (req) => {
     requireUsageReadAccess(req.auth);
     const { period } = req.query as { period?: string };
@@ -742,6 +820,15 @@ function registerPlatformRoutes(
     // The organization comes only from the authenticated credential. Caller
     // query parameters never widen an organization-scoped usage read.
     return getOrganizationUsage(ctx.pool, req.auth.orgId, period);
+  });
+
+  app.get('/api/v1/me/usage/control', async (req) => {
+    requireUsageReadAccess(req.auth);
+    const { period } = req.query as { period?: string };
+    if (!period || !usagePeriodSchema.safeParse(period).success) {
+      throw badRequest('invalid_query_param', 'period must be a UTC month in YYYY-MM format');
+    }
+    return getOrganizationUsageControl(ctx.pool, req.auth.orgId, period);
   });
 
   app.get('/api/v1/me/usage/range', async (req) => {
@@ -781,7 +868,7 @@ function registerPlatformRoutes(
 
   app.get('/api/v1/projects', async (req) => {
     platform(req);
-    const all = await listProjectsWithStats(ctx.pool, req.auth.orgId);
+    const all = await listProjectsWithStats(ctx.pool, ctx.eventStore, req.auth.orgId);
     // Secret keys are pinned to one project; personal tokens see the whole org.
     if (req.auth.kind === 'secret') {
       const { rows } = await ctx.pool.query('SELECT slug FROM projects WHERE id = $1', [req.auth.projectId]);
@@ -789,6 +876,48 @@ function registerPlatformRoutes(
       return { projects: all.filter((p) => p.slug === onlySlug), scope: 'project' };
     }
     return { projects: all, scope: 'org' };
+  });
+
+  app.get('/api/v1/projects/portfolio', async (req) => {
+    platform(req);
+    const { env = 'prod' } = req.query as { env?: string };
+    if (!/^[a-zA-Z0-9_-]{1,50}$/.test(env)) {
+      throw badRequest('invalid_query_param', 'env must be a non-empty environment key');
+    }
+    const projectScoped = req.auth.kind === 'secret';
+    const scopedProjectId = projectScoped ? req.auth.projectId : undefined;
+    if (projectScoped && !scopedProjectId) {
+      throw new ApiError(403, 'project_scope', 'this secret key is not pinned to a project');
+    }
+    return getProjectPortfolio(
+      ctx.pool,
+      ctx.eventStore,
+      req.auth.orgId,
+      env,
+      projectScoped ? 'project' : 'organization',
+      scopedProjectId ?? undefined,
+    );
+  });
+
+  app.get('/api/v1/projects/:slug/control-tower', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env = 'prod', range = '30d' } = req.query as { env?: string; range?: string };
+    if (!/^[a-zA-Z0-9_-]{1,50}$/.test(env)) {
+      throw badRequest('invalid_query_param', 'env must be a non-empty environment key');
+    }
+    const ranges = { '7d': 7, '30d': 30, '90d': 90 } as const;
+    if (!(range in ranges)) {
+      throw badRequest('invalid_query_param', 'range must be one of 7d, 30d or 90d');
+    }
+    return getProjectControlTower(
+      ctx.pool,
+      ctx.eventStore,
+      ctx.query,
+      project,
+      env,
+      ranges[range as keyof typeof ranges],
+    );
   });
 
   app.post('/api/v1/projects', async (req, reply) => {
@@ -799,10 +928,20 @@ function registerPlatformRoutes(
     }
     try {
       const project = await createProject(ctx.pool, req.auth.orgId, body.slug, body.name);
+      const evaluatedHealth = evaluateProjectHealth({
+        events30d: 0,
+        registeredCoverage30d: null,
+        activeOutcomeContracts: 0,
+        proposedMetrics: 0,
+      });
       // A new project has no data yet — return the same shape as the list (stats zeroed).
       return reply.status(201).send({
         slug: project.slug, name: project.name, timezone: project.timezone,
-        active_metrics: 0, funnels: 0, events_30d: 0,
+        active_metrics: 0, proposed_metrics: 0, active_outcome_contracts: 0, funnels: 0,
+        events_24h: 0, events_7d: 0, events_30d: 0,
+        last_event_at: null, registered_coverage_30d: null,
+        key_outcome_available: false,
+        ...evaluatedHealth,
       });
     } catch (err) {
       if ((err as { code?: string }).code === '23505') {
@@ -931,6 +1070,100 @@ function registerPlatformRoutes(
     const project = await resolveProject(req);
     const { env } = req.query as { env?: string };
     return getProjectSchema(ctx.pool, ctx.eventStore, project, env ?? 'prod');
+  });
+
+  // ----- Saved / official analysis answers -----
+  app.post('/api/v1/projects/:slug/analysis-views', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const view = await createAnalysisView(
+      ctx.pool,
+      project,
+      analysisViewCreateSchema.parse(req.body),
+      analysisViewCredential(req.auth),
+    );
+    return reply.status(201).send({ view });
+  });
+
+  app.get('/api/v1/projects/:slug/analysis-views', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const query = req.query as { env?: string; status?: string; official?: string };
+    const status = query.status;
+    if (status !== undefined && status !== 'active' && status !== 'archived') {
+      throw badRequest('invalid_query_param', 'status must be active or archived');
+    }
+    let official: boolean | undefined;
+    if (query.official !== undefined) {
+      if (query.official !== 'true' && query.official !== 'false') {
+        throw badRequest('invalid_query_param', 'official must be true or false');
+      }
+      official = query.official === 'true';
+    }
+    return {
+      views: await listAnalysisViews(ctx.pool, project, {
+        env: query.env ?? req.auth.env,
+        ...(status ? { status } : {}),
+        ...(official !== undefined ? { official } : {}),
+      }),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/readiness', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env = req.auth.env } = req.query as { env?: string };
+    if (!env.trim() || env.length > 100) {
+      throw badRequest('invalid_query_param', 'env must contain between 1 and 100 characters');
+    }
+    return getMeasurementReadiness(ctx.pool, ctx.eventStore, project, env);
+  });
+
+  app.get('/api/v1/projects/:slug/analysis-views/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return getAnalysisView(ctx.pool, project, id);
+  });
+
+  app.patch('/api/v1/projects/:slug/analysis-views/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return {
+      view: await updateAnalysisView(
+        ctx.pool,
+        project,
+        id,
+        analysisViewUpdateSchema.parse(req.body),
+        analysisViewCredential(req.auth),
+      ),
+    };
+  });
+
+  app.post('/api/v1/projects/:slug/analysis-views/:id/archive', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return {
+      view: await archiveAnalysisView(ctx.pool, project, id, analysisViewCredential(req.auth)),
+    };
+  });
+
+  app.put('/api/v1/projects/:slug/analysis-views/:id/official', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const body = analysisViewOfficialSchema.parse(req.body);
+    return {
+      view: await setAnalysisViewOfficial(
+        ctx.pool,
+        project,
+        id,
+        body.official,
+        analysisViewCredential(req.auth),
+      ),
+    };
   });
 
   // ----- browser experience -----
@@ -1212,7 +1445,7 @@ function registerPlatformRoutes(
       );
     }
     const patch = updateMetricSchema.parse(req.body);
-    const metric = await updateMetric(ctx.pool, project.id, key, patch);
+    const metric = await updateMetric(ctx.pool, project.id, key, patch, authOwner(req.auth));
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
     return metric;
@@ -1227,6 +1460,41 @@ function registerPlatformRoutes(
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
     return metric;
+  });
+
+  app.get('/api/v1/projects/:slug/metrics/:key/definition', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return getMetricDefinition(ctx.pool, project.id, key);
+  });
+
+  app.post('/api/v1/projects/:slug/metrics/:key/definition/preview', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return previewMetricDefinition(
+      ctx.pool,
+      project.id,
+      key,
+      metricDefinitionPreviewSchema.parse(req.body),
+    );
+  });
+
+  app.post('/api/v1/projects/:slug/metrics/:key/definition/apply', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const result = await applyMetricDefinition(
+      ctx.pool,
+      project.id,
+      key,
+      metricDefinitionApplySchema.parse(req.body),
+      authOwner(req.auth),
+    );
+    ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
+    return result;
   });
 
   app.get('/api/v1/projects/:slug/metrics/:key/usage', async (req) => {
@@ -1626,8 +1894,9 @@ function registerPlatformRoutes(
   app.get('/api/v1/projects/:slug/releases', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const { env, status, contract_key, experiment_key, originating_decision_id } = req.query as {
+    const { env, status, contract_key, experiment_key, originating_decision_id, decision_eligible } = req.query as {
       env?: string; status?: string; contract_key?: string; experiment_key?: string; originating_decision_id?: string;
+      decision_eligible?: string;
     };
     return {
       releases: await listReleases(ctx.pool, project.id, {
@@ -1636,6 +1905,7 @@ function registerPlatformRoutes(
         ...(contract_key ? { contractKey: contract_key } : {}),
         ...(experiment_key ? { experimentKey: experiment_key } : {}),
         ...(originating_decision_id ? { originatingDecisionId: originating_decision_id } : {}),
+        ...(decision_eligible === 'nearest' ? { decisionEligible: 'nearest' as const } : {}),
       }),
     };
   });
@@ -1677,12 +1947,15 @@ function registerPlatformRoutes(
   app.get('/api/v1/projects/:slug/decisions', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const { env, status, release_id } = req.query as { env?: string; status?: string; release_id?: string };
+    const { env, status, release_id, experiment_key } = req.query as {
+      env?: string; status?: string; release_id?: string; experiment_key?: string;
+    };
     return {
       decisions: await listDecisions(ctx.pool, project.id, {
         ...(env ? { env } : {}),
         ...(status ? { status } : {}),
         ...(release_id ? { releaseId: release_id } : {}),
+        ...(experiment_key ? { experimentKey: experiment_key } : {}),
       }),
     };
   });
@@ -1975,6 +2248,33 @@ function registerPlatformRoutes(
     const project = await resolveProject(req);
     const { env, kind } = req.query as { env?: string; kind?: string };
     return { warnings: await listIngestWarnings(ctx.pool, project.id, { ...(env && { env }), ...(kind && { kind: kind as WarningKind }) }) };
+  });
+
+  app.get('/api/v1/projects/:slug/data-health', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const query = z.object({ env: z.string().trim().min(1).max(100).default('prod') }).parse(req.query);
+    return getProjectDataHealth(ctx.pool, ctx.eventStore, project, query.env);
+  });
+
+  app.post('/api/v1/projects/:slug/data-health/verify', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const body = z.object({
+      env: z.string().trim().min(1).max(100).default('prod'),
+      signature_id: z.string().uuid(),
+      watermark: z.object({
+        count: z.number().int().nonnegative(),
+        last_seen: z.string().datetime({ offset: true }),
+      }).strict(),
+    }).strict().parse(req.body);
+    return verifyProjectDataHealthFix(
+      ctx.pool,
+      project.id,
+      body.env,
+      body.signature_id,
+      body.watermark,
+    );
   });
 
   app.get('/api/v1/projects/:slug/data-quality', async (req) => {

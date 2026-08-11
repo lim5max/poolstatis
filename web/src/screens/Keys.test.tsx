@@ -36,7 +36,18 @@ describe('Keys', () => {
         label: 'Project MCP',
         masked_token: 'sk_...cafe',
         created_at: '2026-07-29T12:00:00.000Z',
+        last_used_at: '2026-08-10T12:00:00.000Z',
         revoked_at: null,
+        credential_policy: {
+          id: 'poolstatis_core.credential_rotation', version: 1,
+          source: 'poolstatis_core_default', mode: 'advisory',
+          thresholds: { age_review_days: 180, idle_review_days: 30, unused_review_days: 7 },
+        },
+        rotation_recommendation: {
+          status: 'review', code: 'idle_review', label: 'Review access',
+          recommendation: 'Confirm the owner and revoke if this integration is abandoned.',
+          evaluated_at: '2026-08-11T12:00:00.000Z', evidence: { age_days: 13, idle_days: 31 },
+        },
       },
     ]);
     personalTokens.mockResolvedValue([
@@ -47,6 +58,16 @@ describe('Keys', () => {
         created_at: '2026-07-29T13:00:00.000Z',
         last_used_at: null,
         revoked_at: null,
+        credential_policy: {
+          id: 'poolstatis_core.credential_rotation', version: 1,
+          source: 'poolstatis_core_default', mode: 'advisory',
+          thresholds: { age_review_days: 180, idle_review_days: 30, unused_review_days: 7 },
+        },
+        rotation_recommendation: {
+          status: 'healthy', code: 'new', label: 'Ready',
+          recommendation: 'New credential; verify it before revoking any predecessor.',
+          evaluated_at: '2026-08-11T12:00:00.000Z', evidence: { age_days: 13, idle_days: null },
+        },
       },
     ]);
     issueKey.mockResolvedValue({ id: 'new-project-key', token: 'sk_plaintext_once' });
@@ -105,6 +126,16 @@ describe('Keys', () => {
           created_at: '2026-07-29T13:00:00.000Z',
           last_used_at: null,
           revoked_at: null,
+          credential_policy: {
+            id: 'poolstatis_core.credential_rotation', version: 1,
+            source: 'poolstatis_core_default', mode: 'advisory',
+            thresholds: { age_review_days: 180, idle_review_days: 30, unused_review_days: 7 },
+          },
+          rotation_recommendation: {
+            status: 'healthy', code: 'new', label: 'Ready',
+            recommendation: 'New credential; verify it before revoking any predecessor.',
+            evaluated_at: '2026-08-11T12:00:00.000Z', evidence: { age_days: 13, idle_days: null },
+          },
         },
       ])
       .mockRejectedValueOnce(new Error('refresh failed'));
@@ -132,12 +163,60 @@ describe('Keys', () => {
     expect(screen.getByRole('button', { name: 'View pt_...beef details' })).toBeInTheDocument();
     expect(screen.getByText('alpha only')).toBeInTheDocument();
     expect(screen.getByText('All projects')).toBeInTheDocument();
+    expect(screen.getByText('Credential health')).toBeInTheDocument();
+    expect(screen.getByText(/Rotation is replacement-first/)).toBeInTheDocument();
+    expect(screen.getByText(/Core advisory policy v1/)).toBeInTheDocument();
+    expect(screen.getByText('Review access')).toBeInTheDocument();
 
     fireEvent.click(projectToken);
     const dialog = screen.getByRole('dialog', { name: 'Project MCP key' });
     expect(within(dialog).getByText('The full key cannot be shown again.')).toBeInTheDocument();
     expect(within(dialog).getByText('Poolstatis does not store its plaintext.')).toBeInTheDocument();
     expect(within(dialog).getByText('all')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Read and manage one project/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Confirm the owner/)).toBeInTheDocument();
+  });
+
+  it('renders the server recommendation instead of deriving health from local timestamps', async () => {
+    keys.mockResolvedValue([{
+      id: 'old-but-server-healthy', kind: 'secret', env: 'prod', label: 'Policy proof',
+      masked_token: 'sk_...f00d', created_at: '2020-01-01T00:00:00.000Z',
+      last_used_at: null, revoked_at: null,
+      credential_policy: {
+        id: 'poolstatis_core.credential_rotation', version: 2,
+        source: 'poolstatis_core_default', mode: 'advisory',
+        thresholds: { age_review_days: 3650, idle_review_days: 3650, unused_review_days: 3650 },
+      },
+      rotation_recommendation: {
+        status: 'healthy', code: 'new', label: 'Server says ready',
+        recommendation: 'Rendered from the list contract.',
+        evaluated_at: '2026-08-11T12:00:00.000Z', evidence: { age_days: 2414, idle_days: null },
+      },
+    }]);
+    personalTokens.mockResolvedValue([]);
+
+    renderKeys();
+
+    expect(await screen.findByText('Server says ready')).toBeInTheDocument();
+    expect(screen.queryByText('Review age')).not.toBeInTheDocument();
+    expect(screen.getByText(/Core advisory policy v2/)).toBeInTheDocument();
+  });
+
+  it('states the exact credential scope and immediate impact before revoke', async () => {
+    renderKeys();
+
+    const projectToken = await screen.findByRole('button', { name: 'View sk_...cafe details' });
+    const row = projectToken.closest('tr');
+    expect(row).not.toBeNull();
+    const actions = within(row!).getByRole('button', { name: 'More actions' });
+    actions.focus();
+    fireEvent.keyDown(actions, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Revoke key' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Revoke sk_...cafe?' });
+    expect(dialog).toHaveTextContent('Scope: alpha only.');
+    expect(dialog).toHaveTextContent('Read and manage one project; cannot access sibling projects.');
+    expect(dialog).toHaveTextContent('Authentication with this key fails immediately');
   });
 
   it('does not offer an organization-wide personal token in a project-scoped session', async () => {
@@ -162,7 +241,18 @@ describe('Keys', () => {
         label: null,
         masked_token: 'sk_...',
         created_at: '2026-07-29T12:00:00.000Z',
+        last_used_at: null,
         revoked_at: null,
+        credential_policy: {
+          id: 'poolstatis_core.credential_rotation', version: 1,
+          source: 'poolstatis_core_default', mode: 'advisory',
+          thresholds: { age_review_days: 180, idle_review_days: 30, unused_review_days: 7 },
+        },
+        rotation_recommendation: {
+          status: 'review', code: 'unused_review', label: 'Never used',
+          recommendation: 'Verify the intended owner or revoke the unused key.',
+          evaluated_at: '2026-08-11T12:00:00.000Z', evidence: { age_days: 13, idle_days: null },
+        },
       },
     ]);
     renderKeys();

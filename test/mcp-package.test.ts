@@ -101,6 +101,7 @@ beforeAll(async () => {
     'dist/core/mcp/server.d.ts',
     'dist/core/mcp/server.js',
     'dist/core/mcp/standard.js',
+    'dist/core/automationSchemas.js',
     'dist/core/schemas.js',
     'package.json',
   ];
@@ -149,6 +150,16 @@ beforeAll(async () => {
         funnels: [],
         entity_types: [],
         observed_events_30d: [],
+      }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/v1/projects/safe-fixture/keys') {
+      res.end(JSON.stringify({
+        keys: [{
+          id: 'key-safe', kind: 'secret', env: 'prod', label: 'Agent',
+          masked_token: 'sk_...cafe', created_at: '2026-08-01T00:00:00.000Z',
+          last_used_at: '2026-08-11T00:00:00.000Z', revoked_at: null,
+        }],
       }));
       return;
     }
@@ -319,10 +330,27 @@ describe('@poolstatis/mcp release artifact', () => {
     try {
       expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.6.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
-      expect(tools.tools).toHaveLength(104);
+      expect(tools.tools).toHaveLength(140);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
+        'get_project_portfolio',
+        'list_project_keys',
+        'get_control_tower',
+        'get_usage_control',
+        'get_account_mode',
+        'compare_projects',
+        'get_metric_definition',
+        'preview_metric_definition',
         'get_project_schema',
+        'create_saved_answer',
+        'list_saved_answers',
+        'get_saved_answer',
+        'update_saved_answer',
+        'archive_saved_answer',
+        'set_saved_answer_official',
+        'get_measurement_readiness',
+        'get_data_health',
+        'verify_data_health_fix',
         'get_web_overview',
         'list_web_sessions',
         'get_web_session',
@@ -337,6 +365,29 @@ describe('@poolstatis/mcp release artifact', () => {
         'preview_event_revision',
         'revise_event',
         'get_event_history',
+        'get_automation_capabilities',
+        'create_notification_destination',
+        'list_notification_destinations',
+        'set_notification_destination_status',
+        'create_monitor_policy',
+        'list_monitor_policies',
+        'get_monitor_policy',
+        'update_monitor_policy',
+        'set_monitor_policy_status',
+        'list_monitor_findings',
+        'create_insight_feed_schedule',
+        'list_insight_feed_schedules',
+        'get_insight_feed_schedule',
+        'update_insight_feed_schedule',
+        'set_insight_feed_schedule_status',
+        'list_insight_feed_snapshots',
+        'list_automation_proposals',
+        'list_automation_inbox',
+        'list_notification_deliveries',
+      ]));
+      expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
+        'approve_automation_proposal',
+        'reject_automation_proposal',
       ]));
       const browserStandard = await client.readResource({
         uri: 'poolstatis://standard/browser-analytics',
@@ -357,6 +408,16 @@ describe('@poolstatis/mcp release artifact', () => {
       expect(result.structuredContent).toMatchObject({
         project: { slug: 'safe-fixture', name: 'Safe Fixture' },
       });
+
+      const keys = await client.callTool({
+        name: 'list_project_keys',
+        arguments: { project: 'safe-fixture' },
+      }, undefined, { timeout: 15_000 });
+      expect(keys.isError).not.toBe(true);
+      expect(keys.structuredContent).toMatchObject({
+        keys: [{ masked_token: 'sk_...cafe', last_used_at: '2026-08-11T00:00:00.000Z' }],
+      });
+      expect(JSON.stringify(keys.structuredContent)).not.toContain(safeToken);
 
       const versions = await client.callTool({
         name: 'list_visual_experience_versions',

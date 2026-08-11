@@ -7,6 +7,7 @@ import {
   scenarioPickerOptions,
   visualizationTitle,
 } from '../analysis/product';
+import { selectCompatibleFunnelEvidence, selectServerFunnelLoss } from './ProductAnalytics';
 
 describe('Product analytics query and copy mapping', () => {
   it('builds registry-backed branches without raw event input', () => {
@@ -51,9 +52,106 @@ describe('Product analytics query and copy mapping', () => {
 
   it('exposes previous-period comparison honestly when the typed DSL cannot execute it', () => {
     expect(comparisonControl()).toEqual({
-      label: 'Current period only',
+      label: 'Previous exact period',
       disabled: true,
-      reason: 'Previous-period comparison is unavailable for single-window queries',
+      reason: 'Runs an adjacent window with identical duration when a safe headline aggregation exists',
     });
+  });
+
+  it('uses the server-selected loss instead of recomputing a different transition in the browser', () => {
+    const meta = {
+      computed_at: '2026-08-08T00:00:00.000Z',
+      date_range: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-08T00:00:00.000Z' },
+      sampling: null,
+      source: 'native' as const,
+    };
+    const step = (label: string, metric_key: string, actors: number) => ({
+      label, metric_key, actors, purpose: `${label} is measured for the signup goal.`, category: 'activation',
+      conversion_from_prev: null, conversion_from_start: null,
+    });
+    const result = {
+      kind: 'funnel' as const,
+      steps: [step('Visited', 'visited', 100), step('Started', 'started', 60), step('Completed', 'completed', 15)],
+      summary: {
+        overall_conversion: 0.15,
+        previous_overall_conversion: 0.4,
+        delta_percentage_points: -25,
+        biggest_absolute_loss: { from_step: 1, to_step: 2, lost_actors: 45, drop_rate: 0.75 },
+        biggest_percentage_loss: { from_step: 0, to_step: 1, lost_actors: 40, drop_rate: 0.4 },
+      },
+      meta,
+    };
+    const summary = selectServerFunnelLoss(result, { fromStep: 0, toStep: 1 });
+
+    expect(summary).toMatchObject({
+      kind: 'percentage', fromLabel: 'Visited', toLabel: 'Started', lostActors: 40,
+      dropRate: 0.4, overallConversion: 0.15, previousOverallConversion: 0.4,
+      deltaPercentagePoints: -25,
+    });
+  });
+
+  it('fails closed when the deep-linked transition is not present in the server summary', () => {
+    const meta = {
+      computed_at: '2026-08-08T00:00:00.000Z',
+      date_range: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-08T00:00:00.000Z' },
+      sampling: null,
+      source: 'native' as const,
+    };
+    const result = {
+      kind: 'funnel' as const,
+      steps: [
+        { label: 'Visited', metric_key: 'visited', actors: 100, purpose: 'Measures visits.', category: 'acquisition', conversion_from_prev: 1, conversion_from_start: 1 },
+        { label: 'Started', metric_key: 'started', actors: 60, purpose: 'Measures signup starts.', category: 'activation', conversion_from_prev: 0.6, conversion_from_start: 0.6 },
+        { label: 'Completed', metric_key: 'completed', actors: 30, purpose: 'Measures signup completion.', category: 'activation', conversion_from_prev: 0.5, conversion_from_start: 0.3 },
+      ],
+      summary: {
+        overall_conversion: 0.3,
+        previous_overall_conversion: null,
+        delta_percentage_points: null,
+        biggest_absolute_loss: { from_step: 0, to_step: 1, lost_actors: 40, drop_rate: 0.4 },
+        biggest_percentage_loss: { from_step: 1, to_step: 2, lost_actors: 30, drop_rate: 0.5 },
+      },
+      meta,
+    };
+
+    expect(selectServerFunnelLoss(result, { fromStep: 0, toStep: 2 })).toBeNull();
+  });
+
+  it('links only explicit release and experiment records compatible with the exact funnel evidence', () => {
+    const result = {
+      kind: 'funnel',
+      steps: [],
+      meta: {
+        computed_at: '2026-08-08T00:00:00.000Z',
+        date_range: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-08T00:00:00.000Z' },
+        sampling: null,
+        source: 'native',
+      },
+    } as const;
+    const matchingRelease = {
+      id: 'release-match', env: 'prod', status: 'observing', deployed_at: '2026-08-04T00:00:00.000Z',
+      contract_snapshot: { primary_metric_key: 'completed' },
+    };
+    const matchingExperiment = {
+      id: 'experiment-match', env: 'prod', status: 'running', started_at: '2026-07-30T00:00:00.000Z',
+      concluded_at: null, primary_metric_key: 'completed',
+    };
+    const selected = selectCompatibleFunnelEvidence(result as never, 'completed', {
+      releases: [
+        matchingRelease,
+        { ...matchingRelease, id: 'release-wrong-env', env: 'staging' },
+        { ...matchingRelease, id: 'release-wrong-metric', contract_snapshot: { primary_metric_key: 'started' } },
+        { ...matchingRelease, id: 'release-outside-window', deployed_at: '2026-07-20T00:00:00.000Z' },
+      ] as never,
+      experiments: [
+        matchingExperiment,
+        { ...matchingExperiment, id: 'experiment-wrong-env', env: 'staging' },
+        { ...matchingExperiment, id: 'experiment-wrong-metric', primary_metric_key: 'started' },
+        { ...matchingExperiment, id: 'experiment-after-window', started_at: '2026-08-10T00:00:00.000Z' },
+      ] as never,
+    }, 'prod');
+
+    expect(selected.releases.map((release) => release.id)).toEqual(['release-match']);
+    expect(selected.experiments.map((experiment) => experiment.id)).toEqual(['experiment-match']);
   });
 });

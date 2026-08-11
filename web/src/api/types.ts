@@ -1,4 +1,127 @@
 // Mirrors the Platform API response shapes (src/http/server.ts + services).
+import type { AnalysisQueryInput, VisualizationSpec } from '../analysis/visualization';
+
+export type SavedAnswerState = 'ready' | 'partial' | 'empty' | 'unavailable' | 'not_configured' | 'stale' | 'error';
+export type SavedAnswerTrust = 'trusted' | 'partial' | 'blocked' | 'unavailable';
+
+export interface SavedAnswerSnapshot {
+  state: SavedAnswerState;
+  headline: string;
+  takeaway: string;
+  primary_value?: {
+    value: number | string | null;
+    unit: 'count' | 'percent' | 'percentage_point' | 'duration_ms' | 'date' | 'text';
+    formatted: string;
+  };
+  delta?: {
+    value: number | null;
+    unit: 'count' | 'percent' | 'percentage_point';
+    direction: 'up' | 'down' | 'flat' | 'unknown';
+    comparison_label: string;
+  };
+  why_it_matters: string;
+}
+
+export interface SavedEvidenceSnapshot {
+  state: SavedAnswerTrust;
+  as_of: string;
+  freshness: 'fresh' | 'stale' | 'unknown';
+  source_refs: Array<Record<string, unknown>>;
+  aggregation?: string;
+  denominator?: { label: string; value: number | null };
+  sample?: { eligible: number | null; observed: number | null; coverage: number | null };
+  warnings: Array<{ code: string; message: string; remediation_action_id?: string }>;
+  unavailable_reasons: Array<{ code: string; message: string; prerequisite_action_id?: string }>;
+  reproducible_query?: AnalysisQueryInput;
+}
+
+export interface SavedAnswer {
+  id: string;
+  project: string;
+  env: string;
+  title: string;
+  description: string | null;
+  template_key: string | null;
+  schema_version: 1;
+  visualization_spec: VisualizationSpec;
+  answer: SavedAnswerSnapshot;
+  evidence: SavedEvidenceSnapshot;
+  status: 'active' | 'archived';
+  official: boolean;
+  created_by: { kind: 'secret' | 'personal' | 'user'; role: 'owner' | 'admin' | null };
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface SavedAnswerAudit {
+  id: string;
+  action: 'created' | 'updated' | 'official_changed' | 'archived';
+  performed_by: { kind: 'secret' | 'personal' | 'user'; role: 'owner' | 'admin' | null };
+  schema_version: 1;
+  spec_fingerprint: string;
+  previous_status: SavedAnswer['status'] | null;
+  next_status: SavedAnswer['status'];
+  previous_official: boolean | null;
+  next_official: boolean;
+  created_at: string;
+}
+
+export type CreateSavedAnswerInput = Pick<
+  SavedAnswer,
+  'title' | 'schema_version' | 'visualization_spec' | 'answer' | 'evidence'
+> & Partial<Pick<SavedAnswer, 'description' | 'template_key'>>;
+
+export type UpdateSavedAnswerInput = Partial<Pick<
+  CreateSavedAnswerInput,
+  'title' | 'description' | 'template_key' | 'schema_version' | 'visualization_spec' | 'answer' | 'evidence'
+>>;
+
+export type MeasurementReadinessSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info' | 'none';
+export type MeasurementReadinessGroupKey = 'tracking_plan' | 'properties' | 'identity' | 'data_sources';
+export interface MeasurementReadinessRepairAction {
+  action_code: 'activate_metric' | 'repair_funnel' | 'review_property' | 'verify_identity' | 'connect_data_source' | 'verify_data_source';
+  kind: 'navigate';
+  label: string;
+  href: string;
+}
+export interface MeasurementReadinessGap {
+  code: 'metric_inactive' | 'funnel_definition_incomplete' | 'property_untrusted'
+    | 'identity_evidence_unavailable' | 'identity_coverage_incomplete'
+    | 'data_source_missing' | 'data_source_unverified';
+  severity: Exclude<MeasurementReadinessSeverity, 'none'>;
+  definition_ref: string | null;
+  affected_answer_ids: string[];
+  repair_action: MeasurementReadinessRepairAction;
+}
+export interface MeasurementReadinessGroup {
+  key: MeasurementReadinessGroupKey;
+  label: string;
+  healthy_count: number;
+  incomplete_count: number;
+  highest_severity: MeasurementReadinessSeverity;
+  gaps: MeasurementReadinessGap[];
+  repair_action: MeasurementReadinessRepairAction | null;
+  evidence: Record<string, number>;
+}
+export interface MeasurementReadiness {
+  schema_version: 1;
+  generated_at: string;
+  project: string;
+  env: string;
+  summary: {
+    healthy_count: number;
+    incomplete_count: number;
+    highest_severity: MeasurementReadinessSeverity;
+  };
+  groups: MeasurementReadinessGroup[];
+  fix_next: (MeasurementReadinessRepairAction & {
+    group: MeasurementReadinessGroupKey;
+    gap_code: MeasurementReadinessGap['code'];
+    severity: Exclude<MeasurementReadinessSeverity, 'none'>;
+    affected_answer_ids: string[];
+  }) | null;
+}
 
 export type MetricCategory = string;
 
@@ -64,6 +187,65 @@ export interface FeatureFlag {
   variants: FeatureFlagVariant[];
   created_at: string;
   updated_at: string;
+}
+
+export interface NotificationDestination {
+  id: string; key: string; name: string; kind: 'in_product' | 'outbox';
+  status: 'active' | 'disabled'; created_at: string; updated_at: string;
+}
+
+export interface MonitorPolicy {
+  id: string; policy_key: string; name: string; current_version: number;
+  status: 'active' | 'paused' | 'archived'; next_evaluation_at: string;
+  revision: {
+    metric_key: string; env: string; comparison_rule: string; threshold: number;
+    minimum_sample: number; window_minutes: number; cadence_minutes: number;
+    cooldown_seconds: number; owner: string; destination_ids: string[];
+    proposal_kind: 'pause' | 'rollback' | null; version: number;
+  };
+}
+
+export interface InsightFeedSchedule {
+  id: string; schedule_key: string; name: string; current_version: number;
+  status: 'active' | 'paused' | 'archived'; next_run_at: string;
+  revision: {
+    metric_key: string; env: string; window_days: number; timezone: string;
+    frequency: 'daily' | 'weekly'; local_time: string; weekday: number | null;
+    destination_ids: string[]; owner: string; version: number;
+  };
+}
+
+export interface AutomationProposal {
+  id: string; kind: 'pause' | 'rollback'; status: 'proposed' | 'approved' | 'rejected';
+  target: Record<string, unknown>; payload: Record<string, unknown>; undo: Record<string, unknown>;
+  confirmation_fingerprint: string; proposed_by?: string; reviewed_by?: string | null;
+  reviewed_at?: string | null; review_rationale: string | null; created_at: string;
+}
+
+export interface MonitorFinding {
+  id: string; policy_id: string; policy_key: string; policy_name: string; severity: string;
+  snapshot: Record<string, unknown>; evidence: Record<string, unknown>;
+  notification_state: 'queued' | 'not_configured'; created_at: string;
+}
+
+export interface InsightFeedSnapshot {
+  id: string; schedule_id: string; schedule_key: string; schedule_name: string;
+  resolved_window: Record<string, unknown>; definition_fingerprint: string;
+  answer: { state: string; headline: string; takeaway: string; primary_value?: number };
+  evidence: Record<string, unknown>; created_at: string;
+}
+
+export interface AutomationInboxNotification {
+  id: string; delivery_id: string; payload: {
+    kind: string; code: string; answer: { state: string; headline: string; takeaway: string };
+    evidence: Record<string, unknown>; action: { kind: string; resource_id: string };
+  }; created_at: string;
+}
+
+export interface NotificationDelivery {
+  id: string; destination_id: string | null; destination_key: string | null;
+  destination_kind: 'in_product' | 'outbox' | null; finding_id: string | null; feed_run_id: string | null;
+  status: string; attempt_count: number; last_error_code: string | null; created_at: string; updated_at: string;
 }
 
 export type ExperimentStatus = 'draft' | 'running' | 'concluded';
@@ -345,6 +527,8 @@ export interface InteractionMapResponse {
 export interface TrendResponse {
   kind: 'trend';
   series: Array<{ bucket: string; value: number; breakdown_value?: string }>;
+  answer?: AnswerBlock;
+  evidence?: EvidenceBlock;
   meta: {
     computed_at: string;
     date_range?: { from: string; to: string };
@@ -352,6 +536,88 @@ export interface TrendResponse {
     note?: string;
     source?: 'native' | 'posthog';
   };
+}
+
+export type ControlTowerState = 'ready' | 'partial' | 'empty' | 'unavailable' | 'not_configured' | 'stale' | 'error';
+export type TrustState = 'trusted' | 'partial' | 'blocked' | 'unavailable';
+export type AttentionSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface AnswerBlock {
+  state: ControlTowerState;
+  headline: string;
+  takeaway: string;
+  primary_value?: {
+    value: number | string | null;
+    unit: 'count' | 'percent' | 'percentage_point' | 'duration_ms' | 'date' | 'text';
+    formatted: string;
+  };
+  delta?: {
+    value: number | null;
+    unit: 'count' | 'percent' | 'percentage_point';
+    direction: 'up' | 'down' | 'flat' | 'unknown';
+    comparison_label: string;
+  };
+  why_it_matters: string;
+}
+
+export interface EvidenceBlock {
+  state: TrustState;
+  as_of: string;
+  freshness: 'fresh' | 'stale' | 'unknown';
+  source_refs: Array<
+    | { kind: 'metric'; key: string; purpose: string }
+    | { kind: 'funnel'; key: string; goal: string }
+    | { kind: 'release'; id: string }
+    | { kind: 'experiment'; key: string }
+    | { kind: 'usage_ledger'; meter: 'events_stored' }
+    | { kind: 'operator_rule'; rule_id: string; rule_version: number }
+  >;
+  aggregation?: string;
+  denominator?: { label: string; value: number | null };
+  sample?: { eligible: number | null; observed: number | null; coverage: number | null };
+  warnings: Array<{ code: string; message: string; remediation_action_id?: string }>;
+  unavailable_reasons: Array<{ code: string; message: string; prerequisite_action_id?: string }>;
+  reproducible_query?: Record<string, unknown>;
+}
+
+export type ControlTowerAction =
+  | { id: string; kind: 'navigate'; label: string; href: string }
+  | { id: string; kind: 'run_typed_query'; label: string; query: Record<string, unknown> }
+  | { id: string; kind: 'copy_agent_task'; label: string; task: string }
+  | { id: string; kind: 'open_confirmation'; label: string; mutation: string; impact: string }
+  | { id: string; kind: 'retry'; label: string };
+
+export interface AttentionItem {
+  id: string;
+  rule_id: string;
+  rule_version: number;
+  severity: AttentionSeverity;
+  state: 'open' | 'acknowledged' | 'resolved' | 'unavailable';
+  title: string;
+  reason: string;
+  impact: string;
+  affected: Array<{ kind: 'answer' | 'metric' | 'funnel' | 'project' | 'customer'; ref: string }>;
+  evidence: EvidenceBlock;
+  primary_action: ControlTowerAction;
+}
+
+export interface ControlTowerResult {
+  schema_version: 1;
+  request_id: string;
+  generated_at: string;
+  home_funnel_key?: string | null;
+  scope: {
+    organization_id?: string;
+    project_slug?: string;
+    environment?: string;
+    window: { from: string; to: string; timezone: 'UTC' };
+    comparison?: { from: string; to: string; basis: 'previous_period' | 'previous_cycle' | 'none' };
+  };
+  answer: AnswerBlock;
+  attention: AttentionItem[];
+  evidence: EvidenceBlock;
+  primary_action: ControlTowerAction;
+  secondary_actions: ControlTowerAction[];
 }
 
 export type WebAnalyticsDimension =
@@ -507,8 +773,171 @@ export interface ProjectWithStats {
   name: string;
   timezone: string;
   active_metrics: number;
+  proposed_metrics: number;
+  active_outcome_contracts: number;
   funnels: number;
+  events_24h: number;
+  events_7d: number;
   events_30d: number;
+  last_event_at: string | null;
+  registered_coverage_30d: number | null;
+  key_outcome_available: boolean;
+  health: 'healthy' | 'needs_attention' | 'no_data';
+  attention: string[];
+  health_evaluation: {
+    source: 'server';
+    evaluated_at: string;
+    guardrails: Array<{
+      id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'metric_review_queue';
+      state: 'pass' | 'fail' | 'not_applicable';
+      observed: number | null;
+      expectation: string;
+    }>;
+  };
+}
+
+export interface ProjectPortfolioRow extends ProjectWithStats {
+  environment: string;
+  current_usage: {
+    meter: 'events_stored';
+    period: string;
+    accepted_events: number;
+    last_ingest_at: string | null;
+    source: 'usage_ledger';
+    basis: 'ingest_time';
+  };
+}
+
+export interface ProjectPortfolioResult {
+  schema_version: 1;
+  generated_at: string;
+  scope: {
+    credential: 'organization' | 'project';
+    environment: string;
+    usage_cycle: { from: string; to: string; timezone: 'UTC'; basis: 'ingest_time' };
+  };
+  projects: ProjectPortfolioRow[];
+}
+
+export interface AccountMode {
+  schema_version: 1;
+  deployment: {
+    mode: 'hosted' | 'self_host';
+    hosted_account: 'available' | 'not_configured';
+  };
+  session: {
+    kind: KeyKind;
+    scope: 'organization' | 'project';
+    role: 'owner' | 'admin' | 'member' | null;
+  };
+  capabilities: {
+    portfolio: 'available' | 'project_only' | 'unavailable';
+    compare_projects: boolean;
+    manage_profile: boolean;
+    manage_personal_tokens: boolean;
+  };
+  primary_action: {
+    id: 'manage_hosted_account' | 'sign_in_to_manage_account' | 'open_local_setup';
+    kind: 'navigate';
+    label: string;
+    href: string;
+  };
+}
+
+export interface MetricSemanticDefinition {
+  key: string;
+  purpose: string;
+  type: MetricType;
+  aggregation: string;
+  source: Record<string, unknown>;
+}
+
+export interface MetricDefinitionCurrent {
+  revision: number;
+  fingerprint: string;
+  aggregation: string;
+  definition: MetricSemanticDefinition;
+}
+
+export interface MetricDefinitionRevision extends MetricDefinitionCurrent {
+  id: string;
+  action: 'created' | 'updated' | 'legacy_update';
+  actor: string;
+  created_at: string;
+}
+
+export interface MetricDefinitionImpact {
+  severity: 'low' | 'medium' | 'high';
+  summary: {
+    answers: number;
+    funnels: number;
+    measurement_contracts: number;
+    releases: number;
+    experiments: number;
+  };
+  references: Array<{
+    kind: 'answer' | 'funnel' | 'measurement_contract' | 'release' | 'experiment';
+    ref: string;
+    label: string;
+    status: string | null;
+  }>;
+  truncated: boolean;
+}
+
+export interface MetricDefinitionDetail {
+  schema_version: 1;
+  metric: Pick<Metric, 'key' | 'name' | 'type' | 'status'>;
+  current: MetricDefinitionCurrent;
+  revisions: MetricDefinitionRevision[];
+  impact: MetricDefinitionImpact;
+  primary_action: { id: string; kind: 'navigate'; label: string; href: string };
+}
+
+export interface MetricDefinitionPreview {
+  schema_version: 1;
+  state: 'ready' | 'empty';
+  metric: Pick<Metric, 'key' | 'name' | 'type' | 'status'>;
+  expected_revision: number;
+  current: MetricDefinitionCurrent;
+  proposed: Omit<MetricDefinitionCurrent, 'revision'>;
+  changed_fields: Array<'purpose' | 'source'>;
+  impact: MetricDefinitionImpact;
+  requires_confirmation: boolean;
+  primary_action:
+    | { id: 'apply_metric_definition'; kind: 'open_confirmation'; label: string; impact: string }
+    | { id: 'return_to_registry'; kind: 'navigate'; label: string; href: string };
+}
+
+export interface SemanticProjectComparison {
+  schema_version: 1;
+  state: 'ready' | 'unavailable';
+  generated_at: string;
+  metric: {
+    key: string;
+    purpose: string | null;
+    type: string | null;
+    aggregation: string | null;
+    fingerprint: string | null;
+  };
+  scope: {
+    environment: string;
+    window: { from: string; to: string; timezone: 'UTC' };
+  };
+  projects: Array<{
+    slug: string;
+    name: string;
+    fingerprint: string | null;
+    value?: number;
+    events?: number;
+    actors?: number;
+    registered_coverage?: number;
+  }>;
+  incompatibilities: Array<{
+    project_slug: string;
+    code: string;
+    message: string;
+  }>;
+  primary_action: { id: string; kind: 'navigate'; label: string; href: string };
 }
 
 export interface ProjectSchema {
@@ -697,6 +1126,10 @@ export interface Decision {
   created_by: string;
   created_at: string;
   updated_at: string;
+  queue_priority?: {
+    evidence_readiness: 'ready' | 'blocked';
+    risk: 'high' | 'medium' | 'low';
+  };
 }
 
 export interface EvidenceMetricWindow {
@@ -924,6 +1357,7 @@ export interface SampleFilter {
 }
 
 export interface IngestWarning {
+  signature_id?: string;
   kind: 'rejected' | 'unregistered' | 'clock_skew';
   event: string;
   detail: string;
@@ -931,6 +1365,77 @@ export interface IngestWarning {
   count: number;
   first_seen: string;
   last_seen: string;
+}
+
+export interface DataHealthWatermark {
+  count: number;
+  last_seen: string;
+}
+
+export interface DataHealthWindow {
+  from: string;
+  to: string;
+  interval: 'hour' | 'day';
+  accepted_total: number;
+  rejected_total: number;
+  points: Array<{ bucket: string; accepted: number; rejected: number }>;
+}
+
+export interface DataHealthVerifyInput {
+  env: string;
+  signature_id: string;
+  watermark: DataHealthWatermark;
+}
+
+export interface DataHealthVerifyResult {
+  schema_version: 1;
+  signature_id: string;
+  status: 'resolved' | 'still_occurring';
+  occurrences_since_watermark: number;
+  checked_at: string;
+  previous_watermark: DataHealthWatermark;
+  current_watermark: DataHealthWatermark;
+}
+
+export interface DataHealthResult {
+  schema_version: 1;
+  generated_at: string;
+  project: string;
+  env: string;
+  coverage: {
+    accepted_basis: string;
+    rejected_basis: string;
+    rejected_history_first_observed_at: string | null;
+  };
+  summary: { accepted_24h: number; rejected_24h: number; accepted_7d: number; rejected_7d: number };
+  windows: { last_24h: DataHealthWindow; last_7d: DataHealthWindow };
+  issue_signatures: Array<{
+    signature_id: string;
+    kind: 'rejected' | 'unregistered' | 'clock_skew';
+    category: 'schema_rejection' | 'missing_definition' | 'clock_skew';
+    remediation: 'fix_schema' | 'register_definition' | 'fix_clock';
+    registered_event_name: string | null;
+    count: number;
+    first_seen: string;
+    last_seen: string;
+    affected_answer_ids: string[];
+    repair_action: { kind: 'navigate'; label: string; href: string };
+    watermark: DataHealthWatermark;
+    verify_after_fix: { method: 'POST'; href: string; body: DataHealthVerifyInput };
+  }>;
+  improvements: Array<{
+    signature_id: string;
+    severity: 'high' | 'medium';
+    title: string;
+    affected_answer_ids: string[];
+    repair_action: { kind: 'navigate'; label: string; href: string };
+    verify_after_fix: { method: 'POST'; href: string; body: DataHealthVerifyInput };
+  }>;
+  doing_well: Array<{
+    code: 'accepted_events_flowing';
+    title: string;
+    evidence: string;
+  }>;
 }
 
 export interface DataQualityIssue {
@@ -967,6 +1472,27 @@ export interface MetricUsage {
 
 export type KeyKind = 'ingest' | 'secret' | 'personal' | 'user';
 
+export interface CredentialRotationPolicy {
+  id: 'poolstatis_core.credential_rotation';
+  version: number;
+  source: 'poolstatis_core_default';
+  mode: 'advisory';
+  thresholds: {
+    age_review_days: number;
+    idle_review_days: number;
+    unused_review_days: number;
+  };
+}
+
+export interface CredentialRotationRecommendation {
+  status: 'healthy' | 'review' | 'revoked';
+  code: 'active' | 'new' | 'age_review' | 'idle_review' | 'unused_review' | 'revoked';
+  label: string;
+  recommendation: string;
+  evaluated_at: string;
+  evidence: { age_days: number; idle_days: number | null };
+}
+
 export interface ApiKeyRow {
   id: string;
   kind: KeyKind;
@@ -975,7 +1501,10 @@ export interface ApiKeyRow {
   /** Permanently masked server value, e.g. sk_...cafe. */
   masked_token: string;
   created_at: string;
+  last_used_at: string | null;
   revoked_at: string | null;
+  credential_policy: CredentialRotationPolicy;
+  rotation_recommendation: CredentialRotationRecommendation;
 }
 
 export interface ApiErrorBody {
@@ -1051,6 +1580,8 @@ export interface PersonalToken {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  credential_policy: CredentialRotationPolicy;
+  rotation_recommendation: CredentialRotationRecommendation;
 }
 
 export interface OrganizationUsage {
@@ -1067,6 +1598,47 @@ export interface OrganizationUsage {
     quantity: number;
     environments: Array<{ env: string; quantity: number }>;
   }>;
+}
+
+export interface UsageControlResult extends ControlTowerResult {
+  meter: 'events_stored';
+  cycle: { from: string; to: string; timezone: 'UTC' };
+  cap: {
+    state: 'finite' | 'not_configured';
+    value: number | null;
+    remaining: number | null;
+    consequence_at_100_percent: string | null;
+  };
+  pace: {
+    observed_days: number;
+    events_per_day_7d: number | null;
+    projected_cycle_end: number | null;
+    confidence: 'sufficient' | 'insufficient';
+  };
+  threshold_forecasts: Array<{
+    percent: 50 | 75 | 90 | 100;
+    state: 'reached' | 'projected' | 'not_projected' | 'not_applicable';
+    reached_or_projected_at: string | null;
+    notification_state: 'not_configured';
+    audit_source: 'usage_ledger';
+  }>;
+  contributors: Array<{
+    project_slug: string;
+    project_name: string;
+    environment: string;
+    accepted_events: number;
+    share: number | null;
+    change_7d: number | null;
+    last_ingest_at: string | null;
+  }>;
+  reconciliation: {
+    metered_quantity: number;
+    attributed_quantity: number;
+    difference: number;
+    unattributed_quantity: number;
+    overattributed_quantity: number;
+    state: 'reconciled' | 'partial';
+  };
 }
 
 export interface OrganizationUsageActivity {

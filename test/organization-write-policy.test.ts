@@ -30,9 +30,9 @@ describe('organization write policy inventory', () => {
       source.matchAll(/app\.(post|put|patch|delete)\('([^']+)'/g),
       (match) => `${match[1]!.toUpperCase()} ${match[2]!}`,
     );
-    expect(allRoutes).toHaveLength(129);
+    expect(allRoutes).toHaveLength(146);
     expect(new Set(allRoutes).size).toBe(allRoutes.length);
-    expect(routes).toHaveLength(78);
+    expect(routes).toHaveLength(86);
     expect(routes.every((route) =>
       route.includes(' /api/v1/') || route.includes(' /i/v1/'))).toBe(true);
 
@@ -42,8 +42,8 @@ describe('organization write policy inventory', () => {
         return requiresOrganizationWriteReadiness(method, path);
       });
     const allowed = allRoutes.filter((route) => !blocked.includes(route));
-    expect(blocked).toHaveLength(67);
-    expect(allowed).toHaveLength(62);
+    expect(blocked).toHaveLength(72);
+    expect(allowed).toHaveLength(74);
 
     const exemptions = routes
       .filter((route) => {
@@ -64,10 +64,10 @@ describe('organization write policy inventory', () => {
   it('keeps MCP on the centralized HTTP boundary and classifies every mutating tool call', async () => {
     const source = await readFile(resolve(repoDir, 'src/mcp/server.ts'), 'utf8');
     expect(source.match(/\bfetch\(/g)).toHaveLength(1);
-    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(104);
+    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(140);
 
     const calls = Array.from(
-      source.matchAll(/api\(\s*'(POST|PATCH|DELETE)'\s*,\s*(`[^`]+`|'[^']+')/g),
+      source.matchAll(/api\(\s*'(POST|PUT|PATCH|DELETE)'\s*,\s*(`[^`]+`|'[^']+')/g),
       (match) => {
         const rawPath = match[2]!.slice(1, -1);
         return {
@@ -76,25 +76,28 @@ describe('organization write policy inventory', () => {
         };
       },
     );
-    expect(calls).toHaveLength(73);
+    expect(calls).toHaveLength(88);
     expect(calls.every(({ route }) => route.startsWith('/api/v1/'))).toBe(true);
 
     const exemptMcpCalls = calls
       .filter(({ method, route }) =>
         !requiresOrganizationWriteReadiness(method, route))
       .map(({ method, route }) => `${method} ${route}`);
-    expect(exemptMcpCalls).toHaveLength(27);
-    expect(calls.length - exemptMcpCalls.length).toBe(46);
+    expect(exemptMcpCalls).toHaveLength(30);
+    expect(calls.length - exemptMcpCalls.length).toBe(58);
     expect(new Set(exemptMcpCalls)).toEqual(new Set([
       'POST /api/v1/projects/:slug/onboarding/observe-agent',
       'POST /api/v1/projects/:slug/events/backfill/preview',
       'POST /api/v1/projects/:slug/events/:eventId/revisions/preview',
+      'POST /api/v1/projects/:slug/metrics/:key/definition/preview',
+      'POST /api/v1/projects/:slug/data-health/verify',
       'POST /api/v1/projects/:slug/contracts/validate',
       'POST /api/v1/projects/:slug/contracts/diff',
       'POST /api/v1/projects/:slug/contracts/similar',
       'POST /api/v1/projects/:slug/flags/:key/evaluate',
       'POST /api/v1/projects/:slug/measurement/trust',
       'POST /api/v1/projects/:slug/query',
+      'POST /api/v1/projects/compare',
     ]));
     expect(source).toContain("'instrumentation-standard'");
     expect(source).toContain("api('GET', `/api/v1/projects/${String(slug)}/schema`)");

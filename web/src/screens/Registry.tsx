@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, ChevronRight, ChevronDown } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import {
@@ -24,11 +24,44 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn, isRedundantKey } from '@/lib/utils';
-import type { Funnel, Metric, MetricCategoryDefinition, MetricStatus } from '../api/types';
+import { DisclosureSummary } from '@/components/disclosure';
+import type { Funnel, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage } from '../api/types';
+import { buildRegistryHealth, type RegistryMetricHealth } from '../analysis/semanticHealth';
 
 export function Registry() {
   const { client, project, env } = useStore();
-  const { data, error, loading, reload } = useAsync(() => client!.schema(project!, env), [project, env]);
+  const [searchParams] = useSearchParams();
+  const focusedMetric = searchParams.get('metric');
+  const focusedFunnel = searchParams.get('funnel');
+  const [tab, setTab] = useState(focusedFunnel ? 'funnels' : 'metrics');
+  useEffect(() => {
+    setTab(focusedFunnel ? 'funnels' : 'metrics');
+  }, [focusedFunnel, focusedMetric]);
+  const { data, error, loading, reload } = useAsync(async () => {
+    const schema = await client!.schema(project!, env);
+    const [experiments, usageEntries, savedAnswers, releases] = await Promise.all([
+      typeof client!.experiments === 'function' ? client!.experiments(project!).catch(() => null) : Promise.resolve(null),
+      Promise.all(schema.metrics.map(async (metric) => {
+        if (typeof client!.metricUsage !== 'function') return [metric.key, null] as const;
+        try {
+          return [metric.key, await client!.metricUsage(project!, metric.key, { env, sinceDays: 30 })] as const;
+        } catch {
+          return [metric.key, null] as const;
+        }
+      })),
+      typeof client!.analysisViews === 'function'
+        ? client!.analysisViews(project!, { env, status: 'active' }).catch(() => null)
+        : Promise.resolve(null),
+      typeof client!.releases === 'function'
+        ? client!.releases(project!, { env }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    const usages = new Map<string, MetricUsage | null>(usageEntries);
+    return {
+      ...schema,
+      registry_health: buildRegistryHealth(schema.metrics, schema.funnels, usages, experiments, savedAnswers, releases),
+    };
+  }, [project, env]);
 
   if (loading) return <Loading what="reading registry…" />;
   if (error) return <RecoverableError onRetry={reload}>{error}</RecoverableError>;
@@ -52,7 +85,7 @@ export function Registry() {
   };
 
   return (
-    <Tabs defaultValue="metrics" className="gap-4">
+    <Tabs value={tab} onValueChange={setTab} className="gap-4">
       <div className="max-w-full overflow-x-auto pb-1">
         <TabsList className="w-max">
           <TabsTrigger value="metrics">Metrics · {data.metrics.length}</TabsTrigger>
@@ -62,7 +95,7 @@ export function Registry() {
         </TabsList>
       </div>
       <TabsContent value="metrics">
-        <MetricsTable metrics={data.metrics} categories={categories} onChanged={reload} />
+        <MetricsTable metrics={data.metrics} categories={categories} health={data.registry_health} focusKey={focusedMetric} onChanged={reload} />
       </TabsContent>
       <TabsContent value="categories">
         <MetricCategoriesPanel
@@ -73,7 +106,7 @@ export function Registry() {
           onDelete={deleteCategory}
         />
       </TabsContent>
-      <TabsContent value="funnels"><FunnelsTable funnels={data.funnels} /></TabsContent>
+      <TabsContent value="funnels"><FunnelsTable funnels={data.funnels} focusKey={focusedFunnel} /></TabsContent>
       <TabsContent value="entities"><EntityTypesTable types={data.entity_types} /></TabsContent>
     </Tabs>
   );
@@ -93,16 +126,20 @@ function metricEvent(m: Metric): string | null {
 function MetricsTable({
   metrics,
   categories,
+  health,
+  focusKey,
   onChanged,
 }: {
   metrics: Metric[];
   categories: MetricCategoryDefinition[];
+  health: ReturnType<typeof buildRegistryHealth>;
+  focusKey: string | null;
   onChanged: () => void;
 }) {
   const { client, project } = useStore();
   const nav = useNavigate();
   const openEvents = (ev: string) => nav(`/data?tab=events&event=${encodeURIComponent(ev)}`);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(focusKey ?? '');
   const [cats, setCats] = useState<Set<string>>(new Set());
   const [statuses, setStatuses] = useState<Set<string>>(new Set());
   const [tagSel, setTagSel] = useState<Set<string>>(new Set());
@@ -112,7 +149,9 @@ function MetricsTable({
   const [deprecating, setDeprecating] = useState<Metric | null>(null);
   const [deleting, setDeleting] = useState<Metric | null>(null);
   const [editing, setEditing] = useState<Metric | null>(null);
+  const [reviewing, setReviewing] = useState<Metric | null>(null);
   const proposedCount = metrics.filter((m) => m.status === 'proposed').length;
+  const healthByKey = useMemo(() => new Map(health.rows.map((row) => [row.key, row])), [health.rows]);
   const allTags = useMemo(() => [...new Set(metrics.flatMap((m) => m.tags ?? []))].sort(), [metrics]);
 
   const filtered = useMemo(() => {
@@ -133,6 +172,16 @@ function MetricsTable({
   }, [metrics, search, cats, statuses, tagSel, sort]);
 
   const groups = useMemo(() => groupRows(filtered, groupBy), [filtered, groupBy]);
+  useEffect(() => {
+    if (focusKey) setSearch(focusKey);
+  }, [focusKey]);
+  useEffect(() => {
+    if (!focusKey) return;
+    const row = document.getElementById(`metric-${encodeURIComponent(focusKey)}`);
+    if (!row) return;
+    row.focus();
+    row.scrollIntoView({ block: 'center' });
+  }, [focusKey, filtered]);
   const toggle = (set: Set<string>, setter: (s: Set<string>) => void, v: string) => { const n = new Set(set); n.has(v) ? n.delete(v) : n.add(v); setter(n); };
   const chips: Chip[] = [
     ...[...cats].map((c) => ({
@@ -169,6 +218,13 @@ function MetricsTable({
       <div className="flex items-center px-5 py-3.5 border-b">
         <h3 className="serif text-lg flex items-center gap-2">Metrics {proposedCount > 0 && <Badge variant="outline" className="font-sans">{proposedCount} awaiting activation</Badge>}</h3>
       </div>
+      <div className="grid grid-cols-2 border-b bg-muted/20 text-center sm:grid-cols-5">
+        <RegistryStat label="Healthy" value={health.healthy} note="Active, observed and used" />
+        <RegistryStat label="Proposed" value={health.proposed} note="Needs explicit activation" />
+        <RegistryStat label="Incomplete" value={health.incomplete} note="Active, no source evidence · 30d" />
+        <RegistryStat label="Deprecated" value={health.deprecated} note="Retained for semantic history" />
+        <RegistryStat label="Unused" value={health.unused} note={health.usageUnavailable > 0 ? `${health.usageUnavailable} need evidence refresh` : 'No saved funnel, insight or experiment'} />
+      </div>
       <Toolbar
         left={<SearchInput value={search} onChange={setSearch} placeholder="Search name, key, purpose…" />}
         center={<>
@@ -200,6 +256,7 @@ function MetricsTable({
                 <SortableTableHead label="Category" direction={sortDirection('category')} onSort={() => clickSort('category')} />
                 <SortableTableHead label="Type" direction={sortDirection('type')} onSort={() => clickSort('type')} />
                 <TableHead>Source</TableHead><TableHead>Purpose</TableHead>
+                <TableHead>Used by answers</TableHead>
                 <SortableTableHead label="Status" direction={sortDirection('status')} onSort={() => clickSort('status')} />
                 <TableHead className="w-12" />
               </TableRow>
@@ -209,12 +266,15 @@ function MetricsTable({
                 <Section
                   key={g.label ?? '_'}
                   group={g}
+                  focusKey={focusKey}
                   categories={categories}
+                  healthByKey={healthByKey}
                   busy={busy}
                   onActivate={(k) => setStatus(k, 'active')}
                   onDeprecate={setDeprecating}
                   onDelete={setDeleting}
                   onEditTaxonomy={setEditing}
+                  onReviewDefinition={setReviewing}
                   onOpenEvents={openEvents}
                 />
               ))}
@@ -242,7 +302,155 @@ function MetricsTable({
           }}
         />
       )}
+      {reviewing && (
+        <DefinitionReviewDialog
+          metric={reviewing}
+          load={() => client!.metricDefinition(project!, reviewing.key)}
+          preview={(body) => client!.previewMetricDefinition(project!, reviewing.key, body)}
+          apply={(body) => client!.applyMetricDefinition(project!, reviewing.key, body)}
+          onCancel={() => setReviewing(null)}
+          onApplied={() => { setReviewing(null); onChanged(); }}
+        />
+      )}
     </Card>
+  );
+}
+
+function RegistryStat({ label, value, note }: { label: string; value: number; note: string }) {
+  return <div className="min-w-0 border-r p-3 last:border-r-0"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-xl font-semibold tabular-nums">{value}</div><div className="mt-1 hidden truncate text-xs text-muted-foreground sm:block" title={note}>{note}</div></div>;
+}
+
+function DefinitionReviewDialog({
+  metric,
+  load,
+  preview,
+  apply,
+  onCancel,
+  onApplied,
+}: {
+  metric: Metric;
+  load: () => Promise<MetricDefinitionDetail>;
+  preview: (body: {
+    expected_revision?: number;
+    definition: { purpose: string; source: Record<string, unknown> };
+  }) => Promise<MetricDefinitionPreview>;
+  apply: (body: {
+    expected_revision: number;
+    expected_fingerprint: string;
+    confirm_impact: true;
+    definition: { purpose: string; source: Record<string, unknown> };
+  }) => Promise<unknown>;
+  onCancel: () => void;
+  onApplied: () => void;
+}) {
+  const detail = useAsync(load, [metric.key]);
+  const [purpose, setPurpose] = useState(metric.purpose);
+  const [sourceText, setSourceText] = useState(JSON.stringify(metric.source, null, 2));
+  const [proposed, setProposed] = useState<MetricDefinitionPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!detail.data) return;
+    setPurpose(detail.data.current.definition.purpose);
+    setSourceText(JSON.stringify(detail.data.current.definition.source, null, 2));
+  }, [detail.data]);
+
+  const definition = () => {
+    const source = JSON.parse(sourceText) as unknown;
+    if (!source || Array.isArray(source) || typeof source !== 'object') throw new Error('Source must be a JSON object.');
+    return { purpose: purpose.trim(), source: source as Record<string, unknown> };
+  };
+  const change = (update: () => void) => {
+    update();
+    setProposed(null);
+    setError(null);
+  };
+  const previewChange = async () => {
+    if (!detail.data) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setProposed(await preview({
+        expected_revision: detail.data.current.revision,
+        definition: definition(),
+      }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Definition preview failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const applyChange = async () => {
+    if (!proposed) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apply({
+        expected_revision: proposed.expected_revision,
+        expected_fingerprint: proposed.current.fingerprint,
+        confirm_impact: true,
+        definition: definition(),
+      });
+      onApplied();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Definition apply failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const impactTotal = proposed
+    ? Object.values(proposed.impact.summary).reduce((sum, count) => sum + count, 0)
+    : 0;
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !busy && onCancel()}>
+      <DialogContent className="max-h-screen overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="serif font-normal text-xl">Definition · {metric.name}</DialogTitle>
+          <DialogDescription>Semantic changes create an immutable revision. Preview dependencies before confirming.</DialogDescription>
+        </DialogHeader>
+        {detail.loading ? <Loading what="Reading semantic definition…" /> : detail.error ? <RecoverableError onRetry={detail.reload}>{detail.error}</RecoverableError> : detail.data && (
+          <div className="space-y-4">
+            <div className="grid gap-3 rounded-md border bg-muted/20 p-3 text-sm sm:grid-cols-3">
+              <div><span className="text-xs text-muted-foreground">Current</span><div className="font-medium">Revision {detail.data.current.revision}</div></div>
+              <div><span className="text-xs text-muted-foreground">Aggregation</span><code className="block text-xs">{detail.data.current.aggregation}</code></div>
+              <div><span className="text-xs text-muted-foreground">Fingerprint</span><code className="block truncate text-xs" title={detail.data.current.fingerprint}>{detail.data.current.fingerprint.slice(0, 12)}…</code></div>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="metric-definition-purpose" className="text-xs text-muted-foreground">Purpose</label>
+              <textarea id="metric-definition-purpose" value={purpose} onChange={(event) => change(() => setPurpose(event.target.value))} className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring" />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="metric-definition-source" className="text-xs text-muted-foreground">Source JSON</label>
+              <textarea id="metric-definition-source" value={sourceText} onChange={(event) => change(() => setSourceText(event.target.value))} spellCheck={false} className="min-h-36 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring" />
+            </div>
+            {proposed && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium">{impactTotal} registered {impactTotal === 1 ? 'dependency' : 'dependencies'}</div>
+                  <Badge variant="outline" className="capitalize">{proposed.impact.severity} impact</Badge>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">Changed: {proposed.changed_fields.join(', ') || 'none'}.</p>
+                {proposed.impact.references.length > 0 && <ul className="mt-2 space-y-1 text-sm">{proposed.impact.references.map((reference) => <li key={`${reference.kind}:${reference.ref}`}><span className="text-muted-foreground">{reference.kind}</span> · {reference.label}{reference.status ? ` · ${reference.status}` : ''}</li>)}</ul>}
+                {proposed.impact.truncated && <p className="mt-2 text-xs text-muted-foreground">Showing the first 25 references; totals above include every dependency.</p>}
+              </div>
+            )}
+            {error && <ErrorNote>{error}</ErrorNote>}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
+          {!proposed ? (
+            <Button onClick={previewChange} disabled={busy || !detail.data || purpose.trim().length < 10}>{busy && <Loader2 className="size-4 animate-spin" />}Preview impact</Button>
+          ) : proposed.requires_confirmation ? (
+            <Button onClick={applyChange} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}Confirm and apply revision {proposed.expected_revision + 1}</Button>
+          ) : (
+            <Button variant="outline" disabled>No semantic change</Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -377,26 +585,35 @@ function TaxonomyEditor({
   );
 }
 
-function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, onEditTaxonomy, onOpenEvents }: {
+function Section({ group, focusKey, categories, healthByKey, busy, onActivate, onDeprecate, onDelete, onEditTaxonomy, onReviewDefinition, onOpenEvents }: {
   group: { label: string | null; rows: Metric[] }; busy: string | null;
+  focusKey: string | null;
   categories: MetricCategoryDefinition[];
+  healthByKey: Map<string, RegistryMetricHealth>;
   onActivate: (k: string) => void; onDeprecate: (m: Metric) => void; onDelete: (m: Metric) => void;
-  onEditTaxonomy: (m: Metric) => void; onOpenEvents: (ev: string) => void;
+  onEditTaxonomy: (m: Metric) => void; onReviewDefinition: (m: Metric) => void; onOpenEvents: (ev: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   return (
     <>
       {group.label && (
         <TableRow className="bg-muted/40 hover:bg-muted/40">
-          <TableCell colSpan={7} className="py-2">
+          <TableCell colSpan={8} className="py-2">
             <button className="flex items-center gap-2 text-xs font-medium text-muted-foreground capitalize" onClick={() => setOpen((o) => !o)}>
               {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}{group.label}<Badge variant="secondary">{group.rows.length}</Badge>
             </button>
           </TableCell>
         </TableRow>
       )}
-      {open && group.rows.map((m) => (
-        <TableRow key={m.id} className="group">
+      {open && group.rows.map((m) => {
+        const health = healthByKey.get(m.key);
+        return (
+        <TableRow
+          key={m.id}
+          id={`metric-${encodeURIComponent(m.key)}`}
+          tabIndex={m.key === focusKey ? -1 : undefined}
+          className={cn('group', m.key === focusKey && 'bg-accent/45')}
+        >
           <TableCell>
             {metricEvent(m)
               ? <button className="font-medium text-left text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground" title="See this metric's events" onClick={() => onOpenEvents(metricEvent(m)!)}>{m.name}</button>
@@ -412,6 +629,14 @@ function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, o
           <TableCell><TypeTag type={m.type} /></TableCell>
           <TableCell className="text-xs text-muted-foreground whitespace-nowrap font-mono">{sourceSummary(m)}</TableCell>
           <TableCell className="max-w-sm"><div className="truncate text-xs text-muted-foreground italic" title={m.purpose}>{m.purpose}</div></TableCell>
+          <TableCell className="max-w-xs">
+            <div className="flex flex-wrap gap-1">
+              {health?.usedByAnswers.slice(0, 2).map((answer) => <Badge key={answer} variant="outline" className="max-w-40 truncate font-normal" title={answer}>{answer}</Badge>)}
+              {(health?.usedByAnswers.length ?? 0) > 2 && <Badge variant="secondary">+{health!.usedByAnswers.length - 2}</Badge>}
+              {(health?.usedByAnswers.length ?? 0) === 0 && <span className="text-xs text-muted-foreground">{health?.unused === null ? 'Consumer evidence unavailable' : 'No saved consumer'}</span>}
+            </div>
+            <details className="mt-1"><DisclosureSummary className="cursor-pointer text-xs font-medium text-foreground underline decoration-border underline-offset-2">Review evidence</DisclosureSummary><div className="mt-1 text-xs text-muted-foreground">{health?.unused === null ? 'Saved-consumer evidence is incomplete; no unused claim was made.' : health?.observedEvents == null ? 'Source evidence unavailable' : `${health.observedEvents} source events · 30d`}</div></details>
+          </TableCell>
           <TableCell>
             <StatusBadge status={m.status} />
             {m.status === 'deprecated' && (
@@ -424,6 +649,7 @@ function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, o
             {busy === m.key ? <Loader2 className="size-4 animate-spin inline" /> : (
               <div className="inline-flex items-center gap-1.5">
                 {m.status !== 'active' && <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onActivate(m.key)}>activate</Button>}
+                <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => onReviewDefinition(m)} aria-label={`Review ${m.name} definition`}>review</Button>
                 <Overflow items={[
                   { label: 'Edit category & tags', onClick: () => onEditTaxonomy(m) },
                   ...(m.status !== 'deprecated' ? [{ label: 'Deprecate', onClick: () => onDeprecate(m) }] : []),
@@ -433,7 +659,7 @@ function Section({ group, categories, busy, onActivate, onDeprecate, onDelete, o
             )}
           </TableCell>
         </TableRow>
-      ))}
+      );})}
     </>
   );
 }
@@ -457,21 +683,29 @@ function groupRows(rows: Metric[], by: string): Array<{ label: string | null; ro
   return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, rs]) => ({ label, rows: rs }));
 }
 
-function FunnelsTable({ funnels }: { funnels: Funnel[] }) {
+function FunnelsTable({ funnels, focusKey }: { funnels: Funnel[]; focusKey: string | null }) {
   if (funnels.length === 0) return <Panel><EmptyState headline="No funnels" lead="defined from registry metrics via MCP or API" /></Panel>;
   return (
     <Panel title={<>Funnels <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{funnels.length}</span></>}>
       <div className="divide-y">
-        {funnels.map((f) => <FunnelRow key={f.key} funnel={f} />)}
+        {funnels.map((f) => <FunnelRow key={f.key} funnel={f} focused={f.key === focusKey} />)}
       </div>
     </Panel>
   );
 }
 
-function FunnelRow({ funnel }: { funnel: Funnel }) {
-  const [open, setOpen] = useState(false);
+function FunnelRow({ funnel, focused }: { funnel: Funnel; focused: boolean }) {
+  const [open, setOpen] = useState(focused);
+  const rowId = `funnel-${encodeURIComponent(funnel.key)}`;
+  useEffect(() => {
+    if (!focused) return;
+    setOpen(true);
+    const row = document.getElementById(rowId);
+    row?.focus();
+    row?.scrollIntoView({ block: 'center' });
+  }, [focused, rowId]);
   return (
-    <section data-testid={`funnel-summary-${funnel.key}`} className="grid min-w-0 gap-3 px-5 py-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(16rem,2fr)_auto] lg:items-start">
+    <section id={rowId} tabIndex={focused ? -1 : undefined} data-testid={`funnel-summary-${funnel.key}`} className={cn('grid min-w-0 gap-3 px-5 py-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(16rem,2fr)_auto] lg:items-start', focused && 'bg-accent/45')}>
       <div className="min-w-0">
         <div className="font-medium break-words">{funnel.name}</div>
         <code className="text-xs text-muted-foreground break-all">{funnel.key}</code>

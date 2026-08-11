@@ -34,6 +34,7 @@ describe('release evidence and immutable decision revisions', () => {
       contracts: [
         contract('shorter_onboarding', 5),
         contract('high_sample_onboarding', 1_000),
+        { ...contract('activation_should_decrease', 5), expected_direction: 'decrease' },
       ],
     };
     const diff = await api(env, env.secretToken, 'POST', path(env, '/contracts/diff'), declaration);
@@ -179,6 +180,60 @@ describe('release evidence and immutable decision revisions', () => {
 
     const crossProject = await api(env, env.secretToken, 'GET', path(other, '/decisions?env=dev'));
     expect(crossProject.status).toBe(404);
+  });
+
+  test('filters a Decisions handoff by the release experiment identity', async () => {
+    const taggedRelease = await register(env, 'decision-experiment-tagged', 'shorter_onboarding', anchor, 'prod', 'shorter_signup');
+    const otherRelease = await register(env, 'decision-experiment-other', 'shorter_onboarding', anchor, 'prod', 'other_signup');
+    const taggedDecision = await api(env, env.secretToken, 'POST', path(env, `/releases/${taggedRelease.id}/evaluate`), {});
+    const otherDecision = await api(env, env.secretToken, 'POST', path(env, `/releases/${otherRelease.id}/evaluate`), {});
+
+    const filtered = await api(env, env.secretToken, 'GET', path(env, '/decisions?env=prod&experiment_key=shorter_signup'));
+    expect(filtered.status).toBe(200);
+    expect(filtered.body.decisions.map((item: { id: string }) => item.id)).toContain(taggedDecision.body.decision.id);
+    expect(filtered.body.decisions.map((item: { id: string }) => item.id)).not.toContain(otherDecision.body.decision.id);
+  });
+
+  test('owns queue ranking by evidence readiness, risk and age on the server', async () => {
+    const oldRiskRelease = await register(env, 'decision-rank-old-risk', 'activation_should_decrease', anchor);
+    const newRiskRelease = await register(env, 'decision-rank-new-risk', 'activation_should_decrease', anchor);
+    const readyLowRiskRelease = await register(env, 'decision-rank-ready-low', 'shorter_onboarding', anchor);
+    const blockedRelease = await register(env, 'decision-rank-blocked', 'high_sample_onboarding', anchor);
+    const oldRisk = await api(env, env.secretToken, 'POST', path(env, `/releases/${oldRiskRelease.id}/evaluate`), {});
+    const newRisk = await api(env, env.secretToken, 'POST', path(env, `/releases/${newRiskRelease.id}/evaluate`), {});
+    const readyLowRisk = await api(env, env.secretToken, 'POST', path(env, `/releases/${readyLowRiskRelease.id}/evaluate`), {});
+    const blocked = await api(env, env.secretToken, 'POST', path(env, `/releases/${blockedRelease.id}/evaluate`), {});
+    expect(oldRisk.body.decision.proposed_outcome).toBe('rollback');
+    expect(newRisk.body.decision.proposed_outcome).toBe('rollback');
+    expect(readyLowRisk.body.decision.proposed_outcome).toBe('keep');
+    expect(blocked.body.decision.proposed_outcome).toBe('inconclusive');
+
+    await env.pool.query(
+      `UPDATE decisions SET created_at = fixture.created_at::timestamptz
+       FROM (VALUES ($1::uuid, '2026-08-01T00:00:00Z'), ($2::uuid, '2026-08-02T00:00:00Z'),
+                    ($3::uuid, '2026-07-01T00:00:00Z'), ($4::uuid, '2026-06-01T00:00:00Z'))
+         AS fixture(id, created_at)
+       WHERE decisions.id = fixture.id`,
+      [oldRisk.body.decision.id, newRisk.body.decision.id, readyLowRisk.body.decision.id, blocked.body.decision.id],
+    );
+
+    const listed = await api(env, env.secretToken, 'GET', path(env, '/decisions?env=prod'));
+    expect(listed.status).toBe(200);
+    const queueIds = listed.body.decisions.map((item: { id: string }) => item.id);
+    const positions = [
+      oldRisk.body.decision.id,
+      newRisk.body.decision.id,
+      readyLowRisk.body.decision.id,
+      blocked.body.decision.id,
+    ].map((id) => queueIds.indexOf(id));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(listed.body.decisions.find((item: { id: string }) => item.id === oldRisk.body.decision.id)).toMatchObject({
+      queue_priority: { evidence_readiness: 'ready', risk: 'high' },
+    });
+    expect(listed.body.decisions.find((item: { id: string }) => item.id === blocked.body.decision.id)).toMatchObject({
+      queue_priority: { evidence_readiness: 'blocked', risk: 'medium' },
+    });
   });
 
   test('never turns insufficient sample or current property distrust into a directional decision', async () => {
@@ -363,11 +418,19 @@ async function ingestWindowEvidence(env: TestEnv, anchor: Date, token: string, b
   expect(ingested.status).toBe(200);
 }
 
-async function register(env: TestEnv, key: string, contractKey: string, deployedAt: Date, releaseEnv = 'prod') {
+async function register(
+  env: TestEnv,
+  key: string,
+  contractKey: string,
+  deployedAt: Date,
+  releaseEnv = 'prod',
+  experimentKey?: string,
+) {
   const response = await api(env, env.secretToken, 'POST', path(env, '/releases'), {
     idempotency_key: key, contract_key: contractKey, env: releaseEnv,
     repository: 'acme/product', branch: 'main', commit_sha: key.padEnd(40, 'a').slice(0, 40).replace(/[^a-f0-9]/g, 'a'),
     deployed_at: deployedAt.toISOString(), status: 'deployed',
+    ...(experimentKey ? { experiment_key: experimentKey } : {}),
   });
   expect(response.status).toBe(201);
   return response.body;

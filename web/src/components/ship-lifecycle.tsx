@@ -145,3 +145,34 @@ export function ShipStageBadge({ stage }: { stage: ShipStage }) {
   const variant = stage === 'decided' ? 'default' : stage === 'ready_to_decide' ? 'secondary' : 'outline';
   return <Badge variant={variant}>{SHIP_STAGE_LABELS[stage]}</Badge>;
 }
+
+export function ShipDocumentationPreview() {
+  const stages = [
+    'Register release',
+    'Collect real exposure',
+    'Read the measured outcome',
+    'Prepare a proposal',
+    'Human decision',
+  ];
+  return (
+    <section className="rounded-panel border bg-card p-4 sm:p-5" role="region" aria-label="Release decision loop documentation preview">
+      <div className="text-xs font-medium text-muted-foreground">Documentation preview · versioned workflow</div>
+      <h2 className="mt-1 text-base font-medium">From <code>poolstatis.yml</code> to a reviewed decision</h2>
+      <ol className="mt-4 grid gap-2 sm:grid-cols-5">
+        {stages.map((stage, index) => (
+          <li key={stage} className="rounded-control border bg-muted/20 p-3 text-sm">
+            <span className="font-mono text-xs text-muted-foreground">{index + 1}</span>
+            <span className="mt-1 block font-medium">{stage}</span>
+          </li>
+        ))}
+      </ol>
+      <pre className="mt-4 overflow-auto rounded-control border bg-background p-3 text-xs leading-relaxed">{`contract_key: shorter_onboarding
+commit_sha: <deployed commit>
+observation_window_days: 7
+decision_owner: growth-team`}</pre>
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+        Illustrative field names from the repository workflow. Poolstatis fills release, evidence, and decision values only from server read-back.
+      </p>
+    </section>
+  );
+}
