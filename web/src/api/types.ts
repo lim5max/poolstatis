@@ -605,6 +605,7 @@ export interface ControlTowerResult {
   schema_version: 1;
   request_id: string;
   generated_at: string;
+  home_funnel_key?: string | null;
   scope: {
     organization_id?: string;
     project_slug?: string;

@@ -139,7 +139,9 @@ function isScope(value: unknown): boolean {
 
 function isControlTower(value: unknown): value is ControlTowerResult {
   return isRecord(value) && value.schema_version === 1 && isString(value.request_id)
-    && isIsoDate(value.generated_at) && isScope(value.scope) && isAnswer(value.answer)
+    && isIsoDate(value.generated_at)
+    && (value.home_funnel_key === undefined || isNullableString(value.home_funnel_key))
+    && isScope(value.scope) && isAnswer(value.answer)
     && Array.isArray(value.attention) && value.attention.every(isAttention)
     && isEvidence(value.evidence) && isAction(value.primary_action)
     && Array.isArray(value.secondary_actions) && value.secondary_actions.every(isAction);
@@ -155,6 +157,7 @@ function unavailableControlTower(headline = 'Answer unavailable'): ControlTowerR
     schema_version: 1,
     request_id: 'unsupported_response_contract',
     generated_at: now,
+    home_funnel_key: null,
     scope: { window: { from: now, to: now, timezone: 'UTC' } },
     answer: {
       state: 'unavailable',

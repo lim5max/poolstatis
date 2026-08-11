@@ -155,6 +155,15 @@ describe('goal-aware Attention', () => {
           evidence: { ...server.evidence, as_of: '2026-08-04T00:00:00.000Z', freshness: 'fresh' },
           primary_action: { id: 'review_usage', kind: 'navigate', label: 'Review usage', href: '/usage' },
         },
+        {
+          ...server.attention[0],
+          id: 'server.release.watch',
+          title: 'Server-ordered release watch',
+          reason: 'A release still needs a bounded evidence review.',
+          impact: 'The decision remains open until the evidence is reviewed.',
+          evidence: { ...server.evidence, as_of: '2026-08-03T00:00:00.000Z', freshness: 'fresh' },
+          primary_action: { id: 'review_release', kind: 'navigate', label: 'Review release', href: '/changes' },
+        },
       ],
     });
     setStore(client);
@@ -169,6 +178,9 @@ describe('goal-aware Attention', () => {
     expect(screen.getByRole('link', { name: /Review definition/ })).toHaveAttribute('data-variant', 'default');
     expect(screen.getByRole('link', { name: /Review funnel/ })).toHaveAttribute('data-variant', 'outline');
     expect(screen.getByRole('link', { name: /Review usage/ })).toHaveAttribute('data-variant', 'outline');
+    expect(screen.getByText('View all 4 signals')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('View all 4 signals'));
+    expect(screen.getByRole('link', { name: /Review release/ })).toHaveAttribute('href', '/changes');
     expect(screen.getByText('stale')).toBeInTheDocument();
     expect(client.controlTower).toHaveBeenCalledOnce();
     expect(client.controlTower).toHaveBeenCalledWith('alpha', 'prod', '30d');
@@ -179,6 +191,7 @@ describe('goal-aware Attention', () => {
     const server = controlTowerResponse();
     client.controlTower.mockResolvedValue({
       ...server,
+      home_funnel_key: 'website_signup',
       attention: [{
         ...server.attention[0],
         id: 'funnel.biggest_loss.website_signup',
@@ -206,6 +219,16 @@ describe('goal-aware Attention', () => {
       ],
     });
     client.funnels.mockResolvedValue([{
+      id: 'unrelated-funnel',
+      key: 'a_unrelated',
+      name: 'Unrelated path',
+      goal: 'Keep this alphabetical fallback out of the Home snapshot.',
+      steps: [
+        { metric_key: 'web_page_views', label: 'Visited' },
+        { metric_key: 'web_page_views', label: 'Returned' },
+      ],
+      window_seconds: 86_400,
+    }, {
       id: 'signup-funnel',
       key: 'website_signup',
       name: 'Visit to signup',
@@ -254,7 +277,11 @@ describe('goal-aware Attention', () => {
     expect(screen.queryByRole('heading', { name: 'Top pages' })).not.toBeInTheDocument();
     expect(view.container.querySelector('.text-xs')).toBeNull();
     expect(client.query).toHaveBeenCalledTimes(1);
-    expect(client.query).toHaveBeenCalledWith('alpha', expect.objectContaining({ kind: 'funnel' }));
+    expect(client.query).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      kind: 'funnel',
+      funnel: 'website_signup',
+      env: 'prod',
+    }));
     await waitFor(() => expect(telemetryCapture.mock.calls.filter(([event]) => event === 'home.answer_viewed')).toEqual([
       ['home.answer_viewed', { template_id: 'website_overview', trust: 'trusted' }, { distinctId: 'home-user' }],
     ]));

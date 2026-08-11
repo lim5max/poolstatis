@@ -46,9 +46,9 @@ export function Experience() {
   const openManualSetup = () => {
     if (!configurationRef.current) return;
     configurationRef.current.open = true;
-    configurationRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    configurationRef.current.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
   };
-  const openSnapshotSetup = () => snapshotRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const openSnapshotSetup = () => snapshotRef.current?.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
 
   return (
     <div className="space-y-4">
@@ -123,6 +123,10 @@ export function Experience() {
       </details>
     </div>
   );
+}
+
+function preferredScrollBehavior(): ScrollBehavior {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 }
 
 function ExperienceSetupGate({

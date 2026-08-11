@@ -65,7 +65,9 @@ export function Overview() {
         || (intent?.project_mode === 'both' && prefersWebsite(intent.primary_goal_id))
         ? pageMetric
         : primaryMetric;
-      const homeFunnel = pickHomeFunnel(funnels, intent?.primary_goal_id ?? null, funnelAnchor?.key ?? null);
+      const homeFunnel = controlTower.home_funnel_key === undefined
+        ? pickHomeFunnel(funnels, intent?.primary_goal_id ?? null, funnelAnchor?.key ?? null)
+        : funnels.find((funnel) => funnel.key === controlTower.home_funnel_key) ?? null;
       const productAnswersEnabled = intent?.project_mode !== 'website';
       const websiteAnswersEnabled = intent?.project_mode !== 'product';
       const [product, website] = await Promise.all([
@@ -112,7 +114,7 @@ export function Overview() {
 
   const { intent, product, website, schema, controlTower } = homeData;
   const mode = intent?.project_mode ?? null;
-  const attention = controlTower.attention.slice(0, 3);
+  const attention = controlTower.attention;
   if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   if (mode === 'both' && intent) {
@@ -153,7 +155,8 @@ function AttentionQueue({ result, items, telemetryUserId, onRetry }: {
   telemetryUserId?: string | null;
   onRetry: () => void;
 }) {
-  const visibleItems = items.length > 0 ? items : [guardrailItem(result)];
+  const visibleItems = items.length > 0 ? items.slice(0, 3) : [guardrailItem(result)];
+  const remainingItems = items.slice(3);
   return (
     <section aria-labelledby="attention-title">
       <div className="mb-3 flex items-baseline justify-between gap-3">
@@ -165,22 +168,43 @@ function AttentionQueue({ result, items, telemetryUserId, onRetry }: {
       </div>
       <div className="grid gap-3 lg:grid-cols-3">
         {visibleItems.map((item, index) => (
-          <article
-            key={item.id}
-            className={`rounded-panel border bg-card p-4 ${item.severity === 'critical' || item.severity === 'high' ? 'border-destructive/45' : item.severity === 'medium' ? 'border-warning/45' : ''}`}
-          >
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="font-medium">{severityLabel(item.severity)}</span>
-              <span className="text-muted-foreground">{item.evidence.freshness === 'fresh' ? fmtRelative(item.evidence.as_of) : item.evidence.freshness}</span>
-            </div>
-            <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
-            <p className="mt-3 border-t pt-3 text-sm"><span className="font-medium">Impact:</span> <span className="text-muted-foreground">{item.impact}</span></p>
-            <AttentionAction action={item.primary_action} primary={index === 0} telemetryUserId={telemetryUserId} onRetry={onRetry} />
-          </article>
+          <AttentionCard key={item.id} item={item} primary={index === 0} telemetryUserId={telemetryUserId} onRetry={onRetry} />
         ))}
       </div>
+      {remainingItems.length > 0 && (
+        <details className="mt-3 rounded-panel border bg-card">
+          <DisclosureSummary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-medium">
+            <span>View all {items.length} signals</span>
+            <span className="font-mono text-muted-foreground">+{remainingItems.length}</span>
+          </DisclosureSummary>
+          <div className="grid gap-3 border-t p-3 lg:grid-cols-3">
+            {remainingItems.map((item) => (
+              <AttentionCard key={item.id} item={item} primary={false} telemetryUserId={telemetryUserId} onRetry={onRetry} />
+            ))}
+          </div>
+        </details>
+      )}
     </section>
+  );
+}
+
+function AttentionCard({ item, primary, telemetryUserId, onRetry }: {
+  item: AttentionItem;
+  primary: boolean;
+  telemetryUserId?: string | null;
+  onRetry: () => void;
+}) {
+  return (
+    <article className={`rounded-panel border bg-card p-4 ${item.severity === 'critical' || item.severity === 'high' ? 'border-destructive/45' : item.severity === 'medium' ? 'border-warning/45' : ''}`}>
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span className="font-medium">{severityLabel(item.severity)}</span>
+        <span className="text-muted-foreground">{item.evidence.freshness === 'fresh' ? fmtRelative(item.evidence.as_of) : item.evidence.freshness}</span>
+      </div>
+      <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
+      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
+      <p className="mt-3 border-t pt-3 text-sm"><span className="font-medium">Impact:</span> <span className="text-muted-foreground">{item.impact}</span></p>
+      <AttentionAction action={item.primary_action} primary={primary} telemetryUserId={telemetryUserId} onRetry={onRetry} />
+    </article>
   );
 }
 

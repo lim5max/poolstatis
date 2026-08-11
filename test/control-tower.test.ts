@@ -76,7 +76,7 @@ describe('project control tower', () => {
     expect(serialized).not.toContain('private@example.com');
     expect(() => controlTowerResultSchema.parse(result.body)).not.toThrow();
     expect(Object.keys(result.body).sort()).toEqual([
-      'answer', 'attention', 'evidence', 'generated_at', 'primary_action', 'request_id',
+      'answer', 'attention', 'evidence', 'generated_at', 'home_funnel_key', 'primary_action', 'request_id',
       'schema_version', 'scope', 'secondary_actions',
     ]);
   });
@@ -249,6 +249,71 @@ describe('project control tower', () => {
             kind: 'navigate',
             href: '/analyze/funnels?funnel=tower_activation&env=prod&from_step=0&to_step=1',
           }),
+        }),
+      ]));
+    } finally {
+      await funnelEnv.close();
+    }
+  });
+
+  it('selects one goal-matched Home funnel for both the snapshot and attention contract', async () => {
+    const funnelEnv = await createTestEnv({ ingestBuffer: false });
+    try {
+      await activeMetric(funnelEnv, { key: 'retention_started', source: { event: 'retention.started' } });
+      await activeMetric(funnelEnv, { key: 'retention_completed', source: { event: 'retention.completed' } });
+      await activeMetric(funnelEnv, { key: 'activation_started', source: { event: 'activation.started' } });
+      await activeMetric(funnelEnv, { key: 'activation_completed', source: { event: 'activation.completed' } });
+      await api(funnelEnv, funnelEnv.secretToken, 'POST', `/api/v1/projects/${funnelEnv.projectSlug}/funnels`, {
+        key: 'a_retention_path',
+        name: 'Retention path',
+        goal: 'See whether retained accounts return after their first outcome.',
+        steps: [
+          { metric_key: 'retention_started', label: 'Started retention window' },
+          { metric_key: 'retention_completed', label: 'Returned' },
+        ],
+        window_seconds: 86_400,
+      });
+      await api(funnelEnv, funnelEnv.secretToken, 'POST', `/api/v1/projects/${funnelEnv.projectSlug}/funnels`, {
+        key: 'z_activation_path',
+        name: 'Activation path',
+        goal: 'See whether new accounts complete activation.',
+        steps: [
+          { metric_key: 'activation_started', label: 'Started activation' },
+          { metric_key: 'activation_completed', label: 'Activated' },
+        ],
+        window_seconds: 86_400,
+      });
+      const intent = await api(funnelEnv, funnelEnv.secretToken, 'PUT', `/api/v1/projects/${funnelEnv.projectSlug}/intent`, {
+        project_mode: 'product',
+        website_domain: null,
+        goal_ids: ['activation'],
+        custom_goal: null,
+        primary_goal_id: 'activation',
+      });
+      expect(intent.status).toBe(200);
+      const ingested = await api(funnelEnv, funnelEnv.ingestToken, 'POST', '/i/v1/events', {
+        batch_id: 'control-tower-goal-funnel',
+        events: [
+          { event: 'activation.started', distinct_id: 'activation-a', timestamp: hoursAgo(3) },
+          { event: 'activation.completed', distinct_id: 'activation-a', timestamp: hoursAgo(2) },
+          { event: 'activation.started', distinct_id: 'activation-b', timestamp: hoursAgo(1) },
+        ],
+      });
+      expect(ingested.body.accepted).toBe(3);
+
+      const result = await api(
+        funnelEnv,
+        funnelEnv.secretToken,
+        'GET',
+        `/api/v1/projects/${funnelEnv.projectSlug}/control-tower?env=prod&range=30d`,
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.body.home_funnel_key).toBe('z_activation_path');
+      expect(result.body.attention).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'funnel.biggest_loss.z_activation_path',
+          affected: [{ kind: 'funnel', ref: 'z_activation_path' }],
         }),
       ]));
     } finally {

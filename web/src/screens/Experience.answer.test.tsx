@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useStore } from '../store';
@@ -169,6 +169,34 @@ describe('Experience answer-first control surface', () => {
       'href',
       'https://github.com/lim5max/poolstatis/blob/main/docs/10-visual-experience-maps.md#evidence-model',
     );
+  });
+
+  it('avoids smooth setup scrolling when reduced motion is requested', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: true,
+      media: '(prefers-reduced-motion: reduce)',
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    });
+    mockedStore.mockReturnValue(store({
+      experienceSurfaces: vi.fn().mockResolvedValue([]),
+      experienceRoutes: vi.fn().mockResolvedValue([]),
+      experienceSnapshots: vi.fn().mockResolvedValue([]),
+    }));
+
+    render(<TooltipProvider><Experience /></TooltipProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up manually' }));
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
   });
 
   it('leads the ready screen with a server-derived friction answer, delta, readiness, and trust before the map', async () => {
