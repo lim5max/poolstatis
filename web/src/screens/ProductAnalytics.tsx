@@ -22,6 +22,8 @@ import {
   resolveRenderState,
   type AnalysisQueryInput,
   type AnalysisQueryResult,
+  type FunnelQueryInput,
+  type FunnelQueryResult,
   type QueryInterval,
   type VisualizationSpec,
 } from '../analysis/visualization';
@@ -37,6 +39,7 @@ import {
 interface AnalysisRun {
   spec: VisualizationSpec;
   result: AnalysisQueryResult;
+  comparisonResult: AnalysisQueryResult | null;
   eventCount: number | null;
 }
 
@@ -140,7 +143,12 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       dates,
     });
     try {
-      const result = await client!.query(runProject, query);
+      const [result, comparisonResult] = await Promise.all([
+        client!.query(runProject, query),
+        query.kind === 'funnel'
+          ? client!.query(runProject, previousPeriodQuery(query)).catch(() => null)
+          : Promise.resolve(null),
+      ]);
       if (generation !== runGeneration.current || scopeRef.current !== runScope) return;
       const metricKeys = queryMetricKeys(query, selectedFunnel);
       const trust = await readTrust(client!, runProject, runEnv, metricKeys, rangeDays(range));
@@ -151,6 +159,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         template,
         query,
         result,
+        comparisonResult,
         metric: selectedMetric,
         funnel: selectedFunnel,
         trust,
@@ -158,6 +167,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       setRun({
         spec,
         result,
+        comparisonResult,
         eventCount: trust.results.length === 0
           ? null
           : trust.results.reduce((sum, item) => sum + item.primary_metric.observed_events, 0),
@@ -238,7 +248,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
             <h2 className="mt-1 text-xl font-semibold">{template.title}</h2>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{template.question}</p>
           </div>
-          <Button className="h-11 shrink-0" onClick={execute} disabled={running || !selectedKey || capability.status !== 'available'}>
+          <Button variant={currentRun ? 'outline' : 'default'} className="h-11 shrink-0" onClick={execute} disabled={running || !selectedKey || capability.status !== 'available'}>
             {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
             {currentRun ? 'Refresh answer' : 'Run answer'}
           </Button>
@@ -267,6 +277,14 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           </div>
         )}
       </AnswerCanvas>
+
+      {funnelSurface && currentRun?.result.kind === 'funnel' && (
+        <FunnelBiggestLoss
+          funnel={registry.data?.funnels.find((item) => item.key === (currentRun.spec.source.kind === 'funnel' ? currentRun.spec.source.key : '')) ?? null}
+          result={currentRun.result}
+          comparison={currentRun.comparisonResult?.kind === 'funnel' ? currentRun.comparisonResult : null}
+        />
+      )}
 
       {currentRun && (
         <EvidenceLine trust={visualizationEvidenceTrust(currentRun.spec.trust.status)} eventCount={currentRun.eventCount} env={env}>
@@ -390,19 +408,23 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
                 </Control>
               )}
               <Control label="Comparison">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-11 min-w-0 justify-start truncate px-3"
-                  disabled={comparison.disabled}
-                  title={comparison.reason}
-                  aria-label={`${comparison.label}. ${comparison.reason}`}
-                >
-                  {comparison.label}
-                </Button>
+                {isFunnel ? (
+                  <div className="flex h-11 items-center rounded-control border bg-background px-3 text-sm">Previous period</div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 min-w-0 justify-start truncate px-3"
+                    disabled={comparison.disabled}
+                    title={comparison.reason}
+                    aria-label={`${comparison.label}. ${comparison.reason}`}
+                  >
+                    {comparison.label}
+                  </Button>
+                )}
               </Control>
             </div>
-            <Button className="h-11 w-full lg:w-auto" onClick={execute} disabled={running || !selectedKey}>
+            <Button variant="outline" className="h-11 w-full lg:w-auto" onClick={execute} disabled={running || !selectedKey}>
               {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
               Run typed query
             </Button>
@@ -418,6 +440,138 @@ function visualizationEvidenceTrust(status: VisualizationSpec['trust']['status']
   return status === 'trusted' ? 'trusted' : status === 'unavailable' ? 'unavailable' : 'partial';
 }
 
+export interface FunnelLossSummary {
+  fromLabel: string;
+  toLabel: string;
+  fromMetric: string;
+  toMetric: string;
+  lostActors: number;
+  dropRate: number | null;
+  previousLostActors: number | null;
+  previousDropRate: number | null;
+  dropRateDelta: number | null;
+  overallConversion: number | null;
+  previousOverallConversion: number | null;
+}
+
+export function biggestFunnelLoss(result: FunnelQueryResult, comparison: FunnelQueryResult | null): FunnelLossSummary | null {
+  if (result.steps.length < 2) return null;
+  const losses = result.steps.slice(1).map((step, index) => {
+    const previous = result.steps[index]!;
+    const lostActors = Math.max(0, previous.actors - step.actors);
+    return {
+      index,
+      previous,
+      step,
+      lostActors,
+      dropRate: previous.actors === 0 ? null : lostActors / previous.actors,
+    };
+  });
+  const biggest = losses.sort((left, right) => right.lostActors - left.lostActors)[0];
+  if (!biggest) return null;
+  const comparisonFrom = comparison?.steps[biggest.index];
+  const comparisonTo = comparison?.steps[biggest.index + 1];
+  const previousLostActors = comparisonFrom && comparisonTo
+    ? Math.max(0, comparisonFrom.actors - comparisonTo.actors)
+    : null;
+  const previousDropRate = comparisonFrom && previousLostActors !== null && comparisonFrom.actors > 0
+    ? previousLostActors / comparisonFrom.actors
+    : null;
+  const overallConversion = funnelOverallConversion(result);
+  const previousOverallConversion = comparison ? funnelOverallConversion(comparison) : null;
+  return {
+    fromLabel: biggest.previous.label,
+    toLabel: biggest.step.label,
+    fromMetric: biggest.previous.metric_key,
+    toMetric: biggest.step.metric_key,
+    lostActors: biggest.lostActors,
+    dropRate: biggest.dropRate,
+    previousLostActors,
+    previousDropRate,
+    dropRateDelta: biggest.dropRate === null || previousDropRate === null ? null : biggest.dropRate - previousDropRate,
+    overallConversion,
+    previousOverallConversion,
+  };
+}
+
+function FunnelBiggestLoss({ funnel, result, comparison }: { funnel: Funnel | null; result: FunnelQueryResult; comparison: FunnelQueryResult | null }) {
+  const [taskVisible, setTaskVisible] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const summary = biggestFunnelLoss(result, comparison);
+  if (!summary || !funnel) return null;
+  if (summary.lostActors === 0) {
+    return <AnswerCanvas><div className="p-4 sm:p-5"><div className="text-sm font-medium text-muted-foreground">Biggest loss</div><h2 className="mt-1 text-xl font-semibold">No measured loss in this period</h2><p className="mt-2 text-sm text-muted-foreground">Every measured actor reached each saved funnel step. No loss or investigate action is implied.</p></div></AnswerCanvas>;
+  }
+  const task = `Investigate the biggest measured loss in funnel ${funnel.key} without changing its definition.\n\nGoal: ${funnel.goal}\nEnvironment and exact period are in the attached Poolstatis query.\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nCurrent loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nUse registered metrics and trusted properties only. Compare safe breakdowns, report sample and data-quality limits, and prepare an evidence-backed proposal for human review.`;
+  const copyTask = async () => {
+    try {
+      await navigator.clipboard.writeText(task);
+      setCopied(true);
+    } catch {
+      setTaskVisible(true);
+    }
+  };
+  return (
+    <AnswerCanvas>
+      <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-muted-foreground">Biggest loss</div>
+          <h2 className="mt-1 text-xl font-semibold">{summary.fromLabel} → {summary.toLabel}</h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            {fmtActors(summary.lostActors)} lost · {summary.dropRate === null ? 'drop rate unavailable' : `${percent(summary.dropRate)} drop`}
+            {summary.dropRateDelta === null ? ' · previous-period comparison unavailable' : ` · ${signedPoints(summary.dropRateDelta)} vs previous period`}.
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <FunnelFact label="Overall conversion" value={summary.overallConversion === null ? 'Unavailable' : percent(summary.overallConversion)} />
+            <FunnelFact label="Previous conversion" value={summary.previousOverallConversion === null ? 'Unavailable' : percent(summary.previousOverallConversion)} />
+            <FunnelFact label="Affected goal" value={funnel.goal} />
+          </div>
+        </div>
+        <Button className="h-11 w-full lg:w-auto" onClick={() => void copyTask()}>{copied ? 'Investigation copied' : 'Investigate this step'}</Button>
+      </div>
+      {taskVisible && (
+        <div className="border-t p-4 sm:p-5">
+          <p role="alert" className="mb-2 text-sm text-muted-foreground">Clipboard access was blocked. Copy the prepared task manually.</p>
+          <pre tabIndex={0} className="max-h-72 overflow-auto whitespace-pre-wrap rounded-panel border bg-background p-4 text-sm">{task}</pre>
+        </div>
+      )}
+    </AnswerCanvas>
+  );
+}
+
+function FunnelFact({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0 rounded-control border bg-muted/20 p-3"><div className="text-sm text-muted-foreground">{label}</div><div className="mt-1 break-words font-medium">{value}</div></div>;
+}
+
+function funnelOverallConversion(result: FunnelQueryResult) {
+  const first = result.steps[0]?.actors;
+  const last = result.steps.at(-1)?.actors;
+  return first && last !== undefined ? last / first : null;
+}
+
+function percent(value: number) {
+  return `${Math.round(value * 1_000) / 10}%`;
+}
+
+function signedPoints(value: number) {
+  const points = Math.round(value * 1_000) / 10;
+  return `${points > 0 ? '+' : ''}${points} pp`;
+}
+
+function fmtActors(value: number) {
+  return `${value.toLocaleString()} ${value === 1 ? 'actor' : 'actors'}`;
+}
+
+export function previousPeriodQuery(query: FunnelQueryInput): FunnelQueryInput {
+  const from = Date.parse(query.date_from);
+  const to = Date.parse(query.date_to ?? '');
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return query;
+  const duration = to - from;
+  const previousTo = new Date(from - 1).toISOString();
+  const previousFrom = new Date(from - duration - 1).toISOString();
+  return { ...query, date_from: previousFrom, date_to: previousTo };
+}
+
 function Control({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="grid min-w-0 gap-1.5 text-sm font-medium text-muted-foreground">{label}{children}</label>;
 }
@@ -428,6 +582,7 @@ function createVisualizationSpec(input: {
   template: AnalysisTemplate;
   query: AnalysisQueryInput;
   result: AnalysisQueryResult;
+  comparisonResult: AnalysisQueryResult | null;
   metric?: Metric;
   funnel?: Funnel;
   trust: TrustRead;
@@ -459,12 +614,14 @@ function createVisualizationSpec(input: {
       coverage: input.trust.coverage,
       source: input.result.meta.source,
       computedAt: input.result.meta.computed_at,
-      comparisonBasis: 'Current exact period only; previous-period comparison is unavailable.',
+      comparisonBasis: input.query.kind === 'funnel' && input.comparisonResult?.kind === 'funnel'
+        ? 'Adjacent previous period with the same duration and funnel definition.'
+        : 'Current exact period only; previous-period comparison is unavailable.',
     },
     display: {
       valueFormat: input.query.kind === 'retention' || input.query.kind === 'funnel' ? 'percent' : 'number',
       granularity: 'interval' in input.query ? input.query.interval : undefined,
-      compare: 'none',
+      compare: input.query.kind === 'funnel' && input.comparisonResult?.kind === 'funnel' ? 'previous_period' : 'none',
       series: seriesFor(input.result, input.metric),
     },
     actions: [

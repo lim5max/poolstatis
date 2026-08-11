@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
@@ -48,9 +48,29 @@ const DIMENSIONS: Array<{ value: BreakdownView; label: string }> = [
   { value: 'device', label: 'Devices' },
 ];
 
-type WebWorkspace =
-  | { state: 'setup'; metric: Metric | null; properties: PropertyDefinition[]; metrics: Metric[] }
-  | ({ state: 'active'; trust: WebTrustRead; properties: PropertyDefinition[]; metrics: Metric[] } & WebWorkspaceResult);
+interface WebRegistryRead {
+  scope: string;
+  metric: Metric | null;
+  proposedMetric: Metric | null;
+  properties: PropertyDefinition[];
+  metrics: Metric[];
+}
+
+interface WebPrimaryRead extends Omit<WebWorkspaceResult, 'sessions'> {
+  scope: string;
+  trust: WebTrustRead;
+}
+
+interface WebSecondaryRead {
+  scope: string;
+  dimension: WebDimension;
+  result: WebAnalyticsResult;
+}
+
+interface WebSessionsRead {
+  scope: string;
+  result: WebSessionsResult;
+}
 
 const UTM_PROPERTY_KEYS = ['$utm_source', '$utm_medium', '$utm_campaign', '$utm_term', '$utm_content'] as const;
 const BROWSER_PROPERTY_KEYS = [
@@ -98,37 +118,38 @@ export function WebAnalytics() {
   const { client, project, env } = useStore();
   const [range, setRange] = useState<AnalyticsRange>('30d');
   const [dimension, setDimension] = useState<BreakdownView>('source');
-  const [selectedSession, setSelectedSession] = useState<WebSessionSummary | null>(null);
-  const workspace = useAsync<WebWorkspace>(async () => {
+  const [selectedSession, setSelectedSession] = useState<{ scope: string; session: WebSessionSummary } | null>(null);
+  const [sessionsRequested, setSessionsRequested] = useState(false);
+  const registryScope = `${project ?? ''}\u0000${env}`;
+  const registry = useAsync<WebRegistryRead>(async () => {
     const [metrics, properties] = await Promise.all([
       client!.metrics(project!),
       client!.properties(project!, { scope: 'event' }),
     ]);
-    const metric = webPageMetric(metrics);
-    if (!metric) {
-      return {
-        state: 'setup',
-        metric: metrics.find((item) => item.key === WEB_PAGE_VIEW_METRIC && item.status === 'proposed') ?? null,
-        properties,
-        metrics,
-      };
-    }
+    return {
+      scope: registryScope,
+      metric: webPageMetric(metrics),
+      proposedMetric: metrics.find((item) => item.key === WEB_PAGE_VIEW_METRIC && item.status === 'proposed') ?? null,
+      properties,
+      metrics,
+    };
+  }, [project, env]);
+  const registryData = registry.data?.scope === registryScope ? registry.data : null;
+  const metric = registryData?.metric ?? null;
+  const primaryScope = `${registryScope}\u0000${range}\u0000${metric?.key ?? ''}`;
+  const primary = useAsync<WebPrimaryRead | null>(async () => {
+    if (!metric) return null;
     const base = {
       metric: metric.key,
       date_from: rangeDateFrom(range),
       filters: [],
       env,
     };
-    const [overview, sessions, trend, trust] = await Promise.all([
+    const [overview, trend, trust] = await Promise.all([
       client!.operationalQuery<WebAnalyticsResult>(project!, {
         kind: 'web_analytics',
         ...base,
-        dimensions: ['source', 'campaign', 'medium', 'term', 'content', 'route', 'device', 'browser', 'country'],
-      }),
-      client!.operationalQuery<WebSessionsResult>(project!, {
-        kind: 'web_sessions',
-        ...base,
-        limit: 50,
+        dimensions: ['source'],
       }),
       client!.query(project!, {
         kind: 'trend',
@@ -144,49 +165,82 @@ export function WebAnalytics() {
       }),
       readWebTrust(client!, project!, env, metric.key),
     ]);
-    return { state: 'active', metric, overview, sessions, trend, trust, properties, metrics };
+    return { scope: primaryScope, metric, overview, trend, trust };
+  }, [project, env, range, metric?.key]);
+  const primaryData = primary.data?.scope === primaryScope ? primary.data : null;
+  const operationalDimension = dimension !== 'conversion' ? dimension : null;
+  const secondary = useAsync<WebSecondaryRead | null>(async () => {
+    if (!metric || !primaryData || !operationalDimension || operationalDimension === 'source') return null;
+    const result = await client!.operationalQuery<WebAnalyticsResult>(project!, {
+      kind: 'web_analytics',
+      metric: metric.key,
+      date_from: rangeDateFrom(range),
+      filters: [],
+      env,
+      dimensions: [operationalDimension],
+    });
+    return { scope: primaryScope, dimension: operationalDimension, result };
+  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension]);
+  const secondaryData = secondary.data?.scope === primaryScope
+    && secondary.data.dimension === operationalDimension ? secondary.data.result : null;
+  const sessions = useAsync<WebSessionsRead | null>(async () => {
+    if (!metric || !primaryData || !sessionsRequested) return null;
+    const result = await client!.operationalQuery<WebSessionsResult>(project!, {
+      kind: 'web_sessions', metric: metric.key, date_from: rangeDateFrom(range), filters: [], env, limit: 50,
+    });
+    return { scope: primaryScope, result };
+  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at, sessionsRequested]);
+  const sessionsData = sessions.data?.scope === primaryScope ? sessions.data.result : null;
+  const currentSession = selectedSession?.scope === primaryScope ? selectedSession.session : null;
+
+  useEffect(() => {
+    setSelectedSession(null);
+    setSessionsRequested(false);
   }, [project, env, range]);
-  if (workspace.loading) return <WebAnalyticsSkeleton />;
-  if (workspace.error) return <ErrorNote>{workspace.error}</ErrorNote>;
-  if (!workspace.data) return null;
-  if (workspace.data.state === 'setup') {
-    const setupData = workspace.data;
+
+  if (registry.loading || (!registryData && !registry.error)) return <WebAnalyticsSkeleton />;
+  if (registry.error) return <ErrorNote>{registry.error}</ErrorNote>;
+  if (!registryData) return null;
+  if (!metric) {
+    const setupData = registryData;
     const acquisitionTrusted = UTM_PROPERTY_KEYS.every((key) => setupData.properties.some(
       (property) => property.key === key && property.scope === 'event' && property.status === 'trusted',
     ));
-    const hasAcquisitionMetric = setupData.metrics.some(
-      (metric) => metric.status === 'active' && metric.type === 'count',
-    );
+    const outcomeReady = hasWebOutcome(setupData.metrics);
     return (
       <div className="space-y-5">
         <ScreenHeader range={range} onRange={setRange} showRange={false} />
-        <WebSetup metric={setupData.metric} onReady={workspace.reload} />
-        {hasAcquisitionMetric && (
-          <AcquisitionPanel
-            metrics={setupData.metrics}
-            env={env}
-            trusted={acquisitionTrusted}
-          />
-        )}
+        <WebSetupOrder canonicalReady={false} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} />
+        <WebSetup metric={setupData.proposedMetric} onReady={registry.reload} />
       </div>
     );
   }
+  if (primary.loading || (!primaryData && !primary.error)) return <WebAnalyticsSkeleton />;
+  if (primary.error) return <ErrorNote>{primary.error}</ErrorNote>;
+  if (!primaryData) return null;
 
-  const { metric, overview, sessions, trend, trust, properties, metrics } = workspace.data;
+  const { overview, trend, trust } = primaryData;
+  const { properties, metrics } = registryData;
   const spec = webTrendSpec(project!, env, metric.name, metric.purpose, overview, trend, trust);
-  const operationalDimension = dimension !== 'conversion' ? dimension : null;
-  const breakdown = operationalDimension ? overview.breakdowns[operationalDimension] ?? [] : [];
-  const unavailableDimensions = overview.meta.unavailable_dimensions ?? {};
+  const breakdownResponse = operationalDimension === 'source' ? overview : secondaryData;
+  const breakdown = operationalDimension ? breakdownResponse?.breakdowns[operationalDimension] ?? [] : [];
+  const unavailableDimensions = breakdownResponse?.meta.unavailable_dimensions ?? {};
   const unavailable = operationalDimension ? unavailableDimensions[operationalDimension] : null;
-  const routeAvailable = !unavailableDimensions.route;
+  const routeAvailable = routeDefinitionsReady(properties);
   const repairState = webDefinitionRepairState(properties);
   const acquisitionTrusted = UTM_PROPERTY_KEYS.every((key) => properties.some(
     (property) => property.key === key && property.scope === 'event' && property.status === 'trusted',
   ));
+  const canonicalReady = hasAcceptedCanonicalPageViews(overview.summary.page_views);
+  const outcomeReady = hasWebOutcome(metrics);
 
   return (
     <div className="space-y-5">
       <ScreenHeader range={range} onRange={(value) => { setRange(value); setSelectedSession(null); }} />
+
+      {(!canonicalReady || !acquisitionTrusted || !outcomeReady) && (
+        <WebSetupOrder canonicalReady={canonicalReady} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} />
+      )}
 
       <KpiStrip items={[
         { label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved actors' },
@@ -204,6 +258,7 @@ export function WebAnalytics() {
       </EvidenceLine>
 
       {repairState.kind !== 'ready' && <WebRepair state={repairState} />}
+      {repairState.kind === 'ready' && !outcomeReady && <WebOutcomeSetup />}
 
       <div className="grid gap-3 border-y bg-card/45 px-4 py-3 text-sm sm:grid-cols-3">
         <Rate label="Measured coverage" value={overview.engagement.measured_session_coverage} />
@@ -216,7 +271,9 @@ export function WebAnalytics() {
       <AnswerCanvas>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
           <h2 className="text-sm font-semibold">Traffic breakdown</h2>
-          {overview.meta.truncated_dimensions.length > 0
+          {!breakdownResponse && operationalDimension !== null
+            ? <Badge variant="outline">Loading selected view</Badge>
+            : breakdownResponse && breakdownResponse.meta.truncated_dimensions.length > 0
             ? <Badge variant="outline">Top values · truncated</Badge>
             : Object.keys(unavailableDimensions).length > 0
               ? <Badge variant="outline">Partial response</Badge>
@@ -234,8 +291,12 @@ export function WebAnalytics() {
           <div className="border-y border-dashed px-4 py-7 text-center">
             <div className="text-lg font-semibold">Choose a conversion to measure</div>
             <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">The current canonical web response does not include a conversion outcome, so Poolstatis will not display a zero.</p>
-            <Button asChild variant="outline" className="mt-4 h-11"><Link to="/measurement">Open Definitions</Link></Button>
+            <Button asChild variant="outline" className="mt-4 h-11"><Link to="/registry">Review outcomes</Link></Button>
           </div>
+        ) : operationalDimension !== 'source' && secondary.loading ? (
+          <Loading what={`Loading ${DIMENSIONS.find((item) => item.value === dimension)?.label ?? dimension} breakdown…`} />
+        ) : operationalDimension !== 'source' && secondary.error ? (
+          <div><ErrorNote>{secondary.error}</ErrorNote><Button variant="outline" className="mt-3 h-11" onClick={secondary.reload}>Retry breakdown</Button></div>
         ) : unavailable ? (
           <UnavailableDimension label={DIMENSIONS.find((item) => item.value === dimension)?.label ?? dimension} unavailable={unavailable} />
         ) : breakdown.length === 0 ? (
@@ -273,9 +334,18 @@ export function WebAnalytics() {
 
       <Panel
         title="Recent sessions"
-        right={<span className="text-xs text-muted-foreground">{sessions.sessions.length} of {sessions.meta.total}</span>}
+        right={sessionsData ? <span className="text-sm text-muted-foreground">{sessionsData.sessions.length} of {sessionsData.meta.total}</span> : undefined}
       >
-        {sessions.sessions.length === 0 ? (
+        {!sessionsRequested ? (
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="max-w-2xl text-sm text-muted-foreground">Session rows are a secondary read and do not block the Web health answer.</p>
+            <Button variant="outline" className="h-11 shrink-0" onClick={() => setSessionsRequested(true)}>Load recent sessions</Button>
+          </div>
+        ) : sessions.loading || (!sessionsData && !sessions.error) ? (
+          <Loading what="Loading recent sessions…" />
+        ) : sessions.error ? (
+          <div><ErrorNote>{sessions.error}</ErrorNote><Button variant="outline" className="mt-3 h-11" onClick={sessions.reload}>Retry sessions</Button></div>
+        ) : sessionsData?.sessions.length === 0 ? (
           <EmptyState headline="No sessions" lead="No canonical browser sessions matched this period." />
         ) : (
           <div className="overflow-x-auto">
@@ -291,7 +361,7 @@ export function WebAnalytics() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sessions.sessions.map((session) => (
+                {sessionsData!.sessions.map((session) => (
                   <TableRow key={`${session.actor_id}:${session.session_id}`}>
                     <TableCell>
                       <Link
@@ -314,7 +384,7 @@ export function WebAnalytics() {
                           size="icon-sm"
                           className="size-11 md:size-8"
                           aria-label={`Open session ${session.session_id}`}
-                          onClick={() => setSelectedSession(session)}
+                          onClick={() => setSelectedSession({ scope: primaryScope, session })}
                         >
                           <ArrowRight className="size-4" />
                         </Button>
@@ -328,14 +398,14 @@ export function WebAnalytics() {
             </Table>
           </div>
         )}
-        {sessions.meta.truncated && (
+        {sessionsData?.meta.truncated && (
           <p className="mt-3 text-xs text-muted-foreground">Showing the first 50 sessions for this exact period.</p>
         )}
       </Panel>
 
-      {selectedSession && (
+      {currentSession && (
         <SessionDetail
-          session={selectedSession}
+          session={currentSession}
           metric={metric.key}
           range={range}
           onClose={() => setSelectedSession(null)}
@@ -344,6 +414,65 @@ export function WebAnalytics() {
 
       <AcquisitionPanel metrics={metrics} env={env} trusted={acquisitionTrusted} />
     </div>
+  );
+}
+
+export function hasAcceptedCanonicalPageViews(pageViews: number) {
+  return pageViews > 0;
+}
+
+export function hasWebOutcome(metrics: Metric[]) {
+  return metrics.some((metric) => metric.status === 'active'
+    && metric.key !== WEB_PAGE_VIEW_METRIC
+    && metric.type !== 'state'
+    && metric.tags.includes('surface:web'));
+}
+
+function routeDefinitionsReady(properties: PropertyDefinition[]) {
+  const route = properties.find((property) => property.scope === 'event' && property.key === '$route_key');
+  return route?.status === 'trusted' && (route.enum_values?.length ?? 0) > 0;
+}
+
+function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady }: {
+  canonicalReady: boolean;
+  acquisitionReady: boolean;
+  outcomeReady: boolean;
+}) {
+  const steps = [
+    { title: 'Canonical page views', ready: canonicalReady, description: 'Active web_page_views metric and accepted browser events in this period.' },
+    { title: 'Trusted acquisition properties', ready: acquisitionReady, description: 'Reviewed source, medium, campaign, term, and content definitions.' },
+    { title: 'Outcome', ready: outcomeReady, description: 'One active non-page-view metric tagged surface:web for conversion or product value.' },
+  ];
+  const current = steps.findIndex((step) => !step.ready);
+  return (
+    <section className="rounded-panel border bg-card p-4 sm:p-5" aria-labelledby="web-setup-order-title">
+      <div>
+        <h2 id="web-setup-order-title" className="text-sm font-semibold">Web setup order</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Finish the first incomplete prerequisite; later answers remain unavailable rather than showing zero.</p>
+      </div>
+      <ol className="mt-4 grid gap-3 lg:grid-cols-3">
+        {steps.map((step, index) => (
+          <li key={step.title} className={`rounded-control border p-3 ${current === index ? 'border-primary/50 bg-primary/10' : step.ready ? 'bg-muted/30' : 'border-dashed'}`}>
+            <div className="flex items-center justify-between gap-3 text-sm"><span className="font-medium">{index + 1}. {step.title}</span><span className="text-muted-foreground">{step.ready ? 'Ready' : current === index ? 'Next' : 'Pending'}</span></div>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{step.description}</p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function WebOutcomeSetup() {
+  return (
+    <AnswerCanvas>
+      <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+        <div>
+          <h2 className="text-lg font-semibold">Define the first web outcome</h2>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Traffic is measurable and acquisition properties are trusted. Activate one outcome tagged <code>surface:web</code> before reading conversion.</p>
+        </div>
+        <Button asChild className="h-11 shrink-0"><Link to="/registry">Review outcomes</Link></Button>
+      </div>
+    </AnswerCanvas>
   );
 }
 

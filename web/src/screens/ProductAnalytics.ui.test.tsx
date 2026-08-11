@@ -48,6 +48,17 @@ function productStore(funnels: unknown[] = []) {
   } as never;
 }
 
+function funnelResult(actors: number[]) {
+  return {
+    kind: 'funnel',
+    steps: [
+      { label: 'Started', metric_key: 'signup_started', purpose: 'Measure entry into the signup journey.', category: 'activation', actors: actors[0], conversion_from_prev: null, conversion_from_start: 1 },
+      { label: 'Completed', metric_key: 'signup_completed', purpose: 'Measure successful completion of signup.', category: 'activation', actors: actors[1], conversion_from_prev: actors[1]! / actors[0]!, conversion_from_start: actors[1]! / actors[0]! },
+    ],
+    meta: { computed_at: '2026-08-06T00:00:00Z', date_range: { from: '2026-07-07T00:00:00Z', to: '2026-08-06T00:00:00Z' }, sampling: null, source: 'native' },
+  };
+}
+
 describe('Product answer-first surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -68,14 +79,18 @@ describe('Product answer-first surface', () => {
   });
 
   it('gives funnels a focused answer surface without the product template grid', async () => {
-    mockedStore.mockReturnValue(productStore([{
+    const current = productStore([{
       id: 'f1', key: 'signup', name: 'Signup', goal: 'Find signup drop-off.',
       steps: [
-        { order: 1, metric: 'signup_started', label: 'Started' },
-        { order: 2, metric: 'signup_completed', label: 'Completed' },
+        { metric_key: 'signup_started', label: 'Started' },
+        { metric_key: 'signup_completed', label: 'Completed' },
       ],
       window_seconds: 604800,
-    }]));
+    }]) as any;
+    current.client.query
+      .mockResolvedValueOnce(funnelResult([100, 40]))
+      .mockResolvedValueOnce(funnelResult([80, 48]));
+    mockedStore.mockReturnValue(current);
 
     render(<MemoryRouter><ProductAnalytics surface="funnels" /></MemoryRouter>);
 
@@ -83,5 +98,12 @@ describe('Product answer-first surface', () => {
     expect(screen.queryByRole('heading', { name: 'Answer templates' })).not.toBeInTheDocument();
     expect(screen.getByText('Activation funnel')).toBeInTheDocument();
     expect(screen.getByText('Edit funnel analysis')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
+    expect(await screen.findByText('Biggest loss')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Started → Completed' })).toBeInTheDocument();
+    expect(screen.getByText(/60 actors lost · 60% drop · \+20 pp vs previous period/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Investigate this step' })).toBeInTheDocument();
+    expect(current.client.query).toHaveBeenCalledTimes(2);
   });
 });

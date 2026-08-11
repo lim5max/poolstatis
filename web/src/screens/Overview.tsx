@@ -1,11 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { ErrorNote, Loading, fmtNum, fmtRelative } from '@/components/ui';
 import { AnswerCanvas, type EvidenceTrust, type KpiItem } from '@/components/analytics';
 import { formatDurationMs, webPageMetric, type WebAnalyticsResult } from '../analysis/operations';
-import type { Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
+import type { DecisionLoopOnboardingStatus, Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
 import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
 import type { ProjectMode } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
@@ -50,11 +50,14 @@ export function Overview() {
   const homeScope = `${project ?? ''}\u0000${env}`;
   const home = useAsync(async () => {
     try {
-      const [intent, metrics, funnels, schema] = await Promise.all([
+      const [intent, metrics, funnels, schema, onboardingRead] = await Promise.all([
         readProjectIntent(client as unknown as IntentCapableClient, project!),
         client!.metrics(project!, { status: 'active' }),
         client!.funnels(project!),
         client!.schema(project!, env).catch(() => null),
+        Promise.resolve().then(() => client!.onboardingStatus(project!, env))
+          .then((status) => ({ status, unavailable: false }))
+          .catch(() => ({ status: null, unavailable: true })),
       ]);
       const primaryMetric = pickPrimaryMetric(metrics, intent?.primary_goal_id ?? null);
       const revenueMetric = metrics.find((metric) => metric.category === 'revenue') ?? null;
@@ -75,7 +78,18 @@ export function Overview() {
         ),
         readWebsiteAnswer(client!, project!, env, websiteAnswersEnabled ? pageMetric : null),
       ]);
-      return { scope: homeScope, value: { intent, product, website, schema }, error: null as string | null };
+      return {
+        scope: homeScope,
+        value: {
+          intent,
+          product,
+          website,
+          schema,
+          onboarding: onboardingRead.status,
+          onboardingUnavailable: onboardingRead.unavailable,
+        },
+        error: null as string | null,
+      };
     } catch (caught) {
       return { scope: homeScope, value: null, error: (caught as Error).message };
     }
@@ -98,12 +112,13 @@ export function Overview() {
   if (scopedHome?.error) return <ErrorNote>{scopedHome.error}</ErrorNote>;
   if (!homeData) return <Loading what="reading current answers…" />;
 
-  const { intent, product, website, schema } = homeData;
+  const { intent, product, website, schema, onboarding, onboardingUnavailable } = homeData;
   const mode = intent?.project_mode ?? null;
-  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} project={project!} env={env} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
-  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} project={project!} env={env} telemetryUserId={account?.user?.id} />;
+  const attention = buildAttentionItems({ mode, onboarding, onboardingUnavailable, product, website, schema });
+  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} attention={attention} telemetryUserId={account?.user?.id} />;
   if (mode === 'both' && intent) {
-    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} attention={attention} onRetry={home.reload} />;
   }
 
   // A missing intent row is legacy/unset. Keep the project useful and never
@@ -111,10 +126,10 @@ export function Overview() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Home"
+        title="Attention"
         answer="Project mode is not set. Your existing answers and data remain available."
-        action={<Button asChild className="h-11"><Link to={website.overview ? '/analyze/web' : '/analyze/product'} onClick={() => trackHomeAction('open_current_answer', account?.user?.id)}>Open current answer <ArrowRight className="size-4" /></Link></Button>}
       />
+      <AttentionQueue items={attention} telemetryUserId={account?.user?.id} />
       <div className="rounded-panel border border-dashed bg-card px-4 py-3 text-sm text-muted-foreground">
         Legacy project · choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
       </div>
@@ -125,38 +140,227 @@ export function Overview() {
   );
 }
 
-function WebsiteHome({ answer, product, schema, project, env, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; project: string; env: string; telemetryUserId?: string | null; onRetry: () => void }) {
+type AttentionSeverity = 'critical' | 'warning' | 'info' | 'healthy';
+
+interface AttentionItem {
+  severity: AttentionSeverity;
+  title: string;
+  reason: string;
+  impact: string;
+  freshness: string;
+  href: string;
+  action: string;
+}
+
+function AttentionQueue({ items, telemetryUserId }: { items: AttentionItem[]; telemetryUserId?: string | null }) {
+  return (
+    <section aria-labelledby="attention-title">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <div>
+          <h2 id="attention-title" className="text-sm font-semibold">Needs attention</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Highest-impact server-backed signal first.</p>
+        </div>
+        <span className="font-mono text-sm text-muted-foreground">{items.length}</span>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-3">
+        {items.map((item, index) => (
+          <article
+            key={`${item.title}:${index}`}
+            className={`rounded-panel border bg-card p-4 ${item.severity === 'critical' ? 'border-destructive/45' : item.severity === 'warning' ? 'border-warning/45' : ''}`}
+          >
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="font-medium">{severityLabel(item.severity)}</span>
+              <span className="text-muted-foreground">{item.freshness}</span>
+            </div>
+            <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
+            <p className="mt-3 border-t pt-3 text-sm"><span className="font-medium">Impact:</span> <span className="text-muted-foreground">{item.impact}</span></p>
+            {index === 0 && (
+              <Button asChild className="mt-4 h-11 w-full sm:w-auto">
+                <Link to={item.href} onClick={() => trackHomeAction(actionTelemetry(item.href), telemetryUserId)}>
+                  {item.action} <ArrowRight className="size-4" />
+                </Link>
+              </Button>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function buildAttentionItems(input: {
+  mode: ProjectMode | null;
+  onboarding: DecisionLoopOnboardingStatus | null;
+  onboardingUnavailable: boolean;
+  product: ProductAnswer;
+  website: WebsiteAnswer;
+  schema: ProjectSchema | null;
+}): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  const blocker = input.onboarding?.next_blocker;
+  if (blocker) items.push(onboardingAttention(blocker, input.mode));
+  else if (input.onboardingUnavailable) {
+    items.push({
+      severity: 'warning',
+      title: 'Setup proof is unavailable',
+      reason: 'Poolstatis could not read the current decision-loop gates, so this screen will not claim setup is complete.',
+      impact: 'The next project action cannot be prioritized from server proof.',
+      freshness: 'Unavailable',
+      href: '/setup',
+      action: 'Check Setup',
+    });
+  }
+
+  const trust = input.mode === 'website' ? input.website.trust : input.product.trust;
+  if (trust?.status === 'untrusted' && blocker?.key !== 'data_quality_accepted' && blocker?.key !== 'metrics_activated') {
+    const finding = trust.blockers[0] ?? trust.warnings[0];
+    items.push({
+      severity: 'critical',
+      title: 'Measurement trust is blocked',
+      reason: finding?.message ?? 'The primary outcome did not pass its server trust check.',
+      impact: finding?.next_action ?? 'Answers may remain unavailable until the definition is reviewed.',
+      freshness: 'Last 30 days',
+      href: '/registry',
+      action: 'Review definition',
+    });
+  }
+
+  const activity = recentObservedEvents(input.schema);
+  if (activity === null && items.length < 3) {
+    items.push({
+      severity: 'warning',
+      title: 'Event freshness is unavailable',
+      reason: 'The project schema read failed; no last-event claim is shown.',
+      impact: 'Freshness and recent volume cannot be verified from this screen.',
+      freshness: 'Unavailable',
+      href: '/data',
+      action: 'Check Events',
+    });
+  } else if (activity?.length === 0 && items.length < 3) {
+    items.push({
+      severity: 'warning',
+      title: 'No events in the last 30 days',
+      reason: 'The current project and environment have no observed event activity in the schema read.',
+      impact: 'Outcome and funnel answers cannot update until one real event arrives.',
+      freshness: 'Last 30 days',
+      href: '/setup',
+      action: 'Send an event',
+    });
+  }
+
+  const funnelItem = funnelAttention(input.product.funnel, input.product.funnelResult);
+  if (funnelItem && items.length < 3) items.push(funnelItem);
+
+  if (items.length === 0) {
+    const href = input.mode === 'website' ? '/analyze/web' : '/analyze/product';
+    items.push({
+      severity: 'healthy',
+      title: 'No setup or trust blocker detected',
+      reason: 'The latest onboarding and measurement reads do not require an immediate repair.',
+      impact: 'Review the primary answer before choosing a product action.',
+      freshness: 'Server checked',
+      href,
+      action: 'Open primary answer',
+    });
+  }
+  const severityRank: Record<AttentionSeverity, number> = { critical: 0, warning: 1, info: 2, healthy: 3 };
+  return [...items].sort((left, right) => severityRank[left.severity] - severityRank[right.severity]).slice(0, 3);
+}
+
+function onboardingAttention(blocker: NonNullable<DecisionLoopOnboardingStatus['next_blocker']>, mode: ProjectMode | null): AttentionItem {
+  const mapping: Record<string, { title: string; impact: string; href: string; action: string }> = {
+    workspace_created: { title: 'Workspace setup is incomplete', impact: 'Project-scoped evidence is not ready.', href: '/setup', action: 'Finish Setup' },
+    data_source_connected: { title: 'Product connection is incomplete', impact: 'No accepted product data can arrive yet.', href: '/setup', action: 'Connect product' },
+    first_event_observed: { title: 'No first event verified', impact: 'Answers cannot be computed until a real event is stored.', href: '/setup', action: 'Send first event' },
+    metrics_activated: { title: 'Metrics need review', impact: 'Raw activity is not yet a trusted business outcome.', href: '/registry', action: 'Review metrics' },
+    data_quality_accepted: { title: 'Data quality needs review', impact: 'Trust blockers can make answers unavailable.', href: '/registry', action: 'Review data quality' },
+    first_query_produced: { title: 'No trusted answer yet', impact: 'The project has data but no verified outcome read.', href: mode === 'website' ? '/analyze/web' : '/analyze/funnels', action: 'Run first answer' },
+    first_decision_saved: { title: 'No decision saved yet', impact: 'Evidence has not completed the decision loop.', href: '/decisions', action: 'Review decisions' },
+    agent_connected: { title: 'Agent access is not verified', impact: 'The agent cannot yet read or act on this project through MCP.', href: '/setup#agent-access', action: 'Connect agent' },
+  };
+  const next = mapping[blocker.key] ?? mapping.workspace_created!;
+  return {
+    severity: blocker.key === 'data_quality_accepted' ? 'critical' : 'warning',
+    title: next.title,
+    reason: blocker.blocker ?? blocker.next_action ?? 'Complete the next server-verified setup gate.',
+    impact: next.impact,
+    freshness: evidenceFreshness(blocker.evidence),
+    href: next.href,
+    action: next.action,
+  };
+}
+
+function funnelAttention(funnel: Funnel | null, result: FunnelQueryResult | null): AttentionItem | null {
+  if (!funnel) return {
+    severity: 'info',
+    title: 'No funnel is saved',
+    reason: 'No goal-bearing path is available for a drop-off read.',
+    impact: 'Poolstatis cannot identify where actors stop before an outcome.',
+    freshness: 'Not configured',
+    href: '/setup',
+    action: 'Create funnel',
+  };
+  if (!result || result.steps.length < 2) return null;
+  const losses = result.steps.slice(1).map((step, index) => {
+    const previous = result.steps[index]!;
+    const lost = Math.max(0, previous.actors - step.actors);
+    return { previous, step, lost, rate: previous.actors === 0 ? null : lost / previous.actors };
+  });
+  const biggest = losses.sort((left, right) => right.lost - left.lost)[0];
+  if (!biggest || biggest.lost === 0) return null;
+  const rate = biggest.rate === null ? 'rate unavailable' : `${Math.round(biggest.rate * 1_000) / 10}%`;
+  return {
+    severity: 'info',
+    title: `Biggest loss: ${biggest.previous.label} → ${biggest.step.label}`,
+    reason: `${fmtNum(biggest.lost)} actors were lost at this step (${rate}).`,
+    impact: funnel.goal,
+    freshness: fmtRelative(result.meta.computed_at),
+    href: '/analyze/funnels',
+    action: 'Investigate step',
+  };
+}
+
+function evidenceFreshness(evidence: Record<string, unknown>) {
+  const timestamp = Object.values(evidence).find((value) => typeof value === 'string' && Number.isFinite(Date.parse(value)));
+  return typeof timestamp === 'string' ? fmtRelative(timestamp) : 'Server checked';
+}
+
+function severityLabel(severity: AttentionSeverity) {
+  if (severity === 'critical') return 'Critical';
+  if (severity === 'warning') return 'Attention';
+  if (severity === 'healthy') return 'Healthy';
+  return 'Opportunity';
+}
+
+function actionTelemetry(href: string): TelemetryHomeAction {
+  if (href === '/analyze/web') return 'open_web';
+  if (href === '/analyze/product' || href === '/analyze/funnels') return 'explore_product';
+  if (href === '/registry') return 'review_outcomes';
+  if (href === '/measurement') return 'open_definitions';
+  return 'open_current_answer';
+}
+
+function WebsiteHome({ answer, product, schema, env, attention, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = websiteLead(answer);
-  const dashboard = useDashboardLayout(`${project}:${env}:website`, WEBSITE_KPIS);
-  const ready = Boolean(answer.metric);
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Home"
-        answer={lead}
-        action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to={ready ? '/analyze/web' : '/measurement'} onClick={() => trackHomeAction(ready ? 'open_web' : 'open_definitions', telemetryUserId)}>{ready ? 'Open Web' : 'Set up Web'} <ArrowRight className="size-4" /></Link></Button></div>}
-      />
-      {dashboard.open && <DashboardSettings ids={WEBSITE_KPIS} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
-      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} order={dashboard.order} onRetry={onRetry} />
+      <PageHeader title="Attention" answer={lead} />
+      <AttentionQueue items={attention} telemetryUserId={telemetryUserId} />
+      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} onRetry={onRetry} />
     </div>
   );
 }
 
-function ProductHome({ answer, schema, project, env, telemetryUserId }: { answer: ProductAnswer; schema: ProjectSchema | null; project: string; env: string; telemetryUserId?: string | null }) {
+function ProductHome({ answer, schema, env, attention, telemetryUserId }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; attention: AttentionItem[]; telemetryUserId?: string | null }) {
   const lead = answer.metric
     ? `${answer.metric.name} is the clearest active outcome available for this project.`
     : 'Events may be arriving, but no active outcome is defined yet.';
-  const definitions = productDashboardDefinitions(answer);
-  const dashboard = useDashboardLayout(`${project}:${env}:product`, definitions);
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Home"
-        answer={lead}
-        action={<div className="flex flex-wrap gap-2"><Button variant="outline" className="h-11" onClick={dashboard.toggle}>Customize dashboard</Button><Button asChild className="h-11"><Link to={answer.metric ? '/analyze/product' : '/registry'} onClick={() => trackHomeAction(answer.metric ? 'explore_product' : 'review_outcomes', telemetryUserId)}>{answer.metric ? 'Explore Product' : 'Review outcomes'} <ArrowRight className="size-4" /></Link></Button></div>}
-      />
-      {dashboard.open && <DashboardSettings ids={definitions} order={dashboard.order} onChange={dashboard.change} onReset={dashboard.reset} />}
-      <ProductAnswerCanvas answer={answer} schema={schema} env={env} order={dashboard.order} />
+      <PageHeader title="Attention" answer={lead} />
+      <AttentionQueue items={attention} telemetryUserId={telemetryUserId} />
+      <ProductAnswerCanvas answer={answer} schema={schema} env={env} />
     </div>
   );
 }
@@ -168,6 +372,7 @@ function BothHome({
   schema,
   env,
   telemetryUserId,
+  attention,
   onRetry,
 }: {
   answer: WebsiteAnswer | ProductAnswer;
@@ -176,6 +381,7 @@ function BothHome({
   schema: ProjectSchema | null;
   env: string;
   telemetryUserId?: string | null;
+  attention: AttentionItem[];
   onRetry: () => void;
 }) {
   const identityState = schema === null
@@ -187,14 +393,14 @@ function BothHome({
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Home"
+        title="Attention"
         answer={identityState === 'unavailable'
           ? 'Identity evidence is unavailable right now, so Poolstatis will not claim a cross-surface path.'
           : identityLinked
             ? 'Identity evidence exists. Poolstatis still requires a registered cross-surface funnel before claiming an acquisition-to-activation path.'
             : 'Website and product activity are not linked yet.'}
-        action={<Button asChild className="h-11"><Link to={identityLinked ? (websiteFirst ? '/analyze/web' : '/analyze/product') : '/measurement'} onClick={() => trackHomeAction(identityLinked ? 'open_primary_answer' : 'review_identity', telemetryUserId)}>{identityLinked ? 'Open primary answer' : 'Review identity'} <ArrowRight className="size-4" /></Link></Button>}
       />
+      <AttentionQueue items={attention} telemetryUserId={telemetryUserId} />
       <div className="flex max-w-full gap-1 overflow-x-auto rounded-control border bg-card p-1" aria-label="Both mode surfaces">
         <span className="flex min-h-11 items-center rounded-control bg-secondary px-4 text-sm font-medium">All</span>
         <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to="/analyze/web">Website</Link>
@@ -233,13 +439,11 @@ const PRODUCT_KPIS = [
 ] as const;
 const REVENUE_KPI = { id: 'revenue', label: 'Revenue' } as const;
 
-type DashboardDefinition = ReadonlyArray<{ id: string; label: string }>;
-
-function productDashboardDefinitions(answer: ProductAnswer): DashboardDefinition {
+function productDashboardDefinitions(answer: ProductAnswer) {
   return answer.revenueMetric ? [...PRODUCT_KPIS, REVENUE_KPI] : PRODUCT_KPIS;
 }
 
-function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPIS.slice(0, 4).map((item) => item.id), onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; order?: string[]; onRetry: () => void }) {
+function WebsiteAnswerCanvas({ answer, product, schema, env, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; onRetry: () => void }) {
   const activity = recentObservedEvents(schema);
   const lastEvent = activity?.[0] ?? null;
   const answerUnavailable = Boolean(answer.metric && !answer.overview);
@@ -250,26 +454,23 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPI
     note: item.id === 'last_event' ? lastEvent?.event ?? activityNote(activity) : answerUnavailable ? 'Website answer unavailable' : 'Connect website measurement',
   }));
   if (!answer.metric || !answer.overview) {
-    const nextAction = answerUnavailable
-      ? { title: 'Retry website answers', body: 'The last request failed without changing your measurement setup.', onClick: onRetry, label: 'Try again' }
-      : { title: 'Connect website measurement', body: 'Activate the canonical page-view definition, then open one real page.', href: '/measurement', label: 'Set up Web' };
     return (
       <>
-        <HomeKpiStrip items={orderDashboardItems(emptyItems, order)} />
+        <HomeKpiStrip items={emptyItems.slice(0, 4)} />
         <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} />
         <HomeSummary
           funnel={product.funnel}
           funnelResult={product.funnelResult}
           activity={activity}
-          nextAction={nextAction}
         />
+        {answerUnavailable && <Button variant="outline" className="h-11" onClick={onRetry}>Retry website answers</Button>}
       </>
     );
   }
   const { overview } = answer;
   return (
     <>
-      <HomeKpiStrip items={orderDashboardItems([
+      <HomeKpiStrip items={[
         { id: 'visitors', label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved people' },
         { id: 'sessions', label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'canonical sessions' },
         { id: 'page_views', label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted views' },
@@ -277,37 +478,35 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, order = WEBSITE_KPI
         { id: 'average_duration', label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? null : formatDurationMs(overview.summary.average_session_duration_ms), note: 'complete sessions' },
         { id: 'engaged_rate', label: 'Engagement rate', value: answer.overview.engagement.engaged_rate == null ? null : `${Math.round(answer.overview.engagement.engaged_rate * 100)}%`, note: 'measured sessions' },
         { id: 'bounce_rate', label: 'Bounce rate', value: answer.overview.engagement.bounce_rate == null ? null : `${Math.round(answer.overview.engagement.bounce_rate * 100)}%`, note: 'measured sessions' },
-      ], order)} />
+      ].slice(0, 4)} />
       <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? overview.summary.page_views} env={env} />
       <HomeSummary
         funnel={product.funnel}
         funnelResult={product.funnelResult}
         activity={activity}
-        nextAction={nextHomeAction({ measurementReady: true, funnel: product.funnel, funnelResult: product.funnelResult, activity })}
       />
     </>
   );
 }
 
-function ProductAnswerCanvas({ answer, schema, env, order = productDashboardDefinitions(answer).slice(0, 4).map((item) => item.id) }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; order?: string[] }) {
+function ProductAnswerCanvas({ answer, schema, env }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string }) {
   const activity = recentObservedEvents(schema);
   const lastEvent = activity?.[0] ?? null;
   const definitions = productDashboardDefinitions(answer);
   if (!answer.metric) {
     return (
       <>
-        <HomeKpiStrip items={orderDashboardItems(definitions.map((item) => ({
+        <HomeKpiStrip items={definitions.map((item) => ({
           ...item,
           value: item.id === 'last_event' && lastEvent ? fmtRelative(lastEvent.last_seen) : null,
           fallback: item.id === 'last_event' ? activityFallback(activity) : 'Not configured',
           note: item.id === 'last_event' ? lastEvent?.event ?? activityNote(activity) : 'Define a measurable outcome',
-        })), order)} />
+        })).slice(0, 4)} />
         <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} />
         <HomeSummary
           funnel={answer.funnel}
           funnelResult={answer.funnelResult}
           activity={activity}
-          nextAction={{ title: 'Define a product outcome', body: 'Activate one metric that represents meaningful product value.', href: '/registry', label: 'Review outcomes' }}
         />
       </>
     );
@@ -319,20 +518,19 @@ function ProductAnswerCanvas({ answer, schema, env, order = productDashboardDefi
   const finalStep = answer.funnelResult?.steps.at(-1) ?? null;
   return (
     <>
-      <HomeKpiStrip items={orderDashboardItems([
+      <HomeKpiStrip items={[
         { id: 'outcome', label: answer.metric.name, value: metricValue, note: 'current 30-day outcome' },
         { id: 'people', label: 'Observed people', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_actors) : null, note: 'resolved actors' },
         { id: 'activation', label: 'Activation', value: finalStep?.conversion_from_start === null || finalStep?.conversion_from_start === undefined ? null : `${Math.round(finalStep.conversion_from_start * 100)}%`, note: answer.funnel?.name ?? 'saved funnel required' },
         { id: 'last_event', label: 'Last event', value: lastEvent ? fmtRelative(lastEvent.last_seen) : null, fallback: activityFallback(activity), note: lastEvent?.event ?? activityNote(activity) },
         { id: 'events', label: 'Event volume', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_events) : null, note: 'accepted observations' },
         ...(answer.revenueMetric ? [{ id: 'revenue', label: answer.revenueMetric.name, value: revenueValue, fallback: 'Unavailable', note: 'active revenue outcome' }] : []),
-      ], order)} />
+      ].slice(0, 4)} />
       <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? null} env={env} />
       <HomeSummary
         funnel={answer.funnel}
         funnelResult={answer.funnelResult}
         activity={activity}
-        nextAction={nextHomeAction({ measurementReady: true, funnel: answer.funnel, funnelResult: answer.funnelResult, activity })}
       />
     </>
   );
@@ -366,19 +564,10 @@ function HomeEvidence({ trust, eventCount, env }: { trust: EvidenceTrust; eventC
   );
 }
 
-interface HomeNextAction {
-  title: string;
-  body: string;
-  href?: string;
-  onClick?: () => void;
-  label: string;
-}
-
-function HomeSummary({ funnel, funnelResult, activity, nextAction }: {
+function HomeSummary({ funnel, funnelResult, activity }: {
   funnel: Funnel | null;
   funnelResult: FunnelQueryResult | null;
   activity: ObservedEvent[] | null;
-  nextAction: HomeNextAction;
 }) {
   return (
     <AnswerCanvas className="mt-5">
@@ -431,48 +620,8 @@ function HomeSummary({ funnel, funnelResult, activity, nextAction }: {
           )}
         </section>
       </div>
-
-      <div className="flex flex-col gap-3 border-t px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold">Next action</div>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground"><span className="font-medium text-foreground">{nextAction.title}.</span> {nextAction.body}</p>
-        </div>
-        {nextAction.onClick ? (
-          <Button variant="outline" className="h-11 self-start sm:self-auto" onClick={nextAction.onClick}>
-            {nextAction.label}
-          </Button>
-        ) : (
-          <Button asChild variant="outline" className="h-11 self-start sm:self-auto">
-            <Link to={nextAction.href!}>{nextAction.label} <ArrowRight className="size-4" /></Link>
-          </Button>
-        )}
-      </div>
     </AnswerCanvas>
   );
-}
-
-function nextHomeAction(input: {
-  measurementReady: boolean;
-  funnel: Funnel | null;
-  funnelResult: FunnelQueryResult | null;
-  activity: ObservedEvent[] | null;
-}): HomeNextAction {
-  if (!input.measurementReady) {
-    return { title: 'Connect measurement', body: 'Register one meaningful outcome before reading results.', href: '/setup', label: 'Open Setup' };
-  }
-  if (input.activity === null) {
-    return { title: 'Check project data', body: 'Open Setup to verify the current environment and connection.', href: '/setup', label: 'Open Setup' };
-  }
-  if (input.activity.length === 0) {
-    return { title: 'Send one real event', body: 'Run the product once and confirm that Poolstatis receives it.', href: '/setup', label: 'Open Setup' };
-  }
-  if (!input.funnel) {
-    return { title: 'Define the first funnel', body: 'Connect recent activity to one measurable goal.', href: '/setup', label: 'Create with agent' };
-  }
-  if (!input.funnelResult) {
-    return { title: 'Check funnel data', body: 'The saved funnel result is unavailable right now.', href: '/analyze/funnels', label: 'Open funnel' };
-  }
-  return { title: 'Review the biggest drop-off', body: 'Open the saved funnel for the full step-by-step breakdown.', href: '/analyze/funnels', label: 'Review funnel' };
 }
 
 function recentObservedEvents(schema: ProjectSchema | null): ObservedEvent[] | null {
@@ -499,89 +648,13 @@ function funnelStepValue(actors: number, conversionFromStart: number | null) {
   return `${Math.round(conversionFromStart * 1_000) / 10}% from start`;
 }
 
-function useDashboardLayout(scope: string, definitions: DashboardDefinition) {
-  const defaults = definitions.slice(0, 4).map((item) => item.id);
-  const available = definitions.map((item) => item.id);
-  const storageKey = `poolstatis.home.cards.${scope}`;
-  const [open, setOpen] = useState(false);
-  const [order, setOrder] = useState<string[]>(() => readDashboardOrder(storageKey, defaults, available));
-  const persist = (next: string[]) => {
-    setOrder(next);
-    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* storage can be blocked */ }
-  };
-  return {
-    open,
-    order,
-    toggle: () => setOpen((value) => !value),
-    change: (slot: number, id: string) => {
-      const next = [...order];
-      const previousSlot = next.indexOf(id);
-      if (previousSlot === slot) return;
-      if (previousSlot === -1) next[slot] = id;
-      else [next[slot], next[previousSlot]] = [next[previousSlot]!, next[slot]!];
-      persist(next);
-    },
-    reset: () => persist(defaults),
-  };
-}
-
-function readDashboardOrder(storageKey: string, defaults: string[], available: string[]) {
-  try {
-    const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
-    if (Array.isArray(saved) && saved.length === 4 && new Set(saved).size === 4 && saved.every((id) => typeof id === 'string' && available.includes(id))) {
-      return saved as string[];
-    }
-  } catch { /* use the useful default dashboard */ }
-  return defaults;
-}
-
-function DashboardSettings({ ids, order, onChange, onReset }: {
-  ids: DashboardDefinition;
-  order: string[];
-  onChange(slot: number, id: string): void;
-  onReset(): void;
-}) {
+function PageHeader({ title, answer }: { title: string; answer: string }) {
   return (
-    <section role="region" aria-label="Dashboard settings" className="rounded-panel border bg-card p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">Dashboard settings</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Choose the order of the four answers shown first.</p>
-        </div>
-        <Button variant="ghost" size="sm" onClick={onReset}>Reset</Button>
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {order.map((id, slot) => (
-          <label key={`${slot}:${id}`} className="grid gap-1.5 text-sm font-medium">
-            Card {slot + 1}
-            <select
-              aria-label={`Card ${slot + 1}`}
-              className="h-11 rounded-field border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              value={id}
-              onChange={(event) => onChange(slot, event.target.value)}
-            >
-              {ids.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-          </label>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function orderDashboardItems<T extends KpiItem & { id: string }>(items: T[], order: string[]): KpiItem[] {
-  const byId = new Map(items.map((item) => [item.id, item]));
-  return order.map((id) => byId.get(id)).filter((item): item is T => Boolean(item));
-}
-
-function PageHeader({ title, answer, action }: { title: string; answer: string; action: ReactNode }) {
-  return (
-    <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <header>
       <div className="max-w-3xl">
         <h1 className="serif text-3xl sm:text-4xl">{title}</h1>
         <p className="mt-2 text-base leading-relaxed text-muted-foreground">{answer}</p>
       </div>
-      <div className="shrink-0">{action}</div>
     </header>
   );
 }

@@ -23,7 +23,7 @@ import {
   telemetryLatencyBucket,
 } from '../productTelemetry';
 import { buildInstallationPack } from '../onboardingGoals';
-import type { ProjectGoalId } from '../api/types';
+import type { DecisionLoopOnboardingStatus, OnboardingGateKey, ProjectGoalId } from '../api/types';
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -198,7 +198,7 @@ export function Setup() {
   }
 
   const sourceReady = sourceGate?.complete ?? false;
-  const connectionVisible = connectionOpen ?? Boolean(proofData && !eventSeen);
+  const connectionVisible = connectionOpen ?? false;
   const currentConnectionStep: 1 | 2 | 3 = eventSeen ? 3 : connectionStep;
   const nextConnectionAction = currentConnectionStep === 1
     ? 'Create and save a product key'
@@ -207,26 +207,38 @@ export function Setup() {
       : 'Send one real event';
   const projectMode = intentData?.intent?.project_mode;
   const installationPack = buildInstallationPack(intentData?.intent?.goal_ids ?? []);
-  const reviewBlocker = serverBlocker ? needsRegistryReview(serverBlocker.key) : false;
-  const blocker = proof.loading && !proofData
-    ? { kind: 'loading' as const, title: 'Checking connection', why: 'Reading the latest server proof for this project.' }
-    : proofError
-      ? { kind: 'error' as const, title: 'Connection status unavailable', why: proofError }
-      : serverBlocker
-        ? {
-            kind: 'server' as const,
-            title: blockerTitle(serverBlocker.key),
-            why: serverBlocker.blocker ?? serverBlocker.next_action ?? 'Complete the next server-verified setup gate.',
-          }
-        : null;
+  const nextStep = resolveSetupNextStep({ status: proofData, loading: proof.loading, error: proofError, mode: projectMode ?? null });
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
       <header>
         <div className="mb-1 text-xs text-muted-foreground">{projectName} · {env}</div>
         <h1 className="serif text-3xl font-normal">Setup</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">What is blocking this project from sending useful data?</p>
+        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">Follow the server-verified path from connection to the first protected decision.</p>
       </header>
+
+      <section className="rounded-panel border bg-card p-4 sm:p-5" aria-labelledby="setup-next-step-title" aria-live="polite">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-muted-foreground">Next verified step</div>
+            <h2 id="setup-next-step-title" className="mt-1 text-xl font-semibold">{nextStep.title}</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">{nextStep.reason}</p>
+          </div>
+          <SetupPrimaryAction
+            step={nextStep}
+            project={project}
+            env={env}
+            client={setupClient}
+            telemetryUserId={account?.user?.id}
+            onConnection={() => setConnectionOpen(true)}
+            connectionOpen={connectionVisible}
+            onAgent={() => setMcpOpen(true)}
+            onRetry={proof.reload}
+            onNavigate={navigate}
+          />
+        </div>
+        <SetupDecisionProgress status={proofData} />
+      </section>
 
       <div className="space-y-3 border-y py-4">
         <ConnectionProgress current={currentConnectionStep} complete={eventSeen} />
@@ -268,33 +280,6 @@ export function Setup() {
           showProgress={false}
           onStepChange={setConnectionStep}
         />
-      )}
-
-      {blocker && (
-        <section className="rounded-lg border bg-muted/10 p-4" aria-live="polite">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-sm font-medium">{blocker.title}</h2>
-              <p className="mt-1 text-xs text-muted-foreground">{blocker.why}</p>
-            </div>
-            {blocker.kind === 'error' && <Button size="sm" onClick={proof.reload}>Try again</Button>}
-            {blocker.kind === 'server' && reviewBlocker && (
-              <Button size="sm" onClick={() => navigate('/registry')}>Review proposed metrics</Button>
-            )}
-            {blocker.kind === 'server' && !reviewBlocker && intentData?.intent && blockerCode && setupClient && typeof setupClient.setupTaskFeedback === 'function' && (
-              <FixTaskAction
-                key={`${uiScope}:${blockerCode}`}
-                projectSlug={project}
-                env={env}
-                client={setupClient}
-                telemetryUserId={account?.user?.id}
-              />
-            )}
-            {blocker.kind === 'server' && !reviewBlocker && !intent.loading && !intentData?.intent && (
-              <Button size="sm" onClick={() => setConnectionOpen(true)}>Show connection steps</Button>
-            )}
-          </div>
-        </section>
       )}
 
       <section className="overflow-hidden rounded-lg border bg-card" aria-label="Setup status">
@@ -373,6 +358,127 @@ export function Setup() {
   );
 }
 
+type SetupNextStep = {
+  kind: 'loading' | 'retry' | 'connection' | 'route' | 'fix' | 'agent';
+  title: string;
+  reason: string;
+  label: string;
+  route?: string;
+  blocker?: OnboardingGateKey;
+};
+
+export function resolveSetupNextStep(input: {
+  status: DecisionLoopOnboardingStatus | null;
+  loading: boolean;
+  error: string | null;
+  mode: SetupIntent['project_mode'] | null;
+}): SetupNextStep {
+  if (!input.status && !input.error) return {
+    kind: 'loading', title: 'Checking server proof', reason: 'Reading the current setup gates for this project and environment.', label: 'Checking…',
+  };
+  if (input.error) return {
+    kind: 'retry', title: 'Setup status is unavailable', reason: input.error, label: 'Retry verification',
+  };
+  const blocker = input.status?.next_blocker;
+  if (input.status?.complete) return {
+    kind: 'route', title: 'Decision loop is ready', reason: 'Connection, definitions, the first answer, and the first saved decision have server proof.', label: 'Open Attention', route: '/',
+  };
+  if (!blocker) return {
+    kind: 'retry', title: 'Next setup step is unavailable', reason: 'The server reports setup is incomplete but did not identify a next blocker.', label: 'Retry verification',
+  };
+  const reason = blocker.blocker ?? blocker.next_action ?? 'Complete the next server-verified setup gate.';
+  switch (blocker.key) {
+    case 'workspace_created':
+    case 'data_source_connected':
+      return { kind: 'connection', title: 'Connect the product', reason, label: 'Open connection', blocker: blocker.key };
+    case 'first_event_observed':
+      return { kind: 'connection', title: 'Verify the first event', reason, label: 'Send first event', blocker: blocker.key };
+    case 'metrics_activated':
+      return { kind: 'route', title: 'Activate the key outcome', reason, label: 'Review metrics', route: '/registry', blocker: blocker.key };
+    case 'data_quality_accepted':
+      return { kind: 'route', title: 'Accept measurement quality', reason, label: 'Review data quality', route: '/registry', blocker: blocker.key };
+    case 'first_query_produced':
+      return {
+        kind: 'fix',
+        title: input.mode === 'website' ? 'Produce the first web answer' : 'Produce the first funnel or outcome answer',
+        reason,
+        label: 'Copy answer task',
+        route: input.mode === 'website' ? '/analyze/web' : '/analyze/funnels',
+        blocker: blocker.key,
+      };
+    case 'first_decision_saved':
+      return { kind: 'fix', title: 'Save the first evidence-backed decision', reason, label: 'Copy decision task', route: '/decisions', blocker: blocker.key };
+    case 'agent_connected':
+      return { kind: 'agent', title: 'Verify agent access', reason, label: 'Connect agent', blocker: blocker.key };
+  }
+}
+
+function SetupPrimaryAction({ step, project, env, client, telemetryUserId, connectionOpen, onConnection, onAgent, onRetry, onNavigate }: {
+  step: SetupNextStep;
+  project: string;
+  env: string;
+  client: SetupClient | null;
+  telemetryUserId?: string | null;
+  connectionOpen: boolean;
+  onConnection: () => void;
+  onAgent: () => void;
+  onRetry: () => void;
+  onNavigate: ReturnType<typeof useNavigate>;
+}) {
+  if (step.kind === 'loading') return <Button className="h-11" disabled><Loader2 className="size-4 animate-spin" />{step.label}</Button>;
+  if (step.kind === 'retry') return <Button className="h-11" onClick={onRetry}>{step.label}</Button>;
+  if (step.kind === 'connection') return connectionOpen ? null : <Button className="h-11" onClick={onConnection}>{step.label}</Button>;
+  if (step.kind === 'agent') return <Button className="h-11" onClick={onAgent}>{step.label}</Button>;
+  if (step.kind === 'fix' && step.blocker && client && typeof client.setupTaskFeedback === 'function') {
+    return (
+      <FixTaskAction
+        projectSlug={project}
+        env={env}
+        client={client}
+        telemetryUserId={telemetryUserId}
+        label={step.label}
+      />
+    );
+  }
+  return <Button className="h-11" onClick={() => onNavigate(step.route ?? '/')}>{step.label}</Button>;
+}
+
+function SetupDecisionProgress({ status }: { status: DecisionLoopOnboardingStatus | null }) {
+  const phases = [
+    { label: 'Connect', keys: ['data_source_connected', 'first_event_observed'] as OnboardingGateKey[] },
+    { label: 'Define', keys: ['metrics_activated', 'data_quality_accepted'] as OnboardingGateKey[] },
+    { label: 'Answer', keys: ['first_query_produced'] as OnboardingGateKey[] },
+    { label: 'Decide', keys: ['first_decision_saved'] as OnboardingGateKey[] },
+  ];
+  const completed = new Set(status?.gates.filter((gate) => gate.complete).map((gate) => gate.key) ?? []);
+  const blockerPhase: Partial<Record<OnboardingGateKey, number>> = {
+    workspace_created: 0,
+    agent_connected: 0,
+    data_source_connected: 0,
+    first_event_observed: 0,
+    metrics_activated: 1,
+    data_quality_accepted: 1,
+    first_query_produced: 2,
+    first_decision_saved: 3,
+  };
+  const verifiedCurrent = status?.next_blocker ? blockerPhase[status.next_blocker.key] : undefined;
+  const current = verifiedCurrent ?? phases.findIndex((phase) => phase.keys.some((key) => !completed.has(key)));
+  return (
+    <ol className="mt-5 grid gap-2 border-t pt-4 sm:grid-cols-4" aria-label="Setup decision path">
+      {phases.map((phase, index) => {
+        const complete = phase.keys.every((key) => completed.has(key));
+        const active = current === index;
+        return (
+          <li key={phase.label} className={`rounded-control border px-3 py-2 text-sm ${active ? 'border-primary/50 bg-primary/10' : complete ? 'bg-muted/30' : 'border-dashed text-muted-foreground'}`}>
+            <span className="font-mono text-muted-foreground">{index + 1}</span> <span className="font-medium">{phase.label}</span>
+            <span className="mt-1 block text-muted-foreground">{complete ? 'Verified' : active ? 'Next' : 'Pending'}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function SetupRow({ title, status, description, action, onAction, last = false }: {
   title: string;
   status: string;
@@ -391,11 +497,12 @@ function SetupRow({ title, status, description, action, onAction, last = false }
   );
 }
 
-function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
+function FixTaskAction({ projectSlug, env, client, telemetryUserId, label = 'Copy fix task' }: {
   projectSlug: string;
   env: string;
   client: SetupClient;
   telemetryUserId?: string | null;
+  label?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -497,9 +604,9 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId }: {
 
   return (
     <div className="flex max-w-xl flex-col items-start gap-2">
-      <Button size="sm" onClick={() => void copyFixTask()} disabled={busy || Boolean(fallbackTask)}>
+      <Button className="h-11" onClick={() => void copyFixTask()} disabled={busy || Boolean(fallbackTask)}>
         {busy && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-        {busy ? 'Preparing task…' : copied ? 'Fix task copied' : 'Copy fix task'}
+        {busy ? 'Preparing task…' : copied ? 'Task copied' : label}
       </Button>
       {fallbackTask && (
         <div className="space-y-2">
@@ -546,24 +653,6 @@ function localEvidenceFingerprint(value: unknown): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
-function needsRegistryReview(key: string): boolean {
-  return key === 'metrics_activated' || key === 'data_quality_accepted';
-}
-
-function blockerTitle(key: string): string {
-  switch (key) {
-    case 'workspace_created': return 'Workspace setup is incomplete';
-    case 'data_source_connected': return 'Product connection is incomplete';
-    case 'first_event_observed': return 'No events yet';
-    case 'metrics_activated': return 'Metrics need review';
-    case 'data_quality_accepted': return 'Data quality needs review';
-    case 'first_query_produced': return 'No trusted answer yet';
-    case 'first_decision_saved': return 'No decision saved yet';
-    case 'agent_connected': return 'Agent access is not connected';
-    default: return 'Setup needs attention';
-  }
 }
 
 function OptionalMcp({ serverUrl, storedToken, canIssuePersonalToken, connected }: {

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
-import { Usage, usageMonthPresetRange } from './Usage';
+import { Usage, usageForecast, usageMonthPresetRange } from './Usage';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -55,9 +55,37 @@ describe('Usage month range', () => {
     expect(usageMonthPresetRange('last-6', '2026-01')).toEqual({ from: '2025-08', to: '2026-01' });
   });
 
+  it('projects pace from the server ledger without inventing a quota', () => {
+    expect(usageForecast(
+      { period: '2026-08', quantity: 620, hard_limit: 1_000 },
+      new Date('2026-08-10T12:00:00.000Z'),
+    )).toEqual({
+      daysElapsed: 10,
+      daysInCycle: 31,
+      dailyPace: 62,
+      projectedEndOfCycle: 1_922,
+      hardLimitDate: '2026-08-17',
+      remaining: 380,
+    });
+  });
+
+  it('shows an honest no-cap state instead of a full or unlimited meter', async () => {
+    usage.mockResolvedValue({
+      meter: 'events_stored', period: monthOffset(0), quantity: 7, hard_limit: null,
+      warning_thresholds: [], warnings: [], projects: [],
+    });
+
+    render(<Usage />);
+
+    expect(await screen.findByText('No hard cap configured')).toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(screen.getByText(/not shown as unlimited/)).toBeInTheDocument();
+  });
+
   it('defaults to the current UTC month and exposes current/last/3/6 month presets', async () => {
     render(<Usage />);
 
+    fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageRange).toHaveBeenCalledWith(monthOffset(0), monthOffset(0)));
     expect(screen.getByRole('button', { name: 'Current month' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Last month' })).toBeInTheDocument();
@@ -72,6 +100,7 @@ describe('Usage month range', () => {
 
   it('validates custom bounds before requesting and explains ledger attribution gaps', async () => {
     render(<Usage />);
+    fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageRange).toHaveBeenCalledOnce());
     expect(await screen.findByText('2 events without retained project attribution')).toBeInTheDocument();
 
