@@ -238,6 +238,7 @@ describe('Product answer-first surface', () => {
     expect(screen.getByRole('link', { name: /Release abcdef1234/ })).toHaveAttribute('href', '/changes');
     expect(screen.getByRole('link', { name: /Experiment Signup copy/ })).toHaveAttribute('href', '/experiments');
     expect(screen.getByRole('button', { name: 'Investigate this step' })).toHaveAttribute('data-variant', 'default');
+    expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
     const saveProposal = screen.getByRole('button', { name: 'Save proposal to Decisions' });
     expect(saveProposal).toHaveAttribute('data-variant', 'outline');
     fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));

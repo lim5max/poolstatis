@@ -677,7 +677,7 @@ function metricAnswerValue(metric: Metric, trend: TrendQueryResult | null, trust
 
 function evidenceTrust(trust: MeasurementTrust | null, unavailable: boolean): EvidenceTrust {
   if (unavailable || !trust) return 'unavailable';
-  return trust.status === 'trusted' ? 'trusted' : 'partial';
+  return trust.status === 'trusted' ? 'trusted' : 'blocked';
 }
 
 function websiteLead(answer: WebsiteAnswer) {

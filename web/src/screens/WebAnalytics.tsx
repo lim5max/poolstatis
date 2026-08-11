@@ -957,7 +957,7 @@ async function readWebTrust(
 
 function webEvidenceTrust(trust: WebTrustRead): EvidenceTrust {
   if (trust.unavailable || !trust.result) return 'unavailable';
-  return trust.result.status === 'trusted' ? 'trusted' : 'partial';
+  return trust.result.status === 'trusted' ? 'trusted' : 'blocked';
 }
 
 function formatDateTime(value: string): string {

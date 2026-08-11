@@ -5,10 +5,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-export type EvidenceTrust = 'trusted' | 'partial' | 'unavailable';
+export type EvidenceTrust = 'trusted' | 'partial' | 'blocked' | 'unavailable';
 
 function evidenceTrustLabel(trust: EvidenceTrust) {
-  return trust === 'trusted' ? 'Trusted' : trust === 'partial' ? 'Partial' : 'Unavailable';
+  if (trust === 'trusted') return 'Trusted';
+  if (trust === 'partial') return 'Partial';
+  if (trust === 'blocked') return 'Blocked';
+  return 'Unavailable';
 }
 
 export function EvidenceLine({
@@ -29,7 +32,7 @@ export function EvidenceLine({
       <span
         className={cn(
           'size-2 shrink-0 rounded-full',
-          trust === 'trusted' ? 'bg-success' : trust === 'partial' ? 'bg-warning' : 'bg-muted-foreground/60',
+          trust === 'trusted' ? 'bg-success' : trust === 'partial' ? 'bg-warning' : trust === 'blocked' ? 'bg-destructive' : 'bg-muted-foreground/60',
         )}
         aria-hidden="true"
       />
@@ -116,6 +119,7 @@ export function CanonicalAnswer({
   followUp,
   followUpTask,
   saveState,
+  saveVariant = 'default',
   onSave,
   chart,
   evidence,
@@ -129,6 +133,7 @@ export function CanonicalAnswer({
   followUp: string;
   followUpTask: string;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
+  saveVariant?: 'default' | 'outline';
   onSave: () => void;
   chart: ReactNode;
   evidence: ReactNode;
@@ -157,7 +162,7 @@ export function CanonicalAnswer({
             </p>
             <p className="mt-2 text-sm text-muted-foreground">Next question: {followUp}</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button type="button" className="h-11" onClick={onSave} disabled={saveState === 'saving' || saveState === 'saved'}>
+              <Button type="button" variant={saveVariant} className="h-11" onClick={onSave} disabled={saveState === 'saving' || saveState === 'saved'}>
                 {saveState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
                 {saveState === 'saved' ? 'Answer saved' : saveState === 'saving' ? 'Saving answer…' : 'Save answer'}
               </Button>
@@ -168,7 +173,9 @@ export function CanonicalAnswer({
             {saveState === 'error' && <p role="alert" className="mt-2 text-sm text-destructive">The answer could not be saved. Check access and try again.</p>}
           </div>
           <div className="flex flex-wrap gap-2 sm:justify-end">
-            <Badge variant={trust === 'trusted' ? 'default' : 'outline'}>{trust === 'trusted' ? 'Trusted evidence' : trust === 'partial' ? 'Partial evidence' : 'Evidence unavailable'}</Badge>
+            <Badge variant={trust === 'trusted' ? 'default' : trust === 'blocked' ? 'destructive' : 'outline'}>
+              {trust === 'trusted' ? 'Trusted evidence' : trust === 'partial' ? 'Partial evidence' : trust === 'blocked' ? 'Blocked evidence' : 'Evidence unavailable'}
+            </Badge>
             <Badge variant="outline">{comparison}</Badge>
           </div>
         </div>

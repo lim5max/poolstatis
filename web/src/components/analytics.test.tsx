@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CanonicalAnswer } from './analytics';
+import { CanonicalAnswer, EvidenceLine } from './analytics';
 
 describe('CanonicalAnswer', () => {
   beforeEach(() => {
@@ -39,5 +39,11 @@ describe('CanonicalAnswer', () => {
     expect(within(answer).getByText(/Aggregation: unique actors/)).toBeVisible();
     expect(within(answer).getByText(/Next question: Break this movement down/)).toBeInTheDocument();
     expect(within(answer).getByRole('button', { name: 'Copy follow-up task' })).toBeInTheDocument();
+  });
+
+  it('keeps blocked evidence distinct from partial and unavailable states', () => {
+    render(<EvidenceLine trust="blocked" eventCount={12} env="prod" />);
+
+    expect(screen.getByText(/Observed · Blocked · 12 events ·/)).toBeInTheDocument();
   });
 });

@@ -343,6 +343,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           followUp={currentRun.summary.followUp}
           followUpTask={followUpAgentTask(currentRun.spec, currentRun.summary)}
           saveState={saveState}
+          saveVariant={funnelSurface ? 'outline' : 'default'}
           onSave={() => void saveAnswer()}
           chart={<ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
           evidence={<>Aggregation: {currentRun.spec.evidence.aggregation}. Sample: {currentRun.spec.evidence.sampleSize ?? 'unavailable'}. Coverage: {currentRun.spec.evidence.coverage}. Comparison: {currentRun.spec.evidence.comparisonBasis}. Computed from {currentRun.spec.evidence.source} at {new Date(currentRun.spec.evidence.computedAt).toLocaleString()}.</>}
@@ -584,7 +585,8 @@ function queryAnswerState(result: AnalysisQueryResult) {
 }
 
 function visualizationEvidenceTrust(status: VisualizationSpec['trust']['status']): EvidenceTrust {
-  return status === 'trusted' ? 'trusted' : status === 'unavailable' ? 'unavailable' : 'partial';
+  if (status === 'trusted' || status === 'partial' || status === 'blocked') return status;
+  return 'unavailable';
 }
 
 function summarizeProductAnswer(
