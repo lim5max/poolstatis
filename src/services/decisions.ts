@@ -25,15 +25,23 @@ export interface DecisionDetail {
   contract: Release['contract_snapshot'] & { revision: number };
 }
 
+export interface DecisionQueuePriority {
+  evidence_readiness: 'ready' | 'blocked';
+  risk: 'high' | 'medium' | 'low';
+}
+
+export type DecisionQueueItem = ProposedDecision & { queue_priority: DecisionQueuePriority };
+
 export async function listDecisions(
   pool: Queryable,
   projectId: string,
-  filter: { status?: string; releaseId?: string; env?: string } = {},
-): Promise<ProposedDecision[]> {
+  filter: { status?: string; releaseId?: string; env?: string; experimentKey?: string } = {},
+): Promise<DecisionQueueItem[]> {
   const params: unknown[] = [projectId];
-  let sql = `SELECT d.*
+  let sql = `SELECT d.*, e.ready AS evidence_ready, e.facts AS evidence_facts
     FROM decisions d
     INNER JOIN releases r ON r.project_id = d.project_id AND r.id = d.release_id
+    INNER JOIN evidence_sets e ON e.project_id = d.project_id AND e.id = d.evidence_id
     WHERE d.project_id = $1`;
   if (filter.status) {
     params.push(filter.status);
@@ -47,8 +55,31 @@ export async function listDecisions(
     params.push(filter.env);
     sql += ` AND r.env = $${params.length}`;
   }
-  const { rows } = await pool.query(`${sql} ORDER BY d.created_at DESC, d.id`, params);
-  return rows.map(rowToDecision);
+  if (filter.experimentKey) {
+    params.push(filter.experimentKey);
+    sql += ` AND r.experiment_key = $${params.length}`;
+  }
+  const riskOrder = `CASE
+    WHEN d.proposed_outcome = 'rollback' OR COALESCE((e.facts->>'guardrail_regression')::boolean, false) THEN 0
+    WHEN d.proposed_outcome IN ('fix', 'inconclusive') THEN 1
+    ELSE 2
+  END`;
+  const { rows } = await pool.query(
+    `${sql} ORDER BY
+       CASE WHEN d.status = 'proposed' THEN 0 ELSE 1 END,
+       CASE WHEN e.ready THEN 0 ELSE 1 END,
+       ${riskOrder},
+       d.created_at,
+       d.id`,
+    params,
+  );
+  return rows.map((row) => ({
+    ...rowToDecision(row),
+    queue_priority: {
+      evidence_readiness: row.evidence_ready ? 'ready' : 'blocked',
+      risk: queueRisk(row),
+    },
+  }));
 }
 
 export async function getDecision(
@@ -202,4 +233,10 @@ async function finalizeObservedRelease(
 
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function queueRisk(row: Record<string, any>): DecisionQueuePriority['risk'] {
+  if (row.proposed_outcome === 'rollback' || row.evidence_facts?.guardrail_regression === true) return 'high';
+  if (row.proposed_outcome === 'fix' || row.proposed_outcome === 'inconclusive') return 'medium';
+  return 'low';
 }

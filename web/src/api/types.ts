@@ -1101,6 +1101,10 @@ export interface Decision {
   created_by: string;
   created_at: string;
   updated_at: string;
+  queue_priority?: {
+    evidence_readiness: 'ready' | 'blocked';
+    risk: 'high' | 'medium' | 'low';
+  };
 }
 
 export interface EvidenceMetricWindow {

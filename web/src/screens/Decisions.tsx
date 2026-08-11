@@ -16,17 +16,21 @@ export function Decisions() {
   const { client, project, env } = useStore();
   const [params] = useSearchParams();
   const requestedDecisionId = params.get('decision');
+  const requestedExperimentKey = params.get('experiment');
   const list = useAsync(async () => {
     const [decisions, releases] = await Promise.all([
-      client!.decisions(project!, { env }),
-      client!.releases(project!, { env }),
+      client!.decisions(project!, {
+        env,
+        ...(requestedExperimentKey ? { experiment_key: requestedExperimentKey } : {}),
+      }),
+      client!.releases(project!, {
+        env,
+        ...(requestedExperimentKey ? { experiment_key: requestedExperimentKey } : {}),
+        decision_eligible: 'nearest',
+      }),
     ]);
-    return {
-      decisions: [...decisions].sort((a, b) => Number(a.status !== 'proposed') - Number(b.status !== 'proposed')
-        || new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
-      releases,
-    };
-  }, [project, env]);
+    return { decisions, releases };
+  }, [project, env, requestedExperimentKey]);
   const loop = useAsync(async () => {
     const [inbox, history, deliveries] = await Promise.all([
       client!.decisionInbox(project!), client!.decisionHistory(project!, { limit: 20 }), client!.webhookDeliveries(project!),
@@ -58,7 +62,7 @@ export function Decisions() {
   if (list.loading) return <Loading what="reading decision revisions…" />;
   if (list.error) return <RecoverableError onRetry={list.reload}>{list.error}</RecoverableError>;
   if (!list.data) return null;
-  const eligibleRelease = list.data.releases.find((release) => release.status === 'deployed' || release.status === 'observing');
+  const eligibleRelease = list.data.releases[0];
   const evaluateEligible = async () => {
     if (!eligibleRelease) return;
     setEmptyBusy(true);
@@ -75,7 +79,7 @@ export function Decisions() {
   };
   return <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
     <header className="max-w-3xl">
-      <div className="flex flex-wrap items-center gap-3"><h1 className="serif text-3xl text-balance">Decision review</h1><Badge variant="outline" aria-label={`Current environment ${env}`}>Environment <code>{env}</code></Badge></div>
+      <div className="flex flex-wrap items-center gap-3"><h1 className="serif text-3xl text-balance">Decision review</h1><Badge variant="outline" aria-label={`Current environment ${env}`}>Environment <code>{env}</code></Badge>{requestedExperimentKey && <Badge variant="outline">Experiment <code>{requestedExperimentKey}</code></Badge>}</div>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Approve, correct, or reject an agent proposal against immutable evidence.</p>
     </header>
     {list.data.decisions.length === 0 ? <>
@@ -84,9 +88,9 @@ export function Decisions() {
         outcome="The queue starts from a real release, immutable evidence, and an agent proposal. A human then approves, corrects, or rejects it; Poolstatis never treats a proposal as an executed product change."
         checks={[
           {
-            label: 'Release registered',
-            ready: list.data.releases.length > 0,
-            detail: list.data.releases.length > 0 ? `${list.data.releases.length} release ${list.data.releases.length === 1 ? 'record is' : 'records are'} available in ${env}.` : 'Register immutable release provenance in Ship first.',
+            label: 'Eligible release registered',
+            ready: Boolean(eligibleRelease),
+            detail: eligibleRelease ? `${eligibleRelease.contract_snapshot.name} is the nearest server-ranked release in ${env}.` : 'Register immutable release provenance in Ship first.',
           },
           {
             label: 'Eligible observation state',
@@ -105,8 +109,8 @@ export function Decisions() {
           },
         ]}
         action={eligibleRelease
-          ? <Button onClick={() => void evaluateEligible()} disabled={emptyBusy}>{emptyBusy && <Loader2 className="size-4 animate-spin" />}Evaluate eligible release</Button>
-          : <Button asChild><Link to="/changes">Open Ship</Link></Button>}
+          ? <div className="flex flex-wrap gap-2"><Button variant="outline" asChild><Link to={`/changes?release=${encodeURIComponent(eligibleRelease.id)}`}>Open release in Ship</Link></Button><Button onClick={() => void evaluateEligible()} disabled={emptyBusy}>{emptyBusy && <Loader2 className="size-4 animate-spin" />}Evaluate eligible release</Button></div>
+          : <Button asChild><Link to={requestedExperimentKey ? `/changes?experiment=${encodeURIComponent(requestedExperimentKey)}` : '/changes'}>{requestedExperimentKey ? 'Open experiment in Ship' : 'Open Ship'}</Link></Button>}
         agentTask={decisionSetupTask(project!, env, eligibleRelease)}
         referenceTitle="First real review item"
         referenceItems={[
@@ -118,7 +122,7 @@ export function Decisions() {
       />
       {emptyError && <ErrorNote>{emptyError}</ErrorNote>}
     </> : <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
-      <Panel title={<>Queue <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{list.data.decisions.length}</span></>}><div className="-m-2 space-y-1">{list.data.decisions.map((decision) => <button key={decision.id} type="button" onClick={() => setSelectedId(decision.id)} aria-pressed={selectedId === decision.id} className={`w-full rounded-control border-l-2 p-3 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${selectedId === decision.id ? 'border-brand-strong bg-primary/10 text-foreground' : 'border-transparent hover:bg-muted/50'}`}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{decisionQueueTitle(decision)}</span><ShipStageBadge stage={deriveDecisionStage(decision)} /></div><div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{decision.accepted_rationale ?? decision.proposed_rationale}</div></button>)}</div></Panel>
+      <Panel title={<>Queue <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{list.data.decisions.length}</span></>}><div className="-m-2 space-y-1">{list.data.decisions.map((decision) => <button key={decision.id} type="button" onClick={() => setSelectedId(decision.id)} aria-pressed={selectedId === decision.id} className={`w-full rounded-control border-l-2 p-3 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${selectedId === decision.id ? 'border-brand-strong bg-primary/10 text-foreground' : 'border-transparent hover:bg-muted/50'}`}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{decisionQueueTitle(decision)}</span><ShipStageBadge stage={deriveDecisionStage(decision)} /></div>{decision.queue_priority && <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground"><span>{decision.queue_priority.evidence_readiness === 'ready' ? 'Ready evidence' : 'Evidence blocked'}</span><span>{queueRiskLabel(decision.queue_priority.risk)}</span></div>}<div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{decision.accepted_rationale ?? decision.proposed_rationale}</div></button>)}</div></Panel>
       {detail.loading ? <Panel><Loading what="reproducing evidence…" /></Panel> : detail.error ? <ErrorNote>{detail.error}</ErrorNote> : detail.data ? <DecisionReview detail={detail.data} env={env} onChanged={() => { list.reload(); detail.reload(); loop.reload(); }} /> : null}
     </div>}
     {loop.error ? <ErrorNote>{loop.error}</ErrorNote> : loop.data && <ContinuousLoopSummary {...loop.data} />}
@@ -322,6 +326,9 @@ function decisionQueueTitle(decision: Decision) {
   if (decision.status === 'proposed') return `Review: ${outcome}`;
   if (decision.status === 'rejected') return `Rejected: ${outcome}`;
   return `Decided: ${outcome}`;
+}
+function queueRiskLabel(risk: NonNullable<Decision['queue_priority']>['risk']) {
+  return `${risk.charAt(0).toUpperCase()}${risk.slice(1)} risk`;
 }
 function formatChange(value: number | null) { return value === null ? 'not comparable' : `${value >= 0 ? '+' : ''}${Math.round(value * 100)}%`; }
 function formatWindow(window: { from: string; to: string }) { return `${new Date(window.from).toLocaleDateString()}–${new Date(window.to).toLocaleDateString()}`; }

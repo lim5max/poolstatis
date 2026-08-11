@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { GitCommit, Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
 import { ErrorNote, Loading, Panel, RecoverableError } from '../components/ui';
@@ -30,6 +30,9 @@ type LifecycleItem =
 
 export function Changes() {
   const { client, project, env } = useStore();
+  const [params] = useSearchParams();
+  const requestedReleaseId = params.get('release');
+  const requestedExperimentKey = params.get('experiment');
   const audit = useAsync(async () => {
     const [releases, listedDecisions, experiments, contracts] = await Promise.all([
       client!.releases(project!, { env }),
@@ -55,6 +58,17 @@ export function Changes() {
   const [busy, setBusy] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!audit.data) return;
+    const target = requestedReleaseId
+      ? document.querySelector<HTMLElement>(`[data-ship-release="${requestedReleaseId}"]`)
+      : requestedExperimentKey
+        ? document.querySelector<HTMLElement>(`[data-ship-experiment="${requestedExperimentKey}"]`)
+        : null;
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView?.({ block: 'center' });
+  }, [audit.data, requestedExperimentKey, requestedReleaseId]);
   const evaluate = async (release: Release) => {
     setBusy(release.id);
     setActionError(null);
@@ -82,6 +96,7 @@ export function Changes() {
       kind: 'experiment', id: experiment.id, stage: deriveExperimentStage(experiment), updatedAt: experiment.updated_at, experiment,
     })),
   ].sort((a, b) => SHIP_STAGES.indexOf(a.stage) - SHIP_STAGES.indexOf(b.stage)
+    || Number(!isRequestedShipItem(a, requestedReleaseId, requestedExperimentKey)) - Number(!isRequestedShipItem(b, requestedReleaseId, requestedExperimentKey))
     || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   const counts = Object.fromEntries(SHIP_STAGES.map((stage) => [stage, items.filter((item) => item.stage === stage).length])) as Record<ShipStage, number>;
 
@@ -164,8 +179,8 @@ export function Changes() {
                 </div>
                 <div className="divide-y">
                   {stageItems.map((item) => item.kind === 'release'
-                    ? <ReleaseLifecycleRow key={`release:${item.id}`} release={item.release} detail={item.detail} busy={busy === item.id} onEvaluate={() => evaluate(item.release)} />
-                    : <ExperimentLifecycleRow key={`experiment:${item.id}`} experiment={item.experiment} />)}
+                    ? <ReleaseLifecycleRow key={`release:${item.id}`} release={item.release} detail={item.detail} busy={busy === item.id} requested={item.id === requestedReleaseId} onEvaluate={() => evaluate(item.release)} />
+                    : <ExperimentLifecycleRow key={`experiment:${item.id}`} experiment={item.experiment} requested={item.experiment.key === requestedExperimentKey} />)}
                 </div>
               </section>
             );
@@ -288,10 +303,11 @@ ${contractSummary}
 5. Do not expose project keys, credentials, raw event payloads, or personal data. Do not approve a future decision on my behalf.`;
 }
 
-function ReleaseLifecycleRow({ release, detail, busy, onEvaluate }: {
+function ReleaseLifecycleRow({ release, detail, busy, requested, onEvaluate }: {
   release: Release;
   detail?: DecisionDetail;
   busy: boolean;
+  requested: boolean;
   onEvaluate: () => void;
 }) {
   const stage = deriveReleaseStage(release, detail?.decision);
@@ -303,7 +319,7 @@ function ReleaseLifecycleRow({ release, detail, busy, onEvaluate }: {
     ?? (stage === 'waiting_for_evidence' ? 'Waiting for sufficient trusted evidence.' : stage === 'running' ? 'Observation has not produced a readout yet.' : 'No recorded blocker.');
   const expectedDecisionAt = release.next_evaluation_at ?? expectedDecisionDate(release);
   return (
-    <article aria-label={release.contract_snapshot.name} className="grid min-w-0 gap-4 p-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:p-5">
+    <article aria-label={release.contract_snapshot.name} aria-current={requested ? 'true' : undefined} data-ship-release={release.id} tabIndex={requested ? -1 : undefined} className={`grid min-w-0 gap-4 p-4 outline-none lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:p-5 ${requested ? 'bg-primary/5 ring-1 ring-inset ring-primary/30' : ''}`}>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <ShipStageBadge stage={stage} />
@@ -356,11 +372,11 @@ function ReleaseLifecycleRow({ release, detail, busy, onEvaluate }: {
   );
 }
 
-function ExperimentLifecycleRow({ experiment }: { experiment: Experiment }) {
+function ExperimentLifecycleRow({ experiment, requested }: { experiment: Experiment; requested: boolean }) {
   const stage = deriveExperimentStage(experiment);
   const outcome = experimentOutcome(experiment);
   return (
-    <article aria-label={experiment.name} className="grid min-w-0 gap-4 p-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:p-5">
+    <article aria-label={experiment.name} aria-current={requested ? 'true' : undefined} data-ship-experiment={experiment.key} tabIndex={requested ? -1 : undefined} className={`grid min-w-0 gap-4 p-4 outline-none lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:p-5 ${requested ? 'bg-primary/5 ring-1 ring-inset ring-primary/30' : ''}`}>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2"><ShipStageBadge stage={stage} /><Badge variant="outline">Experiment</Badge></div>
         <h3 className="mt-2 font-medium">{experiment.name}</h3>
@@ -410,4 +426,14 @@ function expectedDecisionDate(release: Release): string | null {
   const deployedAt = new Date(release.deployed_at).getTime();
   if (!Number.isFinite(deployedAt)) return null;
   return new Date(deployedAt + release.contract_snapshot.observation_window_days * 86_400_000).toISOString();
+}
+
+function isRequestedShipItem(
+  item: LifecycleItem,
+  releaseId: string | null,
+  experimentKey: string | null,
+): boolean {
+  return item.kind === 'release'
+    ? item.id === releaseId
+    : item.experiment.key === experimentKey;
 }

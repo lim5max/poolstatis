@@ -215,6 +215,34 @@ describe('Ship lifecycle', () => {
     screen.getAllByText('Technical details').forEach((summary) => expect(summary.closest('details')).not.toHaveAttribute('open'));
   });
 
+  it('marks the exact release requested by a Decisions handoff', async () => {
+    const target = {
+      ...release('deployed'),
+      id: 'release-target',
+      contract_snapshot: { ...release('deployed').contract_snapshot, name: 'Target release' },
+    };
+    const other = {
+      ...release('deployed'),
+      id: 'release-other',
+      contract_snapshot: { ...release('deployed').contract_snapshot, name: 'Other release' },
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        releases: vi.fn().mockResolvedValue([other, target]),
+        decisions: vi.fn().mockResolvedValue([]),
+        experiments: vi.fn().mockResolvedValue([]),
+        contracts: vi.fn().mockResolvedValue([]),
+      },
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter initialEntries={['/changes?release=release-target']}><Changes /></MemoryRouter>);
+
+    expect(await screen.findByRole('article', { name: 'Target release' })).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByRole('article', { name: 'Other release' })).not.toHaveAttribute('aria-current');
+  });
+
   it('renders concluded experiment rows without inventing a decision or rollout change', async () => {
     const closed = { ...experiment('concluded'), id: 'closed', name: 'Closed legacy test' };
     const recorded = {
@@ -441,10 +469,11 @@ describe('Ship lifecycle', () => {
   it('evaluates the first eligible release from the guided decision queue', async () => {
     const eligible = release('observing');
     const evaluateRelease = vi.fn().mockResolvedValue({});
+    const releases = vi.fn().mockResolvedValue([eligible]);
     mockedStore.mockReturnValue({
       client: {
         decisions: vi.fn().mockResolvedValue([]),
-        releases: vi.fn().mockResolvedValue([eligible]),
+        releases,
         evaluateRelease,
         decisionInbox: vi.fn().mockResolvedValue([]),
         decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
@@ -456,7 +485,9 @@ describe('Ship lifecycle', () => {
 
     render(<MemoryRouter><Decisions /></MemoryRouter>);
     expect(await screen.findByText('Create the first reviewable decision')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open release in Ship' })).toHaveAttribute('href', `/changes?release=${eligible.id}`);
     fireEvent.click(screen.getByRole('button', { name: 'Evaluate eligible release' }));
     await waitFor(() => expect(evaluateRelease).toHaveBeenCalledWith('alpha', eligible.id));
+    expect(releases).toHaveBeenCalledWith('alpha', { env: 'prod', decision_eligible: 'nearest' });
   });
 });

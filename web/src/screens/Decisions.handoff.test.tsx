@@ -26,6 +26,10 @@ function decision(id: string, proposedOutcome: 'keep' | 'rollback', updatedAt: s
     created_by: 'agent',
     created_at: updatedAt,
     updated_at: updatedAt,
+    queue_priority: {
+      evidence_readiness: 'ready',
+      risk: proposedOutcome === 'rollback' ? 'high' : 'low',
+    },
   } as const;
 }
 
@@ -53,5 +57,49 @@ describe('Decisions handoff', () => {
     const newer = screen.getByRole('button', { name: /Review: keep/ });
     fireEvent.click(newer);
     await waitFor(() => expect(newer).toHaveAttribute('aria-pressed', 'true'));
+  });
+
+  it('preserves the server-owned readiness, risk and age order', async () => {
+    const serverFirst = decision('decision-risk-old', 'rollback', '2026-08-01T12:00:00Z');
+    const clientNewer = decision('decision-low-new', 'keep', '2026-08-09T12:00:00Z');
+    const client = {
+      decisions: vi.fn().mockResolvedValue([serverFirst, clientNewer]),
+      releases: vi.fn().mockResolvedValue([]),
+      decision: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      decisionInbox: vi.fn().mockResolvedValue([]),
+      decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+      webhookDeliveries: vi.fn().mockResolvedValue([]),
+    };
+    mockedStore.mockReturnValue({ client, project: 'alpha', env: 'prod' } as never);
+
+    render(<MemoryRouter><Decisions /></MemoryRouter>);
+
+    const rows = await screen.findAllByRole('button', { name: /Review:/ });
+    expect(rows[0]).toHaveAccessibleName(/Review: rollback/);
+    expect(rows[0]).toHaveTextContent('Ready evidence');
+    expect(rows[0]).toHaveTextContent('High risk');
+  });
+
+  it('keeps an experiment handoff scoped to the same server identity', async () => {
+    const decisions = vi.fn().mockResolvedValue([]);
+    const releases = vi.fn().mockResolvedValue([]);
+    const client = {
+      decisions,
+      releases,
+      decisionInbox: vi.fn().mockResolvedValue([]),
+      decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+      webhookDeliveries: vi.fn().mockResolvedValue([]),
+    };
+    mockedStore.mockReturnValue({ client, project: 'alpha', env: 'prod' } as never);
+
+    render(<MemoryRouter initialEntries={['/decisions?experiment=shorter_signup']}><Decisions /></MemoryRouter>);
+
+    expect(await screen.findByText('Create the first reviewable decision')).toBeInTheDocument();
+    expect(decisions).toHaveBeenCalledWith('alpha', { env: 'prod', experiment_key: 'shorter_signup' });
+    expect(releases).toHaveBeenCalledWith('alpha', {
+      env: 'prod', experiment_key: 'shorter_signup', decision_eligible: 'nearest',
+    });
+    expect(screen.getByRole('link', { name: 'Open experiment in Ship' }))
+      .toHaveAttribute('href', '/changes?experiment=shorter_signup');
   });
 });

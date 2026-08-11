@@ -133,7 +133,14 @@ export async function registerRelease(
 export async function listReleases(
   pool: Queryable,
   projectId: string,
-  filter: { env?: string; status?: string; contractKey?: string; experimentKey?: string; originatingDecisionId?: string } = {},
+  filter: {
+    env?: string;
+    status?: string;
+    contractKey?: string;
+    experimentKey?: string;
+    originatingDecisionId?: string;
+    decisionEligible?: 'nearest';
+  } = {},
 ): Promise<Release[]> {
   const params: unknown[] = [projectId];
   let sql = `SELECT ${RELEASE_COLS} FROM releases WHERE project_id = $1`;
@@ -148,7 +155,25 @@ export async function listReleases(
   if (filter.contractKey) { params.push(filter.contractKey); sql += ` AND contract_key = $${params.length}`; }
   if (filter.experimentKey) { params.push(filter.experimentKey); sql += ` AND experiment_key = $${params.length}`; }
   if (filter.originatingDecisionId) { params.push(filter.originatingDecisionId); sql += ` AND originating_decision_id = $${params.length}`; }
-  const { rows } = await pool.query<Record<string, any>>(`${sql} ORDER BY created_at DESC, id`, params);
+  if (filter.decisionEligible === 'nearest') {
+    sql += ` AND status IN ('deployed', 'observing')
+      AND NOT EXISTS (
+        SELECT 1 FROM decisions d
+        WHERE d.project_id = releases.project_id AND d.release_id = releases.id
+      )`;
+  }
+  const order = filter.decisionEligible === 'nearest'
+    ? `ORDER BY
+        CASE status WHEN 'observing' THEN 0 ELSE 1 END,
+        COALESCE(
+          next_evaluation_at,
+          deployed_at + ((contract_snapshot->>'observation_window_days')::integer * interval '1 day')
+        ),
+        created_at,
+        id
+       LIMIT 1`
+    : 'ORDER BY created_at DESC, id';
+  const { rows } = await pool.query<Record<string, any>>(`${sql} ${order}`, params);
   return rows.map(rowToRelease);
 }
 

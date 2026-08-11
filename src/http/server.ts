@@ -1842,8 +1842,9 @@ function registerPlatformRoutes(
   app.get('/api/v1/projects/:slug/releases', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const { env, status, contract_key, experiment_key, originating_decision_id } = req.query as {
+    const { env, status, contract_key, experiment_key, originating_decision_id, decision_eligible } = req.query as {
       env?: string; status?: string; contract_key?: string; experiment_key?: string; originating_decision_id?: string;
+      decision_eligible?: string;
     };
     return {
       releases: await listReleases(ctx.pool, project.id, {
@@ -1852,6 +1853,7 @@ function registerPlatformRoutes(
         ...(contract_key ? { contractKey: contract_key } : {}),
         ...(experiment_key ? { experimentKey: experiment_key } : {}),
         ...(originating_decision_id ? { originatingDecisionId: originating_decision_id } : {}),
+        ...(decision_eligible === 'nearest' ? { decisionEligible: 'nearest' as const } : {}),
       }),
     };
   });
@@ -1893,12 +1895,15 @@ function registerPlatformRoutes(
   app.get('/api/v1/projects/:slug/decisions', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const { env, status, release_id } = req.query as { env?: string; status?: string; release_id?: string };
+    const { env, status, release_id, experiment_key } = req.query as {
+      env?: string; status?: string; release_id?: string; experiment_key?: string;
+    };
     return {
       decisions: await listDecisions(ctx.pool, project.id, {
         ...(env ? { env } : {}),
         ...(status ? { status } : {}),
         ...(release_id ? { releaseId: release_id } : {}),
+        ...(experiment_key ? { experimentKey: experiment_key } : {}),
       }),
     };
   });

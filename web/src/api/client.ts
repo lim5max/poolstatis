@@ -358,10 +358,17 @@ export class PoolstatisClient {
     return this.req<{ filename: string; yaml: string }>('GET', `/api/v1/projects/${slug}/contracts/export`);
   }
 
-  releases(slug: string, filter: { env?: string; status?: ReleaseStatus } = {}) {
+  releases(slug: string, filter: {
+    env?: string;
+    status?: ReleaseStatus;
+    experiment_key?: string;
+    decision_eligible?: 'nearest';
+  } = {}) {
     const qs = new URLSearchParams();
     if (filter.env) qs.set('env', filter.env);
     if (filter.status) qs.set('status', filter.status);
+    if (filter.experiment_key) qs.set('experiment_key', filter.experiment_key);
+    if (filter.decision_eligible) qs.set('decision_eligible', filter.decision_eligible);
     return this.req<{ releases: Release[] }>('GET', `/api/v1/projects/${slug}/releases${qs.size ? `?${qs}` : ''}`)
       .then((response) => response.releases);
   }
@@ -394,11 +401,17 @@ export class PoolstatisClient {
     );
   }
 
-  decisions(slug: string, filter: { env?: string; status?: Decision['status']; release_id?: string } = {}) {
+  decisions(slug: string, filter: {
+    env?: string;
+    status?: Decision['status'];
+    release_id?: string;
+    experiment_key?: string;
+  } = {}) {
     const qs = new URLSearchParams();
     if (filter.env) qs.set('env', filter.env);
     if (filter.status) qs.set('status', filter.status);
     if (filter.release_id) qs.set('release_id', filter.release_id);
+    if (filter.experiment_key) qs.set('experiment_key', filter.experiment_key);
     return this.req<{ decisions: Decision[] }>('GET', `/api/v1/projects/${slug}/decisions${qs.size ? `?${qs}` : ''}`)
       .then((response) => response.decisions);
   }

@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { Add, Check, Loader2, Target } from '@/components/icons';
 import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, fmtNum, fmtPct } from '../components/ui';
@@ -552,6 +553,10 @@ function ExperimentCard({
           {!busy && experiment.status !== 'draft' && <Button variant="outline" size="sm" onClick={showResults}>View evidence</Button>}
           {!busy && !legacyAllEnvironments && experiment.status === 'running' && <Button size="sm" onClick={() => setShowDecision(true)}>Record decision</Button>}
         </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2 border-t pt-3" aria-label={`${experiment.name} lifecycle links`}>
+        <Button asChild variant="outline" size="sm"><Link to={`/changes?experiment=${encodeURIComponent(experiment.key)}`}>Open in Ship</Link></Button>
+        <Button asChild variant="outline" size="sm"><Link to={`/decisions?experiment=${encodeURIComponent(experiment.key)}`}>Open in Decisions</Link></Button>
       </div>
       {legacyAllEnvironments && (
         <p className="mt-3 text-sm text-muted-foreground">Legacy all-environment experiments are read only here. Review every environment before using the legacy conclude operation.</p>
