@@ -64,6 +64,19 @@ export interface TrendPoint {
   breakdown_value?: string;
 }
 
+export interface AcceptedIngestTrendQuery {
+  projectId: string;
+  env: string;
+  from: Date;
+  to: Date;
+  interval: 'hour' | 'day';
+}
+
+export interface AcceptedIngestTrendPoint {
+  bucket: string;
+  accepted: number;
+}
+
 export interface WebAnalyticsQuery {
   projectId: string;
   env: string;
@@ -638,6 +651,8 @@ export interface EventStore {
   append(events: StorableEvent[]): Promise<AppendResult>;
   /** Returns `duplicate` when the batch was already durably appended. */
   appendIdempotent(batch: IdempotentAppend): Promise<AppendResult>;
+  /** Accepted physical event volume by durable ingest time, never event time. */
+  acceptedIngestTrend(q: AcceptedIngestTrendQuery): Promise<AcceptedIngestTrendPoint[]>;
   trend(q: TrendQuery): Promise<TrendPoint[]>;
   webAnalytics(q: WebAnalyticsQuery): Promise<WebAnalyticsResult>;
   webSessions(q: WebSessionsQuery): Promise<WebSessionsResult>;

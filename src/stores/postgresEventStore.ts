@@ -1,6 +1,8 @@
 import type pg from 'pg';
 import type {
   AppendResult,
+  AcceptedIngestTrendPoint,
+  AcceptedIngestTrendQuery,
   BackfillRecord,
   BackfillResult,
   EventRevisionInput,
@@ -137,6 +139,22 @@ export class PostgresEventStore implements EventStore {
     } finally {
       client.release();
     }
+  }
+
+  async acceptedIngestTrend(q: AcceptedIngestTrendQuery): Promise<AcceptedIngestTrendPoint[]> {
+    const { rows } = await this.pool.query<{ bucket: Date; accepted: string }>(
+      `SELECT date_trunc($5, ingested_at) AS bucket, count(*)::text AS accepted
+       FROM events
+       WHERE project_id = $1 AND env = $2 AND ingested_at >= $3 AND ingested_at < $4
+         AND NOT is_system AND event_source <> 'system'
+       GROUP BY 1
+       ORDER BY 1`,
+      [q.projectId, q.env, q.from, q.to, q.interval],
+    );
+    return rows.map((row) => ({
+      bucket: row.bucket.toISOString(),
+      accepted: Number(row.accepted),
+    }));
   }
 
   /**

@@ -1,5 +1,5 @@
 import type {
-  AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
+  AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataHealthResult, DataHealthVerifyInput, DataHealthVerifyResult, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
   BackfillPreview, BackfillRecord, ControlTowerResult, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, UsageControlResult, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
@@ -927,6 +927,21 @@ export class PoolstatisClient {
     if (q.limit !== undefined) qs.set('limit', String(q.limit));
     if (q.sinceDays !== undefined) qs.set('since_days', String(q.sinceDays));
     return this.req<DataQualityResponse>('GET', `/api/v1/projects/${slug}/data-quality?${qs}`);
+  }
+
+  dataHealth(slug: string, env = 'prod') {
+    return this.req<DataHealthResult>(
+      'GET',
+      `/api/v1/projects/${slug}/data-health?env=${encodeURIComponent(env)}`,
+    );
+  }
+
+  verifyDataHealthFix(slug: string, body: DataHealthVerifyInput) {
+    return this.req<DataHealthVerifyResult>(
+      'POST',
+      `/api/v1/projects/${slug}/data-health/verify`,
+      body,
+    );
   }
 
   // ---- keys (admin) ----

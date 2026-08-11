@@ -35,6 +35,7 @@ import { deleteEntities, getIdentityEntity, upsertEntities } from '../services/e
 import { createInsight, listInsights, setInsightStatus } from '../services/insights.js';
 import { clearIngestWarnings, listIngestWarnings, type WarningKind } from '../services/warnings.js';
 import { listDataQualityIssues } from '../services/dataQuality.js';
+import { getProjectDataHealth, verifyProjectDataHealthFix } from '../services/dataHealth.js';
 import { explainMetricUsage } from '../services/metricUsage.js';
 import {
   applyMetricDefinition, getMetricDefinition, previewMetricDefinition,
@@ -2184,6 +2185,33 @@ function registerPlatformRoutes(
     const project = await resolveProject(req);
     const { env, kind } = req.query as { env?: string; kind?: string };
     return { warnings: await listIngestWarnings(ctx.pool, project.id, { ...(env && { env }), ...(kind && { kind: kind as WarningKind }) }) };
+  });
+
+  app.get('/api/v1/projects/:slug/data-health', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const query = z.object({ env: z.string().trim().min(1).max(100).default('prod') }).parse(req.query);
+    return getProjectDataHealth(ctx.pool, ctx.eventStore, project, query.env);
+  });
+
+  app.post('/api/v1/projects/:slug/data-health/verify', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const body = z.object({
+      env: z.string().trim().min(1).max(100).default('prod'),
+      signature_id: z.string().uuid(),
+      watermark: z.object({
+        count: z.number().int().nonnegative(),
+        last_seen: z.string().datetime({ offset: true }),
+      }).strict(),
+    }).strict().parse(req.body);
+    return verifyProjectDataHealthFix(
+      ctx.pool,
+      project.id,
+      body.env,
+      body.signature_id,
+      body.watermark,
+    );
   });
 
   app.get('/api/v1/projects/:slug/data-quality', async (req) => {

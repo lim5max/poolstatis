@@ -162,7 +162,7 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe(
-        '038_metric_definition_revisions.sql',
+        '039_data_health_control.sql',
       );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
@@ -205,6 +205,9 @@ describe('hosted policy migration role topology', () => {
       );
       await deploy.query(
         'SELECT poolstatis_prepare_metric_definition_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_data_health_role_grants()',
       );
       await deploy.query(
         'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
@@ -298,6 +301,9 @@ describe('hosted policy migration role topology', () => {
       )).resolves.toMatchObject({ rows: [{ count: 0 }] });
       await expect(coreRuntime.query(
         'SELECT count(*)::int AS count FROM metric_definition_revisions',
+      )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+      await expect(coreRuntime.query(
+        'SELECT count(*)::int AS count FROM ingest_warning_occurrences',
       )).resolves.toMatchObject({ rows: [{ count: 0 }] });
       await expect(coreRuntime.query(
         'SELECT count(*)::int AS count FROM setup_task_feedback',
@@ -444,6 +450,13 @@ describe('hosted policy migration role topology', () => {
       });
       expect(ingested.status).toBe(200);
       expect(ingested.body.accepted).toBe(1);
+      const dataHealth = await api(
+        token,
+        'GET',
+        '/api/v1/projects/isolated-project/data-health?env=prod',
+      );
+      expect(dataHealth.status).toBe(200);
+      expect(dataHealth.body.summary.accepted_24h).toBe(1);
       const storedPartition = await deploy.query<{ partition: string }>(
         `SELECT tableoid::regclass::text AS partition
          FROM events WHERE event = 'isolated.event'`,
@@ -520,7 +533,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '038_metric_definition_revisions.sql',
+        last_migration: '039_data_health_control.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -607,6 +620,7 @@ describe('hosted policy migration role topology', () => {
       await selfHost.query('SELECT poolstatis_prepare_analysis_views_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_control_tower_automation_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_metric_definition_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_data_health_role_grants()');
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(selfHost, new Date(), 12);
       await ensureRetentionIndexes(selfHost);
@@ -749,7 +763,7 @@ describe('hosted policy migration role topology', () => {
       );
       const applied = await migrateWithEvidence(selfHost);
       expect(applied.at(-1)).toBe(
-        '038_metric_definition_revisions.sql',
+        '039_data_health_control.sql',
       );
       const topology = await selfHost.query<{
         superuser: boolean;

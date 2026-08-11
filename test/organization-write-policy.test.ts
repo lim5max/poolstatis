@@ -30,9 +30,9 @@ describe('organization write policy inventory', () => {
       source.matchAll(/app\.(post|put|patch|delete)\('([^']+)'/g),
       (match) => `${match[1]!.toUpperCase()} ${match[2]!}`,
     );
-    expect(allRoutes).toHaveLength(143);
+    expect(allRoutes).toHaveLength(145);
     expect(new Set(allRoutes).size).toBe(allRoutes.length);
-    expect(routes).toHaveLength(85);
+    expect(routes).toHaveLength(86);
     expect(routes.every((route) =>
       route.includes(' /api/v1/') || route.includes(' /i/v1/'))).toBe(true);
 
@@ -43,7 +43,7 @@ describe('organization write policy inventory', () => {
       });
     const allowed = allRoutes.filter((route) => !blocked.includes(route));
     expect(blocked).toHaveLength(72);
-    expect(allowed).toHaveLength(71);
+    expect(allowed).toHaveLength(73);
 
     const exemptions = routes
       .filter((route) => {
@@ -64,7 +64,7 @@ describe('organization write policy inventory', () => {
   it('keeps MCP on the centralized HTTP boundary and classifies every mutating tool call', async () => {
     const source = await readFile(resolve(repoDir, 'src/mcp/server.ts'), 'utf8');
     expect(source.match(/\bfetch\(/g)).toHaveLength(1);
-    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(137);
+    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(139);
 
     const calls = Array.from(
       source.matchAll(/api\(\s*'(POST|PUT|PATCH|DELETE)'\s*,\s*(`[^`]+`|'[^']+')/g),
@@ -76,20 +76,21 @@ describe('organization write policy inventory', () => {
         };
       },
     );
-    expect(calls).toHaveLength(88);
+    expect(calls).toHaveLength(89);
     expect(calls.every(({ route }) => route.startsWith('/api/v1/'))).toBe(true);
 
     const exemptMcpCalls = calls
       .filter(({ method, route }) =>
         !requiresOrganizationWriteReadiness(method, route))
       .map(({ method, route }) => `${method} ${route}`);
-    expect(exemptMcpCalls).toHaveLength(29);
+    expect(exemptMcpCalls).toHaveLength(30);
     expect(calls.length - exemptMcpCalls.length).toBe(59);
     expect(new Set(exemptMcpCalls)).toEqual(new Set([
       'POST /api/v1/projects/:slug/onboarding/observe-agent',
       'POST /api/v1/projects/:slug/events/backfill/preview',
       'POST /api/v1/projects/:slug/events/:eventId/revisions/preview',
       'POST /api/v1/projects/:slug/metrics/:key/definition/preview',
+      'POST /api/v1/projects/:slug/data-health/verify',
       'POST /api/v1/projects/:slug/contracts/validate',
       'POST /api/v1/projects/:slug/contracts/diff',
       'POST /api/v1/projects/:slug/contracts/similar',

@@ -1,5 +1,7 @@
 import { ApiError } from '../errors.js';
 import type {
+  AcceptedIngestTrendPoint,
+  AcceptedIngestTrendQuery,
   ActorSummary,
   ActorActivityQuery,
   ActorActivityResult,
@@ -152,6 +154,10 @@ export class BufferedEventStore implements EventStore {
       this.idempotentEvents += weight;
       this.pumpIdempotentQueue();
     });
+  }
+
+  acceptedIngestTrend(q: AcceptedIngestTrendQuery): Promise<AcceptedIngestTrendPoint[]> {
+    return this.inner.acceptedIngestTrend(q);
   }
 
   trend(q: TrendQuery): Promise<TrendPoint[]> {

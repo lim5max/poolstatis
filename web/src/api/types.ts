@@ -1318,6 +1318,7 @@ export interface SampleFilter {
 }
 
 export interface IngestWarning {
+  signature_id?: string;
   kind: 'rejected' | 'unregistered' | 'clock_skew';
   event: string;
   detail: string;
@@ -1325,6 +1326,77 @@ export interface IngestWarning {
   count: number;
   first_seen: string;
   last_seen: string;
+}
+
+export interface DataHealthWatermark {
+  count: number;
+  last_seen: string;
+}
+
+export interface DataHealthWindow {
+  from: string;
+  to: string;
+  interval: 'hour' | 'day';
+  accepted_total: number;
+  rejected_total: number;
+  points: Array<{ bucket: string; accepted: number; rejected: number }>;
+}
+
+export interface DataHealthVerifyInput {
+  env: string;
+  signature_id: string;
+  watermark: DataHealthWatermark;
+}
+
+export interface DataHealthVerifyResult {
+  schema_version: 1;
+  signature_id: string;
+  status: 'resolved' | 'still_occurring';
+  occurrences_since_watermark: number;
+  checked_at: string;
+  previous_watermark: DataHealthWatermark;
+  current_watermark: DataHealthWatermark;
+}
+
+export interface DataHealthResult {
+  schema_version: 1;
+  generated_at: string;
+  project: string;
+  env: string;
+  coverage: {
+    accepted_basis: string;
+    rejected_basis: string;
+    rejected_history_first_observed_at: string | null;
+  };
+  summary: { accepted_24h: number; rejected_24h: number; accepted_7d: number; rejected_7d: number };
+  windows: { last_24h: DataHealthWindow; last_7d: DataHealthWindow };
+  issue_signatures: Array<{
+    signature_id: string;
+    kind: 'rejected' | 'unregistered' | 'clock_skew';
+    category: 'schema_rejection' | 'missing_definition' | 'clock_skew';
+    remediation: 'fix_schema' | 'register_definition' | 'fix_clock';
+    registered_event_name: string | null;
+    count: number;
+    first_seen: string;
+    last_seen: string;
+    affected_answer_ids: string[];
+    repair_action: { kind: 'navigate'; label: string; href: string };
+    watermark: DataHealthWatermark;
+    verify_after_fix: { method: 'POST'; href: string; body: DataHealthVerifyInput };
+  }>;
+  improvements: Array<{
+    signature_id: string;
+    severity: 'high' | 'medium';
+    title: string;
+    affected_answer_ids: string[];
+    repair_action: { kind: 'navigate'; label: string; href: string };
+    verify_after_fix: { method: 'POST'; href: string; body: DataHealthVerifyInput };
+  }>;
+  doing_well: Array<{
+    code: 'accepted_events_flowing';
+    title: string;
+    evidence: string;
+  }>;
 }
 
 export interface DataQualityIssue {

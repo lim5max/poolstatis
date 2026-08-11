@@ -1331,6 +1331,35 @@ jsonTool(
 );
 
 jsonTool(
+  'get_data_health',
+  'Read project/environment accepted and rejected trends for 24 hourly and 7 daily buckets, bounded opaque warning signatures, affected answer ids, improvements, proven healthy signals, and exact repair/verify actions. The response excludes raw warning details, payloads, properties, samples and actor ids; only currently registered event names may be exposed.',
+  { project, env: z.string().default('prod') },
+  wrap(({ project: slug, env }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/data-health?env=${encodeURIComponent(env)}`,
+  )),
+);
+
+jsonTool(
+  'verify_data_health_fix',
+  'Verify one bounded warning signature after a repair. Compares the current server count/last-seen watermark with the exact earlier watermark and returns resolved or still_occurring without exposing warning detail or payload data.',
+  {
+    project,
+    env: z.string().default('prod'),
+    signature_id: z.string().uuid(),
+    watermark: z.object({
+      count: z.number().int().nonnegative(),
+      last_seen: z.string().datetime({ offset: true }),
+    }).strict(),
+  },
+  wrap(({ project: slug, ...body }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/data-health/verify`,
+    body,
+  )),
+);
+
+jsonTool(
   'list_data_quality_issues',
   'Find semantic contradictions in ingested data. Currently flags entities whose current status contradicts terminal registered events such as brief.completed.',
   {

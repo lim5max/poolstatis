@@ -15,12 +15,11 @@ import { cn } from '@/lib/utils';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { DataHealthControl } from '../components/data-health-control';
 import type {
   BackfillPreview, DataQualityIssue, EntityRow, EventRevisionPatch, EventRevisionPreview, FilterOp,
   ObservedEvent, SampleEvent, SampleFilter,
-  Metric,
 } from '../api/types';
-import { buildDataHealth, type HealthFinding } from '../analysis/semanticHealth';
 
 function EnvSelect() {
   const { env, setEnv, availableEnvs } = useStore();
@@ -40,6 +39,7 @@ export function Data() {
   const [tab, setTab] = useState(params.get('tab') ?? 'health');
   const eventParam = params.get('event') ?? undefined;
   const actorParam = params.get('distinct_id') ?? undefined;
+  const signatureParam = params.get('signature') ?? undefined;
   const schema = useAsync(() => client!.schema(project!, env), [project, env]);
   if (schema.loading) return <Loading what="reading data…" />;
   if (schema.error) return <RecoverableError onRetry={schema.reload}>{schema.error}</RecoverableError>;
@@ -59,7 +59,7 @@ export function Data() {
         </div>
         <EnvSelect />
       </div>
-      <TabsContent value="health"><Health observed={schema.data.observed_events_30d} metrics={schema.data.metrics} /></TabsContent>
+      <TabsContent value="health"><Health focusedSignature={signatureParam} observed={schema.data.observed_events_30d} /></TabsContent>
       <TabsContent value="events"><EventStream initialEvent={eventParam} initialActor={actorParam} observed={schema.data.observed_events_30d} /></TabsContent>
       <TabsContent value="backfill"><BackfillManager /></TabsContent>
       <TabsContent value="entities"><Entities types={schema.data.entity_types.map((t) => t.name)} /></TabsContent>
@@ -68,10 +68,9 @@ export function Data() {
   );
 }
 
-function Health({ observed, metrics }: { observed: ObservedEvent[]; metrics: Metric[] }) {
+function Health({ observed, focusedSignature }: { observed: ObservedEvent[]; focusedSignature?: string }) {
   const { client, project, env } = useStore();
   const quality = useAsync(() => client!.dataQuality(project!, { env, limit: 50 }), [project, env]);
-  const warnings = useAsync(() => client!.ingestWarnings(project!, { env }), [project, env]);
   const events = [...observed].sort((a, b) => b.count - a.count);
   const total = events.reduce((s, e) => s + e.count, 0);
   const weighted = events.reduce((s, e) => s + e.count * e.registered_share, 0);
@@ -80,23 +79,16 @@ function Health({ observed, metrics }: { observed: ObservedEvent[]; metrics: Met
   const qualityIssues = quality.loading || quality.error ? undefined : quality.data?.issues;
   const qualityChecked = quality.loading || quality.error ? undefined : quality.data?.checked;
   const issueCount = quality.error ? 'error' : quality.loading ? '…' : (qualityIssues?.length ?? 0);
-  const health = qualityIssues && qualityChecked && warnings.data
-    ? buildDataHealth({ observed, issues: qualityIssues, checked: qualityChecked, warnings: warnings.data, metrics })
-    : null;
   return (
     <div className="space-y-4">
+      <DataHealthControl focusedSignature={focusedSignature} />
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <Stat label="Instrumentation coverage" value={fmtPct(coverage)} sub="of 30-day volume" />
         <Stat label="Off-standard names" value={wild.length} sub="no matching active metric" />
         <Stat label="Entity conflicts" value={quality.loading ? '…' : issueCount} sub="events vs current status" />
         <Stat label="Distinct events" value={events.length} sub={`${fmtNum(total)} total · 30d`} />
       </div>
-      {(warnings.loading || quality.loading) && <Loading what="classifying integration health…" />}
-      {warnings.error && <ErrorNote>{warnings.error}</ErrorNote>}
-      {health && <div className="grid gap-4 lg:grid-cols-2">
-        <FindingPanel title="Possible improvements" findings={health.improvements} empty="No current integration improvement was found from available signals." />
-        <FindingPanel title="Doing great" findings={health.doingGreat} empty="No healthy claim can be confirmed from the current evidence." positive />
-      </div>}
+      {quality.loading && <Loading what="classifying entity consistency…" />}
       <DataQualityPanel loading={quality.loading} error={quality.error} issues={qualityIssues} checked={qualityChecked} />
       <Panel title="Observed events · 30 days">
         {events.length === 0 ? <EmptyState headline="No events yet" lead="send some to the ingest API to see them here" /> : (
@@ -119,18 +111,6 @@ function Health({ observed, metrics }: { observed: ObservedEvent[]; metrics: Met
       </Panel>
     </div>
   );
-}
-
-function FindingPanel({ title, findings, empty, positive = false }: { title: string; findings: HealthFinding[]; empty: string; positive?: boolean }) {
-  return <Panel title={title}>
-    {findings.length === 0 ? <p className="text-sm text-muted-foreground">{empty}</p> : <div className="divide-y rounded-control border">
-      {findings.map((finding) => <div key={finding.code} className="p-3">
-        <div className="flex items-start gap-2"><span className={`mt-1 size-2 shrink-0 rounded-full ${positive ? 'bg-success' : 'bg-warning'}`} /><div><div className="text-sm font-medium">{finding.title}</div><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{finding.detail}</p></div></div>
-        {finding.affected.length > 0 && <p className="mt-2 text-xs"><span className="font-medium">Affected:</span> {finding.affected.join(', ')}</p>}
-        <p className="mt-1 text-xs text-muted-foreground"><span className="font-medium text-foreground">Verify:</span> {finding.verify}</p>
-      </div>)}
-    </div>}
-  </Panel>;
 }
 
 function DataQualityPanel({
