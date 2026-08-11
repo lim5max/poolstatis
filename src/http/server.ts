@@ -21,7 +21,7 @@ import type { SetupTaskProvider } from '../services/setupTaskProvider.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
   createApiKey, createProject, deleteProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
-  evaluateProjectHealth, listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
+  evaluateProjectHealth, getProjectPortfolio, listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
 } from '../services/projects.js';
 import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
 import {
@@ -876,6 +876,27 @@ function registerPlatformRoutes(
       return { projects: all.filter((p) => p.slug === onlySlug), scope: 'project' };
     }
     return { projects: all, scope: 'org' };
+  });
+
+  app.get('/api/v1/projects/portfolio', async (req) => {
+    platform(req);
+    const { env = 'prod' } = req.query as { env?: string };
+    if (!/^[a-zA-Z0-9_-]{1,50}$/.test(env)) {
+      throw badRequest('invalid_query_param', 'env must be a non-empty environment key');
+    }
+    const projectScoped = req.auth.kind === 'secret';
+    const scopedProjectId = projectScoped ? req.auth.projectId : undefined;
+    if (projectScoped && !scopedProjectId) {
+      throw new ApiError(403, 'project_scope', 'this secret key is not pinned to a project');
+    }
+    return getProjectPortfolio(
+      ctx.pool,
+      ctx.eventStore,
+      req.auth.orgId,
+      env,
+      projectScoped ? 'project' : 'organization',
+      scopedProjectId ?? undefined,
+    );
   });
 
   app.get('/api/v1/projects/:slug/control-tower', async (req) => {

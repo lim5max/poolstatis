@@ -125,9 +125,16 @@ function jsonTool(
 
 jsonTool(
   'list_projects',
-  'List projects this token can access with portfolio health, recent usage, key-outcome availability and explicit attention reasons.',
+  'List projects this token can access with registry counts and all-environment recent event health for bootstrap selection.',
   {},
   wrap(() => api('GET', '/api/v1/projects')),
+);
+
+jsonTool(
+  'get_project_portfolio',
+  'Read environment-scoped project health and current UTC-cycle accepted usage from the immutable ingest-time usage ledger.',
+  { env: z.string().min(1).max(50).default('prod') },
+  wrap(({ env }) => api('GET', `/api/v1/projects/portfolio?env=${encodeURIComponent(env)}`)),
 );
 
 jsonTool(

@@ -139,6 +139,7 @@ GET    /api/v1/me/usage/range?from=YYYY-MM&to=YYYY-MM
 GET    /api/v1/me/usage/activity?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
 GET    /api/v1/account-mode
 GET    /api/v1/projects
+GET    /api/v1/projects/portfolio?env=prod
 POST   /api/v1/projects/compare
 GET    /api/v1/projects/{slug}/schema
 GET    /api/v1/projects/{slug}/onboarding/status?env=prod
@@ -240,6 +241,14 @@ GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+`/api/v1/projects/portfolio` is the environment-scoped portfolio read. Its
+`current_usage.accepted_events` is the current UTC cycle quantity from the
+append-only `usage_ledger`, grouped by ingest time; it is not a 30-day event-time
+count. Project secret keys receive only their project, while organization-wide
+personal tokens and hosted owner/admin sessions receive the organization
+portfolio. Last-event and registered-coverage health are evaluated in the
+requested environment.
 
 ### Семантические ревизии и сравнение проектов
 

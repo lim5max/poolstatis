@@ -22,7 +22,8 @@
 ### Контекст
 
 ```
-list_projects()                      → [{slug, name, env_list, events_30d}]
+list_projects()                      → bootstrap project list and all-environment event health
+get_project_portfolio(env?)          → env-scoped health plus current-cycle accepted usage
 get_account_mode()                   → deployment, credential scope, role, capabilities
 get_project_schema(project)          → то же, что ресурс schema (для клиентов без resources)
 compare_projects({metric_key, projects[2..8], environment, window})

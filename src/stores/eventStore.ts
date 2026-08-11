@@ -683,7 +683,7 @@ export interface EventStore {
     issues: EntityStatusEvidence[];
     matchedEntities: number;
   }>;
-  projectPortfolioStats(projectIds: string[]): Promise<ProjectPortfolioEventStats[]>;
+  projectPortfolioStats(projectIds: string[], env?: string): Promise<ProjectPortfolioEventStats[]>;
   /**
    * Hard-delete events for a project. Optionally scope to one env and/or a
    * single actor (distinct_id) — the latter powers person-level deletion.

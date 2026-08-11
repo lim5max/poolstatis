@@ -267,8 +267,8 @@ export class BufferedEventStore implements EventStore {
     return this.inner.entityStatusEvidence(q);
   }
 
-  projectPortfolioStats(projectIds: string[]): Promise<ProjectPortfolioEventStats[]> {
-    return this.inner.projectPortfolioStats(projectIds);
+  projectPortfolioStats(projectIds: string[], env?: string): Promise<ProjectPortfolioEventStats[]> {
+    return this.inner.projectPortfolioStats(projectIds, env);
   }
 
   purge(projectId: string, env?: string, distinctId?: string): Promise<number> {

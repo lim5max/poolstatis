@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
-import { useStore } from '../store';
-import { DangerConfirm, Panel, EmptyState, ErrorNote, fmtNum, fmtRelative, TableScroll } from '../components/ui';
+import { useAsync, useStore } from '../store';
+import { DangerConfirm, Panel, EmptyState, ErrorNote, Loading, fmtNum, fmtRelative, TableScroll } from '../components/ui';
 import { Onboarding } from './Onboarding';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,9 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { ProjectWithStats, SemanticProjectComparison } from '../api/types';
+import type { ProjectPortfolioResult, ProjectPortfolioRow, ProjectWithStats, SemanticProjectComparison } from '../api/types';
+
+const UNAVAILABLE_PORTFOLIO = new Promise<null>(() => {});
 
 export function Projects() {
   const { projects, project, setProject, tokenKind, projectScope, account, client, refreshProjects, env } = useStore();
@@ -22,9 +24,18 @@ export function Projects() {
   const [deleteTarget, setDeleteTarget] = useState<{ slug: string; name: string } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const healthy = projects.filter((item) => item.health === 'healthy').length;
-  const attention = projects.filter((item) => item.health === 'needs_attention').length;
-  const noData = projects.filter((item) => item.health === 'no_data').length;
+  const projectFingerprint = projects.map((item) => item.slug).join('|');
+  const portfolio = useAsync<ProjectPortfolioResult | null>(
+    () => client?.projectPortfolio
+      ? client.projectPortfolio(env)
+      : UNAVAILABLE_PORTFOLIO,
+    [client, env, projectFingerprint],
+  );
+  const hasScopedPortfolio = portfolio.data !== null && portfolio.data.scope.environment === env;
+  const displayProjects = hasScopedPortfolio ? portfolio.data!.projects : projects;
+  const healthy = hasScopedPortfolio ? displayProjects.filter((item) => item.health === 'healthy').length : 0;
+  const attention = hasScopedPortfolio ? displayProjects.filter((item) => item.health === 'needs_attention').length : 0;
+  const noData = hasScopedPortfolio ? displayProjects.filter((item) => item.health === 'no_data').length : 0;
 
   const remove = async () => {
     if (!deleteTarget || !client) return;
@@ -52,28 +63,32 @@ export function Projects() {
         right={(
           <div className="flex items-center gap-2">
             {projectScope === 'project' && <span className="text-xs text-muted-foreground">secret key scope</span>}
+            {hasScopedPortfolio && <span className="text-xs text-muted-foreground">{env} · {portfolio.data!.scope.usage_cycle.basis.replace('_', ' ')}</span>}
+            {client?.projectPortfolio && <Button variant="outline" size="sm" onClick={portfolio.reload} disabled={portfolio.loading}>Refresh</Button>}
             {canCreate && client && <Button size="sm" onClick={() => setCreateOpen(true)}>New project</Button>}
           </div>
         )}
       >
-        {projects.length > 0 && <div className="mb-4 grid grid-cols-3 overflow-hidden rounded-control border text-center"><PortfolioStat label="Healthy" value={healthy} /><PortfolioStat label="Needs attention" value={attention} /><PortfolioStat label="No data" value={noData} /></div>}
-        {projects.length === 0 ? <EmptyState headline={tokenKind === 'user' ? 'No projects in this workspace' : 'No projects'} lead={tokenKind === 'user' ? 'Ask an owner or admin to create one.' : 'Use New project above or create one with the CLI.'} /> : (
+        {hasScopedPortfolio && displayProjects.length > 0 && <div className="mb-4 grid grid-cols-3 overflow-hidden rounded-control border text-center"><PortfolioStat label="Healthy" value={healthy} /><PortfolioStat label="Needs attention" value={attention} /><PortfolioStat label="No data" value={noData} /></div>}
+        {portfolio.error && <div className="mb-4"><ErrorNote>{portfolio.error}</ErrorNote></div>}
+        {projects.length === 0 ? <EmptyState headline={tokenKind === 'user' ? 'No projects in this workspace' : 'No projects'} lead={tokenKind === 'user' ? 'Ask an owner or admin to create one.' : 'Use New project above or create one with the CLI.'} /> : portfolio.loading && !hasScopedPortfolio && Boolean(client?.projectPortfolio) ? <Loading what={`Reading ${env} project portfolio…`} /> : (
           <TableScroll><Table>
             <TableHeader>
-              <TableRow><TableHead>Project</TableHead><TableHead>Health</TableHead><TableHead>Last event</TableHead><TableHead>Current usage</TableHead><TableHead>Key outcome</TableHead><TableHead>Attention</TableHead><TableHead /></TableRow>
+              <TableRow><TableHead>Project</TableHead><TableHead>Health</TableHead><TableHead>Last event</TableHead><TableHead>Accepted this cycle</TableHead><TableHead>Key outcome</TableHead><TableHead>Attention</TableHead><TableHead /></TableRow>
             </TableHeader>
             <TableBody>
-              {projects.map((p) => (
+              {displayProjects.map((p) => {
+                const scoped = hasScopedPortfolio ? p as ProjectPortfolioRow : null;
+                return (
                 <TableRow key={p.slug}>
                   <TableCell><div className="font-medium flex items-center gap-2">{p.name}{p.slug === project && <Badge className="text-xs">selected</Badge>}</div><div className="text-xs text-muted-foreground">{p.slug} · {p.timezone}</div></TableCell>
                   <TableCell>
-                    <Badge variant={p.health === 'healthy' ? 'default' : 'outline'}>{p.health === 'healthy' ? 'Healthy' : p.health === 'needs_attention' ? 'Needs attention' : 'No data'}</Badge>
-                    <ProjectHealthDetails evaluation={p.health_evaluation} />
+                    {scoped ? <><Badge variant={scoped.health === 'healthy' ? 'default' : 'outline'}>{scoped.health === 'healthy' ? 'Healthy' : scoped.health === 'needs_attention' ? 'Needs attention' : 'No data'}</Badge><ProjectHealthDetails evaluation={scoped.health_evaluation} /></> : <span className="text-xs text-muted-foreground">Unavailable for {env}</span>}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{p.last_event_at ? fmtRelative(p.last_event_at) : 'Never'}</TableCell>
-                  <TableCell><div className="tabular-nums">{fmtNum(p.events_30d ?? 0)} <span className="text-xs text-muted-foreground">events · 30d</span></div><div className="text-xs text-muted-foreground">{fmtNum(p.events_24h ?? 0)} · 24h / {fmtNum(p.events_7d ?? 0)} · 7d</div></TableCell>
+                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{scoped?.last_event_at ? fmtRelative(scoped.last_event_at) : scoped ? `Never in ${env}` : 'Unavailable'}</TableCell>
+                  <TableCell>{scoped ? <><div className="tabular-nums">{fmtNum(scoped.current_usage.accepted_events)} <span className="text-xs text-muted-foreground">accepted · {scoped.current_usage.period}</span></div><div className="text-xs text-muted-foreground">{scoped.current_usage.last_ingest_at ? `Last ingest ${fmtRelative(scoped.current_usage.last_ingest_at)}` : `No accepted ${env} events this cycle`}</div></> : <span className="text-xs text-muted-foreground">Unavailable</span>}</TableCell>
                   <TableCell><Badge variant={p.key_outcome_available ? 'outline' : 'secondary'}>{p.key_outcome_available ? `${p.active_outcome_contracts} active contract${p.active_outcome_contracts === 1 ? '' : 's'}` : 'Unavailable'}</Badge><div className="mt-1 text-xs text-muted-foreground">{p.active_metrics} metrics · {p.funnels} funnels</div></TableCell>
-                  <TableCell>{(p.attention ?? []).length === 0 ? <span className="text-xs text-muted-foreground">None</span> : <div className="max-w-64"><div className="mb-1 text-xs text-muted-foreground">{p.attention.length} attention item{p.attention.length === 1 ? '' : 's'}</div><div className="flex flex-wrap gap-1">{p.attention.slice(0, 2).map((reason) => <Badge key={reason} variant="outline" className="font-normal">{reason}</Badge>)}</div></div>}</TableCell>
+                  <TableCell>{!scoped ? <span className="text-xs text-muted-foreground">Unavailable</span> : scoped.attention.length === 0 ? <span className="text-xs text-muted-foreground">None</span> : <div className="max-w-64"><div className="mb-1 text-xs text-muted-foreground">{scoped.attention.length} attention item{scoped.attention.length === 1 ? '' : 's'}</div><div className="flex flex-wrap gap-1">{scoped.attention.slice(0, 2).map((reason) => <Badge key={reason} variant="outline" className="font-normal">{reason}</Badge>)}</div></div>}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="sm" onClick={() => open(p.slug)} aria-label={`Open ${p.name}`}>Open</Button>
@@ -89,7 +104,8 @@ export function Projects() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table></TableScroll>
         )}
@@ -165,9 +181,21 @@ function ProjectComparison({
 }) {
   const [metricKey, setMetricKey] = useState('');
   const [selected, setSelected] = useState(() => new Set(projects.slice(0, 8).map((item) => item.slug)));
-  const [result, setResult] = useState<SemanticProjectComparison | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const scopeKey = [
+    env,
+    metricKey.trim(),
+    projects.map((item) => item.slug).join(','),
+    [...selected].sort().join(','),
+  ].join('\u0000');
+  const latestScope = useRef(scopeKey);
+  latestScope.current = scopeKey;
+  const requestGeneration = useRef(0);
+  const [result, setResult] = useState<{ scope: string; value: SemanticProjectComparison } | null>(null);
+  const [busyScope, setBusyScope] = useState<string | null>(null);
+  const [error, setError] = useState<{ scope: string; message: string } | null>(null);
+  const visibleResult = result?.scope === scopeKey && result.value.scope.environment === env ? result.value : null;
+  const visibleError = error?.scope === scopeKey ? error.message : null;
+  const busy = busyScope === scopeKey;
 
   const toggleProject = (slug: string) => {
     setSelected((current) => {
@@ -179,22 +207,32 @@ function ProjectComparison({
     setResult(null);
   };
   const run = async () => {
+    const generation = ++requestGeneration.current;
+    const requestedScope = scopeKey;
     const to = new Date();
     const from = new Date(to.getTime() - 30 * 86_400_000);
-    setBusy(true);
+    setBusyScope(requestedScope);
     setError(null);
     setResult(null);
     try {
-      setResult(await compare({
+      const response = await compare({
         metric_key: metricKey.trim(),
         projects: projects.filter((item) => selected.has(item.slug)).map((item) => item.slug),
         environment: env,
         window: { from: from.toISOString(), to: to.toISOString() },
-      }));
+      });
+      if (generation !== requestGeneration.current || latestScope.current !== requestedScope) return;
+      if (response.scope.environment !== env) {
+        setError({ scope: requestedScope, message: 'Project comparison returned a different environment scope.' });
+        return;
+      }
+      setResult({ scope: requestedScope, value: response });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Project comparison failed.');
+      if (generation === requestGeneration.current && latestScope.current === requestedScope) {
+        setError({ scope: requestedScope, message: cause instanceof Error ? cause.message : 'Project comparison failed.' });
+      }
     } finally {
-      setBusy(false);
+      if (generation === requestGeneration.current && latestScope.current === requestedScope) setBusyScope(null);
     }
   };
   const ready = selected.size >= 2 && metricKey.trim().length > 0;
@@ -223,20 +261,20 @@ function ProjectComparison({
         <p className="text-xs text-muted-foreground">
           Values are shown only when key, purpose, type, aggregation and semantic fingerprint match in every selected project.
         </p>
-        {error && <ErrorNote>{error}</ErrorNote>}
-        {result?.state === 'unavailable' && (
+        {visibleError && <ErrorNote>{visibleError}</ErrorNote>}
+        {visibleResult?.state === 'unavailable' && (
           <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
             <div className="font-medium">Comparison unavailable</div>
             <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
-              {result.incompatibilities.map((item, index) => <li key={`${item.project_slug}:${item.code}:${index}`}><span className="font-medium text-foreground">{item.project_slug}</span> — {item.message}</li>)}
+              {visibleResult.incompatibilities.map((item, index) => <li key={`${item.project_slug}:${item.code}:${index}`}><span className="font-medium text-foreground">{item.project_slug}</span> — {item.message}</li>)}
             </ul>
-            <Button asChild className="mt-4"><a href={result.primary_action.href}>{result.primary_action.label}</a></Button>
+            <Button asChild className="mt-4"><a href={visibleResult.primary_action.href}>{visibleResult.primary_action.label}</a></Button>
           </div>
         )}
-        {result?.state === 'ready' && (
+        {visibleResult?.state === 'ready' && (
           <TableScroll testId="project-comparison-scroll"><Table>
             <TableHeader><TableRow><TableHead>Project</TableHead><TableHead className="text-right">Value</TableHead><TableHead className="text-right">Events</TableHead><TableHead className="text-right">Actors</TableHead><TableHead className="text-right">Registered</TableHead></TableRow></TableHeader>
-            <TableBody>{result.projects.map((item) => <TableRow key={item.slug}>
+            <TableBody>{visibleResult.projects.map((item) => <TableRow key={item.slug}>
               <TableCell><div className="font-medium">{item.name}</div><code className="text-xs text-muted-foreground">{item.slug}</code></TableCell>
               <TableCell className="text-right tabular-nums">{fmtNum(item.value ?? 0)}</TableCell>
               <TableCell className="text-right tabular-nums">{fmtNum(item.events ?? 0)}</TableCell>

@@ -795,6 +795,29 @@ export interface ProjectWithStats {
   };
 }
 
+export interface ProjectPortfolioRow extends ProjectWithStats {
+  environment: string;
+  current_usage: {
+    meter: 'events_stored';
+    period: string;
+    accepted_events: number;
+    last_ingest_at: string | null;
+    source: 'usage_ledger';
+    basis: 'ingest_time';
+  };
+}
+
+export interface ProjectPortfolioResult {
+  schema_version: 1;
+  generated_at: string;
+  scope: {
+    credential: 'organization' | 'project';
+    environment: string;
+    usage_cycle: { from: string; to: string; timezone: 'UTC'; basis: 'ingest_time' };
+  };
+  projects: ProjectPortfolioRow[];
+}
+
 export interface AccountMode {
   schema_version: 1;
   deployment: {

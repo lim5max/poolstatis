@@ -6,6 +6,7 @@ import { Profile } from './screens/Profile';
 import { Projects } from './screens/Projects';
 import { Registry } from './screens/Registry';
 import { useStore } from './store';
+import type { SemanticProjectComparison } from './api/types';
 
 vi.mock('./store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./store')>()),
@@ -130,6 +131,69 @@ describe('semantic control surfaces', () => {
       projects: ['alpha', 'bravo'],
       environment: 'prod',
     }));
+  });
+
+  it('drops a slow comparison when the environment scope changes', async () => {
+    let resolveProd: ((value: SemanticProjectComparison) => void) | undefined;
+    const prodResponse = new Promise<SemanticProjectComparison>((resolve) => { resolveProd = resolve; });
+    const devResponse = {
+      schema_version: 1 as const,
+      state: 'ready' as const,
+      generated_at: '2026-08-11T11:00:00.000Z',
+      metric: {
+        key: metric.key, purpose: metric.purpose, type: metric.type,
+        aggregation: 'unique_actors', fingerprint: currentDefinition.fingerprint,
+      },
+      scope: {
+        environment: 'dev',
+        window: { from: '2026-07-12T10:00:00.000Z', to: '2026-08-11T10:00:00.000Z', timezone: 'UTC' as const },
+      },
+      projects: [
+        { slug: 'alpha', name: 'Alpha', fingerprint: currentDefinition.fingerprint, value: 13, events: 13, actors: 13, registered_coverage: 1 },
+        { slug: 'bravo', name: 'Bravo', fingerprint: currentDefinition.fingerprint, value: 8, events: 8, actors: 8, registered_coverage: 1 },
+      ],
+      incompatibilities: [],
+      primary_action: {
+        id: 'open_comparison_evidence' as const, kind: 'navigate' as const,
+        label: 'Review comparison evidence', href: '/projects#comparison-evidence',
+      },
+    };
+    const compareProjects = vi.fn()
+      .mockReturnValueOnce(prodResponse)
+      .mockResolvedValueOnce(devResponse);
+    const client = { compareProjects };
+    let currentStore = {
+      projects: [
+        { slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 1, funnels: 0, events_30d: 100 },
+        { slug: 'bravo', name: 'Bravo', timezone: 'UTC', active_metrics: 1, funnels: 0, events_30d: 80 },
+      ],
+      project: 'alpha', setProject: vi.fn(), tokenKind: 'personal' as const, projectScope: 'org' as const,
+      account: null, client, refreshProjects: vi.fn(), env: 'prod',
+    };
+    mockedStore.mockImplementation(() => currentStore as never);
+    const view = render(<MemoryRouter><Projects /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Metric key'), { target: { value: metric.key } });
+    fireEvent.click(screen.getByRole('button', { name: 'Compare projects' }));
+
+    currentStore = { ...currentStore, env: 'dev' };
+    view.rerender(<MemoryRouter><Projects /></MemoryRouter>);
+    expect(screen.getByText('dev · last 30 days · UTC')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveProd?.({
+        ...devResponse,
+        generated_at: '2026-08-11T10:00:00.000Z',
+        scope: { ...devResponse.scope, environment: 'prod' },
+        projects: devResponse.projects.map((project) => ({ ...project, value: 777 })),
+      });
+      await prodResponse;
+    });
+    expect(screen.queryByText('777')).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Value' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Compare projects' }));
+    expect((await screen.findAllByText('13')).length).toBeGreaterThan(0);
+    expect(compareProjects).toHaveBeenNthCalledWith(2, expect.objectContaining({ environment: 'dev' }));
   });
 
   it('previews dependency impact before a confirmed immutable metric revision', async () => {

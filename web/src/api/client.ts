@@ -1,6 +1,6 @@
 import type {
   AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataHealthResult, DataHealthVerifyInput, DataHealthVerifyResult, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
-  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
+  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectPortfolioResult, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
 import type { OperationalQueryInput, OperationalQueryResult, PersonResult } from '../analysis/operations';
@@ -172,6 +172,13 @@ export class PoolstatisClient {
   // ---- projects ----
   listProjects() {
     return this.req<{ projects: ProjectWithStats[]; scope: 'org' | 'project' }>('GET', '/api/v1/projects');
+  }
+
+  projectPortfolio(env: string) {
+    return this.req<ProjectPortfolioResult>(
+      'GET',
+      `/api/v1/projects/portfolio?env=${encodeURIComponent(env)}`,
+    );
   }
 
   compareProjects(body: {

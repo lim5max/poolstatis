@@ -297,6 +297,29 @@ export interface ProjectWithStats extends Pick<Project, 'slug' | 'name' | 'timez
   health_evaluation: ProjectHealthEvaluation;
 }
 
+export interface ProjectPortfolioRow extends ProjectWithStats {
+  environment: string;
+  current_usage: {
+    meter: 'events_stored';
+    period: string;
+    accepted_events: number;
+    last_ingest_at: string | null;
+    source: 'usage_ledger';
+    basis: 'ingest_time';
+  };
+}
+
+export interface ProjectPortfolioResult {
+  schema_version: 1;
+  generated_at: string;
+  scope: {
+    credential: 'organization' | 'project';
+    environment: string;
+    usage_cycle: { from: string; to: string; timezone: 'UTC'; basis: 'ingest_time' };
+  };
+  projects: ProjectPortfolioRow[];
+}
+
 export interface ProjectHealthEvaluation {
   source: 'server';
   evaluated_at: string;
@@ -364,7 +387,12 @@ export async function listProjectsWithStats(
   pool: pg.Pool,
   eventStore: EventStore,
   orgId: string,
+  options: { env?: string; projectId?: string; evaluatedAt?: Date } = {},
 ): Promise<ProjectWithStats[]> {
+  const params: unknown[] = [orgId];
+  const projectPredicate = options.projectId === undefined
+    ? ''
+    : ` AND p.id = $${params.push(options.projectId)}`;
   const { rows } = await pool.query(
     `SELECT p.id, p.slug, p.name, p.timezone,
        metric_stats.active_metrics,
@@ -385,14 +413,14 @@ export async function listProjectsWithStats(
        SELECT count(*) FILTER (WHERE status = 'active')::int AS active_outcome_contracts
        FROM measurement_contracts WHERE project_id = p.id
      ) contract_stats
-     WHERE p.org_id = $1 ORDER BY p.created_at`,
-    [orgId],
+     WHERE p.org_id = $1${projectPredicate} ORDER BY p.created_at`,
+    params,
   );
   const eventStats = new Map(
-    (await eventStore.projectPortfolioStats(rows.map((row) => row.id as string)))
+    (await eventStore.projectPortfolioStats(rows.map((row) => row.id as string), options.env))
       .map((stats) => [stats.project_id, stats]),
   );
-  const evaluatedAt = new Date();
+  const evaluatedAt = options.evaluatedAt ?? new Date();
   return rows.map((row) => {
     const activeMetrics = Number(row.active_metrics);
     const proposedMetrics = Number(row.proposed_metrics);
@@ -429,6 +457,81 @@ export async function listProjectsWithStats(
       ...evaluatedHealth,
     };
   });
+}
+
+function safeUsageQuantity(value: string | number): number {
+  const quantity = Number(value);
+  if (!Number.isSafeInteger(quantity) || quantity < 0) {
+    throw new Error('portfolio usage cannot be represented as a non-negative safe integer');
+  }
+  return quantity;
+}
+
+export async function getProjectPortfolio(
+  pool: pg.Pool,
+  eventStore: EventStore,
+  orgId: string,
+  env: string,
+  credential: 'organization' | 'project',
+  projectId?: string,
+  now = new Date(),
+): Promise<ProjectPortfolioResult> {
+  const cycleFrom = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const cycleTo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const period = cycleFrom.toISOString().slice(0, 7);
+  const projects = await listProjectsWithStats(pool, eventStore, orgId, {
+    env,
+    ...(projectId ? { projectId } : {}),
+    evaluatedAt: now,
+  });
+  const usageParams: unknown[] = [orgId, env, cycleFrom.toISOString().slice(0, 10)];
+  const projectPredicate = projectId === undefined
+    ? ''
+    : ` AND l.project_id = $${usageParams.push(projectId)}`;
+  const usage = await pool.query<{
+    project_slug: string;
+    quantity: string;
+    last_ingest_at: Date | string;
+  }>(
+    `SELECT p.slug AS project_slug, sum(l.quantity)::bigint::text AS quantity, max(l.ingested_at) AS last_ingest_at
+     FROM usage_ledger l
+     JOIN projects p ON p.org_id = l.org_id AND p.id = l.project_id
+     WHERE l.org_id = $1 AND l.env = $2 AND l.meter_key = 'events_stored'
+       AND l.period_start = $3::date${projectPredicate}
+     GROUP BY p.slug`,
+    usageParams,
+  );
+  const usageByProject = new Map(usage.rows.map((row) => [row.project_slug, row]));
+
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    scope: {
+      credential,
+      environment: env,
+      usage_cycle: {
+        from: cycleFrom.toISOString(),
+        to: cycleTo.toISOString(),
+        timezone: 'UTC',
+        basis: 'ingest_time',
+      },
+    },
+    projects: projects.map((project) => {
+      const usageRow = usageByProject.get(project.slug);
+      return {
+        ...project,
+        environment: env,
+        current_usage: {
+          meter: 'events_stored',
+          period,
+          accepted_events: safeUsageQuantity(usageRow?.quantity ?? '0'),
+          last_ingest_at: usageRow ? new Date(usageRow.last_ingest_at).toISOString() : null,
+          source: 'usage_ledger',
+          basis: 'ingest_time',
+        },
+      };
+    }),
+  };
 }
 
 export async function getProjectBySlug(

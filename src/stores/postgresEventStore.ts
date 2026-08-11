@@ -2375,8 +2375,10 @@ export class PostgresEventStore implements EventStore {
     };
   }
 
-  async projectPortfolioStats(projectIds: string[]): Promise<ProjectPortfolioEventStats[]> {
+  async projectPortfolioStats(projectIds: string[], env?: string): Promise<ProjectPortfolioEventStats[]> {
     if (projectIds.length === 0) return [];
+    const params: unknown[] = [projectIds];
+    const envPredicate = env === undefined ? '' : ` AND env = $${params.push(env)}`;
     const { rows } = await this.pool.query<{
       project_id: string;
       events_24h: number;
@@ -2403,16 +2405,18 @@ export class PostgresEventStore implements EventStore {
            count(*) FILTER (WHERE registered)::int AS registered_events_30d
          FROM events
          WHERE project_id = requested.project_id
+           ${envPredicate}
            AND "timestamp" >= now() - interval '30 days'
        ) recent ON true
        LEFT JOIN LATERAL (
          SELECT "timestamp" AS last_event_at
          FROM events
          WHERE project_id = requested.project_id
+           ${envPredicate}
          ORDER BY "timestamp" DESC
          LIMIT 1
        ) latest ON true`,
-      [projectIds],
+      params,
     );
     return rows.map((row) => ({
       project_id: row.project_id,
