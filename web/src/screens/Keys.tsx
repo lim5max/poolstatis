@@ -20,8 +20,13 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import type { ApiKeyRow, PersonalToken } from '../api/types';
-import { credentialHealth, credentialPermissions } from '../analysis/semanticHealth';
+import type {
+  ApiKeyRow,
+  CredentialRotationPolicy,
+  CredentialRotationRecommendation,
+  PersonalToken,
+} from '../api/types';
+import { credentialPermissions } from '../analysis/semanticHealth';
 
 type IssuableKind = 'ingest' | 'secret' | 'personal';
 
@@ -36,6 +41,8 @@ interface KeyListItem {
   lastUsedAt: string | null;
   revokedAt: string | null;
   owner: 'project' | 'personal';
+  credentialPolicy: CredentialRotationPolicy;
+  rotationRecommendation: CredentialRotationRecommendation;
 }
 
 export function Keys() {
@@ -107,6 +114,7 @@ export function Keys() {
     else if (status === 'healthy') counts.healthy += 1;
     return counts;
   }, { healthy: 0, attention: 0 });
+  const policySummaries = [...new Set(rows.map(policySummary))];
 
   return (
     <div className="space-y-4">
@@ -188,6 +196,9 @@ export function Keys() {
         <p className="mt-3 text-xs text-muted-foreground">
           Rotation is replacement-first: create a new key, verify its consumer, then revoke the predecessor. Plaintext keys cannot be recovered.
         </p>
+        {policySummaries.map((summary) => (
+          <p key={summary} className="mt-1 text-xs text-muted-foreground">{summary}</p>
+        ))}
         {refreshError && (
           <div className="mt-3">
             <ErrorNote>Could not refresh the key list: {refreshError}</ErrorNote>
@@ -240,6 +251,8 @@ function projectKeyRow(key: ApiKeyRow, project: string): KeyListItem {
     lastUsedAt: key.last_used_at,
     revokedAt: key.revoked_at,
     owner: 'project',
+    credentialPolicy: key.credential_policy,
+    rotationRecommendation: key.rotation_recommendation,
   };
 }
 
@@ -255,6 +268,8 @@ function personalKeyRow(token: PersonalToken): KeyListItem {
     lastUsedAt: token.last_used_at,
     revokedAt: token.revoked_at,
     owner: 'personal',
+    credentialPolicy: token.credential_policy,
+    rotationRecommendation: token.rotation_recommendation,
   };
 }
 
@@ -264,7 +279,13 @@ function KindChip({ kind }: { kind: IssuableKind }) {
 }
 
 function keyHealth(item: KeyListItem) {
-  return credentialHealth({ created_at: item.createdAt, last_used_at: item.lastUsedAt, revoked_at: item.revokedAt });
+  return item.rotationRecommendation;
+}
+
+function policySummary(item: KeyListItem): string {
+  const policy = item.credentialPolicy;
+  const source = policy.source === 'poolstatis_core_default' ? 'Core' : policy.source;
+  return `${source} ${policy.mode} policy v${policy.version} · review at ${policy.thresholds.age_review_days}d age, ${policy.thresholds.idle_review_days}d idle, or ${policy.thresholds.unused_review_days}d unused; no automatic expiry.`;
 }
 
 function CredentialHealthBadge({ item }: { item: KeyListItem }) {
@@ -422,6 +443,7 @@ function KeyDetails({ item, onDone }: { item: KeyListItem; onDone: () => void })
           <div className="col-span-2"><dt className="text-xs text-muted-foreground">Permissions</dt><dd className="mt-1">{credentialPermissions(item.kind)}</dd></div>
         </dl>
         <div className="rounded-md border p-3 text-sm"><div className="font-medium">{health.label}</div><p className="mt-1 text-xs text-muted-foreground">{health.recommendation}</p></div>
+        <p className="text-xs text-muted-foreground">{policySummary(item)}</p>
         <div className="rounded-md bg-muted/50 p-3 text-sm">
           <p className="font-medium">The full key cannot be shown again.</p>
           <p className="mt-1 text-xs text-muted-foreground">Poolstatis does not store its plaintext.</p>

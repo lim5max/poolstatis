@@ -1,5 +1,4 @@
 import type {
-  ApiKeyRow,
   DataQualityIssue,
   Funnel,
   IngestWarning,
@@ -8,7 +7,6 @@ import type {
   Metric,
   MetricUsage,
   ObservedEvent,
-  PersonalToken,
   PropertyDefinition,
   Release,
   SavedAnswer,
@@ -297,21 +295,6 @@ function savedAnswerMetricRefs(answer: SavedAnswer): string[] {
   const evidence = answer.evidence.source_refs.flatMap((ref) =>
     ref.kind === 'metric' && typeof ref.key === 'string' ? [ref.key] : []);
   return [...new Set([...primary, ...evidence])];
-}
-
-export type CredentialHealth = 'healthy' | 'review' | 'revoked';
-
-export function credentialHealth(
-  item: Pick<ApiKeyRow, 'created_at' | 'last_used_at' | 'revoked_at'> | Pick<PersonalToken, 'created_at' | 'last_used_at' | 'revoked_at'>,
-  now = new Date(),
-): { status: CredentialHealth; label: string; recommendation: string } {
-  if (item.revoked_at) return { status: 'revoked', label: 'Revoked', recommendation: 'Audit retained; no credential can authenticate.' };
-  const ageDays = Math.floor((now.getTime() - Date.parse(item.created_at)) / DAY);
-  const idleDays = item.last_used_at ? Math.floor((now.getTime() - Date.parse(item.last_used_at)) / DAY) : null;
-  if (ageDays >= 180) return { status: 'review', label: 'Review age', recommendation: 'No server rotation deadline is configured. If policy requires replacement, create and verify it before revoking this key.' };
-  if (idleDays !== null && idleDays >= 30) return { status: 'review', label: 'Review access', recommendation: 'Confirm the owner and revoke if this integration is abandoned.' };
-  if (item.last_used_at === null && ageDays >= 7) return { status: 'review', label: 'Never used', recommendation: 'Verify the intended owner or revoke the unused key.' };
-  return { status: 'healthy', label: item.last_used_at ? 'Healthy' : 'Ready', recommendation: item.last_used_at ? 'No rotation signal from age or activity.' : 'New credential; verify it before revoking any predecessor.' };
 }
 
 export function credentialPermissions(kind: 'ingest' | 'secret' | 'personal'): string {

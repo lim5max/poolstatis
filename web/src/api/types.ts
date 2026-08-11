@@ -1443,6 +1443,27 @@ export interface MetricUsage {
 
 export type KeyKind = 'ingest' | 'secret' | 'personal' | 'user';
 
+export interface CredentialRotationPolicy {
+  id: 'poolstatis_core.credential_rotation';
+  version: number;
+  source: 'poolstatis_core_default';
+  mode: 'advisory';
+  thresholds: {
+    age_review_days: number;
+    idle_review_days: number;
+    unused_review_days: number;
+  };
+}
+
+export interface CredentialRotationRecommendation {
+  status: 'healthy' | 'review' | 'revoked';
+  code: 'active' | 'new' | 'age_review' | 'idle_review' | 'unused_review' | 'revoked';
+  label: string;
+  recommendation: string;
+  evaluated_at: string;
+  evidence: { age_days: number; idle_days: number | null };
+}
+
 export interface ApiKeyRow {
   id: string;
   kind: KeyKind;
@@ -1453,6 +1474,8 @@ export interface ApiKeyRow {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  credential_policy: CredentialRotationPolicy;
+  rotation_recommendation: CredentialRotationRecommendation;
 }
 
 export interface ApiErrorBody {
@@ -1528,6 +1551,8 @@ export interface PersonalToken {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  credential_policy: CredentialRotationPolicy;
+  rotation_recommendation: CredentialRotationRecommendation;
 }
 
 export interface OrganizationUsage {

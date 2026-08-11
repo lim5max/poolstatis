@@ -104,6 +104,8 @@ export interface ApiKeyRow {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  credential_policy: CredentialRotationPolicy;
+  rotation_recommendation: CredentialRotationRecommendation;
 }
 
 export interface PersonalApiKeyRow {
@@ -113,6 +115,89 @@ export interface PersonalApiKeyRow {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  credential_policy: CredentialRotationPolicy;
+  rotation_recommendation: CredentialRotationRecommendation;
+}
+
+export interface CredentialRotationPolicy {
+  id: 'poolstatis_core.credential_rotation';
+  version: 1;
+  source: 'poolstatis_core_default';
+  mode: 'advisory';
+  thresholds: {
+    age_review_days: 180;
+    idle_review_days: 30;
+    unused_review_days: 7;
+  };
+}
+
+export interface CredentialRotationRecommendation {
+  status: 'healthy' | 'review' | 'revoked';
+  code: 'active' | 'new' | 'age_review' | 'idle_review' | 'unused_review' | 'revoked';
+  label: string;
+  recommendation: string;
+  evaluated_at: string;
+  evidence: { age_days: number; idle_days: number | null };
+}
+
+export const CORE_CREDENTIAL_ROTATION_POLICY: CredentialRotationPolicy = {
+  id: 'poolstatis_core.credential_rotation',
+  version: 1,
+  source: 'poolstatis_core_default',
+  mode: 'advisory',
+  thresholds: {
+    age_review_days: 180,
+    idle_review_days: 30,
+    unused_review_days: 7,
+  },
+};
+
+export function evaluateCredentialRotation(
+  item: { created_at: string | Date; last_used_at: string | Date | null; revoked_at: string | Date | null },
+  evaluatedAt = new Date(),
+): CredentialRotationRecommendation {
+  const ageDays = elapsedWholeDays(evaluatedAt, item.created_at);
+  const idleDays = item.last_used_at ? elapsedWholeDays(evaluatedAt, item.last_used_at) : null;
+  const evidence = { age_days: ageDays, idle_days: idleDays };
+  const evaluated_at = evaluatedAt.toISOString();
+
+  if (item.revoked_at) {
+    return {
+      status: 'revoked', code: 'revoked', label: 'Revoked', evaluated_at, evidence,
+      recommendation: 'Audit retained; this credential cannot authenticate.',
+    };
+  }
+  if (ageDays >= CORE_CREDENTIAL_ROTATION_POLICY.thresholds.age_review_days) {
+    return {
+      status: 'review', code: 'age_review', label: 'Review age', evaluated_at, evidence,
+      recommendation: 'Core advisory age threshold reached. Create and verify a replacement before revoking this key.',
+    };
+  }
+  if (idleDays !== null && idleDays >= CORE_CREDENTIAL_ROTATION_POLICY.thresholds.idle_review_days) {
+    return {
+      status: 'review', code: 'idle_review', label: 'Review access', evaluated_at, evidence,
+      recommendation: 'Core advisory inactivity threshold reached. Confirm the owner and revoke if this integration is abandoned.',
+    };
+  }
+  if (idleDays === null && ageDays >= CORE_CREDENTIAL_ROTATION_POLICY.thresholds.unused_review_days) {
+    return {
+      status: 'review', code: 'unused_review', label: 'Never used', evaluated_at, evidence,
+      recommendation: 'Core advisory unused threshold reached. Verify the intended owner or revoke the unused key.',
+    };
+  }
+  return item.last_used_at
+    ? {
+        status: 'healthy', code: 'active', label: 'Healthy', evaluated_at, evidence,
+        recommendation: 'No Core advisory rotation signal from age or activity.',
+      }
+    : {
+        status: 'healthy', code: 'new', label: 'Ready', evaluated_at, evidence,
+        recommendation: 'New credential; verify it before revoking any predecessor.',
+      };
+}
+
+function elapsedWholeDays(now: Date, value: string | Date): number {
+  return Math.max(0, Math.floor((now.getTime() - new Date(value).getTime()) / 86_400_000));
 }
 
 /** Personal credentials are scoped to their issuing hosted user and never reveal plaintext. */
@@ -128,6 +213,7 @@ export async function listPersonalApiKeys(
      ORDER BY created_at DESC`,
     [orgId, userId],
   );
+  const evaluatedAt = new Date();
   return rows.map((row) => ({
     id: row.id,
     label: row.label,
@@ -135,6 +221,8 @@ export async function listPersonalApiKeys(
     created_at: row.created_at,
     last_used_at: row.last_used_at,
     revoked_at: row.revoked_at,
+    credential_policy: CORE_CREDENTIAL_ROTATION_POLICY,
+    rotation_recommendation: evaluateCredentialRotation(row, evaluatedAt),
   }));
 }
 
@@ -160,6 +248,7 @@ export async function listApiKeys(pool: pg.Pool, projectId: string): Promise<Api
      FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC`,
     [projectId],
   );
+  const evaluatedAt = new Date();
   return rows.map((row) => ({
     id: row.id,
     kind: row.kind,
@@ -171,6 +260,8 @@ export async function listApiKeys(pool: pg.Pool, projectId: string): Promise<Api
     created_at: row.created_at,
     last_used_at: row.last_used_at,
     revoked_at: row.revoked_at,
+    credential_policy: CORE_CREDENTIAL_ROTATION_POLICY,
+    rotation_recommendation: evaluateCredentialRotation(row, evaluatedAt),
   }));
 }
 

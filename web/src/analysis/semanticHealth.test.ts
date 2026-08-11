@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDataHealth, buildRegistryHealth, credentialHealth, previousPeriodQuery, summarizeAnswer } from './semanticHealth';
+import { buildDataHealth, buildRegistryHealth, previousPeriodQuery, summarizeAnswer } from './semanticHealth';
 
 describe('semantic health helpers', () => {
   it('builds a previous exact period and a plain-language delta', () => {
@@ -95,10 +95,4 @@ describe('semantic health helpers', () => {
     ]));
   });
 
-  it('makes rotation replacement-first and reserves revoked for actual revocation', () => {
-    const result = credentialHealth({ created_at: '2025-01-01T00:00:00Z', last_used_at: '2026-08-10T00:00:00Z', revoked_at: null }, new Date('2026-08-11T00:00:00Z'));
-    expect(result.status).toBe('review');
-    expect(result.label).toBe('Review age');
-    expect(result.recommendation).toContain('No server rotation deadline');
-  });
 });

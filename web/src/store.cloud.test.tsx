@@ -42,7 +42,18 @@ describe('hosted StoreProvider connection', () => {
     vi.clearAllMocks();
     current = null;
     localStorage.clear();
-    personalTokens.mockResolvedValue([{ id: 'token-1', label: 'CLI', token: 'pt_...cafe', created_at: '2026-07-01T00:00:00.000Z', last_used_at: null, revoked_at: null }]);
+    personalTokens.mockResolvedValue([{
+      id: 'token-1', label: 'CLI', token: 'pt_...cafe', created_at: '2026-07-01T00:00:00.000Z', last_used_at: null, revoked_at: null,
+      credential_policy: {
+        id: 'poolstatis_core.credential_rotation', version: 1, source: 'poolstatis_core_default', mode: 'advisory',
+        thresholds: { age_review_days: 180, idle_review_days: 30, unused_review_days: 7 },
+      },
+      rotation_recommendation: {
+        status: 'review', code: 'unused_review', label: 'Never used',
+        recommendation: 'Verify the intended owner or revoke the unused key.',
+        evaluated_at: '2026-08-11T00:00:00.000Z', evidence: { age_days: 41, idle_days: null },
+      },
+    }]);
   });
 
   it('keeps a hosted member connected without requesting organization projects, including later hydration', async () => {

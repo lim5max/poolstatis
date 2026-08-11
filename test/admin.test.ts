@@ -163,7 +163,14 @@ describe('projects admin', () => {
 });
 
 describe('api key admin', () => {
-  it('lists the project keys (masked, no token)', async () => {
+  it('lists masked project keys with a versioned Core advisory rotation recommendation', async () => {
+    const issued = await api(env, env.secretToken, 'POST', `${P()}/keys`, { kind: 'secret', label: 'rotation-boundary' });
+    await env.pool.query(
+      `UPDATE api_keys SET created_at = now() - interval '181 days', last_used_at = now() - interval '1 day'
+       WHERE id = $1`,
+      [issued.body.id],
+    );
+
     const res = await api(env, env.secretToken, 'GET', `${P()}/keys`);
     expect(res.status).toBe(200);
     expect(res.body.keys.length).toBeGreaterThanOrEqual(3); // ingest prod, ingest dev, secret
@@ -172,6 +179,24 @@ describe('api key admin', () => {
     expect(res.body.keys[0]).toHaveProperty('last_used_at');
     expect(res.body.keys[0].masked_token).toMatch(/^(pk|sk)_\.\.\.[a-f0-9]{4}$/);
     expect(res.body.keys.some((key: any) => key.kind === 'secret' && key.last_used_at)).toBe(true);
+    const boundary = res.body.keys.find((key: any) => key.id === issued.body.id);
+    expect(boundary).toMatchObject({
+      credential_policy: {
+        id: 'poolstatis_core.credential_rotation',
+        version: 1,
+        source: 'poolstatis_core_default',
+        mode: 'advisory',
+        thresholds: { age_review_days: 180, idle_review_days: 30, unused_review_days: 7 },
+      },
+      rotation_recommendation: {
+        status: 'review',
+        code: 'age_review',
+        label: 'Review age',
+        evaluated_at: expect.any(String),
+        evidence: { age_days: 181, idle_days: 1 },
+      },
+    });
+    expect(boundary.rotation_recommendation.recommendation).toMatch(/create and verify/i);
   });
 
   it('issues an ingest key and returns the token exactly once', async () => {
