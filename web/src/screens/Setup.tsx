@@ -152,8 +152,29 @@ export function Setup() {
 
   useEffect(() => {
     if (!project || eventSeen) return;
-    const timer = window.setInterval(() => proof.reload(), 5000);
-    return () => window.clearInterval(timer);
+    let timer: number | null = null;
+    const stop = () => {
+      if (timer !== null) window.clearInterval(timer);
+      timer = null;
+    };
+    const start = () => {
+      if (document.hidden || timer !== null) return;
+      timer = window.setInterval(() => proof.reload(), 5000);
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+        return;
+      }
+      proof.reload();
+      start();
+    };
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
     // The reload callback is intentionally read from the latest render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventSeen, project]);

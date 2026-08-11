@@ -609,6 +609,37 @@ describe('condensed Setup', () => {
     expect(keyStep.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('pauses first-event polling while the tab is hidden and resumes with an immediate read-back', async () => {
+    vi.useFakeTimers();
+    const onboardingStatus = vi.fn().mockResolvedValue(pendingProof);
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus,
+        projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, funnels: 0, events_30d: 0 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+
+    const view = render(<MemoryRouter><Setup /></MemoryRouter>);
+    await act(async () => { await Promise.resolve(); });
+    expect(onboardingStatus).toHaveBeenCalledTimes(1);
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    expect(onboardingStatus).toHaveBeenCalledTimes(1);
+
+    hidden.mockReturnValue(false);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); await Promise.resolve(); });
+    expect(onboardingStatus).toHaveBeenCalledTimes(2);
+    await act(async () => { vi.advanceTimersByTime(5_000); await Promise.resolve(); });
+    expect(onboardingStatus).toHaveBeenCalledTimes(3);
+
+    view.unmount();
+    hidden.mockRestore();
+    vi.useRealTimers();
+  });
+
   it('resumes at the agent task when the server proves a product key exists', async () => {
     const requestTask = vi.fn().mockResolvedValue(setupTask());
     mockedStore.mockReturnValue({

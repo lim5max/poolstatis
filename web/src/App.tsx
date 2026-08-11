@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import {
@@ -484,9 +484,19 @@ function AccountProfileLink({ collapsed, onNavigate }: { collapsed: boolean; onN
 function Main() {
   const loc = useLocation();
   const navigate = useNavigate();
+  const mainRef = useRef<HTMLElement>(null);
   const { projects, project, setProject, env } = useStore();
   const title = titleFor(loc.pathname);
   const showProject = isProjectScoped(loc.pathname);
+
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    const heading = main.querySelector<HTMLElement>('h1');
+    const focusTarget = heading ?? main;
+    if (focusTarget === heading) heading.tabIndex = -1;
+    focusTarget.focus();
+  }, [loc.pathname]);
 
   return (
     <div className="min-h-0 min-w-0 flex-1 md:h-screen md:overflow-y-auto">
@@ -520,7 +530,7 @@ function Main() {
           </div>
         </div>
       </div>
-      <motion.main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-7xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
+      <motion.main ref={mainRef} id="main-content" tabIndex={-1} className="mx-auto w-full max-w-7xl p-4 pb-20 outline-none md:p-8" key={loc.pathname}
         initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
         <SetupResumeBanner path={loc.pathname} />
         <Routes>

@@ -42,23 +42,38 @@ const result: ControlTowerResult = {
   evidence: {
     state: 'blocked',
     as_of: '2026-08-11T10:00:00.000Z',
-    freshness: 'fresh',
-    source_refs: [{ kind: 'operator_rule', rule_id: 'ingest.warnings', rule_version: 1 }],
+    freshness: 'stale',
+    source_refs: [
+      { kind: 'metric', key: 'signup_conversion', purpose: 'Measure successful account creation.' },
+      { kind: 'funnel', key: 'signup', goal: 'Find the largest signup loss.' },
+      { kind: 'operator_rule', rule_id: 'ingest.warnings', rule_version: 1 },
+    ],
+    aggregation: 'Unique actors completing the metric in the selected period.',
+    denominator: { label: 'Eligible visitors', value: 40 },
+    sample: { eligible: 40, observed: 32, coverage: 0.8 },
     warnings: [{ code: 'clock_skew', message: 'One clock-skew warning remains.' }],
     unavailable_reasons: [],
+    reproducible_query: { kind: 'trend', metric: 'signup_conversion', interval: 'day' },
   },
   primary_action: { id: 'review_ingest_rejected', kind: 'navigate', label: 'Review ingest warnings', href: '/events' },
   secondary_actions: [],
 };
 
 describe('ControlTower', () => {
-  it('renders the answer first, exposes attention evidence and delegates server-owned actions', () => {
+  it('renders the answer first, exposes complete evidence and keeps only one visually primary action', () => {
     const onAction = vi.fn();
     render(<ControlTower result={result} onAction={onAction} />);
 
     expect(screen.getByRole('heading', { name: '2 items need attention' })).toBeInTheDocument();
     expect(screen.getByText('Rejected observations')).toBeInTheDocument();
     expect(screen.getAllByText('Evidence and trust')).toHaveLength(2);
+    expect(screen.getAllByText('Freshness:').some((item) => item.textContent?.includes('stale'))).toBe(true);
+    expect(screen.getByText('signup_conversion — Measure successful account creation.')).toBeInTheDocument();
+    expect(screen.getByText('signup — Find the largest signup loss.')).toBeInTheDocument();
+    expect(screen.getByText(/Sample:/)).toHaveTextContent('32 observed of 40 eligible · 80.0% coverage');
+    expect(screen.getByText(/Reproducible query:/)).toHaveTextContent('"metric":"signup_conversion"');
+    expect(screen.getByRole('button', { name: 'Review ingest warnings' })).toHaveAttribute('data-variant', 'default');
+    expect(screen.getByRole('button', { name: 'Review this attention item' })).toHaveAttribute('data-variant', 'outline');
     fireEvent.click(screen.getAllByRole('button', { name: 'Review ingest warnings' })[0]!);
     expect(onAction).toHaveBeenCalledWith(result.primary_action);
   });

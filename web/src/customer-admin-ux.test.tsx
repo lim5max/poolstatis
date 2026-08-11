@@ -253,4 +253,15 @@ describe('customer admin shell', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument());
     expect(trigger).toHaveFocus();
   });
+
+  it('moves keyboard focus to the main content after route navigation', async () => {
+    render(<MemoryRouter initialEntries={['/analyze/web']}><App /></MemoryRouter>);
+    const usage = screen.getAllByRole('link', { name: 'Usage' })[0]!;
+    usage.focus();
+    fireEvent.click(usage);
+
+    const main = document.getElementById('main-content');
+    await waitFor(() => expect(main).toHaveFocus());
+    expect(main).toHaveAttribute('tabindex', '-1');
+  });
 });
