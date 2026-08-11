@@ -363,7 +363,7 @@ export async function createAnalysisView(
 ): Promise<AnalysisView> {
   const input = analysisViewCreateSchema.parse(raw);
   assertViewScope(project.slug, input.visualization_spec.env, input.visualization_spec);
-  assertSnapshotConsistency(input.visualization_spec, input.evidence);
+  assertSnapshotConsistency(input.visualization_spec, input.answer, input.evidence);
   assertPrivacyBoundary(input);
   await assertCurrentReferences(pool, project.id, input.visualization_spec);
   const fingerprint = viewFingerprint(input.visualization_spec, input.answer, input.evidence);
@@ -465,7 +465,7 @@ export async function updateAnalysisView(
     const spec = patch.visualization_spec ?? visualizationSpecSchema.parse(current.visualization_spec);
     const answer = patch.answer ?? answerSnapshotSchema.parse(current.answer_snapshot);
     const evidence = patch.evidence ?? evidenceSnapshotSchema.parse(current.evidence_snapshot);
-    assertSnapshotConsistency(spec, evidence);
+    assertSnapshotConsistency(spec, answer, evidence);
     if (patch.schema_version !== undefined && patch.schema_version !== current.schema_version) {
       throw badRequest('analysis_view_schema_mismatch', 'schema_version must match the stored answer');
     }
@@ -567,6 +567,13 @@ export async function setAnalysisViewOfficial(
     const current = await selectView(client, project.id, viewId, true);
     if (official && current.status !== 'active') {
       throw new ApiError(409, 'analysis_view_archived', 'an archived saved answer cannot be official');
+    }
+    if (official) {
+      assertSnapshotConsistency(
+        visualizationSpecSchema.parse(current.visualization_spec),
+        answerSnapshotSchema.parse(current.answer_snapshot),
+        evidenceSnapshotSchema.parse(current.evidence_snapshot),
+      );
     }
     if (current.official === official) {
       await client.query('COMMIT');
@@ -850,7 +857,7 @@ function parseRow(projectSlug: string, row: AnalysisViewRow): AnalysisView {
   const evidence = evidenceSnapshotSchema.safeParse(row.evidence_snapshot);
   if (!visualization.success || !answer.success || !evidence.success
     || visualization.data.project !== projectSlug || visualization.data.env !== row.env
-    || snapshotConsistencyIssue(visualization.data, evidence.data)) {
+    || snapshotConsistencyIssue(visualization.data, answer.data, evidence.data)) {
     throw new ApiError(
       409,
       'analysis_view_schema_unsupported',
@@ -959,14 +966,16 @@ function viewFingerprint(
 
 function assertSnapshotConsistency(
   spec: z.infer<typeof visualizationSpecSchema>,
+  answer: z.infer<typeof answerSnapshotSchema>,
   evidence: z.infer<typeof evidenceSnapshotSchema>,
 ): void {
-  const issue = snapshotConsistencyIssue(spec, evidence);
+  const issue = snapshotConsistencyIssue(spec, answer, evidence);
   if (issue) throw badRequest('analysis_view_snapshot_mismatch', issue);
 }
 
 function snapshotConsistencyIssue(
   spec: z.infer<typeof visualizationSpecSchema>,
+  answer: z.infer<typeof answerSnapshotSchema>,
   evidence: z.infer<typeof evidenceSnapshotSchema>,
 ): string | null {
   if (evidence.state !== spec.trust.status) {
@@ -974,6 +983,22 @@ function snapshotConsistencyIssue(
   }
   if (evidence.as_of !== spec.evidence.computedAt) {
     return 'evidence as_of must match the visualization computation time';
+  }
+  if (answer.state === 'ready' && evidence.state !== 'trusted') {
+    return 'ready answers require trusted evidence';
+  }
+  if (answer.state === 'partial' && evidence.state !== 'partial' && evidence.state !== 'blocked') {
+    return 'partial answers require partial or blocked evidence';
+  }
+  if (answer.state === 'empty' && evidence.sample?.observed !== 0) {
+    return 'empty answers require an observed sample of zero';
+  }
+  if ((answer.state === 'unavailable' || answer.state === 'not_configured' || answer.state === 'error')
+    && evidence.state !== 'unavailable') {
+    return `${answer.state} answers require unavailable evidence`;
+  }
+  if (answer.state === 'stale' && evidence.freshness !== 'stale') {
+    return 'stale answers require stale evidence';
   }
   if ((spec.source.kind === 'metric' || spec.source.kind === 'funnel')
     && (!evidence.reproducible_query

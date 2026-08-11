@@ -157,6 +157,37 @@ describe('saved and official analysis views', () => {
       `/api/v1/projects/${env.projectSlug}/analysis-views/${id}/official`,
       { official: true },
     )).status).toBe(409);
+
+    const inconsistent = await api(
+      env,
+      env.secretToken,
+      'POST',
+      `/api/v1/projects/${env.projectSlug}/analysis-views`,
+      { ...analysisViewInput(env.projectSlug), title: 'Inconsistent official candidate' },
+    );
+    const inconsistentId = inconsistent.body.view.id as string;
+    await env.pool.query(
+      `UPDATE analysis_views
+       SET answer_snapshot = jsonb_set(answer_snapshot, '{state}', '"partial"'::jsonb)
+       WHERE id = $1`,
+      [inconsistentId],
+    );
+    const inconsistentOfficial = await api(
+      env,
+      env.personalToken,
+      'PUT',
+      `/api/v1/projects/${env.projectSlug}/analysis-views/${inconsistentId}/official`,
+      { official: true },
+    );
+    expect(inconsistentOfficial.status).toBe(400);
+    expect(inconsistentOfficial.body.error).toMatchObject({
+      code: 'analysis_view_snapshot_mismatch',
+      message: 'partial answers require partial or blocked evidence',
+    });
+    expect((await env.pool.query(
+      'SELECT official FROM analysis_views WHERE id = $1',
+      [inconsistentId],
+    )).rows[0]?.official).toBe(false);
   });
 
   it('fails closed on cross-project/tenant scope, schema drift, and prohibited saved content', async () => {
@@ -278,6 +309,23 @@ describe('saved and official analysis views', () => {
     );
     expect(snapshotRejected.status).toBe(400);
     expect(snapshotRejected.body.error.code).toBe('analysis_view_snapshot_mismatch');
+
+    const inconsistentAnswer = analysisViewInput(env.projectSlug) as Record<string, any>;
+    inconsistentAnswer.visualization_spec.trust.status = 'blocked';
+    inconsistentAnswer.evidence.state = 'blocked';
+    inconsistentAnswer.answer.state = 'ready';
+    const answerRejected = await api(
+      env,
+      env.secretToken,
+      'POST',
+      `/api/v1/projects/${env.projectSlug}/analysis-views`,
+      inconsistentAnswer,
+    );
+    expect(answerRejected.status).toBe(400);
+    expect(answerRejected.body.error).toMatchObject({
+      code: 'analysis_view_snapshot_mismatch',
+      message: 'ready answers require trusted evidence',
+    });
 
     await env.pool.query(
       `UPDATE analysis_views

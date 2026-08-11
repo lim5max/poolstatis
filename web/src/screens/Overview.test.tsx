@@ -166,6 +166,9 @@ describe('goal-aware Attention', () => {
     expect(screen.getByRole('link', { name: /Review definition/ })).toHaveAttribute('href', '/registry');
     expect(screen.getByRole('link', { name: /Review funnel/ })).toHaveAttribute('href', '/analyze/funnels');
     expect(screen.getByRole('link', { name: /Review usage/ })).toHaveAttribute('href', '/usage');
+    expect(screen.getByRole('link', { name: /Review definition/ })).toHaveAttribute('data-variant', 'default');
+    expect(screen.getByRole('link', { name: /Review funnel/ })).toHaveAttribute('data-variant', 'outline');
+    expect(screen.getByRole('link', { name: /Review usage/ })).toHaveAttribute('data-variant', 'outline');
     expect(screen.getByText('stale')).toBeInTheDocument();
     expect(client.controlTower).toHaveBeenCalledOnce();
     expect(client.controlTower).toHaveBeenCalledWith('alpha', 'prod', '30d');

@@ -497,7 +497,7 @@ function followUpAgentTask(spec: VisualizationSpec, summary: StandardAnswerSumma
 }
 
 function savedAnswerInput(run: AnalysisRun, templateKey: string): CreateSavedAnswerInput {
-  const { spec, summary, eventCount } = run;
+  const { spec, summary, eventCount, result } = run;
   if (spec.source.kind !== 'metric' && spec.source.kind !== 'funnel') {
     throw new Error('Product answers require a metric or funnel source.');
   }
@@ -508,6 +508,13 @@ function savedAnswerInput(run: AnalysisRun, templateKey: string): CreateSavedAns
   const coverageMatch = /^(\d+(?:\.\d+)?)% registered$/.exec(spec.evidence.coverage);
   const coverage = coverageMatch ? Number(coverageMatch[1]) / 100 : null;
   const blockers = spec.trust.blockers.map((blocker) => ({ code: blocker.code, message: blocker.message }));
+  const resultEvidence = queryEvidence(result);
+  const primaryValue = summary.currentValue === null
+    ? null
+    : percentageValue ? summary.currentValue * 100 : summary.currentValue;
+  const deltaValue = summary.delta === null
+    ? null
+    : percentageValue ? summary.delta * 100 : summary.delta;
   const query = spec.source.query;
   return {
     title: spec.title,
@@ -516,21 +523,21 @@ function savedAnswerInput(run: AnalysisRun, templateKey: string): CreateSavedAns
     schema_version: 1,
     visualization_spec: spec,
     answer: {
-      state: 'ready',
+      state: savedAnswerState(run),
       headline: spec.title,
       takeaway: summary.takeaway,
-      ...(summary.currentValue === null ? {} : {
+      ...(primaryValue === null ? {} : {
         primary_value: {
-          value: summary.currentValue,
+          value: primaryValue,
           unit: percentageValue ? 'percent' as const : 'count' as const,
-          formatted: formatSavedValue(summary.currentValue, percentageValue),
+          formatted: formatSavedValue(primaryValue, percentageValue),
         },
       }),
-      ...(summary.delta === null ? {} : {
+      ...(deltaValue === null ? {} : {
         delta: {
-          value: summary.delta,
-          unit: percentageValue ? 'percent' as const : 'count' as const,
-          direction: summary.delta > 0 ? 'up' as const : summary.delta < 0 ? 'down' as const : 'flat' as const,
+          value: deltaValue,
+          unit: percentageValue ? 'percentage_point' as const : 'count' as const,
+          direction: deltaValue > 0 ? 'up' as const : deltaValue < 0 ? 'down' as const : 'flat' as const,
           comparison_label: summary.comparison,
         },
       }),
@@ -539,21 +546,41 @@ function savedAnswerInput(run: AnalysisRun, templateKey: string): CreateSavedAns
     evidence: {
       state: spec.trust.status,
       as_of: spec.evidence.computedAt,
-      freshness: 'unknown',
+      freshness: resultEvidence?.freshness ?? 'unknown',
       source_refs: [sourceRef],
       aggregation: spec.evidence.aggregation,
-      sample: { eligible: null, observed: eventCount, coverage },
-      warnings: spec.trust.status === 'unavailable' ? [] : blockers,
-      unavailable_reasons: spec.trust.status === 'unavailable' ? blockers : [],
+      sample: { eligible: null, observed: spec.evidence.sampleSize ?? eventCount, coverage },
+      warnings: spec.trust.status === 'unavailable'
+        ? []
+        : [...(resultEvidence?.warnings ?? []), ...blockers],
+      unavailable_reasons: spec.trust.status === 'unavailable'
+        ? [...(resultEvidence?.unavailable_reasons ?? []), ...blockers]
+        : [],
       reproducible_query: query,
     },
   };
 }
 
 function formatSavedValue(value: number, percentage: boolean): string {
-  return new Intl.NumberFormat(undefined, percentage
-    ? { style: 'percent', maximumFractionDigits: 1 }
-    : { maximumFractionDigits: 2 }).format(value);
+  const formatted = new Intl.NumberFormat(undefined, { maximumFractionDigits: percentage ? 1 : 2 }).format(value);
+  return percentage ? `${formatted}%` : formatted;
+}
+
+function savedAnswerState(run: AnalysisRun): CreateSavedAnswerInput['answer']['state'] {
+  const serverState = queryAnswerState(run.result);
+  if (serverState === 'error' || serverState === 'not_configured' || serverState === 'stale') return serverState;
+  if (run.spec.trust.status === 'unavailable' || serverState === 'unavailable') return 'unavailable';
+  if (countResultPoints(run.result) === 0 || serverState === 'empty') return 'empty';
+  if (run.spec.trust.status === 'partial' || run.spec.trust.status === 'blocked' || serverState === 'partial') return 'partial';
+  return 'ready';
+}
+
+function queryEvidence(result: AnalysisQueryResult) {
+  return (result.kind === 'trend' || result.kind === 'funnel') ? result.evidence : undefined;
+}
+
+function queryAnswerState(result: AnalysisQueryResult) {
+  return (result.kind === 'trend' || result.kind === 'funnel') ? result.answer?.state : undefined;
 }
 
 function visualizationEvidenceTrust(status: VisualizationSpec['trust']['status']): EvidenceTrust {
@@ -757,9 +784,9 @@ function FunnelBiggestLoss({
         )}
         <div className="mt-3 flex flex-wrap items-center gap-3">
           {proposalDecisionId ? (
-            <Button asChild><Link to={`/decisions?decision=${encodeURIComponent(proposalDecisionId)}`}>Open proposal in Decisions</Link></Button>
+            <Button asChild variant="outline"><Link to={`/decisions?decision=${encodeURIComponent(proposalDecisionId)}`}>Open proposal in Decisions</Link></Button>
           ) : proposalRelease ? (
-            <Button type="button" onClick={() => void saveProposal()} disabled={proposalState === 'saving'}>
+            <Button type="button" variant="outline" onClick={() => void saveProposal()} disabled={proposalState === 'saving'}>
               {proposalState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
               {proposalState === 'saving' ? 'Saving proposal…' : 'Save proposal to Decisions'}
             </Button>
@@ -870,6 +897,7 @@ function createVisualizationSpec(input: {
     ? { kind: 'funnel' as const, key: input.funnel?.key ?? input.query.funnel ?? 'inline', query: input.query }
     : { kind: 'metric' as const, key: metricKey(input.query), query: input.query };
   const purpose = input.funnel?.goal ?? input.metric?.purpose ?? input.template.purpose;
+  const trust = evidenceBoundTrust(input.trust.trust, queryEvidence(input.result));
   const spec: VisualizationSpec = {
     schemaVersion: 1,
     id: `${input.query.kind}:${source.key}:${input.env}:${input.result.meta.computed_at}`,
@@ -885,7 +913,7 @@ function createVisualizationSpec(input: {
       timezone: 'UTC',
     },
     source,
-    trust: input.trust.trust,
+    trust,
     evidence: {
       aggregation: aggregationLabel(input.query, input.metric, input.funnel),
       denominator: denominatorLabel(input.result),
@@ -908,6 +936,19 @@ function createVisualizationSpec(input: {
     ],
   };
   return spec;
+}
+
+function evidenceBoundTrust(
+  trust: VisualizationSpec['trust'],
+  evidence: ReturnType<typeof queryEvidence>,
+): VisualizationSpec['trust'] {
+  if (!evidence) return trust;
+  const rank = { trusted: 0, partial: 1, blocked: 2, unavailable: 3 } as const;
+  if (rank[evidence.state] <= rank[trust.status]) return trust;
+  const evidenceReason = evidence.unavailable_reasons[0]?.message
+    ?? evidence.warnings[0]?.message
+    ?? `The query returned ${evidence.state} evidence.`;
+  return { ...trust, status: evidence.state, reason: evidenceReason };
 }
 
 interface TrustRead {

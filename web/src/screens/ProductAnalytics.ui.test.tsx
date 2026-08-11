@@ -145,6 +145,46 @@ describe('Product answer-first surface', () => {
     expect(JSON.stringify(savedPayload)).not.toMatch(/"(?:sql|secret|token|distinct_id)"\s*:/i);
   });
 
+  it('downgrades a saved answer when the query evidence is partial even if registry trust passed', async () => {
+    const current = productStore() as any;
+    current.client.query.mockResolvedValueOnce({
+      kind: 'trend',
+      series: [{ bucket: '2026-08-05T00:00:00Z', value: 8 }],
+      answer: {
+        state: 'ready',
+        headline: 'Eight actors were observed.',
+        takeaway: 'The metric returned an aggregate result.',
+        why_it_matters: metric.purpose,
+      },
+      evidence: {
+        state: 'partial',
+        as_of: '2026-08-06T00:00:00Z',
+        freshness: 'fresh',
+        source_refs: [],
+        warnings: [{ code: 'bounded_output', message: 'The server returned a bounded result.' }],
+        unavailable_reasons: [],
+      },
+      meta: {
+        computed_at: '2026-08-06T00:00:00Z',
+        date_range: { from: '2026-07-07T00:00:00Z', to: '2026-08-06T00:00:00Z' },
+        sampling: null,
+        source: 'native',
+      },
+    });
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
+    expect(await screen.findByText('Partial evidence')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
+
+    const payload = current.client.createAnalysisView.mock.calls[0][1];
+    expect(payload.visualization_spec.trust.status).toBe('partial');
+    expect(payload.evidence.state).toBe('partial');
+    expect(payload.answer.state).toBe('partial');
+  });
+
   it('gives funnels a focused answer surface without the product template grid', async () => {
     const current = productStore([
       {
@@ -197,11 +237,22 @@ describe('Product answer-first surface', () => {
     expect(screen.getByText(/Stable step order resolved an equal loss/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Release abcdef1234/ })).toHaveAttribute('href', '/changes');
     expect(screen.getByRole('link', { name: /Experiment Signup copy/ })).toHaveAttribute('href', '/experiments');
-    fireEvent.click(screen.getByRole('button', { name: 'Save proposal to Decisions' }));
+    expect(screen.getByRole('button', { name: 'Investigate this step' })).toHaveAttribute('data-variant', 'default');
+    const saveProposal = screen.getByRole('button', { name: 'Save proposal to Decisions' });
+    expect(saveProposal).toHaveAttribute('data-variant', 'outline');
+    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
+    expect(current.client.createAnalysisView.mock.calls[0][1].answer).toMatchObject({
+      state: 'ready',
+      primary_value: { value: 30, unit: 'percent', formatted: '30%' },
+      delta: { value: -15, unit: 'percentage_point', direction: 'down' },
+    });
+    fireEvent.click(saveProposal);
     await waitFor(() => expect(current.client.evaluateRelease).toHaveBeenCalledWith('alpha', 'release-1'));
-    expect(screen.getByRole('link', { name: 'Open proposal in Decisions' })).toHaveAttribute('href', '/decisions?decision=decision-1');
+    const openProposal = screen.getByRole('link', { name: 'Open proposal in Decisions' });
+    expect(openProposal).toHaveAttribute('href', '/decisions?decision=decision-1');
+    expect(openProposal).toHaveAttribute('data-variant', 'outline');
     expect(screen.queryByText(/cannot be saved directly to Decisions/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Investigate this step' })).toBeInTheDocument();
     expect(current.client.query).toHaveBeenCalledTimes(1);
     expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({ kind: 'funnel', funnel: 'checkout', env: 'prod' }));
   });

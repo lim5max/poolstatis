@@ -164,7 +164,7 @@ function AttentionQueue({ result, items, telemetryUserId, onRetry }: {
         <span className="font-mono text-sm text-muted-foreground">{items.length}</span>
       </div>
       <div className="grid gap-3 lg:grid-cols-3">
-        {visibleItems.map((item) => (
+        {visibleItems.map((item, index) => (
           <article
             key={item.id}
             className={`rounded-panel border bg-card p-4 ${item.severity === 'critical' || item.severity === 'high' ? 'border-destructive/45' : item.severity === 'medium' ? 'border-warning/45' : ''}`}
@@ -176,7 +176,7 @@ function AttentionQueue({ result, items, telemetryUserId, onRetry }: {
             <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
             <p className="mt-3 border-t pt-3 text-sm"><span className="font-medium">Impact:</span> <span className="text-muted-foreground">{item.impact}</span></p>
-            <AttentionAction action={item.primary_action} telemetryUserId={telemetryUserId} onRetry={onRetry} />
+            <AttentionAction action={item.primary_action} primary={index === 0} telemetryUserId={telemetryUserId} onRetry={onRetry} />
           </article>
         ))}
       </div>
@@ -200,14 +200,15 @@ function guardrailItem(result: ControlTowerResult): AttentionItem {
   };
 }
 
-function AttentionAction({ action, telemetryUserId, onRetry }: {
+function AttentionAction({ action, primary, telemetryUserId, onRetry }: {
   action: ControlTowerAction;
+  primary: boolean;
   telemetryUserId?: string | null;
   onRetry: () => void;
 }) {
   if (action.kind === 'navigate') {
     return (
-      <Button asChild className="mt-4 h-11 w-full sm:w-auto">
+      <Button asChild variant={primary ? 'default' : 'outline'} className="mt-4 h-11 w-full sm:w-auto">
         <Link to={action.href} onClick={() => trackHomeAction(actionTelemetry(action.href), telemetryUserId)}>
           {action.label} <ArrowRight className="size-4" />
         </Link>
@@ -215,9 +216,9 @@ function AttentionAction({ action, telemetryUserId, onRetry }: {
     );
   }
   if (action.kind === 'retry') {
-    return <Button className="mt-4 h-11 w-full sm:w-auto" onClick={onRetry}>{action.label}</Button>;
+    return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-11 w-full sm:w-auto" onClick={onRetry}>{action.label}</Button>;
   }
-  return <Button className="mt-4 h-11 w-full sm:w-auto" disabled>{action.label}</Button>;
+  return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-11 w-full sm:w-auto" disabled>{action.label}</Button>;
 }
 
 function severityLabel(severity: AttentionItem['severity']) {
