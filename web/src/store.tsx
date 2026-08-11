@@ -285,7 +285,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
   data: T | null; error: string | null; loading: boolean; reload: () => void;
 } {
   const [nonce, setNonce] = useState(0);
-  const requestDeps = [...deps, nonce];
+  const requestDeps = [...deps];
   const [snapshot, setSnapshot] = useState<{
     deps: unknown[];
     data: T | null;
@@ -295,16 +295,18 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
 
   useEffect(() => {
     let alive = true;
-    const effectDeps = [...deps, nonce];
-    setSnapshot({ deps: effectDeps, data: null, error: null, loading: true });
+    const effectDeps = [...deps];
+    setSnapshot((previous) => sameAsyncDeps(previous.deps, effectDeps)
+      ? { ...previous, error: null, loading: true }
+      : { deps: effectDeps, data: null, error: null, loading: true });
     fn()
       .then((data) => alive && setSnapshot({ deps: effectDeps, data, error: null, loading: false }))
-      .catch((error) => alive && setSnapshot({
+      .catch((error) => alive && setSnapshot((previous) => ({
         deps: effectDeps,
-        data: null,
+        data: sameAsyncDeps(previous.deps, effectDeps) ? previous.data : null,
         error: error?.message ?? 'failed',
         loading: false,
-      }));
+      })));
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce]);
