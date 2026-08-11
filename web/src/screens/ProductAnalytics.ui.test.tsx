@@ -62,6 +62,7 @@ function funnelResult(actors: number[]) {
 describe('Product answer-first surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
     mockedStore.mockReturnValue(productStore());
   });
 
@@ -78,6 +79,16 @@ describe('Product answer-first surface', () => {
     expect(screen.getByText('Takeaway')).toBeInTheDocument();
     expect(screen.getByText('Previous exact period')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Product answer chart' })).toHaveTextContent('table fallback');
+    expect(screen.getByText(/Aggregation:/)).not.toBeVisible();
+    fireEvent.click(screen.getByText('How this is calculated'));
+    expect(screen.getByText(/Aggregation:/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy follow-up task' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledOnce());
+    const task = vi.mocked(navigator.clipboard.writeText).mock.calls[0]?.[0] as string;
+    expect(task).toContain('Product health · Weekly active users');
+    expect(task).toContain('Project: alpha');
+    expect(task).toContain('Environment: prod');
+    expect(task).not.toMatch(/raw event|sql|secret|token/i);
   });
 
   it('gives funnels a focused answer surface without the product template grid', async () => {

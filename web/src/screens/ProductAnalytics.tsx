@@ -294,7 +294,13 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         />
       )}
 
-      {renderState === 'ready' && currentRun && <AnswerTakeaway summary={currentRun.summary} trust={currentRun.spec.trust.status} />}
+      {renderState === 'ready' && currentRun && (
+        <AnswerTakeaway
+          summary={currentRun.summary}
+          trust={currentRun.spec.trust.status}
+          task={followUpAgentTask(currentRun.spec, currentRun.summary)}
+        />
+      )}
       {renderState === 'ready' && currentRun && <ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
       {currentRun && (
         <div className="space-y-2">
@@ -448,8 +454,27 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   );
 }
 
-function AnswerTakeaway({ summary, trust }: { summary: StandardAnswerSummary; trust: VisualizationSpec['trust']['status'] }) {
+function followUpAgentTask(spec: VisualizationSpec, summary: StandardAnswerSummary): string {
+  return `Investigate the next evidence-backed question for ${spec.title} without changing its definition.\n\nProject: ${spec.project}\nEnvironment: ${spec.env}\nExact UTC range: ${spec.range.from} to ${spec.range.to}\nCurrent takeaway: ${summary.takeaway}\nNext question: ${summary.followUp}\n\nUse registered metrics and trusted properties only. Keep the same scope, report sample and data-quality limits, and prepare a proposal for human review.`;
+}
+
+function AnswerTakeaway({ summary, trust, task }: {
+  summary: StandardAnswerSummary;
+  trust: VisualizationSpec['trust']['status'];
+  task: string;
+}) {
   const trusted = trust === 'trusted';
+  const [copied, setCopied] = useState(false);
+  const [manualCopy, setManualCopy] = useState(false);
+  const copyTask = async () => {
+    try {
+      await navigator.clipboard.writeText(task);
+      setCopied(true);
+      setManualCopy(false);
+    } catch {
+      setManualCopy(true);
+    }
+  };
   return (
     <AnswerCanvas className="border-l-4 border-l-primary">
       <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:p-5">
@@ -457,12 +482,21 @@ function AnswerTakeaway({ summary, trust }: { summary: StandardAnswerSummary; tr
           <div className="text-xs font-medium text-muted-foreground">Takeaway</div>
           <p className="mt-1 text-lg font-semibold leading-snug">{summary.takeaway}</p>
           <p className="mt-2 text-sm text-muted-foreground">Next question: {summary.followUp}</p>
+          <Button type="button" variant="outline" className="mt-3 h-11" onClick={() => void copyTask()}>
+            {copied ? 'Follow-up task copied' : 'Copy follow-up task'}
+          </Button>
         </div>
         <div className="flex flex-wrap gap-2 sm:justify-end">
           <Badge variant={trusted ? 'default' : 'outline'}>{trusted ? 'Trusted evidence' : 'Review trust'}</Badge>
           <Badge variant="outline">{summary.comparison}</Badge>
         </div>
       </div>
+      {manualCopy && (
+        <div className="border-t p-4 sm:p-5">
+          <p role="alert" className="mb-2 text-sm text-muted-foreground">Clipboard access was blocked. Copy the prepared follow-up task manually.</p>
+          <pre tabIndex={0} className="max-h-72 overflow-auto whitespace-pre-wrap rounded-panel border bg-background p-4 text-sm">{task}</pre>
+        </div>
+      )}
     </AnswerCanvas>
   );
 }
