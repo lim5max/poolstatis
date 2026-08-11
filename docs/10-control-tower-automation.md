@@ -12,9 +12,15 @@ feature-flag traffic or deploy state on its own.
   proposal, insight snapshot or delivery for the same run.
 - A breached monitor may create a frozen `pause` or `rollback` proposal. The
   proposal records the exact target, requested allocation, current undo state
-  and SHA-256 confirmation fingerprint. Approving it records a human review and
+  and SHA-256 confirmation fingerprint. Only an authenticated workspace owner
+  or admin user session may approve or reject it. `sk_`/`pt_` credentials and
+  MCP can read the frozen proposal but cannot record a human review. Approval
   returns `requires_existing_human_approved_mutation`; it does not call the flag
   or release mutation service.
+- A proposal-producing monitor is accepted only when the policy, release or
+  experiment target, and feature flag use the same explicit environment. The
+  worker rechecks the flag environment before freezing a proposal, so a legacy
+  or drifted `dev` policy cannot propose a `prod` traffic mutation.
 - Scheduled feeds resolve IANA timezone cadence in Core. Spring DST gaps move to
   the first valid local minute; repeated fall minutes run once using the local
   date idempotency key.
@@ -42,7 +48,6 @@ email, Slack, webhook or another provider exists.
 | `CONTROL_TOWER_AUTOMATION_LEASE_MS` | `300000` | Crash-safe claim lease |
 
 REST resources live below `/api/v1/projects/:slug/monitors`,
-`/insight-feed/*` and `/automation/*`. MCP tools are thin mappings to the same
-authorized REST contract. `web/src/screens/ControlTower.tsx` is route-ready; the
-application shell and navigation intentionally remain unchanged in this
-workstream.
+`/insight-feed/*` and `/automation/*`. MCP exposes proposal reads but deliberately
+omits proposal approve/reject tools. The admin shows review controls only for a
+signed-in workspace owner/admin and keeps API-key sessions read-only.

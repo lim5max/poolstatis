@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { AppContext } from './context.js';
 import type { Project } from '../services/projects.js';
+import type { HumanAutomationReviewer } from './server.js';
 import {
   insightFeedScheduleInputSchema, monitorPolicyInputSchema, notificationDestinationLifecycleSchema,
   notificationDestinationInputSchema, resourceLifecycleSchema, reviewAutomationProposalSchema,
@@ -19,6 +20,7 @@ export function registerAutomationRoutes(
     platform(req: FastifyRequest): void;
     resolveProject(req: FastifyRequest): Promise<Project>;
     actor(req: FastifyRequest): string;
+    humanReviewer(req: FastifyRequest): HumanAutomationReviewer;
   },
 ): void {
   const project = async (req: FastifyRequest) => { helpers.platform(req); return helpers.resolveProject(req); };
@@ -94,10 +96,11 @@ export function registerAutomationRoutes(
   });
   for (const decision of ['approve', 'reject'] as const) {
     app.post(`/api/v1/projects/:slug/automation/proposals/:id/${decision}`, async (req) => {
+      const reviewer = helpers.humanReviewer(req);
       const scoped = await project(req); const { id } = req.params as { id: string };
       const body = reviewAutomationProposalSchema.parse(req.body);
       return reviewAutomationProposal(ctx.pool, scoped.id, id, decision === 'approve' ? 'approved' : 'rejected',
-        body.confirmation_fingerprint, body.rationale, helpers.actor(req));
+        body.confirmation_fingerprint, body.rationale, reviewer);
     });
   }
   app.get('/api/v1/projects/:slug/automation/findings', async (req) => {

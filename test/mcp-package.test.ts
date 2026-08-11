@@ -330,7 +330,7 @@ describe('@poolstatis/mcp release artifact', () => {
     try {
       expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.6.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
-      expect(tools.tools).toHaveLength(141);
+      expect(tools.tools).toHaveLength(139);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'list_project_keys',
@@ -381,10 +381,12 @@ describe('@poolstatis/mcp release artifact', () => {
         'set_insight_feed_schedule_status',
         'list_insight_feed_snapshots',
         'list_automation_proposals',
-        'approve_automation_proposal',
-        'reject_automation_proposal',
         'list_automation_inbox',
         'list_notification_deliveries',
+      ]));
+      expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
+        'approve_automation_proposal',
+        'reject_automation_proposal',
       ]));
       const browserStandard = await client.readResource({
         uri: 'poolstatis://standard/browser-analytics',

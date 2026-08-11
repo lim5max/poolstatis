@@ -20,7 +20,7 @@ describe('route-ready control tower automation screen', () => {
       proposals: [{ id: 'p1', kind: 'pause', status: 'proposed', target: { flag_key: 'activation_rollout' },
         payload: { variants: [] }, undo: { variants: [] }, confirmation_fingerprint: 'a'.repeat(64),
         review_rationale: null, created_at: '2026-08-11T12:00:00Z' }],
-    }} busy={false} error={null} onReload={vi.fn()} onReview={onReview} onSetMonitorStatus={vi.fn()}
+    }} busy={false} error={null} reviewAccess="allowed" onReload={vi.fn()} onReview={onReview} onSetMonitorStatus={vi.fn()}
       onSetScheduleStatus={vi.fn()} onCreateDestination={vi.fn()} onCreateMonitor={vi.fn()} onCreateSchedule={vi.fn()} />);
     expect(screen.getByRole('heading', { name: 'Control tower' })).toBeInTheDocument();
     expect(screen.getByText(/External providers are not configured/i)).toBeInTheDocument();
@@ -29,5 +29,21 @@ describe('route-ready control tower automation screen', () => {
     fireEvent.change(screen.getByLabelText('Review rationale'), { target: { value: 'Reviewed frozen evidence and approved the existing mutation handoff.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Approve proposal' }));
     expect(onReview).toHaveBeenCalledWith('p1', 'approve', 'a'.repeat(64), 'Reviewed frozen evidence and approved the existing mutation handoff.');
+  });
+
+  test('keeps API-key sessions read-only and does not imply they can perform human review', () => {
+    render(<ControlTowerView data={{
+      capabilities: { in_product: 'configured', outbox: 'configured', external: 'not_configured' },
+      destinations: [], policies: [], schedules: [], findings: [], snapshots: [], inbox: [], deliveries: [],
+      proposals: [{ id: 'p1', kind: 'rollback', status: 'proposed', target: { flag_key: 'activation_rollout' },
+        payload: { variants: [] }, undo: { variants: [] }, confirmation_fingerprint: 'b'.repeat(64),
+        review_rationale: null, created_at: '2026-08-11T12:00:00Z' }],
+    }} busy={false} error={null} reviewAccess="sign_in_required" onReload={vi.fn()} onReview={vi.fn()}
+      onSetMonitorStatus={vi.fn()} onSetScheduleStatus={vi.fn()} onCreateDestination={vi.fn()}
+      onCreateMonitor={vi.fn()} onCreateSchedule={vi.fn()} />);
+    expect(screen.getByText(/API keys and MCP can inspect this frozen proposal but cannot approve or reject it/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve proposal' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Review rationale')).not.toBeInTheDocument();
   });
 });

@@ -218,7 +218,8 @@ export interface InsightFeedSchedule {
 export interface AutomationProposal {
   id: string; kind: 'pause' | 'rollback'; status: 'proposed' | 'approved' | 'rejected';
   target: Record<string, unknown>; payload: Record<string, unknown>; undo: Record<string, unknown>;
-  confirmation_fingerprint: string; review_rationale: string | null; created_at: string;
+  confirmation_fingerprint: string; proposed_by?: string; reviewed_by?: string | null;
+  reviewed_at?: string | null; review_rationale: string | null; created_at: string;
 }
 
 export interface MonitorFinding {

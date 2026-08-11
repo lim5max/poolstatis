@@ -9,6 +9,17 @@ export interface AutomationProposal {
   review_rationale: string | null; created_at: string; updated_at: string;
 }
 
+export interface AutomationProposalReviewer {
+  actor: string;
+  role: 'owner' | 'admin';
+}
+
+export interface AutomationProposalReviewResult {
+  proposal: AutomationProposal;
+  review: AutomationProposalReviewer;
+  execution: { state: 'requires_existing_human_approved_mutation'; mutation: 'feature_flag_update' };
+}
+
 export async function listAutomationProposals(pool: pg.Pool, projectId: string): Promise<AutomationProposal[]> {
   const { rows } = await pool.query<Record<string, unknown>>(
     'SELECT * FROM automation_proposals WHERE project_id = $1 ORDER BY created_at DESC, id', [projectId],
@@ -26,8 +37,8 @@ export async function getAutomationProposal(pool: pg.Pool | pg.PoolClient, proje
 
 export async function reviewAutomationProposal(
   pool: pg.Pool, projectId: string, id: string, decision: 'approved' | 'rejected',
-  fingerprint: string, rationale: string, actor: string, now = new Date(),
-): Promise<{ proposal: AutomationProposal; execution: { state: 'requires_existing_human_approved_mutation'; mutation: 'feature_flag_update' } }> {
+  fingerprint: string, rationale: string, reviewer: AutomationProposalReviewer, now = new Date(),
+): Promise<AutomationProposalReviewResult> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -42,15 +53,22 @@ export async function reviewAutomationProposal(
     const updated = await client.query<Record<string, unknown>>(
       `UPDATE automation_proposals SET status = $3, reviewed_by = $4, reviewed_at = $5,
          review_rationale = $6, updated_at = now() WHERE project_id = $1 AND id = $2 RETURNING *`,
-      [projectId, id, decision, actor, now, rationale],
+      [projectId, id, decision, reviewer.actor, now, rationale],
     );
     const proposal = mapProposal(updated.rows[0]!);
     await client.query(
       `INSERT INTO automation_proposal_audit (project_id, proposal_id, event, actor, snapshot)
-       VALUES ($1,$2,$3,$4,$5)`, [projectId, id, decision, actor, JSON.stringify(proposal)],
+       VALUES ($1,$2,$3,$4,$5)`, [projectId, id, decision, reviewer.actor, JSON.stringify({
+        proposal,
+        review: { ...reviewer, identity: 'authenticated_user' },
+      })],
     );
     await client.query('COMMIT');
-    return { proposal, execution: { state: 'requires_existing_human_approved_mutation', mutation: 'feature_flag_update' } };
+    return {
+      proposal,
+      review: reviewer,
+      execution: { state: 'requires_existing_human_approved_mutation', mutation: 'feature_flag_update' },
+    };
   } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
   finally { client.release(); }
 }

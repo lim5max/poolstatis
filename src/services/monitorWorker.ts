@@ -4,6 +4,7 @@ import type { AutomationWorkerOptions, WorkerRunResult } from './automationWorke
 import { errorCode, retryDelay, stableHash } from './automationWorkerShared.js';
 import { activeDestinationIds, enqueueNotifications } from './notificationWorker.js';
 import { getFeatureFlag } from './flags.js';
+import { requireSameMonitorEnvironment } from './monitorPolicies.js';
 
 interface PolicyRevision {
   project_id: string; policy_id: string; policy_version: number; metric_key: string; env: string;
@@ -130,12 +131,12 @@ export class MonitorWorker {
         );
         if (!recent.rows[0]) {
           const snapshot = {
-            policy_version: run.policy_version, metric_key: run.metric_key, comparison_rule: run.comparison_rule,
+            policy_version: run.policy_version, metric_key: run.metric_key, env: run.env, comparison_rule: run.comparison_rule,
             threshold: Number(run.threshold), observed_comparison: comparison,
           };
           const evidence = {
             state: 'trusted', window_from: new Date(run.window_from).toISOString(), window_to: new Date(run.window_to).toISOString(),
-            current: evaluation.current, previous: evaluation.previous, definition_fingerprint: evaluation.definitionFingerprint,
+            env: run.env, current: evaluation.current, previous: evaluation.previous, definition_fingerprint: evaluation.definitionFingerprint,
           };
           const notificationState = (await activeDestinationIds(client, run.project_id, run.destination_ids)).length === 0
             ? 'not_configured' : 'queued';
@@ -171,6 +172,7 @@ export class MonitorWorker {
   private async freezeProposal(client: pg.PoolClient, run: ClaimedRun, findingId: string): Promise<void> {
     const target = run.proposal_target!;
     const flag = await getFeatureFlag(client, run.project_id, target.flag_key, true);
+    requireSameMonitorEnvironment(run.env, flag.env, 'proposal feature flag');
     const frozenTarget = { kind: 'feature_flag', flag_key: flag.key, env: flag.env };
     const payload = { variants: target.variants };
     const undo = { status: flag.status, variants: flag.variants.map(({ key, rollout_percentage }) => ({ key, rollout_percentage })) };

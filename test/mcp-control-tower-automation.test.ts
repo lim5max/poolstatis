@@ -31,8 +31,11 @@ describe('control tower automation MCP parity', () => {
       'create_monitor_policy', 'list_monitor_policies', 'update_monitor_policy', 'set_monitor_policy_status',
       'create_insight_feed_schedule', 'list_insight_feed_schedules', 'update_insight_feed_schedule',
       'set_insight_feed_schedule_status', 'list_monitor_findings', 'list_insight_feed_snapshots',
-      'list_automation_proposals', 'approve_automation_proposal', 'reject_automation_proposal',
+      'list_automation_proposals',
       'list_automation_inbox', 'list_notification_deliveries',
+    ]));
+    expect(names).not.toEqual(expect.arrayContaining([
+      'approve_automation_proposal', 'reject_automation_proposal',
     ]));
     const destination = await client.callTool({
       name: 'create_notification_destination',

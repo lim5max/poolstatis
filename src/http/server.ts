@@ -183,6 +183,32 @@ function authOwner(auth: AuthContext): string {
   return auth.keyId ? `key:${auth.keyId}` : `user:${auth.userId}`;
 }
 
+export interface HumanAutomationReviewer {
+  actor: string;
+  role: 'owner' | 'admin';
+}
+
+/** Automation proposal review is a human control, never an API-key capability. */
+export function requireHumanAutomationReviewer(auth: AuthContext): HumanAutomationReviewer {
+  if (auth.kind !== 'user' || !auth.userId) {
+    throw new ApiError(
+      403,
+      'human_user_required',
+      'automation proposals can only be approved or rejected by an authenticated human user',
+      'open the admin with a signed-in workspace owner or admin; API keys and MCP remain read-only for proposals',
+    );
+  }
+  if (auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+    throw new ApiError(
+      403,
+      'insufficient_role',
+      'this workspace role cannot review automation proposals',
+      'ask a workspace owner or admin to review the frozen proposal',
+    );
+  }
+  return { actor: authOwner(auth), role: auth.userRole };
+}
+
 /** Hosted identities fail closed without a current owner/admin role. */
 export function hasOrganizationManagementRole(auth: AuthContext): boolean {
   if (auth.kind === 'user') {
@@ -763,7 +789,12 @@ function registerPlatformRoutes(
     return project;
   };
 
-  registerAutomationRoutes(app, ctx, { platform, resolveProject, actor: (req) => authOwner(req.auth) });
+  registerAutomationRoutes(app, ctx, {
+    platform,
+    resolveProject,
+    actor: (req) => authOwner(req.auth),
+    humanReviewer: (req) => requireHumanAutomationReviewer(req.auth),
+  });
 
   app.get('/api/v1/account-mode', async (req) => {
     requireKind(req.auth, 'secret', 'personal', 'user');

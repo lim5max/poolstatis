@@ -74,6 +74,102 @@ describe('control tower automation REST contract', () => {
     expect(read.body).toMatchObject({ id: created.body.id, status: 'paused' });
   });
 
+  test('rejects monitor targets and frozen proposal flags from another environment', async () => {
+    const prodFlag = await api(env, env.secretToken, 'POST', path('/flags'), {
+      key: 'prod_activation_rollout', name: 'Prod activation rollout',
+      purpose: 'Controls the production activation rollout for monitor safety.',
+      status: 'active', env: 'prod',
+      variants: [{ key: 'control', rollout_percentage: 50 }, { key: 'test', rollout_percentage: 50 }],
+    });
+    expect(prodFlag.status).toBe(201);
+    const flagMismatch = await api(env, env.secretToken, 'POST', path('/monitors'), {
+      ...monitorInput([]), policy_key: 'dev_policy_prod_flag', env: 'dev', proposal_kind: 'pause',
+      proposal_target: {
+        flag_key: 'prod_activation_rollout',
+        variants: [{ key: 'control', rollout_percentage: 100 }, { key: 'test', rollout_percentage: 0 }],
+      },
+    });
+    expect(flagMismatch.status).toBe(409);
+    expect(flagMismatch.body.error.code).toBe('monitor_environment_mismatch');
+
+    const devFlag = await api(env, env.secretToken, 'POST', path('/flags'), {
+      key: 'dev_activation_rollout', name: 'Dev activation rollout',
+      purpose: 'Controls the development activation rollout for monitor safety.',
+      status: 'active', env: 'dev',
+      variants: [{ key: 'control', rollout_percentage: 50 }, { key: 'test', rollout_percentage: 50 }],
+    });
+    expect(devFlag.status).toBe(201);
+    const experiment = await api(env, env.secretToken, 'POST', path('/experiments'), {
+      key: 'dev_activation_experiment', name: 'Dev activation experiment',
+      hypothesis: 'The development rollout should improve the activation outcome.',
+      flag_key: 'dev_activation_rollout', primary_metric_key: 'activation_completed',
+      secondary_metric_keys: [], env: 'dev', control_variant_key: 'control',
+    });
+    expect(experiment.status).toBe(201);
+    const experimentMismatch = await api(env, env.secretToken, 'POST', path('/monitors'), {
+      ...monitorInput([]), policy_key: 'prod_policy_dev_experiment', env: 'prod',
+      target_kind: 'experiment', target_id: experiment.body.id,
+    });
+    expect(experimentMismatch.status).toBe(409);
+    expect(experimentMismatch.body.error.code).toBe('monitor_environment_mismatch');
+
+    const declaration = { version: 1, contracts: [{
+      key: 'environment_safe_release', name: 'Environment-safe release',
+      business_hypothesis: 'The monitored release should improve product activation.',
+      decision_owner: 'growth-team', primary_metric_key: 'activation_completed',
+      guardrail_metric_keys: [], target_filters: [], baseline_window_days: 1,
+      observation_window_days: 1, minimum_sample_size: 10,
+      expected_direction: 'increase', minimum_meaningful_effect: 0.1,
+      references: {}, status: 'active',
+    }] };
+    const diff = await api(env, env.secretToken, 'POST', path('/contracts/diff'), declaration);
+    expect(diff.status).toBe(200);
+    const applied = await api(env, env.secretToken, 'POST', path('/contracts/apply'), {
+      declaration, expected_revision: diff.body.expected_revision,
+    });
+    expect(applied.status).toBe(200);
+    const release = await api(env, env.secretToken, 'POST', path('/releases'), {
+      idempotency_key: 'dev-environment-safe-release', contract_key: 'environment_safe_release',
+      env: 'dev', repository: 'acme/product', commit_sha: 'd'.repeat(40),
+      flag_key: 'dev_activation_rollout', status: 'planned',
+    });
+    expect(release.status).toBe(201);
+    const releaseMismatch = await api(env, env.secretToken, 'POST', path('/monitors'), {
+      ...monitorInput([]), policy_key: 'prod_policy_dev_release', env: 'prod',
+      target_kind: 'release', target_id: release.body.id,
+    });
+    expect(releaseMismatch.status).toBe(409);
+    expect(releaseMismatch.body.error.code).toBe('monitor_environment_mismatch');
+
+    const otherDevFlag = await api(env, env.secretToken, 'POST', path('/flags'), {
+      key: 'dev_other_rollout', name: 'Other dev rollout',
+      purpose: 'Controls another development rollout that is not linked to the experiment.',
+      status: 'active', env: 'dev',
+      variants: [{ key: 'control', rollout_percentage: 50 }, { key: 'test', rollout_percentage: 50 }],
+    });
+    expect(otherDevFlag.status).toBe(201);
+    const linkedFlagMismatch = await api(env, env.secretToken, 'POST', path('/monitors'), {
+      ...monitorInput([]), policy_key: 'dev_experiment_wrong_flag', env: 'dev',
+      target_kind: 'experiment', target_id: experiment.body.id, proposal_kind: 'pause',
+      proposal_target: {
+        flag_key: 'dev_other_rollout',
+        variants: [{ key: 'control', rollout_percentage: 100 }, { key: 'test', rollout_percentage: 0 }],
+      },
+    });
+    expect(linkedFlagMismatch.status).toBe(409);
+    expect(linkedFlagMismatch.body.error.code).toBe('monitor_proposal_target_mismatch');
+
+    const valid = await api(env, env.secretToken, 'POST', path('/monitors'), {
+      ...monitorInput([]), policy_key: 'dev_experiment_safe_flag', env: 'dev',
+      target_kind: 'experiment', target_id: experiment.body.id, proposal_kind: 'pause',
+      proposal_target: {
+        flag_key: 'dev_activation_rollout',
+        variants: [{ key: 'control', rollout_percentage: 100 }, { key: 'test', rollout_percentage: 0 }],
+      },
+    });
+    expect(valid.status).toBe(201);
+  });
+
   test('creates a timezone-aware scheduled semantic feed and preserves tenant isolation', async () => {
     const destination = await api(env, env.secretToken, 'POST', path('/automation/destinations'), {
       key: 'daily_inbox', name: 'Daily inbox', kind: 'in_product',

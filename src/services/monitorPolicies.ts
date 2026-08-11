@@ -128,11 +128,71 @@ async function validateRevision(client: pg.PoolClient, projectId: string, input:
   const metric = await client.query<{ status: string }>('SELECT status FROM metrics WHERE project_id = $1 AND key = $2', [projectId, input.metric_key]);
   if (metric.rows[0]?.status !== 'active') throw new ApiError(400, 'monitor_metric_invalid', 'monitor metric must be active in this project');
   await requireDestinationIds(client, projectId, input.destination_ids);
-  if (input.target_kind !== 'project') {
-    const table = input.target_kind === 'release' ? 'releases' : 'experiments';
-    const target = await client.query(`SELECT 1 FROM ${table} WHERE project_id = $1 AND id = $2`, [projectId, input.target_id]);
+  let linkedFlagKey: string | null = null;
+  if (input.target_kind === 'release') {
+    const target = await client.query<{ env: string; flag_key: string | null; experiment_key: string | null }>(
+      'SELECT env, flag_key, experiment_key FROM releases WHERE project_id = $1 AND id = $2',
+      [projectId, input.target_id],
+    );
     if (!target.rows[0]) throw new ApiError(400, 'monitor_target_invalid', 'monitor target must belong to this project');
+    requireSameMonitorEnvironment(input.env, target.rows[0].env, 'release target');
+    linkedFlagKey = target.rows[0].flag_key;
+    if (!linkedFlagKey && target.rows[0].experiment_key) {
+      const experiment = await client.query<{ env: string | null; flag_key: string }>(
+        'SELECT env, flag_key FROM experiments WHERE project_id = $1 AND key = $2',
+        [projectId, target.rows[0].experiment_key],
+      );
+      if (!experiment.rows[0]) {
+        throw new ApiError(400, 'monitor_target_invalid', 'release experiment target must belong to this project');
+      }
+      requireSameMonitorEnvironment(input.env, experiment.rows[0].env, 'release experiment target');
+      linkedFlagKey = experiment.rows[0].flag_key;
+    }
+  } else if (input.target_kind === 'experiment') {
+    const target = await client.query<{ env: string | null; flag_key: string }>(
+      'SELECT env, flag_key FROM experiments WHERE project_id = $1 AND id = $2',
+      [projectId, input.target_id],
+    );
+    if (!target.rows[0]) throw new ApiError(400, 'monitor_target_invalid', 'monitor target must belong to this project');
+    requireSameMonitorEnvironment(input.env, target.rows[0].env, 'experiment target');
+    linkedFlagKey = target.rows[0].flag_key;
   }
+  if (input.proposal_target) {
+    const flag = await client.query<{ env: string | null }>(
+      'SELECT env FROM feature_flags WHERE project_id = $1 AND key = $2',
+      [projectId, input.proposal_target.flag_key],
+    );
+    if (!flag.rows[0]) {
+      throw new ApiError(400, 'monitor_target_invalid', 'proposal feature flag must belong to this project');
+    }
+    requireSameMonitorEnvironment(input.env, flag.rows[0].env, 'proposal feature flag');
+    if (input.target_kind !== 'project' && !linkedFlagKey) {
+      throw new ApiError(
+        409,
+        'monitor_proposal_target_mismatch',
+        'the release or experiment target has no feature flag linked to the proposed mutation',
+        'attach the environment-scoped feature flag to the target before enabling automatic proposals',
+      );
+    }
+    if (linkedFlagKey && linkedFlagKey !== input.proposal_target.flag_key) {
+      throw new ApiError(
+        409,
+        'monitor_proposal_target_mismatch',
+        `proposal flag "${input.proposal_target.flag_key}" does not match target flag "${linkedFlagKey}"`,
+        'use the feature flag attached to the same release or experiment',
+      );
+    }
+  }
+}
+
+export function requireSameMonitorEnvironment(expected: string, actual: string | null, subject: string): void {
+  if (actual === expected) return;
+  throw new ApiError(
+    409,
+    'monitor_environment_mismatch',
+    `${subject} belongs to env=${actual ?? 'unscoped'} while the monitor policy belongs to env=${expected}`,
+    'use a policy, release or experiment, and feature flag scoped to the same environment',
+  );
 }
 
 async function insertRevision(client: pg.PoolClient, projectId: string, id: string, version: number, input: MonitorPolicyInput, actor: string) {

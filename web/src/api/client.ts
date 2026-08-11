@@ -1038,7 +1038,11 @@ export class PoolstatisClient {
     return this.req<{ proposals: AutomationProposal[] }>('GET', `/api/v1/projects/${slug}/automation/proposals`).then((r) => r.proposals);
   }
   reviewAutomationProposal(slug: string, id: string, decision: 'approve' | 'reject', confirmationFingerprint: string, rationale: string) {
-    return this.req<{ proposal: AutomationProposal; execution: { state: string; mutation: string } }>(
+    return this.req<{
+      proposal: AutomationProposal;
+      review: { actor: string; role: 'owner' | 'admin' };
+      execution: { state: string; mutation: string };
+    }>(
       'POST', `/api/v1/projects/${slug}/automation/proposals/${id}/${decision}`,
       { confirmation_fingerprint: confirmationFingerprint, rationale },
     );
