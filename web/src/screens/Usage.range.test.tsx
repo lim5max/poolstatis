@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
 import { Usage, usageMonthPresetRange } from './Usage';
 
@@ -34,6 +34,11 @@ function rangeResponse(from: string, to: string) {
 }
 
 describe('Usage month range', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     usageControl.mockResolvedValue({
@@ -200,6 +205,29 @@ describe('Usage month range', () => {
     expect(await screen.findByRole('link', { name: 'Configure cap' })).toHaveAttribute('href', '/setup');
     expect(screen.getByRole('button', { name: 'Review contributors' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Review plan' })).not.toBeInTheDocument();
+  });
+
+  it('avoids smooth scrolling when reduced motion is requested', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: true,
+      media: '(prefers-reduced-motion: reduce)',
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    });
+
+    render(<Usage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review contributors' }));
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
   });
 
   it('defaults to the current UTC month and exposes current/last/3/6 month presets', async () => {

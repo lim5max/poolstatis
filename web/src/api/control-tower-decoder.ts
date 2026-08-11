@@ -1,175 +1,218 @@
-import type {
-  AnswerBlock,
-  AttentionItem,
-  ControlTowerAction,
-  ControlTowerResult,
-  EvidenceBlock,
-  UsageControlResult,
-} from './types';
+import type { ControlTowerAction, ControlTowerResult, UsageControlResult } from './types';
 
-const ANSWER_STATES = new Set(['ready', 'partial', 'empty', 'unavailable', 'not_configured', 'stale', 'error']);
-const TRUST_STATES = new Set(['trusted', 'partial', 'blocked', 'unavailable']);
-const FRESHNESS_STATES = new Set(['fresh', 'stale', 'unknown']);
-const ATTENTION_SEVERITIES = new Set(['critical', 'high', 'medium', 'low', 'info']);
-const ATTENTION_STATES = new Set(['open', 'acknowledged', 'resolved', 'unavailable']);
-const ACTION_KINDS = new Set(['navigate', 'run_typed_query', 'copy_agent_task', 'open_confirmation', 'retry']);
-const VALUE_UNITS = new Set(['count', 'percent', 'percentage_point', 'duration_ms', 'date', 'text']);
-const DELTA_UNITS = new Set(['count', 'percent', 'percentage_point']);
-const DELTA_DIRECTIONS = new Set(['up', 'down', 'flat', 'unknown']);
+type JsonRecord = Record<string, unknown>;
 
-const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object'
-  ? value as Record<string, unknown>
-  : {};
+const ANSWER_STATES = ['ready', 'partial', 'empty', 'unavailable', 'not_configured', 'stale', 'error'] as const;
+const TRUST_STATES = ['trusted', 'partial', 'blocked', 'unavailable'] as const;
+const FRESHNESS_STATES = ['fresh', 'stale', 'unknown'] as const;
+const ATTENTION_SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'] as const;
+const ATTENTION_STATES = ['open', 'acknowledged', 'resolved', 'unavailable'] as const;
+const VALUE_UNITS = ['count', 'percent', 'percentage_point', 'duration_ms', 'date', 'text'] as const;
+const DELTA_UNITS = ['count', 'percent', 'percentage_point'] as const;
+const DELTA_DIRECTIONS = ['up', 'down', 'flat', 'unknown'] as const;
+const AFFECTED_KINDS = ['answer', 'metric', 'funnel', 'project', 'customer'] as const;
+const THRESHOLD_STATES = ['reached', 'projected', 'not_projected', 'not_applicable'] as const;
+
+const isRecord = (value: unknown): value is JsonRecord => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const isString = (value: unknown): value is string => typeof value === 'string';
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const isNullableNumber = (value: unknown): value is number | null => value === null || isFiniteNumber(value);
+const isNullableString = (value: unknown): value is string | null => value === null || isString(value);
+const isIsoDate = (value: unknown): value is string => isString(value) && Number.isFinite(Date.parse(value));
+const inEnum = <T extends readonly string[]>(value: unknown, values: T): value is T[number] => isString(value) && values.includes(value);
+const optionalString = (value: unknown) => value === undefined || isString(value);
+
+function isAction(value: unknown): value is ControlTowerAction {
+  if (!isRecord(value) || !isString(value.id) || !isString(value.label) || !isString(value.kind)) return false;
+  switch (value.kind) {
+    case 'navigate': return isString(value.href);
+    case 'run_typed_query': return isRecord(value.query);
+    case 'copy_agent_task': return isString(value.task);
+    case 'open_confirmation': return isString(value.mutation) && isString(value.impact);
+    case 'retry': return true;
+    default: return false;
+  }
+}
+
+function isAnswer(value: unknown): boolean {
+  if (!isRecord(value) || !inEnum(value.state, ANSWER_STATES)
+    || !isString(value.headline) || !isString(value.takeaway) || !isString(value.why_it_matters)) return false;
+  if (value.primary_value !== undefined) {
+    if (!isRecord(value.primary_value)
+      || !(value.primary_value.value === null || isString(value.primary_value.value) || isFiniteNumber(value.primary_value.value))
+      || !inEnum(value.primary_value.unit, VALUE_UNITS)
+      || !isString(value.primary_value.formatted)) return false;
+  }
+  if (value.delta !== undefined) {
+    if (!isRecord(value.delta) || !isNullableNumber(value.delta.value)
+      || !inEnum(value.delta.unit, DELTA_UNITS)
+      || !inEnum(value.delta.direction, DELTA_DIRECTIONS)
+      || !isString(value.delta.comparison_label)) return false;
+  }
+  return true;
+}
+
+function isSourceRef(value: unknown): boolean {
+  if (!isRecord(value) || !isString(value.kind)) return false;
+  switch (value.kind) {
+    case 'metric': return isString(value.key) && isString(value.purpose);
+    case 'funnel': return isString(value.key) && isString(value.goal);
+    case 'release': return isString(value.id);
+    case 'experiment': return isString(value.key);
+    case 'usage_ledger': return value.meter === 'events_stored';
+    case 'operator_rule': return isString(value.rule_id) && isFiniteNumber(value.rule_version);
+    default: return false;
+  }
+}
+
+function isWarning(value: unknown): boolean {
+  return isRecord(value) && isString(value.code) && isString(value.message)
+    && optionalString(value.remediation_action_id);
+}
+
+function isUnavailableReason(value: unknown): boolean {
+  return isRecord(value) && isString(value.code) && isString(value.message)
+    && optionalString(value.prerequisite_action_id);
+}
+
+function isEvidence(value: unknown): boolean {
+  if (!isRecord(value) || !inEnum(value.state, TRUST_STATES) || !inEnum(value.freshness, FRESHNESS_STATES)
+    || !isIsoDate(value.as_of) || !Array.isArray(value.source_refs) || !value.source_refs.every(isSourceRef)
+    || !Array.isArray(value.warnings) || !value.warnings.every(isWarning)
+    || !Array.isArray(value.unavailable_reasons) || !value.unavailable_reasons.every(isUnavailableReason)
+    || !optionalString(value.aggregation)) return false;
+  if (value.denominator !== undefined && (!isRecord(value.denominator)
+    || !isString(value.denominator.label) || !isNullableNumber(value.denominator.value))) return false;
+  if (value.sample !== undefined && (!isRecord(value.sample)
+    || !isNullableNumber(value.sample.eligible)
+    || !isNullableNumber(value.sample.observed)
+    || !isNullableNumber(value.sample.coverage))) return false;
+  return value.reproducible_query === undefined || isRecord(value.reproducible_query);
+}
+
+function isAttention(value: unknown): boolean {
+  return isRecord(value)
+    && isString(value.id) && isString(value.rule_id) && isFiniteNumber(value.rule_version)
+    && inEnum(value.severity, ATTENTION_SEVERITIES) && inEnum(value.state, ATTENTION_STATES)
+    && isString(value.title) && isString(value.reason) && isString(value.impact)
+    && Array.isArray(value.affected) && value.affected.every((affected) => isRecord(affected)
+      && inEnum(affected.kind, AFFECTED_KINDS) && isString(affected.ref))
+    && isEvidence(value.evidence) && isAction(value.primary_action);
+}
+
+function isWindow(value: unknown): value is ControlTowerResult['scope']['window'] {
+  return isRecord(value) && isIsoDate(value.from) && isIsoDate(value.to) && value.timezone === 'UTC';
+}
+
+function isScope(value: unknown): boolean {
+  if (!isRecord(value) || !isWindow(value.window)
+    || !optionalString(value.organization_id) || !optionalString(value.project_slug) || !optionalString(value.environment)) return false;
+  if (value.comparison !== undefined) {
+    return isRecord(value.comparison) && isIsoDate(value.comparison.from) && isIsoDate(value.comparison.to)
+      && inEnum(value.comparison.basis, ['previous_period', 'previous_cycle', 'none'] as const);
+  }
+  return true;
+}
+
+function isControlTower(value: unknown): value is ControlTowerResult {
+  return isRecord(value) && value.schema_version === 1 && isString(value.request_id)
+    && isIsoDate(value.generated_at) && isScope(value.scope) && isAnswer(value.answer)
+    && Array.isArray(value.attention) && value.attention.every(isAttention)
+    && isEvidence(value.evidence) && isAction(value.primary_action)
+    && Array.isArray(value.secondary_actions) && value.secondary_actions.every(isAction);
+}
 
 function unavailableAction(): ControlTowerAction {
   return { id: 'reload_unavailable_contract', kind: 'retry', label: 'Reload' };
 }
 
-function decodeAction(value: unknown): ControlTowerAction {
-  const action = record(value);
-  return typeof action.kind === 'string' && ACTION_KINDS.has(action.kind)
-    ? action as unknown as ControlTowerAction
-    : unavailableAction();
-}
-
-function decodeEvidence(value: unknown, forceUnavailable = false): EvidenceBlock {
-  const evidence = record(value);
-  const state = !forceUnavailable && typeof evidence.state === 'string' && TRUST_STATES.has(evidence.state)
-    ? evidence.state as EvidenceBlock['state']
-    : 'unavailable';
-  const freshness = typeof evidence.freshness === 'string' && FRESHNESS_STATES.has(evidence.freshness)
-    ? evidence.freshness as EvidenceBlock['freshness']
-    : 'unknown';
+function unavailableControlTower(headline = 'Answer unavailable'): ControlTowerResult {
+  const now = new Date().toISOString();
   return {
-    ...(evidence as unknown as EvidenceBlock),
-    state,
-    freshness,
-    source_refs: Array.isArray(evidence.source_refs)
-      ? evidence.source_refs.filter((source) => {
-        const kind = record(source).kind;
-        return typeof kind === 'string' && ['metric', 'funnel', 'release', 'experiment', 'usage_ledger', 'operator_rule'].includes(kind);
-      }) as EvidenceBlock['source_refs']
-      : [],
-    warnings: Array.isArray(evidence.warnings) ? evidence.warnings as EvidenceBlock['warnings'] : [],
-    unavailable_reasons: Array.isArray(evidence.unavailable_reasons)
-      ? evidence.unavailable_reasons as EvidenceBlock['unavailable_reasons']
-      : [],
-  };
-}
-
-function decodeAnswer(value: unknown, forceUnavailable = false): AnswerBlock {
-  const answer = record(value);
-  const state = !forceUnavailable && typeof answer.state === 'string' && ANSWER_STATES.has(answer.state)
-    ? answer.state as AnswerBlock['state']
-    : 'unavailable';
-  const primary = record(answer.primary_value);
-  const delta = record(answer.delta);
-  const primaryValue = answer.primary_value === undefined
-    ? undefined
-    : typeof primary.unit === 'string' && VALUE_UNITS.has(primary.unit)
-      ? primary as unknown as NonNullable<AnswerBlock['primary_value']>
-      : undefined;
-  const decodedDelta = answer.delta === undefined
-    ? undefined
-    : typeof delta.unit === 'string' && DELTA_UNITS.has(delta.unit)
-      && typeof delta.direction === 'string' && DELTA_DIRECTIONS.has(delta.direction)
-      ? delta as unknown as NonNullable<AnswerBlock['delta']>
-      : undefined;
-  return {
-    ...(answer as unknown as AnswerBlock),
-    state,
-    ...(primaryValue ? { primary_value: primaryValue } : { primary_value: undefined }),
-    ...(decodedDelta ? { delta: decodedDelta } : { delta: undefined }),
-  };
-}
-
-function decodeAttention(value: unknown): AttentionItem {
-  const item = record(value);
-  const severity = typeof item.severity === 'string' && ATTENTION_SEVERITIES.has(item.severity)
-    ? item.severity as AttentionItem['severity']
-    : 'info';
-  const state = typeof item.state === 'string' && ATTENTION_STATES.has(item.state)
-    ? item.state as AttentionItem['state']
-    : 'unavailable';
-  return {
-    ...(item as unknown as AttentionItem),
-    severity,
-    state,
-    affected: Array.isArray(item.affected) ? item.affected as AttentionItem['affected'] : [],
-    evidence: decodeEvidence(item.evidence),
-    primary_action: decodeAction(item.primary_action),
-  };
-}
-
-export function decodeControlTowerResult(value: unknown, forceUnavailable = false): ControlTowerResult {
-  const result = record(value);
-  const futureSchema = result.schema_version !== 1;
-  const unavailable = forceUnavailable || futureSchema;
-  return {
-    ...(result as unknown as ControlTowerResult),
     schema_version: 1,
-    answer: decodeAnswer(result.answer, unavailable),
-    attention: Array.isArray(result.attention) ? result.attention.map(decodeAttention) : [],
-    evidence: decodeEvidence(result.evidence, unavailable),
-    primary_action: unavailable ? unavailableAction() : decodeAction(result.primary_action),
-    secondary_actions: unavailable || !Array.isArray(result.secondary_actions)
-      ? []
-      : result.secondary_actions.map(decodeAction),
+    request_id: 'unsupported_response_contract',
+    generated_at: now,
+    scope: { window: { from: now, to: now, timezone: 'UTC' } },
+    answer: {
+      state: 'unavailable',
+      headline,
+      takeaway: 'The server response could not be verified against this client contract.',
+      why_it_matters: 'Poolstatis will not present an unknown or malformed response as a successful answer.',
+    },
+    attention: [],
+    evidence: {
+      state: 'unavailable',
+      as_of: now,
+      freshness: 'unknown',
+      source_refs: [],
+      warnings: [],
+      unavailable_reasons: [{
+        code: 'unsupported_response_contract',
+        message: 'Update the client or retry after the server contract is verified.',
+      }],
+    },
+    primary_action: unavailableAction(),
+    secondary_actions: [],
+  };
+}
+
+export function decodeControlTowerResult(value: unknown): ControlTowerResult {
+  return isControlTower(value) ? value : unavailableControlTower();
+}
+
+function isContributor(value: unknown): boolean {
+  return isRecord(value) && isString(value.project_slug) && isString(value.project_name)
+    && isString(value.environment) && isFiniteNumber(value.accepted_events)
+    && isNullableNumber(value.share) && isNullableNumber(value.change_7d) && isNullableString(value.last_ingest_at)
+    && (value.last_ingest_at === null || isIsoDate(value.last_ingest_at));
+}
+
+function isThreshold(value: unknown): boolean {
+  if (!isRecord(value) || ![50, 75, 90, 100].includes(Number(value.percent))
+    || !inEnum(value.state, THRESHOLD_STATES) || value.notification_state !== 'not_configured'
+    || value.audit_source !== 'usage_ledger' || !isNullableString(value.reached_or_projected_at)) return false;
+  return value.reached_or_projected_at === null || isIsoDate(value.reached_or_projected_at);
+}
+
+function isUsageControl(value: unknown): value is UsageControlResult {
+  if (!isControlTower(value) || !isRecord(value)) return false;
+  const cap = value.cap;
+  const pace = value.pace;
+  const reconciliation = value.reconciliation;
+  return value.meter === 'events_stored' && isWindow(value.cycle)
+    && isRecord(cap) && inEnum(cap.state, ['finite', 'not_configured'] as const)
+    && isNullableNumber(cap.value) && isNullableNumber(cap.remaining) && isNullableString(cap.consequence_at_100_percent)
+    && (cap.state === 'finite' ? isFiniteNumber(cap.value) : cap.value === null && cap.remaining === null)
+    && isRecord(pace) && isFiniteNumber(pace.observed_days) && isNullableNumber(pace.events_per_day_7d)
+    && isNullableNumber(pace.projected_cycle_end) && inEnum(pace.confidence, ['sufficient', 'insufficient'] as const)
+    && Array.isArray(value.threshold_forecasts) && value.threshold_forecasts.every(isThreshold)
+    && Array.isArray(value.contributors) && value.contributors.every(isContributor)
+    && isRecord(reconciliation) && isFiniteNumber(reconciliation.metered_quantity)
+    && isFiniteNumber(reconciliation.attributed_quantity) && isFiniteNumber(reconciliation.difference)
+    && isFiniteNumber(reconciliation.unattributed_quantity) && isFiniteNumber(reconciliation.overattributed_quantity)
+    && inEnum(reconciliation.state, ['reconciled', 'partial'] as const);
+}
+
+function unavailableUsage(): UsageControlResult {
+  const base = unavailableControlTower('Usage unavailable');
+  return {
+    ...base,
+    meter: 'events_stored',
+    cycle: base.scope.window,
+    cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
+    pace: { observed_days: 0, events_per_day_7d: null, projected_cycle_end: null, confidence: 'insufficient' },
+    threshold_forecasts: ([50, 75, 90, 100] as const).map((percent) => ({
+      percent, state: 'not_applicable', reached_or_projected_at: null,
+      notification_state: 'not_configured', audit_source: 'usage_ledger',
+    })),
+    contributors: [],
+    reconciliation: {
+      metered_quantity: 0, attributed_quantity: 0, difference: 0,
+      unattributed_quantity: 0, overattributed_quantity: 0, state: 'partial',
+    },
   };
 }
 
 export function decodeUsageControlResult(value: unknown): UsageControlResult {
-  const result = record(value);
-  const cap = record(result.cap);
-  const pace = record(result.pace);
-  const reconciliation = record(result.reconciliation);
-  const thresholds = Array.isArray(result.threshold_forecasts) ? result.threshold_forecasts.map(record) : [];
-  const unknownUsageEnum = result.meter !== 'events_stored'
-    || !['finite', 'not_configured'].includes(String(cap.state))
-    || !['sufficient', 'insufficient'].includes(String(pace.confidence))
-    || !['reconciled', 'partial'].includes(String(reconciliation.state))
-    || thresholds.some((threshold) => ![50, 75, 90, 100].includes(Number(threshold.percent))
-      || !['reached', 'projected', 'not_projected', 'not_applicable'].includes(String(threshold.state))
-      || threshold.notification_state !== 'not_configured'
-      || threshold.audit_source !== 'usage_ledger');
-  const base = decodeControlTowerResult(result, unknownUsageEnum);
-  const capKnown = ['finite', 'not_configured'].includes(String(cap.state));
-
-  return {
-    ...(result as unknown as UsageControlResult),
-    ...base,
-    meter: 'events_stored',
-    cap: capKnown ? cap as unknown as UsageControlResult['cap'] : {
-      state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null,
-    },
-    pace: {
-      ...(pace as unknown as UsageControlResult['pace']),
-      confidence: ['sufficient', 'insufficient'].includes(String(pace.confidence))
-        ? pace.confidence as UsageControlResult['pace']['confidence']
-        : 'insufficient',
-    },
-    threshold_forecasts: thresholds
-      .filter((threshold) => [50, 75, 90, 100].includes(Number(threshold.percent)))
-      .map((threshold) => ({
-        ...(threshold as unknown as UsageControlResult['threshold_forecasts'][number]),
-        state: ['reached', 'projected', 'not_projected', 'not_applicable'].includes(String(threshold.state))
-          ? threshold.state as UsageControlResult['threshold_forecasts'][number]['state']
-          : 'not_applicable',
-        reached_or_projected_at: ['reached', 'projected'].includes(String(threshold.state))
-          && typeof threshold.reached_or_projected_at === 'string'
-          ? threshold.reached_or_projected_at
-          : null,
-        notification_state: 'not_configured',
-        audit_source: 'usage_ledger',
-      })),
-    contributors: Array.isArray(result.contributors)
-      ? result.contributors as UsageControlResult['contributors']
-      : [],
-    reconciliation: {
-      ...(reconciliation as unknown as UsageControlResult['reconciliation']),
-      state: ['reconciled', 'partial'].includes(String(reconciliation.state))
-        ? reconciliation.state as UsageControlResult['reconciliation']['state']
-        : 'partial',
-    },
-  };
+  return isUsageControl(value) ? value : unavailableUsage();
 }

@@ -54,7 +54,11 @@ interface WebRegistryRead {
   proposedMetric: Metric | null;
   properties: PropertyDefinition[];
   metrics: Metric[];
-  readiness: MeasurementReadiness | null;
+}
+
+interface WebReadinessRead {
+  scope: string;
+  result: MeasurementReadiness | null;
 }
 
 interface WebPrimaryRead {
@@ -140,12 +144,9 @@ export function WebAnalytics() {
   const [breakdownRequested, setBreakdownRequested] = useState(false);
   const registryScope = `${project ?? ''}\u0000${env}`;
   const registry = useAsync<WebRegistryRead>(async () => {
-    const [metrics, properties, readiness] = await Promise.all([
+    const [metrics, properties] = await Promise.all([
       client!.metrics(project!),
       client!.properties(project!, { scope: 'event' }),
-      typeof client!.measurementReadiness === 'function'
-        ? client!.measurementReadiness(project!, env).catch(() => null)
-        : Promise.resolve(null),
     ]);
     return {
       scope: registryScope,
@@ -153,10 +154,16 @@ export function WebAnalytics() {
       proposedMetric: metrics.find((item) => item.key === WEB_PAGE_VIEW_METRIC && item.status === 'proposed') ?? null,
       properties,
       metrics,
-      readiness,
     };
   }, [project, env]);
   const registryData = registry.data?.scope === registryScope ? registry.data : null;
+  const readiness = useAsync<WebReadinessRead>(async () => ({
+    scope: registryScope,
+    result: typeof client!.measurementReadiness === 'function'
+      ? await client!.measurementReadiness(project!, env).catch(() => null)
+      : null,
+  }), [project, env]);
+  const readinessData = readiness.data?.scope === registryScope ? readiness.data.result : null;
   const metric = registryData?.metric ?? null;
   const primaryScope = `${registryScope}\u0000${range}\u0000${metric?.key ?? ''}`;
   const primary = useAsync<WebPrimaryRead | null>(async () => {
@@ -240,7 +247,7 @@ export function WebAnalytics() {
       (property) => property.key === key && property.scope === 'event' && property.status === 'trusted',
     ));
     const outcomeReady = hasWebOutcome(setupData.metrics);
-    const affectedAnswerIds = webAffectedAnswerIds(setupData.readiness, setupData.metrics);
+    const affectedAnswerIds = webAffectedAnswerIds(readinessData, setupData.metrics);
     return (
       <div className="space-y-5">
         <ScreenHeader range={range} onRange={setRange} showRange={false} />
@@ -268,7 +275,7 @@ export function WebAnalytics() {
   ));
   const canonicalReady = hasAcceptedCanonicalPageViews(overview.summary.page_views);
   const outcomeReady = hasWebOutcome(metrics);
-  const affectedAnswerIds = webAffectedAnswerIds(registryData.readiness, metrics);
+  const affectedAnswerIds = webAffectedAnswerIds(readinessData, metrics);
 
   return (
     <div className="space-y-5">
@@ -514,7 +521,9 @@ function WebHealthAnswer({ current, previous, comparisonState, range, trust, tru
           <p className="mt-2 text-xs text-muted-foreground">{trustLabel} · {fmtNum(observed)} observed events · {env}</p>
         </div>
         <Badge variant={trust.result?.status === 'trusted' && !trust.unavailable ? 'outline' : 'secondary'}>
-          {delta === null ? 'Comparison unavailable' : delta === 0 ? 'Stable' : `${delta > 0 ? '+' : ''}${fmtNum(delta)} views`}
+          {comparisonState === 'loading' ? 'Comparison loading'
+            : delta === null ? 'Comparison unavailable'
+              : delta === 0 ? 'Stable' : `${delta > 0 ? '+' : ''}${fmtNum(delta)} views`}
         </Badge>
       </div>
     </AnswerCanvas>

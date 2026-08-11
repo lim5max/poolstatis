@@ -16,6 +16,7 @@ vi.mock('../analysis/charts', () => ({
 }));
 
 const mockedStore = vi.mocked(useStore);
+const routerFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
 const metric = {
   id: 'web',
@@ -228,7 +229,7 @@ describe('Web analytics partial availability', () => {
   it('keeps traffic, UTM source and sessions visible when routes are unavailable', async () => {
     render(
       <TooltipProvider>
-        <MemoryRouter>
+        <MemoryRouter future={routerFuture}>
           <WebAnalytics />
         </MemoryRouter>
       </TooltipProvider>,
@@ -250,20 +251,28 @@ describe('Web analytics partial availability', () => {
 
     expect(screen.getByText(/Observed · Unavailable · 20 events ·/)).toBeInTheDocument();
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Pages' }), { button: 0, ctrlKey: false });
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Pages' }), { button: 0, ctrlKey: false });
+    });
 
     expect(await screen.findByText('Pages unavailable')).toBeInTheDocument();
     expect(screen.getAllByText('Visitors').length).toBeGreaterThan(0);
     expect(screen.queryByText('telegram')).not.toBeInTheDocument();
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Countries' }), { button: 0, ctrlKey: false });
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Countries' }), { button: 0, ctrlKey: false });
+    });
     expect(await screen.findByText('Countries unavailable')).toBeInTheDocument();
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Medium' }), { button: 0, ctrlKey: false });
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Medium' }), { button: 0, ctrlKey: false });
+    });
     expect(await screen.findByText('Medium unavailable')).toBeInTheDocument();
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Conversions' }), { button: 0, ctrlKey: false });
-    expect(screen.getByText('Choose a conversion to measure')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Conversions' }), { button: 0, ctrlKey: false });
+    });
+    expect(await screen.findByText('Choose a conversion to measure')).toBeInTheDocument();
     expect(screen.getByText(/will not display a zero/)).toBeInTheDocument();
   });
 
@@ -280,13 +289,14 @@ describe('Web analytics partial availability', () => {
       },
     } as never);
 
-    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     const answer = await screen.findByRole('heading', { name: 'Web health' });
     expect(screen.getByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
-    expect(screen.getByText('No change versus the previous 30 days.')).toBeInTheDocument();
-    expect(screen.getByText(/Trusted measurement/)).toBeInTheDocument();
-    expect(answer.compareDocumentPosition(screen.getByTestId('web-trend')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await screen.findByText('No change versus the previous 30 days.')).toBeInTheDocument();
+    expect(await screen.findByText(/Trusted measurement/)).toBeInTheDocument();
+    const chart = await screen.findByTestId('web-trend');
+    expect(answer.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_analytics')).toEqual(
       expect.arrayContaining([
         expect.arrayContaining([expect.objectContaining({ date_from: '-30d' })]),
@@ -310,11 +320,11 @@ describe('Web analytics partial availability', () => {
       },
     } as never);
 
-    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
-    expect(screen.getByText('Previous-period comparison is unavailable.')).toBeInTheDocument();
-    expect(screen.getByTestId('web-trend')).toBeInTheDocument();
+    expect(await screen.findByText('Previous-period comparison is unavailable.')).toBeInTheDocument();
+    expect(await screen.findByTestId('web-trend')).toBeInTheDocument();
   });
 
   it('renders the current headline before slow secondary reads and loads source only on request', async () => {
@@ -335,6 +345,7 @@ describe('Web analytics partial availability', () => {
     });
     const slowTrend = vi.fn(() => new Promise(() => undefined));
     const slowTrust = vi.fn(() => new Promise(() => undefined));
+    const slowReadiness = vi.fn(() => new Promise(() => undefined));
     mockedStore.mockReturnValue({
       project: 'y1blin-com',
       env: 'prod',
@@ -344,10 +355,11 @@ describe('Web analytics partial availability', () => {
         operationalQuery: isolatedOperationalQuery,
         query: slowTrend,
         measurementTrust: slowTrust,
+        measurementReadiness: slowReadiness,
       },
     } as never);
 
-    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
     expect(screen.getByText('Previous-period comparison is loading.')).toBeInTheDocument();
@@ -362,7 +374,7 @@ describe('Web analytics partial availability', () => {
 
   it('does not keep prior-scope KPI data visible while a new project registry is loading', async () => {
     const view = render(
-      <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
+      <TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>,
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'Load traffic breakdown' }));
@@ -379,7 +391,7 @@ describe('Web analytics partial availability', () => {
     } as never);
 
     await act(async () => {
-      view.rerender(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+      view.rerender(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
     });
 
     expect(screen.getByLabelText('Loading web analytics')).toBeInTheDocument();
@@ -390,7 +402,7 @@ describe('Web analytics partial availability', () => {
   it('repairs legacy route and UTM definitions from Web', async () => {
     properties.mockResolvedValueOnce([]);
     render(
-      <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
+      <TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>,
     );
 
     expect(await screen.findByText('Finish web setup')).toBeInTheDocument();
@@ -404,7 +416,7 @@ describe('Web analytics partial availability', () => {
 
   it('shows trusted UTM term values from the canonical Web response', async () => {
     render(
-      <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
+      <TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>,
     );
     fireEvent.keyDown(await screen.findByRole('tab', { name: 'UTM term' }), { key: 'Enter' });
     expect(await screen.findByText('launch')).toBeInTheDocument();
@@ -414,7 +426,7 @@ describe('Web analytics partial availability', () => {
 
   it('repairs a UTM-only gap without changing the trusted route vocabulary', async () => {
     properties.mockResolvedValueOnce(trustedProperties.filter((item) => item.key !== '$utm_term'));
-    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('Finish web setup')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add UTM definitions' }));
@@ -439,7 +451,7 @@ describe('Web analytics partial availability', () => {
 
     render(
       <TooltipProvider>
-        <MemoryRouter>
+        <MemoryRouter future={routerFuture}>
           <WebAnalytics />
         </MemoryRouter>
       </TooltipProvider>,
@@ -489,7 +501,7 @@ describe('Web analytics partial availability', () => {
       },
     } as never);
 
-    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('Add website analytics')).toBeInTheDocument();
     expect(screen.getByText('Web setup order')).toBeInTheDocument();
@@ -514,7 +526,7 @@ describe('Web analytics partial availability', () => {
       },
     } as never);
 
-    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByRole('link', { name: 'answer-web-conversion' })).toHaveAttribute(
       'href',

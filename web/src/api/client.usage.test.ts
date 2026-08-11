@@ -70,8 +70,7 @@ describe('PoolstatisClient usage', () => {
     expect(result.answer.state).toBe('unavailable');
     expect(result.evidence).toMatchObject({ state: 'unavailable', freshness: 'unknown' });
     expect(result.primary_action).toMatchObject({ kind: 'retry', label: 'Reload' });
-    expect(result.attention[0]).toMatchObject({ severity: 'info', state: 'unavailable' });
-    expect(result.attention[0]?.primary_action).toMatchObject({ kind: 'retry', label: 'Reload' });
+    expect(result.attention).toEqual([]);
   });
 
   it('fails closed for future usage-specific enum values', async () => {
@@ -105,5 +104,55 @@ describe('PoolstatisClient usage', () => {
     expect(result.pace.confidence).toBe('insufficient');
     expect(result.threshold_forecasts[0]).toMatchObject({ state: 'not_applicable', notification_state: 'not_configured' });
     expect(result.reconciliation.state).toBe('partial');
+  });
+
+  it('returns a complete unavailable contract for malformed current-schema payloads', async () => {
+    const malformed = {
+      schema_version: 1,
+      request_id: 'req-malformed',
+      generated_at: 'not-a-date',
+      scope: { window: { from: 'not-a-date', to: 'also-not-a-date', timezone: 'UTC' } },
+      answer: { state: 'ready', headline: 'Unsafe success', takeaway: 'Unsafe', why_it_matters: 'Unsafe' },
+      attention: [],
+      evidence: { state: 'trusted', freshness: 'fresh', as_of: 'not-a-date', source_refs: [], warnings: [], unavailable_reasons: [] },
+      primary_action: { id: 'unsafe', kind: 'navigate', label: 'Unsafe navigation' },
+      secondary_actions: [],
+    };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
+
+    const result = await new PoolstatisClient('https://core.example', 'pt_test').controlTower('alpha');
+
+    expect(result.answer).toMatchObject({ state: 'unavailable', headline: 'Answer unavailable' });
+    expect(result.primary_action).toMatchObject({ kind: 'retry', label: 'Reload' });
+    expect(Number.isFinite(Date.parse(result.generated_at))).toBe(true);
+    expect(Number.isFinite(Date.parse(result.scope.window.from))).toBe(true);
+  });
+
+  it('never leaks partial usage fields when the current-schema shape is malformed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      schema_version: 1,
+      request_id: 'req-malformed-usage',
+      generated_at: '2026-08-12T00:00:00.000Z',
+      scope: { window: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', timezone: 'UTC' } },
+      answer: { state: 'ready', headline: 'Unsafe usage', takeaway: 'Unsafe', why_it_matters: 'Unsafe' },
+      attention: [],
+      evidence: { state: 'trusted', freshness: 'fresh', as_of: '2026-08-12T00:00:00.000Z', source_refs: [], warnings: [], unavailable_reasons: [] },
+      primary_action: { id: 'review', kind: 'navigate', label: 'Review', href: '/usage' },
+      secondary_actions: [],
+      meter: 'events_stored',
+      cap: { state: 'finite', value: 100, remaining: 99, consequence_at_100_percent: 'Pause ingest.' },
+      pace: { observed_days: 7, events_per_day_7d: 1, projected_cycle_end: 31, confidence: 'sufficient' },
+      threshold_forecasts: [{ percent: 75, state: 'projected', reached_or_projected_at: 'invalid-date', notification_state: 'not_configured', audit_source: 'usage_ledger' }],
+      contributors: [],
+      reconciliation: { metered_quantity: 1, attributed_quantity: 1, difference: 0, unattributed_quantity: 0, overattributed_quantity: 0, state: 'reconciled' },
+    }), { status: 200 }));
+
+    const result = await new PoolstatisClient('https://core.example', 'pt_test').usageControl('2026-08');
+
+    expect(result.answer).toMatchObject({ state: 'unavailable', headline: 'Usage unavailable' });
+    expect(result.cycle).toEqual(result.scope.window);
+    expect(result.cap).toMatchObject({ state: 'not_configured', value: null, remaining: null });
+    expect(result.threshold_forecasts).toHaveLength(4);
+    expect(result.threshold_forecasts.every((threshold) => threshold.state === 'not_applicable')).toBe(true);
   });
 });
