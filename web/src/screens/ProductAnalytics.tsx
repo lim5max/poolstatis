@@ -530,6 +530,9 @@ function AnswerTakeaway({ summary, trust, task, saveState, onSave }: {
 
 function savedAnswerInput(run: AnalysisRun, templateKey: string): CreateSavedAnswerInput {
   const { spec, summary, eventCount } = run;
+  if (spec.source.kind !== 'metric' && spec.source.kind !== 'funnel') {
+    throw new Error('Product answers require a metric or funnel source.');
+  }
   const percentageValue = spec.kind === 'funnel' || spec.kind === 'retention_curve' || spec.kind === 'retention_matrix';
   const sourceRef = spec.source.kind === 'funnel'
     ? { kind: 'funnel' as const, key: spec.source.key, goal: spec.purpose }
@@ -537,7 +540,7 @@ function savedAnswerInput(run: AnalysisRun, templateKey: string): CreateSavedAns
   const coverageMatch = /^(\d+(?:\.\d+)?)% registered$/.exec(spec.evidence.coverage);
   const coverage = coverageMatch ? Number(coverageMatch[1]) / 100 : null;
   const blockers = spec.trust.blockers.map((blocker) => ({ code: blocker.code, message: blocker.message }));
-  const query = spec.source.kind === 'metric' || spec.source.kind === 'funnel' ? spec.source.query : undefined;
+  const query = spec.source.query;
   return {
     title: spec.title,
     description: spec.question,
@@ -574,7 +577,7 @@ function savedAnswerInput(run: AnalysisRun, templateKey: string): CreateSavedAns
       sample: { eligible: null, observed: eventCount, coverage },
       warnings: spec.trust.status === 'unavailable' ? [] : blockers,
       unavailable_reasons: spec.trust.status === 'unavailable' ? blockers : [],
-      ...(query ? { reproducible_query: query } : {}),
+      reproducible_query: query,
     },
   };
 }

@@ -1,5 +1,5 @@
 import type {
-  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, CreateSavedAnswerInput, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
+  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
   BackfillPreview, BackfillRecord, ControlTowerResult, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, UsageControlResult, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
@@ -916,6 +916,59 @@ export class PoolstatisClient {
   clearIngestWarnings(slug: string, env?: string) {
     const suffix = env ? `?env=${encodeURIComponent(env)}` : '';
     return this.req<{ cleared: number }>('DELETE', `/api/v1/projects/${slug}/ingest-warnings${suffix}`);
+  }
+
+  // ---- control tower automation ----
+  automationCapabilities(slug: string) {
+    return this.req<{ in_product: 'configured'; outbox: 'configured'; external: 'not_configured' }>('GET', `/api/v1/projects/${slug}/automation/capabilities`);
+  }
+  notificationDestinations(slug: string) {
+    return this.req<{ destinations: NotificationDestination[] }>('GET', `/api/v1/projects/${slug}/automation/destinations`).then((r) => r.destinations);
+  }
+  createNotificationDestination(slug: string, body: { key: string; name: string; kind: 'in_product' | 'outbox' }) {
+    return this.req<NotificationDestination>('POST', `/api/v1/projects/${slug}/automation/destinations`, body);
+  }
+  setNotificationDestinationStatus(slug: string, id: string, status: NotificationDestination['status']) {
+    return this.req<NotificationDestination>('PATCH', `/api/v1/projects/${slug}/automation/destinations/${id}`, { status });
+  }
+  monitorPolicies(slug: string) {
+    return this.req<{ policies: MonitorPolicy[] }>('GET', `/api/v1/projects/${slug}/monitors`).then((r) => r.policies);
+  }
+  createMonitorPolicy(slug: string, body: Record<string, unknown>) {
+    return this.req<MonitorPolicy>('POST', `/api/v1/projects/${slug}/monitors`, body);
+  }
+  setMonitorPolicyStatus(slug: string, id: string, expectedVersion: number, status: MonitorPolicy['status']) {
+    return this.req<MonitorPolicy>('POST', `/api/v1/projects/${slug}/monitors/${id}/lifecycle`, { expected_version: expectedVersion, status });
+  }
+  insightFeedSchedules(slug: string) {
+    return this.req<{ schedules: InsightFeedSchedule[] }>('GET', `/api/v1/projects/${slug}/insight-feed/schedules`).then((r) => r.schedules);
+  }
+  createInsightFeedSchedule(slug: string, body: Record<string, unknown>) {
+    return this.req<InsightFeedSchedule>('POST', `/api/v1/projects/${slug}/insight-feed/schedules`, body);
+  }
+  setInsightFeedScheduleStatus(slug: string, id: string, expectedVersion: number, status: InsightFeedSchedule['status']) {
+    return this.req<InsightFeedSchedule>('POST', `/api/v1/projects/${slug}/insight-feed/schedules/${id}/lifecycle`, { expected_version: expectedVersion, status });
+  }
+  automationProposals(slug: string) {
+    return this.req<{ proposals: AutomationProposal[] }>('GET', `/api/v1/projects/${slug}/automation/proposals`).then((r) => r.proposals);
+  }
+  reviewAutomationProposal(slug: string, id: string, decision: 'approve' | 'reject', confirmationFingerprint: string, rationale: string) {
+    return this.req<{ proposal: AutomationProposal; execution: { state: string; mutation: string } }>(
+      'POST', `/api/v1/projects/${slug}/automation/proposals/${id}/${decision}`,
+      { confirmation_fingerprint: confirmationFingerprint, rationale },
+    );
+  }
+  monitorFindings(slug: string) {
+    return this.req<{ findings: MonitorFinding[] }>('GET', `/api/v1/projects/${slug}/automation/findings`).then((r) => r.findings);
+  }
+  insightFeedSnapshots(slug: string) {
+    return this.req<{ snapshots: InsightFeedSnapshot[] }>('GET', `/api/v1/projects/${slug}/insight-feed/snapshots`).then((r) => r.snapshots);
+  }
+  automationInbox(slug: string) {
+    return this.req<{ notifications: AutomationInboxNotification[] }>('GET', `/api/v1/projects/${slug}/automation/inbox`).then((r) => r.notifications);
+  }
+  notificationDeliveries(slug: string) {
+    return this.req<{ deliveries: NotificationDelivery[] }>('GET', `/api/v1/projects/${slug}/automation/deliveries`).then((r) => r.deliveries);
   }
 
   // ---- docs ----

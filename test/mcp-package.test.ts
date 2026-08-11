@@ -101,6 +101,7 @@ beforeAll(async () => {
     'dist/core/mcp/server.d.ts',
     'dist/core/mcp/server.js',
     'dist/core/mcp/standard.js',
+    'dist/core/automationSchemas.js',
     'dist/core/schemas.js',
     'package.json',
   ];
@@ -329,7 +330,7 @@ describe('@poolstatis/mcp release artifact', () => {
     try {
       expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.6.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
-      expect(tools.tools).toHaveLength(114);
+      expect(tools.tools).toHaveLength(135);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'list_project_keys',
@@ -357,6 +358,27 @@ describe('@poolstatis/mcp release artifact', () => {
         'preview_event_revision',
         'revise_event',
         'get_event_history',
+        'get_automation_capabilities',
+        'create_notification_destination',
+        'list_notification_destinations',
+        'set_notification_destination_status',
+        'create_monitor_policy',
+        'list_monitor_policies',
+        'get_monitor_policy',
+        'update_monitor_policy',
+        'set_monitor_policy_status',
+        'list_monitor_findings',
+        'create_insight_feed_schedule',
+        'list_insight_feed_schedules',
+        'get_insight_feed_schedule',
+        'update_insight_feed_schedule',
+        'set_insight_feed_schedule_status',
+        'list_insight_feed_snapshots',
+        'list_automation_proposals',
+        'approve_automation_proposal',
+        'reject_automation_proposal',
+        'list_automation_inbox',
+        'list_notification_deliveries',
       ]));
       const browserStandard = await client.readResource({
         uri: 'poolstatis://standard/browser-analytics',

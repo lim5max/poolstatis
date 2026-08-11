@@ -64,7 +64,7 @@ describe('organization write policy inventory', () => {
   it('keeps MCP on the centralized HTTP boundary and classifies every mutating tool call', async () => {
     const source = await readFile(resolve(repoDir, 'src/mcp/server.ts'), 'utf8');
     expect(source.match(/\bfetch\(/g)).toHaveLength(1);
-    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(114);
+    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(133);
 
     const calls = Array.from(
       source.matchAll(/api\(\s*'(POST|PUT|PATCH|DELETE)'\s*,\s*(`[^`]+`|'[^']+')/g),
@@ -76,7 +76,7 @@ describe('organization write policy inventory', () => {
         };
       },
     );
-    expect(calls).toHaveLength(77);
+    expect(calls).toHaveLength(86);
     expect(calls.every(({ route }) => route.startsWith('/api/v1/'))).toBe(true);
 
     const exemptMcpCalls = calls
@@ -84,7 +84,7 @@ describe('organization write policy inventory', () => {
         !requiresOrganizationWriteReadiness(method, route))
       .map(({ method, route }) => `${method} ${route}`);
     expect(exemptMcpCalls).toHaveLength(27);
-    expect(calls.length - exemptMcpCalls.length).toBe(50);
+    expect(calls.length - exemptMcpCalls.length).toBe(59);
     expect(new Set(exemptMcpCalls)).toEqual(new Set([
       'POST /api/v1/projects/:slug/onboarding/observe-agent',
       'POST /api/v1/projects/:slug/events/backfill/preview',

@@ -1,5 +1,5 @@
 // Mirrors the Platform API response shapes (src/http/server.ts + services).
-import type { VisualizationSpec } from '../analysis/visualization';
+import type { AnalysisQueryInput, VisualizationSpec } from '../analysis/visualization';
 
 export type SavedAnswerState = 'ready' | 'partial' | 'empty' | 'unavailable' | 'not_configured' | 'stale' | 'error';
 export type SavedAnswerTrust = 'trusted' | 'partial' | 'blocked' | 'unavailable';
@@ -32,7 +32,7 @@ export interface SavedEvidenceSnapshot {
   sample?: { eligible: number | null; observed: number | null; coverage: number | null };
   warnings: Array<{ code: string; message: string; remediation_action_id?: string }>;
   unavailable_reasons: Array<{ code: string; message: string; prerequisite_action_id?: string }>;
-  reproducible_query?: Record<string, unknown>;
+  reproducible_query?: AnalysisQueryInput;
 }
 
 export interface SavedAnswer {
@@ -187,6 +187,64 @@ export interface FeatureFlag {
   variants: FeatureFlagVariant[];
   created_at: string;
   updated_at: string;
+}
+
+export interface NotificationDestination {
+  id: string; key: string; name: string; kind: 'in_product' | 'outbox';
+  status: 'active' | 'disabled'; created_at: string; updated_at: string;
+}
+
+export interface MonitorPolicy {
+  id: string; policy_key: string; name: string; current_version: number;
+  status: 'active' | 'paused' | 'archived'; next_evaluation_at: string;
+  revision: {
+    metric_key: string; env: string; comparison_rule: string; threshold: number;
+    minimum_sample: number; window_minutes: number; cadence_minutes: number;
+    cooldown_seconds: number; owner: string; destination_ids: string[];
+    proposal_kind: 'pause' | 'rollback' | null; version: number;
+  };
+}
+
+export interface InsightFeedSchedule {
+  id: string; schedule_key: string; name: string; current_version: number;
+  status: 'active' | 'paused' | 'archived'; next_run_at: string;
+  revision: {
+    metric_key: string; env: string; window_days: number; timezone: string;
+    frequency: 'daily' | 'weekly'; local_time: string; weekday: number | null;
+    destination_ids: string[]; owner: string; version: number;
+  };
+}
+
+export interface AutomationProposal {
+  id: string; kind: 'pause' | 'rollback'; status: 'proposed' | 'approved' | 'rejected';
+  target: Record<string, unknown>; payload: Record<string, unknown>; undo: Record<string, unknown>;
+  confirmation_fingerprint: string; review_rationale: string | null; created_at: string;
+}
+
+export interface MonitorFinding {
+  id: string; policy_id: string; policy_key: string; policy_name: string; severity: string;
+  snapshot: Record<string, unknown>; evidence: Record<string, unknown>;
+  notification_state: 'queued' | 'not_configured'; created_at: string;
+}
+
+export interface InsightFeedSnapshot {
+  id: string; schedule_id: string; schedule_key: string; schedule_name: string;
+  resolved_window: Record<string, unknown>; definition_fingerprint: string;
+  answer: { state: string; headline: string; takeaway: string; primary_value?: number };
+  evidence: Record<string, unknown>; created_at: string;
+}
+
+export interface AutomationInboxNotification {
+  id: string; delivery_id: string; payload: {
+    kind: string; code: string; answer: { state: string; headline: string; takeaway: string };
+    evidence: Record<string, unknown>; action: { kind: string; resource_id: string };
+  }; created_at: string;
+}
+
+export interface NotificationDelivery {
+  id: string; destination_id: string | null; destination_key: string | null;
+  destination_kind: 'in_product' | 'outbox' | null; finding_id: string | null; feed_run_id: string | null;
+  status: string; attempt_count: number; last_error_code: string | null; created_at: string; updated_at: string;
 }
 
 export type ExperimentStatus = 'draft' | 'running' | 'concluded';

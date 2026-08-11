@@ -28,6 +28,11 @@ import {
 import { INSTRUMENTATION_STANDARD } from './standard.js';
 import { BROWSER_ANALYTICS_STANDARD } from './browserStandard.js';
 import { ACTORS_STANDARD } from './actorsStandard.js';
+import {
+  insightFeedScheduleInputSchema, monitorPolicyInputSchema, notificationDestinationInputSchema, notificationDestinationLifecycleSchema,
+  resourceLifecycleSchema, reviewAutomationProposalSchema, reviseInsightFeedScheduleSchema,
+  reviseMonitorPolicySchema,
+} from '../automationSchemas.js';
 
 export interface McpConfig { baseUrl: string; token: string; }
 
@@ -137,6 +142,62 @@ jsonTool(
   { project, env: z.string().default('prod') },
   wrap(({ project: slug, env }) => api('GET', `/api/v1/projects/${slug}/schema?env=${encodeURIComponent(env)}`)),
 );
+
+// ===== Control tower automation =====
+
+jsonTool('get_automation_capabilities',
+  'Read truthful built-in delivery capability. External providers remain not_configured until an extension is installed.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/capabilities`)));
+jsonTool('create_notification_destination', 'Create an in-product or extension-ready outbox destination.',
+  { project, destination: notificationDestinationInputSchema },
+  wrap(({ project: slug, destination }) => api('POST', `/api/v1/projects/${slug}/automation/destinations`, destination)));
+jsonTool('list_notification_destinations', 'List privacy-safe notification destinations for one project.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/destinations`)));
+jsonTool('set_notification_destination_status', 'Enable or disable one project notification destination with immutable audit.',
+  { project, id: z.string().uuid(), change: notificationDestinationLifecycleSchema },
+  wrap(({ project: slug, id, change }) => api('PATCH', `/api/v1/projects/${slug}/automation/destinations/${id}`, change)));
+jsonTool('create_monitor_policy', 'Create a versioned metric monitor. A breach may freeze a proposal but never changes traffic.',
+  { project, policy: monitorPolicyInputSchema },
+  wrap(({ project: slug, policy }) => api('POST', `/api/v1/projects/${slug}/monitors`, policy)));
+jsonTool('list_monitor_policies', 'List current project monitor policy heads and frozen current revisions.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/monitors`)));
+jsonTool('get_monitor_policy', 'Read one current monitor policy head and revision.',
+  { project, id: z.string().uuid() }, wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/monitors/${id}`)));
+jsonTool('update_monitor_policy', 'Append a monitor revision using optimistic version control.',
+  { project, id: z.string().uuid(), change: reviseMonitorPolicySchema },
+  wrap(({ project: slug, id, change }) => api('PATCH', `/api/v1/projects/${slug}/monitors/${id}`, change)));
+jsonTool('set_monitor_policy_status', 'Pause, resume or irreversibly archive a monitor policy.',
+  { project, id: z.string().uuid(), change: resourceLifecycleSchema },
+  wrap(({ project: slug, id, change }) => api('POST', `/api/v1/projects/${slug}/monitors/${id}/lifecycle`, change)));
+jsonTool('list_monitor_findings', 'List immutable, privacy-safe threshold findings.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/findings`)));
+jsonTool('create_insight_feed_schedule', 'Create a timezone-aware scheduled semantic metric feed.',
+  { project, schedule: insightFeedScheduleInputSchema },
+  wrap(({ project: slug, schedule }) => api('POST', `/api/v1/projects/${slug}/insight-feed/schedules`, schedule)));
+jsonTool('list_insight_feed_schedules', 'List scheduled semantic feed definitions.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/insight-feed/schedules`)));
+jsonTool('get_insight_feed_schedule', 'Read one scheduled feed head and current immutable revision.',
+  { project, id: z.string().uuid() }, wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/insight-feed/schedules/${id}`)));
+jsonTool('update_insight_feed_schedule', 'Append a timezone-aware feed schedule revision.',
+  { project, id: z.string().uuid(), change: reviseInsightFeedScheduleSchema },
+  wrap(({ project: slug, id, change }) => api('PATCH', `/api/v1/projects/${slug}/insight-feed/schedules/${id}`, change)));
+jsonTool('set_insight_feed_schedule_status', 'Pause, resume or irreversibly archive a scheduled feed.',
+  { project, id: z.string().uuid(), change: resourceLifecycleSchema },
+  wrap(({ project: slug, id, change }) => api('POST', `/api/v1/projects/${slug}/insight-feed/schedules/${id}/lifecycle`, change)));
+jsonTool('list_insight_feed_snapshots', 'List immutable scheduled insight answers with evidence and definition fingerprints.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/insight-feed/snapshots`)));
+jsonTool('list_automation_proposals', 'List frozen pause or rollback proposals awaiting or recording human review.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/proposals`)));
+for (const decision of ['approve', 'reject'] as const) {
+  jsonTool(`${decision}_automation_proposal`,
+    `${decision === 'approve' ? 'Approve' : 'Reject'} a frozen proposal. Approval still requires the existing human-approved mutation path.`,
+    { project, id: z.string().uuid(), review: reviewAutomationProposalSchema },
+    wrap(({ project: slug, id, review }) => api('POST', `/api/v1/projects/${slug}/automation/proposals/${id}/${decision}`, review)));
+}
+jsonTool('list_automation_inbox', 'List delivered in-product automation notifications.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/inbox`)));
+jsonTool('list_notification_deliveries', 'List delivery state, retries and explicit extension-ready outcomes without credentials.',
+  { project }, wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/automation/deliveries`)));
 
 jsonTool(
   'get_onboarding_status',

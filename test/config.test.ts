@@ -309,6 +309,15 @@ describe('production protection config', () => {
       leaseMs: 300_000,
       requestTimeoutMs: 10_000,
     });
+    expect(config.controlTowerAutomation).toEqual({
+      enabled: true,
+      intervalMs: 60_000,
+      batchSize: 25,
+      maxAttempts: 8,
+      baseRetryMs: 60_000,
+      maxRetryMs: 3_600_000,
+      leaseMs: 300_000,
+    });
   });
 
   it('supports explicit operational overrides and strict booleans', () => {
@@ -337,6 +346,13 @@ describe('production protection config', () => {
       WEBHOOK_OUTBOX_MAX_RETRY_MS: '3333',
       WEBHOOK_OUTBOX_LEASE_MS: '4444',
       WEBHOOK_REQUEST_TIMEOUT_MS: '555',
+      CONTROL_TOWER_AUTOMATION_ENABLED: 'false',
+      CONTROL_TOWER_AUTOMATION_INTERVAL_MS: '666',
+      CONTROL_TOWER_AUTOMATION_BATCH_SIZE: '5',
+      CONTROL_TOWER_AUTOMATION_MAX_ATTEMPTS: '6',
+      CONTROL_TOWER_AUTOMATION_BASE_RETRY_MS: '777',
+      CONTROL_TOWER_AUTOMATION_MAX_RETRY_MS: '8888',
+      CONTROL_TOWER_AUTOMATION_LEASE_MS: '9999',
       OUTBOUND_ALLOW_LOCAL_HTTP: 'true',
       POOLSTATIS_CURSOR_SIGNING_SECRET: 'synthetic-server-only-secret-123456',
     });
@@ -372,6 +388,15 @@ describe('production protection config', () => {
       requestTimeoutMs: 555,
     });
     expect(config.cursorSigningSecret).toBe('synthetic-server-only-secret-123456');
+    expect(config.controlTowerAutomation).toEqual({
+      enabled: false,
+      intervalMs: 666,
+      batchSize: 5,
+      maxAttempts: 6,
+      baseRetryMs: 777,
+      maxRetryMs: 8888,
+      leaseMs: 9999,
+    });
 
     expect(() => loadConfig({ RATE_LIMIT_ENABLED: 'yes' })).toThrow(
       'RATE_LIMIT_ENABLED must be true or false',

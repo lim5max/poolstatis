@@ -71,6 +71,7 @@ import {
   approveAction, getAction, listActions, prepareAction, rejectAction, retryAction,
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
+import { registerAutomationRoutes } from './automationRoutes.js';
 import type { OutboundPolicyOptions } from '../security/outbound.js';
 import {
   getOrganizationUsage, getOrganizationUsageActivity, getOrganizationUsageControl, getOrganizationUsageRange,
@@ -751,6 +752,8 @@ function registerPlatformRoutes(
     req.resolvedProject = project;
     return project;
   };
+
+  registerAutomationRoutes(app, ctx, { platform, resolveProject, actor: (req) => authOwner(req.auth) });
 
   app.get('/api/v1/me/usage', async (req) => {
     requireUsageReadAccess(req.auth);

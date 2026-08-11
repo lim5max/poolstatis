@@ -201,6 +201,9 @@ describe('hosted policy migration role topology', () => {
         'SELECT poolstatis_prepare_analysis_views_role_grants()',
       );
       await deploy.query(
+        'SELECT poolstatis_prepare_control_tower_automation_role_grants()',
+      );
+      await deploy.query(
         'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
       );
       await ensureRollingEventPartitions(deploy, new Date(), 12);
@@ -596,6 +599,7 @@ describe('hosted policy migration role topology', () => {
       await selfHost.query('SELECT poolstatis_prepare_event_management_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_project_intent_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_analysis_views_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_control_tower_automation_role_grants()');
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(selfHost, new Date(), 12);
       await ensureRetentionIndexes(selfHost);
