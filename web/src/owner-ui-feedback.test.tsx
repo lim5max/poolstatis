@@ -96,8 +96,42 @@ const visualResult = {
   },
   click_cells: [{ x: 2, y: 3, count: 1, actors: 1 }],
   click_labels: [{ label: 'hero.get_started', count: 1, actors: 1 }],
+  click_labels_truncated: false,
   scroll_coverage: [{ depth: 50, sessions: 2, actors: 1, percentage: 40 }],
   sections: [{ section: 'hero', top: 0, sessions: 5, actors: 1, percentage: 100, dropoff_percentage: 0 }],
+  sections_truncated: false,
+  agent_context: {
+    scope: {
+      surface: surface.key,
+      route: 'landing-home',
+      version: 'release-a',
+      device: 'mobile',
+      purpose: surface.purpose,
+    },
+    sample_size: { events: 8, page_views: 5, sessions: 5, actors: 1, clicks: 1 },
+    section_order: ['hero'],
+    largest_section_reach_decreases: [],
+    click_concentration: [{ label: 'hero.get_started', count: 1, actors: 1, percentage_of_all_clicks: 100 }],
+    scroll_reach: [{ depth: 50, sessions: 2, actors: 1, percentage: 40 }],
+    output_coverage: {
+      click_labels_returned: 1,
+      click_labels_truncated: false,
+      sections_returned: 1,
+      sections_truncated: false,
+    },
+    snapshot_coverage: {
+      status: 'fresh',
+      exact_viewport_match: true,
+      snapshot_id: mobileSnapshot.id,
+      evidence_ref: mobileSnapshot.evidence_ref,
+      captured_at: mobileSnapshot.captured_at,
+      expires_at: mobileSnapshot.expires_at,
+      age_seconds: 60,
+    },
+    evidence_refs: [{ type: 'experience_snapshot', id: mobileSnapshot.id, evidence_ref: mobileSnapshot.evidence_ref }],
+    data_quality: { status: 'ok', caveats: [] },
+    suggested_next_actions: [],
+  },
   causality: 'Aggregated interaction evidence does not prove why users acted.',
   meta: { computed_at: '2026-07-27T09:01:00.000Z', date_range: { from: '2026-06-27', to: '2026-07-27' } },
 } as const;
@@ -162,6 +196,16 @@ describe('owner UI feedback regressions', () => {
       ...visualResult,
       device: 'desktop',
       snapshot: desktopSnapshot,
+      agent_context: {
+        ...visualResult.agent_context,
+        scope: { ...visualResult.agent_context.scope, device: 'desktop' },
+        snapshot_coverage: {
+          ...visualResult.agent_context.snapshot_coverage,
+          snapshot_id: desktopSnapshot.id,
+          evidence_ref: desktopSnapshot.evidence_ref,
+        },
+        evidence_refs: [{ type: 'experience_snapshot', id: desktopSnapshot.id, evidence_ref: desktopSnapshot.evidence_ref }],
+      },
       summary: {
         ...visualResult.summary,
         max_document_width: 1440,
@@ -195,12 +239,31 @@ describe('owner UI feedback regressions', () => {
       ...visualResult,
       device: 'desktop',
       snapshot: desktopSnapshot,
+      agent_context: {
+        ...visualResult.agent_context,
+        scope: { ...visualResult.agent_context.scope, device: 'desktop' },
+        snapshot_coverage: {
+          ...visualResult.agent_context.snapshot_coverage,
+          snapshot_id: desktopSnapshot.id,
+          evidence_ref: desktopSnapshot.evidence_ref,
+        },
+        evidence_refs: [{ type: 'experience_snapshot', id: desktopSnapshot.id, evidence_ref: desktopSnapshot.evidence_ref }],
+      },
     } as const;
     const comparisonRequest = deferred<{
       kind: 'visual_experience_compare';
       baseline: typeof visualResult;
       comparison: typeof desktopResult;
       delta: { sessions: number; clicks: number; actors: number; sections: [] };
+      agent_context: {
+        largest_section_changes: [];
+        section_taxonomy_mismatches: [];
+        data_quality: { status: 'ok'; caveats: [] };
+        evidence_refs: [];
+        sample_sizes: { baseline: typeof visualResult.agent_context.sample_size; comparison: typeof desktopResult.agent_context.sample_size };
+        scope: { surface: string; route: string; purpose: string };
+        suggested_next_actions: [];
+      };
       causality: string;
     }>();
     const visualExperience = vi.fn()
@@ -224,6 +287,18 @@ describe('owner UI feedback regressions', () => {
       baseline: visualResult,
       comparison: desktopResult,
       delta: { sessions: 3, clicks: 0, actors: 0, sections: [] },
+      agent_context: {
+        largest_section_changes: [],
+        section_taxonomy_mismatches: [],
+        data_quality: { status: 'ok', caveats: [] },
+        evidence_refs: [],
+        sample_sizes: {
+          baseline: visualResult.agent_context.sample_size,
+          comparison: desktopResult.agent_context.sample_size,
+        },
+        scope: { surface: surface.key, route: route.key, purpose: surface.purpose },
+        suggested_next_actions: [],
+      },
       causality: 'Comparison fixture.',
     }));
     expect(screen.queryByText(/Compared with/)).not.toBeInTheDocument();

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Add, GridView, Loader2 } from '@/components/icons';
+import { Badge } from '@/components/ui/badge';
 import { useAsync, useStore } from '../store';
 import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, Stat, fmtNum } from '../components/ui';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { DisclosureSummary } from '@/components/disclosure';
 import { GuidedFirstValue } from '../components/guided-first-value';
+import { EvidenceLine, KpiStrip, type EvidenceTrust } from '../components/analytics';
 import type {
   ExperienceRoute,
   InteractionMapResponse,
@@ -179,6 +181,10 @@ function ExperienceSetupGate({
       'Named-section reach and aggregate drop-off',
       'Snapshot freshness, caveats, and non-causal interpretation',
     ]}
+    referenceSource={{
+      label: 'Visual Experience Maps v1 evidence model',
+      href: 'https://github.com/lim5max/poolstatis/blob/main/docs/10-visual-experience-maps.md#evidence-model',
+    }}
   />;
 }
 
@@ -377,14 +383,17 @@ function VisualExplorer({
   };
 
   return (
-    <div id="visual-experience-map" className="scroll-mt-4">
-      <Panel
-        title="Page evidence"
-        right={result?.snapshot?.stale
-          ? <span className="text-sm text-amber-700">Snapshot may be stale</span>
-          : <span className="text-sm text-muted-foreground">Exact version + layout</span>}
-      >
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
+    <>
+      <ExperienceFrictionAnswer result={result} comparison={comparison} busy={busy} error={error} env={env} />
+      {comparison && <ComparisonStrip comparison={comparison} />}
+      <div id="visual-experience-map" className="scroll-mt-4">
+        <Panel
+          title="Page evidence"
+          right={result?.snapshot?.stale
+            ? <span className="text-sm text-amber-700">Snapshot may be stale</span>
+            : <span className="text-sm text-muted-foreground">Exact version + layout</span>}
+        >
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
         <Filter label="Surface">
           <Select value={surface} onValueChange={setSurface}>
             <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
@@ -419,9 +428,9 @@ function VisualExplorer({
             </SelectContent>
           </Select>
         </Filter>
-      </div>
+          </div>
 
-      <div className="mt-3 flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mt-3 flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">
           {comparisonTarget
             ? (
@@ -440,24 +449,137 @@ function VisualExplorer({
               ? 'Compare versions'
               : 'Compare unavailable'}
         </Button>
-      </div>
+          </div>
 
-      <div className="mt-3">
+          <div className="mt-3">
         <Tabs value={mode} onValueChange={(value) => setMode(value as 'clicks' | 'scroll')}>
           <TabsList>
             <TabsTrigger value="clicks">Click intensity</TabsTrigger>
             <TabsTrigger value="scroll">Scroll reach</TabsTrigger>
           </TabsList>
         </Tabs>
-      </div>
+          </div>
 
-      {busy && <div className="mt-4"><Loading what="aligning events to the snapshot…" /></div>}
-      {error && <div className="mt-4"><ErrorNote>{error}</ErrorNote></div>}
-      {!busy && result && <VisualResult result={result} mode={mode} />}
-      {comparison && <ComparisonStrip comparison={comparison} />}
-      </Panel>
-    </div>
+          {busy && <div className="mt-4"><Loading what="aligning events to the snapshot…" /></div>}
+          {error && <div className="mt-4"><ErrorNote>{error}</ErrorNote></div>}
+          {!busy && result && <VisualResult result={result} mode={mode} />}
+        </Panel>
+      </div>
+    </>
   );
+}
+
+function ExperienceFrictionAnswer({
+  result,
+  comparison,
+  busy,
+  error,
+  env,
+}: {
+  result: VisualExperienceResponse | null;
+  comparison: VisualExperienceCompareResponse | null;
+  busy: boolean;
+  error: string | null;
+  env: string;
+}) {
+  if (busy) {
+    return (
+      <section aria-label="Aggregate friction answer">
+        <Panel title="Aggregate friction answer" right={<Badge variant="outline">Reading evidence</Badge>}>
+          <Loading what="deriving the aggregate friction answer…" />
+        </Panel>
+      </section>
+    );
+  }
+  if (error || !result) {
+    return (
+      <section aria-label="Aggregate friction answer">
+        <Panel title="Aggregate friction answer" right={<Badge variant="outline">Evidence unavailable</Badge>}>
+          <p className="text-sm text-muted-foreground">
+            {error ?? 'No server evidence is available for this exact surface, route, version, device, and period.'}
+          </p>
+        </Panel>
+      </section>
+    );
+  }
+
+  const context = result.agent_context;
+  const decrease = context.largest_section_reach_decreases[0];
+  const comparisonChange = comparison?.agent_context.largest_section_changes[0];
+  const trust = experienceEvidenceTrust(result);
+  const trustLabel = trust === 'trusted'
+    ? 'Trusted evidence'
+    : trust === 'partial'
+      ? 'Partial evidence'
+      : 'Evidence unavailable';
+  const readiness = trust === 'trusted'
+    ? 'Evidence ready'
+    : trust === 'partial'
+      ? 'Review caveats'
+      : 'No evidence';
+  const takeaway = context.data_quality.status === 'empty'
+    ? 'No accepted aggregate experience events match this exact evidence cohort.'
+    : decrease
+      ? `The largest observed adjacent reach decrease is ${decrease.from_section} → ${decrease.to_section}: ${decrease.session_count_decrease} fewer sessions (${decrease.percentage_point_decrease} pp).`
+      : 'No adjacent section reach decrease is available in this bounded cohort.';
+
+  return (
+    <section aria-label="Aggregate friction answer">
+      <Panel title="Aggregate friction answer" right={<Badge variant={trust === 'trusted' ? 'default' : 'outline'}>{trustLabel}</Badge>}>
+        <p className="max-w-3xl text-lg font-semibold leading-snug">{takeaway}</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Purpose: <span className="text-foreground">{context.scope.purpose}</span>
+        </p>
+        {comparisonChange && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Explicit cohort delta: <code>{comparisonChange.section}</code>{' '}
+            {signed(comparisonChange.percentage_points)} pp from {comparisonChange.baseline_percentage}% to {comparisonChange.comparison_percentage}%.
+          </p>
+        )}
+        <div className="mt-4">
+          <KpiStrip items={[
+            {
+              label: 'Adjacent reach delta',
+              value: decrease ? `−${decrease.percentage_point_decrease} pp` : null,
+              fallback: 'Not available',
+              note: decrease ? `${decrease.from_section} → ${decrease.to_section}` : 'No ordered section decrease returned',
+            },
+            { label: 'Sessions', value: context.sample_size.sessions, note: 'Exact selected cohort' },
+            { label: 'Actors', value: context.sample_size.actors, note: 'Aggregate distinct actors' },
+            {
+              label: 'Readiness',
+              value: readiness,
+              note: `${context.data_quality.status} quality · ${context.snapshot_coverage.status} snapshot`,
+            },
+          ]} />
+        </div>
+        <EvidenceLine trust={trust} eventCount={context.sample_size.events} env={env} className="mt-3">
+          <p>
+            Scope: <code>{context.scope.surface}</code> · <code>{context.scope.route}</code> ·{' '}
+            <code>{context.scope.version}</code> · {context.scope.device}. Computed {result.meta.computed_at} for{' '}
+            {result.meta.date_range.from} through {result.meta.date_range.to}.
+          </p>
+          <p className="mt-1">
+            Snapshot: {context.snapshot_coverage.status}; viewport {context.snapshot_coverage.exact_viewport_match ? 'matched exactly' : 'not matched exactly'}.
+          </p>
+          {context.data_quality.caveats.length > 0 && (
+            <ul className="mt-1 list-disc space-y-1 pl-4">
+              {context.data_quality.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)}
+            </ul>
+          )}
+          <p className="mt-1">{result.causality}</p>
+        </EvidenceLine>
+      </Panel>
+    </section>
+  );
+}
+
+function experienceEvidenceTrust(result: VisualExperienceResponse): EvidenceTrust {
+  const { data_quality: quality, snapshot_coverage: snapshot } = result.agent_context;
+  if (quality.status === 'empty' || result.agent_context.sample_size.events === 0) return 'unavailable';
+  return quality.status === 'ok' && snapshot.status === 'fresh' && snapshot.exact_viewport_match
+    ? 'trusted'
+    : 'partial';
 }
 
 function VisualResult({ result, mode }: { result: VisualExperienceResponse; mode: 'clicks' | 'scroll' }) {
@@ -655,7 +777,7 @@ function SectionDropoff({ sections, total }: { sections: VisualExperienceRespons
 function ComparisonStrip({ comparison }: { comparison: VisualExperienceCompareResponse }) {
   const target = `${comparison.comparison.version} · ${comparison.comparison.device}`;
   return (
-    <div className="mt-4 rounded-md border bg-muted/30 p-4">
+    <div className="rounded-md border bg-muted/30 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-sm font-medium">Compared with {target}</div>

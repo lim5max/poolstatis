@@ -18,6 +18,7 @@ export function GuidedFirstValue({
   agentTask,
   referenceTitle,
   referenceItems,
+  referenceSource,
 }: {
   title: string;
   outcome: string;
@@ -26,6 +27,7 @@ export function GuidedFirstValue({
   agentTask?: string;
   referenceTitle: string;
   referenceItems: string[];
+  referenceSource?: { label: string; href: string };
 }) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -77,6 +79,19 @@ export function GuidedFirstValue({
         </div>
         <aside className="rounded-panel border bg-muted/20 p-4" aria-label={referenceTitle}>
           <div className="text-sm font-medium">{referenceTitle}</div>
+          {referenceSource && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Illustrative reference ·{' '}
+              <a
+                className="font-medium text-foreground underline decoration-border underline-offset-4"
+                href={referenceSource.href}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {referenceSource.label}
+              </a>
+            </p>
+          )}
           <ul className="mt-3 space-y-2 text-sm leading-relaxed text-muted-foreground">
             {referenceItems.map((item) => <li key={item}>— {item}</li>)}
           </ul>
