@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { EmptyState, ErrorNote, Loading, Panel, fmtNum } from './ui';
+import { DisclosureSummary } from './disclosure';
 
 export function DataHealthControl({ focusedSignature }: { focusedSignature?: string }) {
   const { client, project, env } = useStore();
@@ -92,14 +93,14 @@ export function DataHealthControl({ focusedSignature }: { focusedSignature?: str
                     {verifying === issue.signature_id ? 'Verifying…' : 'Verify fix'}
                   </Button>
                 </div>
-                {result && <p className={cn('mt-2 text-xs font-medium', result.status === 'resolved' ? 'text-success' : 'text-destructive')} role="status">
+                {result && <p className={cn('mt-2 text-xs font-medium', result.status === 'resolved' ? 'text-foreground' : 'text-destructive')} role="status">
                   {result.status === 'resolved'
                     ? 'No recurrence after this watermark'
                     : `${fmtNum(result.occurrences_since_watermark)} new occurrence${result.occurrences_since_watermark === 1 ? '' : 's'} after this watermark`}
                 </p>}
                 {error && <div className="mt-2"><ErrorNote>{error}</ErrorNote></div>}
                 <details className="mt-2 text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">Evidence watermark</summary>
+                  <DisclosureSummary className="cursor-pointer">Evidence watermark</DisclosureSummary>
                   <code className="mt-1 block break-all">{issue.signature_id} · {issue.watermark.count} · {issue.watermark.last_seen}</code>
                 </details>
               </article>;
