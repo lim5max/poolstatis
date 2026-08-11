@@ -5,6 +5,7 @@ import { buildServer } from '../src/http/server.js';
 import { TEST_DB_URL } from './urls.js';
 import type pg from 'pg';
 import type { FastifyInstance } from 'fastify';
+import { usageControlResultSchema } from '../src/services/usage.js';
 
 let pool: pg.Pool;
 let app: FastifyInstance;
@@ -78,6 +79,12 @@ describe('hosted auth onboarding', () => {
     });
     expect(res.body.billing.meters.map((m: any) => m.key)).toEqual(['events_stored']);
     expect(res.body.onboarding.completed).toBe(false);
+    const usageControl = await authApi(
+      'GET',
+      `/api/v1/me/usage/control?period=${new Date().toISOString().slice(0, 7)}`,
+    );
+    expect(usageControl.status).toBe(200);
+    expect(() => usageControlResultSchema.parse(usageControl.body)).not.toThrow();
   });
 
   it('creates the first project and one-time MCP tokens', async () => {
@@ -206,5 +213,8 @@ describe('hosted auth onboarding', () => {
     const usage = await authApiAs(memberToken, 'GET', `/api/v1/me/usage?period=${new Date().toISOString().slice(0, 7)}`);
     expect(usage.status).toBe(403);
     expect(usage.body.error.code).toBe('insufficient_role');
+    const usageControl = await authApiAs(memberToken, 'GET', `/api/v1/me/usage/control?period=${new Date().toISOString().slice(0, 7)}`);
+    expect(usageControl.status).toBe(403);
+    expect(usageControl.body.error.code).toBe('insufficient_role');
   });
 });

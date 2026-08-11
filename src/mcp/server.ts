@@ -144,6 +144,27 @@ jsonTool(
   }),
 );
 
+jsonTool(
+  'get_control_tower',
+  'Read the server-owned project answer, prioritized attention, evidence and safe next actions. Raw warning samples and actor identifiers are excluded.',
+  {
+    project,
+    env: z.string().default('prod'),
+    range: z.enum(['7d', '30d', '90d']).default('30d'),
+  },
+  wrap(({ project: slug, env, range }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/control-tower?env=${encodeURIComponent(env)}&range=${range}`,
+  )),
+);
+
+jsonTool(
+  'get_usage_control',
+  'Read organization-scoped accepted-event usage, UTC cycle cap, seven-day pace, threshold forecasts and project/environment contributors. This MCP call requires an owner/admin organization-wide personal token; the same REST read also accepts a hosted owner/admin user session. Project secret keys are rejected.',
+  { period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).describe('UTC month in YYYY-MM format') },
+  wrap(({ period }) => api('GET', `/api/v1/me/usage/control?period=${encodeURIComponent(period)}`)),
+);
+
 // ===== Measurement trust =====
 
 jsonTool(

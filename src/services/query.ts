@@ -39,6 +39,9 @@ import {
   requireActorCursorSigningKey,
 } from './actorCursors.js';
 import { actorCursorSecurity, resolveActorIdentity } from './identity.js';
+import {
+  funnelControlBlocks, trendControlBlocks, type AnswerBlock, type EvidenceBlock, type FunnelSummary,
+} from './controlTower.js';
 
 const SESSION_ATTRIBUTION_NOTE = 'Session landing attribution: this associates events with the tagged landing in the same browser session; it is not causal campaign credit.';
 const WEB_DIMENSIONS = {
@@ -192,7 +195,7 @@ interface VisualCompareAgentContext {
 }
 
 export type QueryResult =
-  | { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value?: string }>; meta: QueryMeta }
+  | { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value?: string }>; answer: AnswerBlock; evidence: EvidenceBlock; meta: QueryMeta }
   | {
       kind: 'web_analytics';
       summary: {
@@ -258,6 +261,9 @@ export type QueryResult =
         conversion_from_prev: number;
         conversion_from_start: number;
       }>;
+      summary: FunnelSummary;
+      answer: AnswerBlock;
+      evidence: EvidenceBlock;
       meta: QueryMeta;
     }
   | { kind: 'entities'; entities: Array<{ entity_id: string; properties: Record<string, unknown>; updated_at: string }>; meta: QueryMeta }
@@ -996,6 +1002,13 @@ export class QueryService {
       return {
         kind: 'trend',
         series: [{ bucket: now.toISOString(), value: count }],
+        ...trendControlBlocks(
+          metric,
+          q,
+          [{ value: count }],
+          now,
+          'native',
+        ),
         meta: meta({ source: 'native', note: 'state metrics are snapshots of current entity state, not time series' }),
       };
     }
@@ -1032,7 +1045,12 @@ export class QueryService {
         interval: q.interval,
         ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
       });
-      return { kind: 'trend', series, meta: meta({ source: 'posthog', ...(attributionNote ? { note: attributionNote } : {}) }) };
+      return {
+        kind: 'trend',
+        series,
+        ...trendControlBlocks(metric, q, series, now, 'posthog'),
+        meta: meta({ source: 'posthog', ...(attributionNote ? { note: attributionNote } : {}) }),
+      };
     }
     const agg =
       metric.type === 'count'
@@ -1052,7 +1070,12 @@ export class QueryService {
       interval: q.interval,
       ...(q.breakdown ? { breakdownProperty: q.breakdown.property } : {}),
     });
-    return { kind: 'trend', series, meta: meta({ source: 'native', ...(attributionNote ? { note: attributionNote } : {}) }) };
+    return {
+      kind: 'trend',
+      series,
+      ...trendControlBlocks(metric, q, series, now, 'native'),
+      meta: meta({ source: 'native', ...(attributionNote ? { note: attributionNote } : {}) }),
+    };
   }
 
   private async funnel(projectId: string, q: FunnelQueryInput, now: Date): Promise<QueryResult> {
@@ -1068,10 +1091,12 @@ export class QueryService {
 
     let stepDefs: Array<{ label: string; metric: Metric }>;
     let windowSeconds: number;
+    let funnelGoal: string | undefined;
 
     if (q.funnel) {
       const funnel = await getFunnel(this.pool, projectId, q.funnel);
       windowSeconds = funnel.window_seconds;
+      funnelGoal = funnel.goal;
       stepDefs = await Promise.all(
         funnel.steps.map(async (s) => ({
           label: s.label,
@@ -1152,17 +1177,19 @@ export class QueryService {
     }
 
     const first = counts[0] ?? 0;
+    const steps = counts.map((actors, i) => ({
+      label: stepDefs[i]!.label,
+      metric_key: stepDefs[i]!.metric.key,
+      purpose: stepDefs[i]!.metric.purpose,
+      category: stepDefs[i]!.metric.category,
+      actors,
+      conversion_from_prev: i === 0 ? 1 : ratio(actors, counts[i - 1]!),
+      conversion_from_start: i === 0 ? 1 : ratio(actors, first),
+    }));
     return {
       kind: 'funnel',
-      steps: counts.map((actors, i) => ({
-        label: stepDefs[i]!.label,
-        metric_key: stepDefs[i]!.metric.key,
-        purpose: stepDefs[i]!.metric.purpose,
-        category: stepDefs[i]!.metric.category,
-        actors,
-        conversion_from_prev: i === 0 ? 1 : ratio(actors, counts[i - 1]!),
-        conversion_from_start: i === 0 ? 1 : ratio(actors, first),
-      })),
+      steps,
+      ...funnelControlBlocks(q, steps, now, resultSource, funnelGoal),
       meta: {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },

@@ -1,4 +1,7 @@
 import type pg from 'pg';
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
+import { controlTowerResultSchema, type AttentionItem, type EvidenceBlock } from './controlTower.js';
 
 export interface OrganizationUsage {
   meter: 'events_stored';
@@ -63,6 +66,307 @@ export interface OrganizationUsageRange {
     basis: 'current_configuration';
   };
   periods: OrganizationUsageRangePeriod[];
+}
+
+export const usageControlResultSchema = controlTowerResultSchema.extend({
+  meter: z.literal('events_stored'),
+  cycle: z.object({ from: z.string().datetime(), to: z.string().datetime(), timezone: z.literal('UTC') }).strict(),
+  cap: z.object({
+    state: z.enum(['finite', 'not_configured']),
+    value: z.number().nullable(),
+    remaining: z.number().nullable(),
+    consequence_at_100_percent: z.string().nullable(),
+  }).strict(),
+  pace: z.object({
+    observed_days: z.number().int().nonnegative(),
+    events_per_day_7d: z.number().nullable(),
+    projected_cycle_end: z.number().nullable(),
+    confidence: z.enum(['sufficient', 'insufficient']),
+  }).strict(),
+  threshold_forecasts: z.array(z.object({
+    percent: z.union([z.literal(50), z.literal(75), z.literal(90), z.literal(100)]),
+    state: z.enum(['reached', 'projected', 'not_projected', 'not_applicable']),
+    reached_or_projected_at: z.string().datetime().nullable(),
+  }).strict()),
+  contributors: z.array(z.object({
+    project_slug: z.string(),
+    project_name: z.string(),
+    environment: z.string(),
+    accepted_events: z.number(),
+    share: z.number().nullable(),
+    change_7d: z.number().nullable(),
+    last_ingest_at: z.string().datetime().nullable(),
+  }).strict()),
+}).strict();
+
+export type UsageControlResult = z.infer<typeof usageControlResultSchema>;
+
+const DAY_MS = 86_400_000;
+
+function safeUsageNumber(value: string | number): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error('usage value cannot be represented as a non-negative safe integer');
+  }
+  return parsed;
+}
+
+function utcMonthBounds(period: string): { start: Date; endExclusive: Date } {
+  const [year, month] = period.split('-').map(Number) as [number, number];
+  return {
+    start: new Date(Date.UTC(year, month - 1, 1)),
+    endExclusive: new Date(Date.UTC(year, month, 1)),
+  };
+}
+
+function startOfUtcDay(value: Date): Date {
+  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+}
+
+function usageEvidence(
+  now: Date,
+  state: EvidenceBlock['state'],
+  observedDays: number,
+  paceWindowDays: number,
+  warnings: EvidenceBlock['warnings'],
+): EvidenceBlock {
+  return {
+    state,
+    as_of: now.toISOString(),
+    freshness: 'fresh',
+    source_refs: [{ kind: 'usage_ledger', meter: 'events_stored' }],
+    aggregation: 'accepted events by immutable usage-ledger ingest time in UTC; seven-day pace includes zero-event calendar days',
+    sample: {
+      eligible: paceWindowDays,
+      observed: observedDays,
+      coverage: paceWindowDays > 0 ? observedDays / paceWindowDays : null,
+    },
+    warnings,
+    unavailable_reasons: observedDays < 2
+      ? [{
+          code: 'insufficient_pace_sample',
+          message: 'At least two distinct observed ingest days are required for a pace forecast.',
+          prerequisite_action_id: 'review_usage_contributors',
+        }]
+      : [],
+  };
+}
+
+/** Server-owned organization usage answer derived only from Core ledger and entitlement facts. */
+export async function getOrganizationUsageControl(
+  pool: pg.Pool,
+  orgId: string,
+  period: string,
+  now = new Date(),
+): Promise<UsageControlResult> {
+  const { start, endExclusive } = utcMonthBounds(period);
+  const currentPeriod = now >= start && now < endExclusive;
+  const anchor = currentPeriod ? now : new Date(endExclusive.getTime() - 1);
+  const anchorDay = startOfUtcDay(anchor);
+  const paceStart = new Date(Math.max(start.getTime(), anchorDay.getTime() - 6 * DAY_MS));
+  const paceWindowDays = Math.floor((anchorDay.getTime() - paceStart.getTime()) / DAY_MS) + 1;
+  const previousStart = new Date(paceStart.getTime() - paceWindowDays * DAY_MS);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const projection = await client.query<{ quantity: string }>(
+        `SELECT quantity::text FROM organization_usage
+         WHERE org_id = $1 AND meter_key = 'events_stored' AND period_start = $2::date`,
+        [orgId, `${period}-01`],
+      );
+    const entitlement = await client.query<{ hard_limit: string | null }>(
+        `SELECT hard_limit::text FROM organization_entitlements
+         WHERE org_id = $1 AND meter_key = 'events_stored'`,
+        [orgId],
+      );
+    const daily = await client.query<{ day: string; quantity: string }>(
+        `SELECT to_char(date_trunc('day', ingested_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
+                sum(quantity)::bigint::text AS quantity
+         FROM usage_ledger
+         WHERE org_id = $1 AND meter_key = 'events_stored'
+           AND period_start = $2::date
+         GROUP BY date_trunc('day', ingested_at AT TIME ZONE 'UTC')
+         ORDER BY day`,
+        [orgId, `${period}-01`],
+      );
+    const contributorRows = await client.query<{
+        slug: string; name: string; env: string; quantity: string;
+        recent_quantity: string; previous_quantity: string; last_ingest_at: Date | string;
+      }>(
+        `SELECT p.slug, p.name, l.env,
+                sum(l.quantity)::bigint::text AS quantity,
+                COALESCE(sum(l.quantity) FILTER (
+                  WHERE l.ingested_at >= $3 AND l.ingested_at < $4
+                ), 0)::bigint::text AS recent_quantity,
+                COALESCE(sum(l.quantity) FILTER (
+                  WHERE l.ingested_at >= $5 AND l.ingested_at < $3
+                ), 0)::bigint::text AS previous_quantity,
+                max(l.ingested_at) AS last_ingest_at
+         FROM usage_ledger l
+         JOIN projects p ON p.id = l.project_id AND p.org_id = l.org_id
+         WHERE l.org_id = $1 AND l.meter_key = 'events_stored' AND l.period_start = $2::date
+         GROUP BY p.slug, p.name, l.env
+         ORDER BY quantity DESC, p.slug, l.env`,
+        [orgId, `${period}-01`, paceStart, new Date(anchorDay.getTime() + DAY_MS), previousStart],
+      );
+    const quantity = safeUsageNumber(projection.rows[0]?.quantity ?? '0');
+    const hardLimitRaw = entitlement.rows[0]?.hard_limit;
+    const hardLimit = hardLimitRaw === null || hardLimitRaw === undefined
+      ? null
+      : safeUsageNumber(hardLimitRaw);
+    const dailyFacts = daily.rows.map((row) => ({
+      day: row.day,
+      at: Date.parse(`${row.day}T00:00:00.000Z`),
+      quantity: safeUsageNumber(row.quantity),
+    }));
+    const paceFacts = dailyFacts.filter((row) => row.at >= paceStart.getTime()
+      && row.at < anchorDay.getTime() + DAY_MS);
+    const observedDays = paceFacts.filter((row) => row.quantity > 0).length;
+    const pace = observedDays >= 2
+      ? paceFacts.reduce((sum, row) => sum + row.quantity, 0) / paceWindowDays
+      : null;
+    const remainingDays = currentPeriod
+      ? Math.max(0, Math.floor((endExclusive.getTime() - anchorDay.getTime()) / DAY_MS) - 1)
+      : 0;
+    const projectedCycleEnd = currentPeriod && pace !== null
+      ? quantity + pace * remainingDays
+      : null;
+    const ledgerQuantity = dailyFacts.reduce((sum, row) => sum + row.quantity, 0);
+    const evidenceWarnings: EvidenceBlock['warnings'] = ledgerQuantity === quantity
+      ? []
+      : [{
+          code: 'ledger_attribution_gap',
+          message: `Current projection is ${quantity}, while retained contributor ledger facts total ${ledgerQuantity}.`,
+          remediation_action_id: 'review_usage_contributors',
+        }];
+    const evidence = usageEvidence(
+      now,
+      evidenceWarnings.length > 0 || observedDays < 2 ? 'partial' : 'trusted',
+      observedDays,
+      paceWindowDays,
+      evidenceWarnings,
+    );
+    const percents = [50, 75, 90, 100] as const;
+    let cumulative = 0;
+    const cumulativeFacts = dailyFacts.map((row) => {
+      cumulative += row.quantity;
+      return { ...row, cumulative };
+    });
+    const thresholdForecasts: UsageControlResult['threshold_forecasts'] = percents.map((percent) => {
+      if (hardLimit === null) {
+        return { percent, state: 'not_applicable', reached_or_projected_at: null };
+      }
+      const target = hardLimit * percent / 100;
+      if (hardLimit === 0) {
+        return { percent, state: 'reached', reached_or_projected_at: start.toISOString() };
+      }
+      if (quantity >= target) {
+        const crossing = cumulativeFacts.find((row) => row.cumulative >= target);
+        return {
+          percent,
+          state: 'reached',
+          reached_or_projected_at: crossing ? new Date(crossing.at).toISOString() : null,
+        };
+      }
+      if (!currentPeriod || pace === null || pace <= 0 || projectedCycleEnd === null || projectedCycleEnd < target) {
+        return { percent, state: 'not_projected', reached_or_projected_at: null };
+      }
+      const daysUntil = Math.ceil((target - quantity) / pace);
+      const projectedAt = new Date(anchorDay.getTime() + daysUntil * DAY_MS);
+      return projectedAt < endExclusive
+        ? { percent, state: 'projected', reached_or_projected_at: projectedAt.toISOString() }
+        : { percent, state: 'not_projected', reached_or_projected_at: null };
+    });
+    const contributors = contributorRows.rows.map((row) => {
+      const accepted = safeUsageNumber(row.quantity);
+      const recent = safeUsageNumber(row.recent_quantity);
+      const previous = safeUsageNumber(row.previous_quantity);
+      return {
+        project_slug: row.slug,
+        project_name: row.name,
+        environment: row.env,
+        accepted_events: accepted,
+        share: quantity > 0 ? accepted / quantity : null,
+        change_7d: previous > 0 ? (recent - previous) / previous : null,
+        last_ingest_at: row.last_ingest_at ? new Date(row.last_ingest_at).toISOString() : null,
+      };
+    });
+    const actionable = thresholdForecasts
+      .filter((forecast) => forecast.percent >= 75
+        && (forecast.state === 'reached' || forecast.state === 'projected'))
+      .sort((left, right) => right.percent - left.percent)[0];
+    const attention: AttentionItem[] = actionable ? [{
+      id: `usage.threshold.${actionable.percent}`,
+      rule_id: `usage.threshold.${actionable.percent}`,
+      rule_version: 1,
+      severity: actionable.percent === 100 && actionable.state === 'reached'
+        ? 'critical'
+        : actionable.percent >= 90 ? 'high' : 'medium',
+      state: 'open',
+      title: actionable.state === 'reached'
+        ? `${actionable.percent}% of the configured event cap is reached`
+        : `${actionable.percent}% of the configured event cap is projected`,
+      reason: actionable.reached_or_projected_at
+        ? `Threshold time: ${actionable.reached_or_projected_at}.`
+        : 'The threshold state is derived from the current accepted-event quantity.',
+      impact: actionable.percent === 100
+        ? 'At the configured hard limit, new accepted-event writes are rejected until the cycle resets or the limit changes.'
+        : 'Approaching the cap can put measurement continuity at risk.',
+      affected: [{ kind: 'customer', ref: orgId }],
+      evidence,
+      primary_action: { id: 'review_usage_contributors', kind: 'navigate', label: 'Review usage contributors', href: '/usage' },
+    }] : [];
+    const remaining = hardLimit === null ? null : Math.max(0, hardLimit - quantity);
+    const formattedQuantity = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(quantity);
+    const result: UsageControlResult = {
+      schema_version: 1,
+      request_id: randomUUID(),
+      generated_at: now.toISOString(),
+      scope: {
+        organization_id: orgId,
+        window: { from: start.toISOString(), to: new Date(endExclusive.getTime() - 1).toISOString(), timezone: 'UTC' },
+      },
+      answer: {
+        state: quantity === 0 ? 'empty' : attention.length > 0 || evidence.state === 'partial' ? 'partial' : 'ready',
+        headline: `${formattedQuantity} accepted events this UTC cycle`,
+        takeaway: hardLimit === null
+          ? 'No Core hard limit is configured for this organization.'
+          : `${new Intl.NumberFormat('en-US').format(remaining ?? 0)} events remain before the configured hard limit.`,
+        primary_value: { value: quantity, unit: 'count', formatted: formattedQuantity },
+        why_it_matters: 'Accepted-event continuity determines whether product answers remain complete.',
+      },
+      attention,
+      evidence,
+      primary_action: attention[0]?.primary_action
+        ?? { id: 'review_usage_contributors', kind: 'navigate', label: 'Review usage contributors', href: '/usage' },
+      secondary_actions: [],
+      meter: 'events_stored',
+      cycle: { from: start.toISOString(), to: new Date(endExclusive.getTime() - 1).toISOString(), timezone: 'UTC' },
+      cap: hardLimit === null
+        ? { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null }
+        : {
+            state: 'finite',
+            value: hardLimit,
+            remaining,
+            consequence_at_100_percent: 'New accepted-event writes are rejected with billing_limit_reached until the UTC cycle resets or the configured limit changes.',
+          },
+      pace: {
+        observed_days: observedDays,
+        events_per_day_7d: pace,
+        projected_cycle_end: projectedCycleEnd,
+        confidence: pace === null ? 'insufficient' : 'sufficient',
+      },
+      threshold_forecasts: thresholdForecasts,
+      contributors,
+    };
+    await client.query('COMMIT');
+    return usageControlResultSchema.parse(result);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function groupUsageRows(rows: Array<{

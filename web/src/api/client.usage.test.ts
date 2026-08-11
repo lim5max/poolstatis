@@ -13,6 +13,8 @@ describe('PoolstatisClient usage', () => {
 
     await client.usage('2026-08');
     await client.usageRange('2026-03', '2026-08');
+    await client.usageControl('2026-08');
+    await client.controlTower('alpha/beta', 'prod', '30d');
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -22,6 +24,16 @@ describe('PoolstatisClient usage', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       'https://core.example/api/v1/me/usage/range?from=2026-03&to=2026-08',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'https://core.example/api/v1/me/usage/control?period=2026-08',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      'https://core.example/api/v1/projects/alpha%2Fbeta/control-tower?env=prod&range=30d',
       expect.objectContaining({ method: 'GET' }),
     );
   });
