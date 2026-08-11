@@ -252,7 +252,7 @@ async function proposeBrowserAnalyticsMetrics(
         filters: [CANONICAL_BROWSER_FILTER],
         data_source: 'native',
       },
-    }));
+    }, actor));
   }
   return metrics;
 }

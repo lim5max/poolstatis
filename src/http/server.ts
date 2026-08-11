@@ -36,6 +36,11 @@ import { createInsight, listInsights, setInsightStatus } from '../services/insig
 import { clearIngestWarnings, listIngestWarnings, type WarningKind } from '../services/warnings.js';
 import { listDataQualityIssues } from '../services/dataQuality.js';
 import { explainMetricUsage } from '../services/metricUsage.js';
+import {
+  applyMetricDefinition, getMetricDefinition, previewMetricDefinition,
+} from '../services/metricDefinitions.js';
+import { compareProjects, requireOrganizationComparisonAccess } from '../services/projectComparison.js';
+import { accountModeForAuth } from '../services/accountMode.js';
 import { getProjectSchema } from '../services/schema.js';
 import {
   archiveFeatureFlag, createFeatureFlag, evaluateFeatureFlag, listFeatureFlags, updateFeatureFlag,
@@ -89,6 +94,7 @@ import {
   deprecateMetricSchema, applyExperimentDecisionSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, prepareExperimentSchema, rejectDecisionActionSchema, reviewDecisionSchema,
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
+  metricDefinitionApplySchema, metricDefinitionPreviewSchema, semanticProjectComparisonSchema,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
   browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usageDateSchema, usageMonthRangeSchema, usagePeriodSchema,
 } from '../schemas.js';
@@ -491,6 +497,8 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         const route = req.routeOptions.url;
         if (route === '/api/v1/me' || route === '/api/v1/onboarding') {
           requireKind(req.auth, 'user');
+        } else if (route === '/api/v1/account-mode') {
+          requireKind(req.auth, 'secret', 'personal', 'user');
         } else if (route === '/api/v1/me/usage'
           || route === '/api/v1/me/usage/control'
           || route === '/api/v1/me/usage/activity'
@@ -549,7 +557,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
 
   registerIngestRoutes(app, ctx);
   registerAccountRoutes(app, ctx, publicUrl, mcpRunner);
-  registerPlatformRoutes(app, ctx, publicUrl, options.setupTaskProvider);
+  registerPlatformRoutes(app, ctx, publicUrl, options.setupTaskProvider, Boolean(options.auth));
   return app;
 }
 
@@ -736,6 +744,7 @@ function registerPlatformRoutes(
   ctx: AppContext,
   publicUrl: string,
   setupTaskProvider?: SetupTaskProvider,
+  hosted = false,
 ): void {
   const platform = (req: FastifyRequest) => {
     requirePlatformAccess(req.auth);
@@ -754,6 +763,21 @@ function registerPlatformRoutes(
   };
 
   registerAutomationRoutes(app, ctx, { platform, resolveProject, actor: (req) => authOwner(req.auth) });
+
+  app.get('/api/v1/account-mode', async (req) => {
+    requireKind(req.auth, 'secret', 'personal', 'user');
+    return accountModeForAuth(req.auth, hosted);
+  });
+
+  app.post('/api/v1/projects/compare', async (req) => {
+    requireOrganizationComparisonAccess(req.auth);
+    return compareProjects(
+      ctx.pool,
+      ctx.query,
+      req.auth,
+      semanticProjectComparisonSchema.parse(req.body),
+    );
+  });
 
   app.get('/api/v1/me/usage', async (req) => {
     requireUsageReadAccess(req.auth);
@@ -1362,7 +1386,7 @@ function registerPlatformRoutes(
       );
     }
     const patch = updateMetricSchema.parse(req.body);
-    const metric = await updateMetric(ctx.pool, project.id, key, patch);
+    const metric = await updateMetric(ctx.pool, project.id, key, patch, authOwner(req.auth));
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
     return metric;
@@ -1377,6 +1401,41 @@ function registerPlatformRoutes(
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
     return metric;
+  });
+
+  app.get('/api/v1/projects/:slug/metrics/:key/definition', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return getMetricDefinition(ctx.pool, project.id, key);
+  });
+
+  app.post('/api/v1/projects/:slug/metrics/:key/definition/preview', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return previewMetricDefinition(
+      ctx.pool,
+      project.id,
+      key,
+      metricDefinitionPreviewSchema.parse(req.body),
+    );
+  });
+
+  app.post('/api/v1/projects/:slug/metrics/:key/definition/apply', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const result = await applyMetricDefinition(
+      ctx.pool,
+      project.id,
+      key,
+      metricDefinitionApplySchema.parse(req.body),
+      authOwner(req.auth),
+    );
+    ctx.ingest.invalidateRegistry(project.id);
+    ctx.query.invalidateProject(project.id);
+    return result;
   });
 
   app.get('/api/v1/projects/:slug/metrics/:key/usage', async (req) => {

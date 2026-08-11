@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, ChevronRight, ChevronDown } from '@/components/icons';
 import { useStore, useAsync } from '../store';
@@ -25,7 +25,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn, isRedundantKey } from '@/lib/utils';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { Funnel, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage } from '../api/types';
+import type { Funnel, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage } from '../api/types';
 import { buildRegistryHealth, type RegistryMetricHealth } from '../analysis/semanticHealth';
 
 export function Registry() {
@@ -131,6 +131,7 @@ function MetricsTable({
   const [deprecating, setDeprecating] = useState<Metric | null>(null);
   const [deleting, setDeleting] = useState<Metric | null>(null);
   const [editing, setEditing] = useState<Metric | null>(null);
+  const [reviewing, setReviewing] = useState<Metric | null>(null);
   const proposedCount = metrics.filter((m) => m.status === 'proposed').length;
   const healthByKey = useMemo(() => new Map(health.rows.map((row) => [row.key, row])), [health.rows]);
   const allTags = useMemo(() => [...new Set(metrics.flatMap((m) => m.tags ?? []))].sort(), [metrics]);
@@ -242,6 +243,7 @@ function MetricsTable({
                   onDeprecate={setDeprecating}
                   onDelete={setDeleting}
                   onEditTaxonomy={setEditing}
+                  onReviewDefinition={setReviewing}
                   onOpenEvents={openEvents}
                 />
               ))}
@@ -269,12 +271,156 @@ function MetricsTable({
           }}
         />
       )}
+      {reviewing && (
+        <DefinitionReviewDialog
+          metric={reviewing}
+          load={() => client!.metricDefinition(project!, reviewing.key)}
+          preview={(body) => client!.previewMetricDefinition(project!, reviewing.key, body)}
+          apply={(body) => client!.applyMetricDefinition(project!, reviewing.key, body)}
+          onCancel={() => setReviewing(null)}
+          onApplied={() => { setReviewing(null); onChanged(); }}
+        />
+      )}
     </Card>
   );
 }
 
 function RegistryStat({ label, value, note }: { label: string; value: number; note: string }) {
   return <div className="min-w-0 border-r p-3 last:border-r-0"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-xl font-semibold tabular-nums">{value}</div><div className="mt-1 hidden truncate text-xs text-muted-foreground sm:block" title={note}>{note}</div></div>;
+}
+
+function DefinitionReviewDialog({
+  metric,
+  load,
+  preview,
+  apply,
+  onCancel,
+  onApplied,
+}: {
+  metric: Metric;
+  load: () => Promise<MetricDefinitionDetail>;
+  preview: (body: {
+    expected_revision?: number;
+    definition: { purpose: string; source: Record<string, unknown> };
+  }) => Promise<MetricDefinitionPreview>;
+  apply: (body: {
+    expected_revision: number;
+    expected_fingerprint: string;
+    confirm_impact: true;
+    definition: { purpose: string; source: Record<string, unknown> };
+  }) => Promise<unknown>;
+  onCancel: () => void;
+  onApplied: () => void;
+}) {
+  const detail = useAsync(load, [metric.key]);
+  const [purpose, setPurpose] = useState(metric.purpose);
+  const [sourceText, setSourceText] = useState(JSON.stringify(metric.source, null, 2));
+  const [proposed, setProposed] = useState<MetricDefinitionPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!detail.data) return;
+    setPurpose(detail.data.current.definition.purpose);
+    setSourceText(JSON.stringify(detail.data.current.definition.source, null, 2));
+  }, [detail.data]);
+
+  const definition = () => {
+    const source = JSON.parse(sourceText) as unknown;
+    if (!source || Array.isArray(source) || typeof source !== 'object') throw new Error('Source must be a JSON object.');
+    return { purpose: purpose.trim(), source: source as Record<string, unknown> };
+  };
+  const change = (update: () => void) => {
+    update();
+    setProposed(null);
+    setError(null);
+  };
+  const previewChange = async () => {
+    if (!detail.data) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setProposed(await preview({
+        expected_revision: detail.data.current.revision,
+        definition: definition(),
+      }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Definition preview failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const applyChange = async () => {
+    if (!proposed) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apply({
+        expected_revision: proposed.expected_revision,
+        expected_fingerprint: proposed.current.fingerprint,
+        confirm_impact: true,
+        definition: definition(),
+      });
+      onApplied();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Definition apply failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const impactTotal = proposed
+    ? Object.values(proposed.impact.summary).reduce((sum, count) => sum + count, 0)
+    : 0;
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !busy && onCancel()}>
+      <DialogContent className="max-h-screen overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="serif font-normal text-xl">Definition · {metric.name}</DialogTitle>
+          <DialogDescription>Semantic changes create an immutable revision. Preview dependencies before confirming.</DialogDescription>
+        </DialogHeader>
+        {detail.loading ? <Loading what="Reading semantic definition…" /> : detail.error ? <RecoverableError onRetry={detail.reload}>{detail.error}</RecoverableError> : detail.data && (
+          <div className="space-y-4">
+            <div className="grid gap-3 rounded-md border bg-muted/20 p-3 text-sm sm:grid-cols-3">
+              <div><span className="text-xs text-muted-foreground">Current</span><div className="font-medium">Revision {detail.data.current.revision}</div></div>
+              <div><span className="text-xs text-muted-foreground">Aggregation</span><code className="block text-xs">{detail.data.current.aggregation}</code></div>
+              <div><span className="text-xs text-muted-foreground">Fingerprint</span><code className="block truncate text-xs" title={detail.data.current.fingerprint}>{detail.data.current.fingerprint.slice(0, 12)}…</code></div>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="metric-definition-purpose" className="text-xs text-muted-foreground">Purpose</label>
+              <textarea id="metric-definition-purpose" value={purpose} onChange={(event) => change(() => setPurpose(event.target.value))} className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring" />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="metric-definition-source" className="text-xs text-muted-foreground">Source JSON</label>
+              <textarea id="metric-definition-source" value={sourceText} onChange={(event) => change(() => setSourceText(event.target.value))} spellCheck={false} className="min-h-36 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring" />
+            </div>
+            {proposed && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium">{impactTotal} registered {impactTotal === 1 ? 'dependency' : 'dependencies'}</div>
+                  <Badge variant="outline" className="capitalize">{proposed.impact.severity} impact</Badge>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">Changed: {proposed.changed_fields.join(', ') || 'none'}.</p>
+                {proposed.impact.references.length > 0 && <ul className="mt-2 space-y-1 text-sm">{proposed.impact.references.map((reference) => <li key={`${reference.kind}:${reference.ref}`}><span className="text-muted-foreground">{reference.kind}</span> · {reference.label}{reference.status ? ` · ${reference.status}` : ''}</li>)}</ul>}
+                {proposed.impact.truncated && <p className="mt-2 text-xs text-muted-foreground">Showing the first 25 references; totals above include every dependency.</p>}
+              </div>
+            )}
+            {error && <ErrorNote>{error}</ErrorNote>}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
+          {!proposed ? (
+            <Button onClick={previewChange} disabled={busy || !detail.data || purpose.trim().length < 10}>{busy && <Loader2 className="size-4 animate-spin" />}Preview impact</Button>
+          ) : proposed.requires_confirmation ? (
+            <Button onClick={applyChange} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}Confirm and apply revision {proposed.expected_revision + 1}</Button>
+          ) : (
+            <Button variant="outline" disabled>No semantic change</Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function DeprecateDialog({ metric, onCancel, onConfirm }: { metric: Metric; onCancel: () => void; onConfirm: (reason: string) => Promise<void> }) {
@@ -408,12 +554,12 @@ function TaxonomyEditor({
   );
 }
 
-function Section({ group, categories, healthByKey, busy, onActivate, onDeprecate, onDelete, onEditTaxonomy, onOpenEvents }: {
+function Section({ group, categories, healthByKey, busy, onActivate, onDeprecate, onDelete, onEditTaxonomy, onReviewDefinition, onOpenEvents }: {
   group: { label: string | null; rows: Metric[] }; busy: string | null;
   categories: MetricCategoryDefinition[];
   healthByKey: Map<string, RegistryMetricHealth>;
   onActivate: (k: string) => void; onDeprecate: (m: Metric) => void; onDelete: (m: Metric) => void;
-  onEditTaxonomy: (m: Metric) => void; onOpenEvents: (ev: string) => void;
+  onEditTaxonomy: (m: Metric) => void; onReviewDefinition: (m: Metric) => void; onOpenEvents: (ev: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -466,6 +612,7 @@ function Section({ group, categories, healthByKey, busy, onActivate, onDeprecate
             {busy === m.key ? <Loader2 className="size-4 animate-spin inline" /> : (
               <div className="inline-flex items-center gap-1.5">
                 {m.status !== 'active' && <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onActivate(m.key)}>activate</Button>}
+                <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => onReviewDefinition(m)} aria-label={`Review ${m.name} definition`}>review</Button>
                 <Overflow items={[
                   { label: 'Edit category & tags', onClick: () => onEditTaxonomy(m) },
                   ...(m.status !== 'deprecated' ? [{ label: 'Deprecate', onClick: () => onDeprecate(m) }] : []),

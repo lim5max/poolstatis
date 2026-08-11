@@ -784,6 +784,127 @@ export interface ProjectWithStats {
   attention: string[];
 }
 
+export interface AccountMode {
+  schema_version: 1;
+  deployment: {
+    mode: 'hosted' | 'self_host';
+    hosted_account: 'available' | 'not_configured';
+  };
+  session: {
+    kind: KeyKind;
+    scope: 'organization' | 'project';
+    role: 'owner' | 'admin' | 'member' | null;
+  };
+  capabilities: {
+    portfolio: 'available' | 'project_only' | 'unavailable';
+    compare_projects: boolean;
+    manage_profile: boolean;
+    manage_personal_tokens: boolean;
+  };
+  primary_action: {
+    id: 'manage_hosted_account' | 'sign_in_to_manage_account' | 'open_local_setup';
+    kind: 'navigate';
+    label: string;
+    href: string;
+  };
+}
+
+export interface MetricSemanticDefinition {
+  key: string;
+  purpose: string;
+  type: MetricType;
+  aggregation: string;
+  source: Record<string, unknown>;
+}
+
+export interface MetricDefinitionCurrent {
+  revision: number;
+  fingerprint: string;
+  aggregation: string;
+  definition: MetricSemanticDefinition;
+}
+
+export interface MetricDefinitionRevision extends MetricDefinitionCurrent {
+  id: string;
+  action: 'created' | 'updated' | 'legacy_update';
+  actor: string;
+  created_at: string;
+}
+
+export interface MetricDefinitionImpact {
+  severity: 'low' | 'medium' | 'high';
+  summary: {
+    answers: number;
+    funnels: number;
+    measurement_contracts: number;
+    releases: number;
+    experiments: number;
+  };
+  references: Array<{
+    kind: 'answer' | 'funnel' | 'measurement_contract' | 'release' | 'experiment';
+    ref: string;
+    label: string;
+    status: string | null;
+  }>;
+  truncated: boolean;
+}
+
+export interface MetricDefinitionDetail {
+  schema_version: 1;
+  metric: Pick<Metric, 'key' | 'name' | 'type' | 'status'>;
+  current: MetricDefinitionCurrent;
+  revisions: MetricDefinitionRevision[];
+  impact: MetricDefinitionImpact;
+  primary_action: { id: string; kind: 'navigate'; label: string; href: string };
+}
+
+export interface MetricDefinitionPreview {
+  schema_version: 1;
+  state: 'ready' | 'empty';
+  metric: Pick<Metric, 'key' | 'name' | 'type' | 'status'>;
+  expected_revision: number;
+  current: MetricDefinitionCurrent;
+  proposed: Omit<MetricDefinitionCurrent, 'revision'>;
+  changed_fields: Array<'purpose' | 'source'>;
+  impact: MetricDefinitionImpact;
+  requires_confirmation: boolean;
+  primary_action:
+    | { id: 'apply_metric_definition'; kind: 'open_confirmation'; label: string; impact: string }
+    | { id: 'return_to_registry'; kind: 'navigate'; label: string; href: string };
+}
+
+export interface SemanticProjectComparison {
+  schema_version: 1;
+  state: 'ready' | 'unavailable';
+  generated_at: string;
+  metric: {
+    key: string;
+    purpose: string | null;
+    type: string | null;
+    aggregation: string | null;
+    fingerprint: string | null;
+  };
+  scope: {
+    environment: string;
+    window: { from: string; to: string; timezone: 'UTC' };
+  };
+  projects: Array<{
+    slug: string;
+    name: string;
+    fingerprint: string | null;
+    value?: number;
+    events?: number;
+    actors?: number;
+    registered_coverage?: number;
+  }>;
+  incompatibilities: Array<{
+    project_slug: string;
+    code: string;
+    message: string;
+  }>;
+  primary_action: { id: string; kind: 'navigate'; label: string; href: string };
+}
+
 export interface ProjectSchema {
   project: { slug: string; name: string };
   env: string;

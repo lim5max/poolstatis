@@ -9,9 +9,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import type { SemanticProjectComparison } from '../api/types';
 
 export function Projects() {
-  const { projects, project, setProject, tokenKind, projectScope, account, client, refreshProjects } = useStore();
+  const { projects, project, setProject, tokenKind, projectScope, account, client, refreshProjects, env } = useStore();
   const nav = useNavigate();
   const canCreate = tokenKind === 'personal'
     || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
@@ -35,6 +36,10 @@ export function Projects() {
   };
 
   const canOnboard = tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin');
+  const canCompare = projectScope === 'org'
+    && projects.length >= 2
+    && (tokenKind === 'personal'
+      || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin')));
   if (canOnboard && projects.length === 0) return <Onboarding />;
 
   return (
@@ -78,6 +83,7 @@ export function Projects() {
           </Table></TableScroll>
         )}
       </Panel>
+      {canCompare && client && <ProjectComparison projects={projects} env={env} compare={(input) => client.compareProjects(input)} />}
       {canCreate && <CreateProject onCreated={async (created) => { await refreshProjects(); setProject(created.slug); }} create={(b) => client!.createProject(b)} />}
       {deleteTarget && (
         <DangerConfirm
@@ -99,6 +105,107 @@ export function Projects() {
 
 function PortfolioStat({ label, value }: { label: string; value: number }) {
   return <div className="border-r p-3 last:border-r-0"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-xl font-semibold tabular-nums">{value}</div></div>;
+}
+
+function ProjectComparison({
+  projects,
+  env,
+  compare,
+}: {
+  projects: Array<{ slug: string; name: string }>;
+  env: string;
+  compare: (input: {
+    metric_key: string;
+    projects: string[];
+    environment: string;
+    window: { from: string; to: string };
+  }) => Promise<SemanticProjectComparison>;
+}) {
+  const [metricKey, setMetricKey] = useState('');
+  const [selected, setSelected] = useState(() => new Set(projects.slice(0, 8).map((item) => item.slug)));
+  const [result, setResult] = useState<SemanticProjectComparison | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggleProject = (slug: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(slug)) next.delete(slug);
+      else if (next.size < 8) next.add(slug);
+      return next;
+    });
+    setResult(null);
+  };
+  const run = async () => {
+    const to = new Date();
+    const from = new Date(to.getTime() - 30 * 86_400_000);
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      setResult(await compare({
+        metric_key: metricKey.trim(),
+        projects: projects.filter((item) => selected.has(item.slug)).map((item) => item.slug),
+        environment: env,
+        window: { from: from.toISOString(), to: to.toISOString() },
+      }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Project comparison failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const ready = selected.size >= 2 && metricKey.trim().length > 0;
+
+  return (
+    <Panel title="Compare project semantics" right={<span className="text-xs text-muted-foreground">{env} · last 30 days · UTC</span>}>
+      <div className="space-y-4" id="comparison-evidence">
+        <div className="grid gap-3 lg:grid-cols-[minmax(12rem,1fr)_minmax(18rem,2fr)_auto] lg:items-end">
+          <div className="space-y-1.5">
+            <Label htmlFor="comparison-metric-key" className="text-xs font-medium text-muted-foreground">Metric key</Label>
+            <Input id="comparison-metric-key" value={metricKey} onChange={(event) => { setMetricKey(event.target.value); setResult(null); }} placeholder="activated_users" />
+          </div>
+          <fieldset className="min-w-0">
+            <legend className="mb-1.5 text-xs font-medium text-muted-foreground">Projects · choose 2–8</legend>
+            <div className="flex max-h-24 flex-wrap gap-2 overflow-y-auto rounded-md border p-2">
+              {projects.map((item) => (
+                <label key={item.slug} className="flex min-h-8 cursor-pointer items-center gap-2 rounded-md px-2 text-sm hover:bg-accent">
+                  <input type="checkbox" checked={selected.has(item.slug)} onChange={() => toggleProject(item.slug)} />
+                  <span>{item.name}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <Button onClick={run} disabled={!ready || busy}>{busy && <Loader2 className="size-4 animate-spin" />}Compare projects</Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Values are shown only when key, purpose, type, aggregation and semantic fingerprint match in every selected project.
+        </p>
+        {error && <ErrorNote>{error}</ErrorNote>}
+        {result?.state === 'unavailable' && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
+            <div className="font-medium">Comparison unavailable</div>
+            <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+              {result.incompatibilities.map((item, index) => <li key={`${item.project_slug}:${item.code}:${index}`}><span className="font-medium text-foreground">{item.project_slug}</span> — {item.message}</li>)}
+            </ul>
+            <Button asChild className="mt-4"><a href={result.primary_action.href}>{result.primary_action.label}</a></Button>
+          </div>
+        )}
+        {result?.state === 'ready' && (
+          <TableScroll testId="project-comparison-scroll"><Table>
+            <TableHeader><TableRow><TableHead>Project</TableHead><TableHead className="text-right">Value</TableHead><TableHead className="text-right">Events</TableHead><TableHead className="text-right">Actors</TableHead><TableHead className="text-right">Registered</TableHead></TableRow></TableHeader>
+            <TableBody>{result.projects.map((item) => <TableRow key={item.slug}>
+              <TableCell><div className="font-medium">{item.name}</div><code className="text-xs text-muted-foreground">{item.slug}</code></TableCell>
+              <TableCell className="text-right tabular-nums">{fmtNum(item.value ?? 0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{fmtNum(item.events ?? 0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{fmtNum(item.actors ?? 0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{Math.round((item.registered_coverage ?? 0) * 100)}%</TableCell>
+            </TableRow>)}</TableBody>
+          </Table></TableScroll>
+        )}
+      </div>
+    </Panel>
+  );
 }
 
 function CreateProject({ create, onCreated }: { create: (b: { slug: string; name: string }) => Promise<{ slug: string }>; onCreated: (project: { slug: string }) => Promise<void> }) {

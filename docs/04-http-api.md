@@ -137,7 +137,9 @@ Browser Analytics добавляет atomic setup endpoint
 GET    /api/v1/me/usage?period=YYYY-MM
 GET    /api/v1/me/usage/range?from=YYYY-MM&to=YYYY-MM
 GET    /api/v1/me/usage/activity?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+GET    /api/v1/account-mode
 GET    /api/v1/projects
+POST   /api/v1/projects/compare
 GET    /api/v1/projects/{slug}/schema
 GET    /api/v1/projects/{slug}/onboarding/status?env=prod
 POST   /api/v1/projects/{slug}/onboarding/observe-agent
@@ -198,6 +200,9 @@ DELETE /api/v1/projects/{slug}/metric-categories/{key}
 POST   /api/v1/projects/{slug}/metrics
 PATCH  /api/v1/projects/{slug}/metrics/{key}
 POST   /api/v1/projects/{slug}/metrics/{key}/deprecate
+GET    /api/v1/projects/{slug}/metrics/{key}/definition
+POST   /api/v1/projects/{slug}/metrics/{key}/definition/preview
+POST   /api/v1/projects/{slug}/metrics/{key}/definition/apply
 GET    /api/v1/projects/{slug}/metrics/{key}/usage
 GET    /api/v1/projects/{slug}/metrics
 POST   /api/v1/projects/{slug}/entity-types
@@ -235,6 +240,67 @@ GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
+
+### Семантические ревизии и сравнение проектов
+
+Семантическая версия метрики включает `key`, `purpose`, `type`, вычисленную
+aggregation-семантику и валидированный `source`. Имя, category, tags и status не
+меняют fingerprint. Новая метрика сразу получает revision 1; существующая
+метрика принимается в историю при первом чтении/изменении определения.
+
+`GET .../metrics/{key}/definition` возвращает текущую revision, SHA-256
+`fingerprint`, append-only историю и ограниченный список зависимостей: answers,
+funnels, measurement contracts, releases и experiments. Для изменения сначала
+вызывается `POST .../definition/preview`:
+
+```json
+{
+  "expected_revision": 2,
+  "definition": {
+    "purpose": "Counts users who complete the reviewed activation milestone.",
+    "source": { "event": "activation.completed", "filters": [] }
+  }
+}
+```
+
+Preview не изменяет текущее определение; для legacy-метрики первый read/preview
+может один раз записать её baseline revision. Он возвращает changed fields,
+proposed fingerprint, точные totals и не более 25 dependency references. Apply принимает тот же definition плюс
+`expected_revision`, текущий `expected_fingerprint` и обязательный
+`"confirm_impact": true`. Если определение изменилось после preview, ответ —
+`409 metric_definition_revision_conflict`; клиент должен перечитать impact, а не
+повторять старое подтверждение. Историю нельзя UPDATE/DELETE напрямую. Явное
+удаление всего проекта удаляет её через parent cascade вместе с остальными
+project-scoped данными.
+
+`POST /api/v1/projects/compare` доступен только organization-wide `pt_` или
+hosted owner/admin session:
+
+```json
+{
+  "metric_key": "activated_users",
+  "projects": ["consumer-app", "business-app"],
+  "environment": "prod",
+  "window": {
+    "from": "2026-07-12T00:00:00.000Z",
+    "to": "2026-08-11T00:00:00.000Z"
+  }
+}
+```
+
+Диапазон обязан быть явным, положительным и не длиннее 366 дней; проектов — 2–8.
+Значения вычисляются через QueryService/EventStore только когда во всех проектах
+есть одна и та же active semantic definition: key, purpose, type, aggregation и
+fingerprint совпадают. Любое отсутствие/расхождение возвращает
+`state: "unavailable"`, bounded `incompatibilities` и ни одного `value`.
+Project-pinned `sk_` получает `403 insufficient_scope`; hosted member —
+`403 insufficient_role`.
+
+`GET /api/v1/account-mode` не принимает режим от клиента: deployment mode,
+credential scope, role и capabilities выводятся сервером из конфигурации и
+аутентифицированного контекста. Self-host возвращает
+`hosted_account: "not_configured"` и локальное setup-действие, не фиктивные
+hosted profile/billing controls.
 
 `/api/v1/me/usage` remains the monthly quota/projection contract. The additive
 `/api/v1/me/usage/range` endpoint returns an inclusive range of 1–12 UTC ingest

@@ -24,6 +24,7 @@ import {
   webSessionsQuerySchema, webSessionQuerySchema, pageEngagementQuerySchema,
   updateExperimentSchema, updateFeatureFlagSchema,
   updateMetricCategorySchema, updateMetricSchema, updatePropertyDefinitionSchema, visualExperienceCompareSchema, visualExperienceQuerySchema,
+  metricDefinitionSchema,
 } from '../schemas.js';
 import { INSTRUMENTATION_STANDARD } from './standard.js';
 import { BROWSER_ANALYTICS_STANDARD } from './browserStandard.js';
@@ -134,6 +135,28 @@ jsonTool(
   'List masked project credentials with environment, last-used evidence and revocation state. Plaintext and hashes are never returned; rotate replacement-first.',
   { project },
   wrap(({ project: slug }) => api('GET', `/api/v1/projects/${slug}/keys`)),
+);
+
+jsonTool(
+  'get_account_mode',
+  'Read the server-derived deployment mode, authenticated scope and bounded account/portfolio capabilities. Self-host never pretends hosted profile or billing controls are configured.',
+  {},
+  wrap(() => api('GET', '/api/v1/account-mode')),
+);
+
+jsonTool(
+  'compare_projects',
+  'Compare one active semantic metric across two to eight projects only when key, purpose, type, aggregation, fingerprint, environment and UTC window match. Incompatible definitions return unavailable without values.',
+  {
+    metric_key: z.string().regex(/^[a-z][a-z0-9_]*$/),
+    projects: z.array(z.string().regex(/^[a-z][a-z0-9-]*$/)).min(2).max(8),
+    environment: z.string().min(1).max(100),
+    window: z.object({
+      from: z.string().datetime({ offset: true }),
+      to: z.string().datetime({ offset: true }),
+    }),
+  },
+  wrap((input) => api('POST', '/api/v1/projects/compare', input)),
 );
 
 jsonTool(
@@ -679,9 +702,38 @@ jsonTool(
 
 jsonTool(
   'update_metric',
-  'Update a registry metric: rename, refine purpose, change source, tags, or status proposed/active. Use deprecate_metric when retiring a metric.',
-  { project, key: z.string(), patch: updateMetricSchema },
+  'Update cosmetic taxonomy/status fields for a registry metric. Semantic purpose/source changes require preview_metric_definition followed by a human-confirmed admin apply. Use deprecate_metric when retiring a metric.',
+  { project, key: z.string(), patch: updateMetricSchema.omit({ purpose: true, source: true }).strict() },
   wrap(({ project: slug, key, patch }) => api('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, patch)),
+);
+
+jsonTool(
+  'get_metric_definition',
+  'Read the current semantic fingerprint, immutable revision history and bounded dependency impact for one metric.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/metrics/${encodeURIComponent(key)}/definition`,
+  )),
+);
+
+jsonTool(
+  'preview_metric_definition',
+  'Validate a proposed purpose/source change and return its semantic fingerprint, changed fields, dependency impact and human confirmation action. This tool never applies the change.',
+  {
+    project,
+    key: z.string(),
+    expected_revision: z.number().int().positive().optional(),
+    definition: metricDefinitionSchema,
+  },
+  wrap(({ project: slug, key, expected_revision, definition }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/metrics/${encodeURIComponent(key)}/definition/preview`,
+    {
+      ...(expected_revision === undefined ? {} : { expected_revision }),
+      definition,
+    },
+  )),
 );
 
 jsonTool(

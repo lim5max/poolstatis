@@ -162,7 +162,7 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe(
-        '037_analysis_views.sql',
+        '038_metric_definition_revisions.sql',
       );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
@@ -202,6 +202,9 @@ describe('hosted policy migration role topology', () => {
       );
       await deploy.query(
         'SELECT poolstatis_prepare_control_tower_automation_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_metric_definition_role_grants()',
       );
       await deploy.query(
         'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
@@ -292,6 +295,9 @@ describe('hosted policy migration role topology', () => {
       )).resolves.toMatchObject({ rows: [{ count: 0 }] });
       await expect(coreRuntime.query(
         'SELECT count(*)::int AS count FROM project_intents',
+      )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+      await expect(coreRuntime.query(
+        'SELECT count(*)::int AS count FROM metric_definition_revisions',
       )).resolves.toMatchObject({ rows: [{ count: 0 }] });
       await expect(coreRuntime.query(
         'SELECT count(*)::int AS count FROM setup_task_feedback',
@@ -514,7 +520,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '037_analysis_views.sql',
+        last_migration: '038_metric_definition_revisions.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -600,6 +606,7 @@ describe('hosted policy migration role topology', () => {
       await selfHost.query('SELECT poolstatis_prepare_project_intent_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_analysis_views_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_control_tower_automation_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_metric_definition_role_grants()');
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(selfHost, new Date(), 12);
       await ensureRetentionIndexes(selfHost);
@@ -742,7 +749,7 @@ describe('hosted policy migration role topology', () => {
       );
       const applied = await migrateWithEvidence(selfHost);
       expect(applied.at(-1)).toBe(
-        '037_analysis_views.sql',
+        '038_metric_definition_revisions.sql',
       );
       const topology = await selfHost.query<{
         superuser: boolean;

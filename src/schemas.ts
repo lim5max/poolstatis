@@ -864,6 +864,56 @@ export const updateMetricSchema = z.object({
 
 export type UpdateMetricInput = z.infer<typeof updateMetricSchema>;
 
+export const metricDefinitionSchema = z.object({
+  purpose: semanticText,
+  source: z.unknown(),
+}).strict();
+export type MetricDefinitionInput = z.infer<typeof metricDefinitionSchema>;
+
+export const metricDefinitionPreviewSchema = z.object({
+  expected_revision: z.number().int().positive().optional(),
+  definition: metricDefinitionSchema,
+}).strict();
+
+export const metricDefinitionApplySchema = z.object({
+  expected_revision: z.number().int().positive(),
+  expected_fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  confirm_impact: z.literal(true),
+  definition: metricDefinitionSchema,
+}).strict();
+
+const comparisonProjectSlugSchema = z.string().trim()
+  .regex(/^[a-z][a-z0-9-]*$/, 'project slug must use lowercase letters, digits and hyphens');
+
+export const semanticProjectComparisonSchema = z.object({
+  metric_key: keySchema,
+  projects: z.array(comparisonProjectSlugSchema).min(2).max(8)
+    .refine((projects) => new Set(projects).size === projects.length, 'projects must be unique'),
+  environment: z.string().trim().min(1).max(100),
+  window: z.object({
+    from: z.string().datetime({ offset: true }),
+    to: z.string().datetime({ offset: true }),
+  }).strict(),
+}).strict().superRefine((input, ctx) => {
+  const from = Date.parse(input.window.from);
+  const to = Date.parse(input.window.to);
+  if (to <= from) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['window', 'to'],
+      message: 'to must be after from',
+    });
+  }
+  if (to - from > 366 * 86_400_000) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['window'],
+      message: 'comparison window cannot exceed 366 days',
+    });
+  }
+});
+export type SemanticProjectComparisonInput = z.infer<typeof semanticProjectComparisonSchema>;
+
 export const deprecateMetricSchema = z.object({
   reason: semanticText,
 });

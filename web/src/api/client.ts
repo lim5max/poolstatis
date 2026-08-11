@@ -1,5 +1,5 @@
 import type {
-  AccountMe, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
+  AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
   BackfillPreview, BackfillRecord, ControlTowerResult, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, UsageControlResult, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
@@ -158,9 +158,22 @@ export class PoolstatisClient {
     return this.req<HostedOnboardingResult>('POST', '/api/v1/onboarding', body);
   }
 
+  accountMode() {
+    return this.req<AccountMode>('GET', '/api/v1/account-mode');
+  }
+
   // ---- projects ----
   listProjects() {
     return this.req<{ projects: ProjectWithStats[]; scope: 'org' | 'project' }>('GET', '/api/v1/projects');
+  }
+
+  compareProjects(body: {
+    metric_key: string;
+    projects: string[];
+    environment: string;
+    window: { from: string; to: string };
+  }) {
+    return this.req<SemanticProjectComparison>('POST', '/api/v1/projects/compare', body);
   }
 
   createProject(body: { slug: string; name: string }) {
@@ -518,6 +531,43 @@ export class PoolstatisClient {
     const qs = new URLSearchParams({ env: q.env });
     if (q.sinceDays !== undefined) qs.set('since_days', String(q.sinceDays));
     return this.req<MetricUsage>('GET', `/api/v1/projects/${slug}/metrics/${key}/usage?${qs}`);
+  }
+
+  metricDefinition(slug: string, key: string) {
+    return this.req<MetricDefinitionDetail>(
+      'GET',
+      `/api/v1/projects/${encodeURIComponent(slug)}/metrics/${encodeURIComponent(key)}/definition`,
+    );
+  }
+
+  previewMetricDefinition(slug: string, key: string, body: {
+    expected_revision?: number;
+    definition: { purpose: string; source: Record<string, unknown> };
+  }) {
+    return this.req<MetricDefinitionPreview>(
+      'POST',
+      `/api/v1/projects/${encodeURIComponent(slug)}/metrics/${encodeURIComponent(key)}/definition/preview`,
+      body,
+    );
+  }
+
+  applyMetricDefinition(slug: string, key: string, body: {
+    expected_revision: number;
+    expected_fingerprint: string;
+    confirm_impact: true;
+    definition: { purpose: string; source: Record<string, unknown> };
+  }) {
+    return this.req<{
+      applied: true;
+      previous_revision: number;
+      revision: number;
+      current: MetricDefinitionDetail['current'];
+      impact: MetricDefinitionDetail['impact'];
+    }>(
+      'POST',
+      `/api/v1/projects/${encodeURIComponent(slug)}/metrics/${encodeURIComponent(key)}/definition/apply`,
+      body,
+    );
   }
 
   setMetricTags(slug: string, key: string, tags: string[]) {
