@@ -208,20 +208,36 @@ export async function getOrganizationUsageControl(
         slug: string; name: string; env: string; quantity: string;
         recent_quantity: string; previous_quantity: string; last_ingest_at: Date | string;
       }>(
-        `SELECT p.slug, p.name, l.env,
-                sum(l.quantity)::bigint::text AS quantity,
-                COALESCE(sum(l.quantity) FILTER (
-                  WHERE l.ingested_at >= $3 AND l.ingested_at < $4
-                ), 0)::bigint::text AS recent_quantity,
-                COALESCE(sum(l.quantity) FILTER (
-                  WHERE l.ingested_at >= $5 AND l.ingested_at < $3
-                ), 0)::bigint::text AS previous_quantity,
-                max(l.ingested_at) AS last_ingest_at
-         FROM usage_ledger l
-         JOIN projects p ON p.id = l.project_id AND p.org_id = l.org_id
-         WHERE l.org_id = $1 AND l.meter_key = 'events_stored' AND l.period_start = $2::date
-         GROUP BY p.slug, p.name, l.env
-         ORDER BY quantity DESC, p.slug, l.env`,
+        `WITH current_contributors AS (
+           SELECT l.project_id, l.env,
+                  sum(l.quantity)::bigint AS quantity,
+                  max(l.ingested_at) AS last_ingest_at
+           FROM usage_ledger l
+           WHERE l.org_id = $1 AND l.meter_key = 'events_stored' AND l.period_start = $2::date
+           GROUP BY l.project_id, l.env
+         ), comparison_windows AS (
+           SELECT l.project_id, l.env,
+                  COALESCE(sum(l.quantity) FILTER (
+                    WHERE l.ingested_at >= $3 AND l.ingested_at < $4
+                  ), 0)::bigint AS recent_quantity,
+                  COALESCE(sum(l.quantity) FILTER (
+                    WHERE l.ingested_at >= $5 AND l.ingested_at < $3
+                  ), 0)::bigint AS previous_quantity
+           FROM usage_ledger l
+           WHERE l.org_id = $1 AND l.meter_key = 'events_stored'
+             AND l.ingested_at >= $5 AND l.ingested_at < $4
+           GROUP BY l.project_id, l.env
+         )
+         SELECT p.slug, p.name, current.env,
+                current.quantity::text AS quantity,
+                COALESCE(windows.recent_quantity, 0)::text AS recent_quantity,
+                COALESCE(windows.previous_quantity, 0)::text AS previous_quantity,
+                current.last_ingest_at
+         FROM current_contributors current
+         JOIN projects p ON p.id = current.project_id AND p.org_id = $1
+         LEFT JOIN comparison_windows windows
+           ON windows.project_id = current.project_id AND windows.env = current.env
+         ORDER BY current.quantity DESC, p.slug, current.env`,
         [orgId, `${period}-01`, paceStart, new Date(anchorDay.getTime() + DAY_MS), previousStart],
       );
     const quantity = safeUsageNumber(projection.rows[0]?.quantity ?? '0');

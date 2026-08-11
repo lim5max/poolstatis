@@ -3,7 +3,7 @@ import { activeMetric, api, createTestEnv, hoursAgo, type TestEnv } from './help
 import { createProject } from '../src/services/projects.js';
 import { recordWarnings } from '../src/services/warnings.js';
 import { controlTowerResultSchema } from '../src/services/controlTower.js';
-import { usageControlResultSchema } from '../src/services/usage.js';
+import { getOrganizationUsageControl, usageControlResultSchema } from '../src/services/usage.js';
 
 let env: TestEnv;
 
@@ -341,6 +341,50 @@ describe('organization usage control', () => {
       expect(secret.status).toBe(403);
     } finally {
       await foreign.close();
+    }
+  });
+
+  it('keeps the previous seven-day contributor window across a UTC month boundary', async () => {
+    const boundary = await createTestEnv({ ingestBuffer: false });
+    try {
+      const orgId = (await boundary.pool.query<{ org_id: string }>(
+        'SELECT org_id::text FROM projects WHERE id = $1',
+        [boundary.projectId],
+      )).rows[0]!.org_id;
+      await boundary.pool.query(
+        `INSERT INTO organization_usage (org_id, meter_key, period_start, quantity)
+         VALUES ($1, 'events_stored', '2026-08-01', 30)`,
+        [orgId],
+      );
+      await boundary.pool.query(
+        `INSERT INTO usage_ledger (
+           org_id, project_id, env, meter_key, period_start, quantity,
+           source_batch, dedupe_key, ingested_at
+         ) VALUES
+           ($1, $2, 'prod', 'events_stored', '2026-07-01', 10, 'boundary-previous', 'boundary-previous', '2026-07-30T12:00:00.000Z'),
+           ($1, $2, 'prod', 'events_stored', '2026-08-01', 10, 'boundary-current-1', 'boundary-current-1', '2026-08-01T12:00:00.000Z'),
+           ($1, $2, 'prod', 'events_stored', '2026-08-01', 10, 'boundary-current-2', 'boundary-current-2', '2026-08-02T12:00:00.000Z'),
+           ($1, $2, 'prod', 'events_stored', '2026-08-01', 10, 'boundary-current-3', 'boundary-current-3', '2026-08-03T12:00:00.000Z')`,
+        [orgId, boundary.projectId],
+      );
+
+      const result = await getOrganizationUsageControl(
+        boundary.pool,
+        orgId,
+        '2026-08',
+        new Date('2026-08-03T18:00:00.000Z'),
+      );
+
+      expect(result.contributors).toEqual([
+        expect.objectContaining({
+          project_slug: boundary.projectSlug,
+          environment: 'prod',
+          accepted_events: 30,
+          change_7d: 2,
+        }),
+      ]);
+    } finally {
+      await boundary.close();
     }
   });
 
