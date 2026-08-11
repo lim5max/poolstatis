@@ -52,6 +52,7 @@ import { Changes } from './screens/Changes';
 import { Decisions } from './screens/Decisions';
 import { Profile } from './screens/Profile';
 import { Usage } from './screens/Usage';
+import { SavedAnswers } from './screens/SavedAnswers';
 import { AuthPortal } from './screens/AuthPortal';
 
 export const NAV_ICONS: Record<string, PoolstatisIcon> = {
@@ -59,6 +60,7 @@ export const NAV_ICONS: Record<string, PoolstatisIcon> = {
   Home: LayoutGrid,
   Product: ChartAnalysis,
   Funnels: Funnel,
+  Saved: TaskDone,
   Web: Globe,
   People: UserGroup,
   Ship: GitCommit,
@@ -86,6 +88,7 @@ const TITLES: Record<string, string> = {
   '/projects': 'Projects',
   '/analyze/product': 'Product',
   '/analyze/funnels': 'Funnels',
+  '/analyze/saved': 'Saved answers',
   '/usage': 'Usage',
   '/profile': 'Profile',
   '/analyze/web': 'Web',
@@ -435,6 +438,7 @@ function Main() {
           <Route path="/usage" element={<Usage />} />
           <Route path="/analyze/product" element={<Guarded><ProductAnalytics /></Guarded>} />
           <Route path="/analyze/funnels" element={<Guarded><ProductAnalytics surface="funnels" /></Guarded>} />
+          <Route path="/analyze/saved" element={<Guarded><SavedAnswers /></Guarded>} />
           <Route path="/analyze/web" element={<Guarded><WebAnalytics /></Guarded>} />
           <Route path="/analyze/users" element={<Guarded><Users /></Guarded>} />
           <Route path="/analyze/users/:distinctId" element={<Guarded><Person /></Guarded>} />
