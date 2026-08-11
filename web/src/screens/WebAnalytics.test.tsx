@@ -404,6 +404,10 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('Visitors')).toBeInTheDocument();
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('Sources & UTM')).toBeInTheDocument();
+    expect(screen.getAllByText('Waiting for setup')).toHaveLength(4);
+    expect(screen.getAllByText('Requires an accepted canonical page view')).toHaveLength(2);
+    expect(screen.getByText('Requires trusted acquisition definitions')).toBeInTheDocument();
+    expect(screen.queryByText('—')).not.toBeInTheDocument();
     expect(screen.queryByText('Period')).not.toBeInTheDocument();
     const create = screen.getByRole('button', { name: 'Create web tracking plan' });
     expect(create).toBeDisabled();

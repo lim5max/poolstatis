@@ -586,10 +586,10 @@ function WebSetup({ metric, onReady }: { metric: Metric | null; onReady: () => v
   return (
     <>
       <KpiStrip items={[
-        { label: 'Visitors', value: null, fallback: '—', note: 'unique people' },
-        { label: 'Sessions', value: null, fallback: '—', note: 'visits over time' },
-        { label: 'Sources & UTM', value: null, fallback: '—', note: 'acquisition context' },
-        { label: 'Top pages', value: null, fallback: '—', note: 'safe route keys' },
+        { label: 'Visitors', value: null, fallback: 'Waiting for setup', note: 'Requires an accepted canonical page view' },
+        { label: 'Sessions', value: null, fallback: 'Waiting for setup', note: 'Requires an accepted canonical page view' },
+        { label: 'Sources & UTM', value: null, fallback: 'Waiting for setup', note: 'Requires trusted acquisition definitions' },
+        { label: 'Top pages', value: null, fallback: 'Waiting for setup', note: 'Requires a reviewed safe route vocabulary' },
       ]} />
       <AnswerCanvas>
         {metric ? (
@@ -815,11 +815,11 @@ function SessionDetail({ session, metric, range, onClose }: {
 function WebAnalyticsSkeleton() {
   return (
     <div className="space-y-5" aria-label="Loading web analytics">
-      <div className="h-11 w-56 animate-pulse rounded-control bg-muted" />
+      <div className="h-11 w-56 animate-pulse rounded-control bg-muted motion-reduce:animate-none" />
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        {Array.from({ length: 4 }, (_, index) => <div key={index} className="h-28 animate-pulse rounded-panel border bg-muted/70" />)}
+        {Array.from({ length: 4 }, (_, index) => <div key={index} className="h-28 animate-pulse rounded-panel border bg-muted/70 motion-reduce:animate-none" />)}
       </div>
-      <div className="h-80 animate-pulse rounded-dialog border bg-muted/60" />
+      <div className="h-80 animate-pulse rounded-dialog border bg-muted/60 motion-reduce:animate-none" />
     </div>
   );
 }
