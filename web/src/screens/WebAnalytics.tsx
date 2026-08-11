@@ -26,7 +26,7 @@ import {
   type WebWorkspaceResult,
 } from '../analysis/operations';
 import type { VisualizationSpec } from '../analysis/visualization';
-import type { MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
+import type { MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 import { useAsync, useStore } from '../store';
 import { AcquisitionPanel } from './Measurement';
 
@@ -54,10 +54,12 @@ interface WebRegistryRead {
   proposedMetric: Metric | null;
   properties: PropertyDefinition[];
   metrics: Metric[];
+  readiness: MeasurementReadiness | null;
 }
 
 interface WebPrimaryRead extends Omit<WebWorkspaceResult, 'sessions'> {
   scope: string;
+  previousOverview: WebAnalyticsResult | null;
   trust: WebTrustRead;
 }
 
@@ -122,9 +124,12 @@ export function WebAnalytics() {
   const [sessionsRequested, setSessionsRequested] = useState(false);
   const registryScope = `${project ?? ''}\u0000${env}`;
   const registry = useAsync<WebRegistryRead>(async () => {
-    const [metrics, properties] = await Promise.all([
+    const [metrics, properties, readiness] = await Promise.all([
       client!.metrics(project!),
       client!.properties(project!, { scope: 'event' }),
+      typeof client!.measurementReadiness === 'function'
+        ? client!.measurementReadiness(project!, env).catch(() => null)
+        : Promise.resolve(null),
     ]);
     return {
       scope: registryScope,
@@ -132,6 +137,7 @@ export function WebAnalytics() {
       proposedMetric: metrics.find((item) => item.key === WEB_PAGE_VIEW_METRIC && item.status === 'proposed') ?? null,
       properties,
       metrics,
+      readiness,
     };
   }, [project, env]);
   const registryData = registry.data?.scope === registryScope ? registry.data : null;
@@ -145,12 +151,20 @@ export function WebAnalytics() {
       filters: [],
       env,
     };
-    const [overview, trend, trust] = await Promise.all([
+    const days = Number.parseInt(range, 10);
+    const [overview, previousOverview, trend, trust] = await Promise.all([
       client!.operationalQuery<WebAnalyticsResult>(project!, {
         kind: 'web_analytics',
         ...base,
         dimensions: ['source'],
       }),
+      client!.operationalQuery<WebAnalyticsResult>(project!, {
+        kind: 'web_analytics',
+        ...base,
+        date_from: `-${days * 2}d`,
+        date_to: `-${days}d`,
+        dimensions: ['source'],
+      }).catch(() => null),
       client!.query(project!, {
         kind: 'trend',
         metric: metric.key,
@@ -165,7 +179,7 @@ export function WebAnalytics() {
       }),
       readWebTrust(client!, project!, env, metric.key),
     ]);
-    return { scope: primaryScope, metric, overview, trend, trust };
+    return { scope: primaryScope, metric, overview, previousOverview, trend, trust };
   }, [project, env, range, metric?.key]);
   const primaryData = primary.data?.scope === primaryScope ? primary.data : null;
   const operationalDimension = dimension !== 'conversion' ? dimension : null;
@@ -207,10 +221,11 @@ export function WebAnalytics() {
       (property) => property.key === key && property.scope === 'event' && property.status === 'trusted',
     ));
     const outcomeReady = hasWebOutcome(setupData.metrics);
+    const affectedAnswerIds = webAffectedAnswerIds(setupData.readiness, setupData.metrics);
     return (
       <div className="space-y-5">
         <ScreenHeader range={range} onRange={setRange} showRange={false} />
-        <WebSetupOrder canonicalReady={false} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} />
+        <WebSetupOrder canonicalReady={false} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} />
         <WebSetup metric={setupData.proposedMetric} onReady={registry.reload} />
       </div>
     );
@@ -219,7 +234,7 @@ export function WebAnalytics() {
   if (primary.error) return <ErrorNote>{primary.error}</ErrorNote>;
   if (!primaryData) return null;
 
-  const { overview, trend, trust } = primaryData;
+  const { overview, previousOverview, trend, trust } = primaryData;
   const { properties, metrics } = registryData;
   const spec = webTrendSpec(project!, env, metric.name, metric.purpose, overview, trend, trust);
   const breakdownResponse = operationalDimension === 'source' ? overview : secondaryData;
@@ -233,13 +248,18 @@ export function WebAnalytics() {
   ));
   const canonicalReady = hasAcceptedCanonicalPageViews(overview.summary.page_views);
   const outcomeReady = hasWebOutcome(metrics);
+  const affectedAnswerIds = webAffectedAnswerIds(registryData.readiness, metrics);
 
   return (
     <div className="space-y-5">
       <ScreenHeader range={range} onRange={(value) => { setRange(value); setSelectedSession(null); }} />
 
       {(!canonicalReady || !acquisitionTrusted || !outcomeReady) && (
-        <WebSetupOrder canonicalReady={canonicalReady} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} />
+        <WebSetupOrder canonicalReady={canonicalReady} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} />
+      )}
+
+      {canonicalReady && acquisitionTrusted && outcomeReady && (
+        <WebHealthAnswer current={overview} previous={previousOverview} range={range} trust={trust} env={env} />
       )}
 
       <KpiStrip items={[
@@ -417,6 +437,46 @@ export function WebAnalytics() {
   );
 }
 
+function WebHealthAnswer({ current, previous, range, trust, env }: {
+  current: WebAnalyticsResult;
+  previous: WebAnalyticsResult | null;
+  range: AnalyticsRange;
+  trust: WebTrustRead;
+  env: string;
+}) {
+  const currentViews = current.summary.page_views;
+  const previousViews = previous?.summary.page_views ?? null;
+  const delta = previousViews === null ? null : currentViews - previousViews;
+  const deltaRate = previousViews === null || previousViews === 0 || delta === null ? null : delta / previousViews;
+  const days = Number.parseInt(range, 10);
+  const comparison = delta === null
+    ? 'Previous-period comparison is unavailable.'
+    : delta === 0
+    ? `No change versus the previous ${days} days.`
+    : deltaRate === null
+      ? `${delta > 0 ? '+' : ''}${fmtNum(delta)} page views; the previous period was zero, so percentage change is unavailable.`
+      : `${delta > 0 ? 'Up' : 'Down'} ${Math.abs(deltaRate * 100).toFixed(1)}% versus the previous ${days} days.`;
+  const trustLabel = trust.result?.status === 'trusted' && !trust.unavailable
+    ? 'Trusted measurement'
+    : trust.unavailable ? 'Trust evidence unavailable' : 'Partial measurement trust';
+  const observed = trust.result?.primary_metric.observed_events ?? currentViews;
+  return (
+    <AnswerCanvas>
+      <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-5">
+        <div>
+          <h2 className="text-lg font-semibold">Web health</h2>
+          <p className="mt-2 text-xl font-semibold">{fmtNum(currentViews)} canonical page views across {fmtNum(current.summary.sessions)} sessions</p>
+          <p className="mt-1 text-sm text-muted-foreground">{comparison}</p>
+          <p className="mt-2 text-xs text-muted-foreground">{trustLabel} · {fmtNum(observed)} observed events · {env}</p>
+        </div>
+        <Badge variant={trust.result?.status === 'trusted' && !trust.unavailable ? 'outline' : 'secondary'}>
+          {delta === null ? 'Comparison unavailable' : delta === 0 ? 'Stable' : `${delta > 0 ? '+' : ''}${fmtNum(delta)} views`}
+        </Badge>
+      </div>
+    </AnswerCanvas>
+  );
+}
+
 export function hasAcceptedCanonicalPageViews(pageViews: number) {
   return pageViews > 0;
 }
@@ -433,10 +493,11 @@ function routeDefinitionsReady(properties: PropertyDefinition[]) {
   return route?.status === 'trusted' && (route.enum_values?.length ?? 0) > 0;
 }
 
-function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady }: {
+function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affectedAnswerIds = [] }: {
   canonicalReady: boolean;
   acquisitionReady: boolean;
   outcomeReady: boolean;
+  affectedAnswerIds?: string[];
 }) {
   const steps = [
     { title: 'Canonical page views', ready: canonicalReady, description: 'Active web_page_views metric and accepted browser events in this period.' },
@@ -458,8 +519,35 @@ function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady }: {
           </li>
         ))}
       </ol>
+      {affectedAnswerIds.length > 0 && (
+        <div className="mt-4 border-t pt-3 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">Affected saved answers:</span>{' '}
+          <span className="inline-flex flex-wrap gap-x-2 gap-y-1">
+            {affectedAnswerIds.map((answerId) => (
+              <Link key={answerId} className="font-mono text-foreground underline decoration-muted-foreground/60 underline-offset-4" to={`/analyze/saved?answer=${encodeURIComponent(answerId)}`}>
+                {answerId}
+              </Link>
+            ))}
+          </span>
+        </div>
+      )}
     </section>
   );
+}
+
+function webAffectedAnswerIds(readiness: MeasurementReadiness | null, metrics: Metric[]): string[] {
+  if (!readiness) return [];
+  const webRefs = new Set<string>([
+    WEB_PAGE_VIEW_METRIC,
+    ...BROWSER_PROPERTY_KEYS,
+    ...UTM_PROPERTY_KEYS,
+    ...metrics.filter((metric) => metric.tags.includes('surface:web')).map((metric) => metric.key),
+  ]);
+  return [...new Set(readiness.groups.flatMap((group) => group.gaps.flatMap((gap) => {
+    const affectsWeb = group.key === 'data_sources'
+      || (gap.definition_ref !== null && webRefs.has(gap.definition_ref));
+    return affectsWeb ? gap.affected_answer_ids : [];
+  })))].sort();
 }
 
 function WebOutcomeSetup() {

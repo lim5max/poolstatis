@@ -31,6 +31,15 @@ const metric = {
   deprecation_reason: null,
   deprecated_at: null,
 } as const;
+const webOutcome = {
+  ...metric,
+  id: 'signup-completed',
+  key: 'signup_completed',
+  name: 'Signup completed',
+  purpose: 'Count completed signup outcomes attributed only by explicit product evidence.',
+  tags: ['surface:web'],
+  source: { event: 'signup.completed' },
+} as const;
 
 const property = (key: string, enumValues: string[] | null = null) => ({
   id: `property-${key}`,
@@ -256,6 +265,56 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText(/will not display a zero/)).toBeInTheDocument();
   });
 
+  it('leads a ready Web workspace with a trusted answer and previous-period delta before the chart', async () => {
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com',
+      env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webOutcome]),
+        properties,
+        operationalQuery,
+        query: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } }),
+        measurementTrust: vi.fn().mockResolvedValue({ status: 'trusted', primary_metric: { observed_events: 20 }, blockers: [], warnings: [] }),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    const answer = await screen.findByRole('heading', { name: 'Web health' });
+    expect(screen.getByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+    expect(screen.getByText('No change versus the previous 30 days.')).toBeInTheDocument();
+    expect(screen.getByText(/Trusted measurement/)).toBeInTheDocument();
+    expect(answer.compareDocumentPosition(screen.getByTestId('web-trend')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_analytics')).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([expect.objectContaining({ date_from: '-30d' })]),
+        expect.arrayContaining([expect.objectContaining({ date_from: '-60d', date_to: '-30d' })]),
+      ]),
+    );
+  });
+
+  it('keeps the current Web health answer when the previous-period comparison is unavailable', async () => {
+    const partialOperationalQuery = vi.fn((project, query) => {
+      if (query.kind === 'web_analytics' && query.date_to === '-30d') return Promise.reject(new Error('previous unavailable'));
+      return operationalQuery(project, query);
+    });
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webOutcome]), properties,
+        operationalQuery: partialOperationalQuery,
+        query: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } }),
+        measurementTrust: vi.fn().mockResolvedValue({ status: 'trusted', primary_metric: { observed_events: 20 }, blockers: [], warnings: [] }),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+    expect(screen.getByText('Previous-period comparison is unavailable.')).toBeInTheDocument();
+    expect(screen.getByTestId('web-trend')).toBeInTheDocument();
+  });
+
   it('does not keep prior-scope KPI data visible while a new project registry is loading', async () => {
     const view = render(
       <TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>,
@@ -388,6 +447,30 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('1. Canonical page views')).toBeInTheDocument();
     expect(screen.queryByText('Acquisition / UTM')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run UTM report' })).not.toBeInTheDocument();
+  });
+
+  it('links missing web definitions to the exact affected saved answer', async () => {
+    mockedStore.mockReturnValue({
+      project: 'alpha',
+      env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([]),
+        properties: vi.fn().mockResolvedValue([]),
+        measurementReadiness: vi.fn().mockResolvedValue({
+          groups: [{
+            key: 'properties',
+            gaps: [{ definition_ref: '$utm_source', affected_answer_ids: ['answer-web-conversion'] }],
+          }],
+        }),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByRole('link', { name: 'answer-web-conversion' })).toHaveAttribute(
+      'href',
+      '/analyze/saved?answer=answer-web-conversion',
+    );
   });
 });
 

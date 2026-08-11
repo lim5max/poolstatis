@@ -109,4 +109,16 @@ describe('SavedAnswers route-ready screen', () => {
     expect(screen.queryByRole('button', { name: 'Remove official status' })).not.toBeInTheDocument();
     expect(screen.getByText('Only a workspace owner or admin can change official status.')).toBeInTheDocument();
   });
+
+  it('focuses the exact answer requested by a downstream affected-answer link', async () => {
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={[`/analyze/saved?answer=${savedAnswer.id}`]}><SavedAnswers /></MemoryRouter>
+      </TooltipProvider>,
+    );
+
+    const focused = await screen.findByTestId(`saved-answer-${savedAnswer.id}`);
+    await waitFor(() => expect(focused).toHaveFocus());
+    expect(focused).toHaveAttribute('data-focused', 'true');
+  });
 });

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Confirm, EmptyState, ErrorNote, Loading, Panel, fmtRelative } from '@/components/ui';
@@ -10,6 +11,8 @@ type SavedAnswerFilter = 'active' | 'archived' | 'official';
 
 export function SavedAnswers() {
   const { client, project, env, tokenKind, account } = useStore();
+  const [searchParams] = useSearchParams();
+  const focusedAnswer = searchParams.get('answer');
   const [filter, setFilter] = useState<SavedAnswerFilter>('active');
   const [archiveTarget, setArchiveTarget] = useState<SavedAnswer | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
@@ -24,6 +27,13 @@ export function SavedAnswers() {
     }),
     [project, env, filter],
   );
+  useEffect(() => {
+    if (saved.loading || !focusedAnswer) return;
+    const card = document.getElementById(`saved-answer-${encodeURIComponent(focusedAnswer)}`);
+    if (!card) return;
+    card.focus();
+    if (typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'center' });
+  }, [focusedAnswer, saved.loading, saved.data]);
 
   const changeOfficial = async (answer: SavedAnswer) => {
     if (!client || !project || !officialAllowed) return;
@@ -95,6 +105,7 @@ export function SavedAnswers() {
             <SavedAnswerCard
               key={answer.id}
               answer={answer}
+              focused={answer.id === focusedAnswer}
               officialAllowed={officialAllowed}
               onOfficial={() => changeOfficial(answer)}
               onArchive={() => setArchiveTarget(answer)}
@@ -120,11 +131,13 @@ export function SavedAnswers() {
 
 export function SavedAnswerCard({
   answer,
+  focused = false,
   officialAllowed,
   onOfficial,
   onArchive,
 }: {
   answer: SavedAnswer;
+  focused?: boolean;
   officialAllowed: boolean;
   onOfficial: () => void;
   onArchive: () => void;
@@ -133,6 +146,13 @@ export function SavedAnswerCard({
     ? 'Trusted evidence'
     : `${answer.evidence.state.replaceAll('_', ' ')} evidence`;
   return (
+    <div
+      id={`saved-answer-${encodeURIComponent(answer.id)}`}
+      data-testid={`saved-answer-${answer.id}`}
+      data-focused={focused ? 'true' : 'false'}
+      tabIndex={focused ? -1 : undefined}
+      className={focused ? 'rounded-panel ring-2 ring-ring ring-offset-2' : undefined}
+    >
     <Panel
       title={<h2 className="serif text-lg font-normal">{answer.title}</h2>}
       right={answer.official ? <Badge>Official</Badge> : <Badge variant="outline">Saved</Badge>}
@@ -173,5 +193,6 @@ export function SavedAnswerCard({
         )}
       </div>
     </Panel>
+    </div>
   );
 }
