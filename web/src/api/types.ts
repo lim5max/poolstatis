@@ -345,6 +345,8 @@ export interface InteractionMapResponse {
 export interface TrendResponse {
   kind: 'trend';
   series: Array<{ bucket: string; value: number; breakdown_value?: string }>;
+  answer?: AnswerBlock;
+  evidence?: EvidenceBlock;
   meta: {
     computed_at: string;
     date_range?: { from: string; to: string };
@@ -352,6 +354,87 @@ export interface TrendResponse {
     note?: string;
     source?: 'native' | 'posthog';
   };
+}
+
+export type ControlTowerState = 'ready' | 'partial' | 'empty' | 'unavailable' | 'not_configured' | 'stale' | 'error';
+export type TrustState = 'trusted' | 'partial' | 'blocked' | 'unavailable';
+export type AttentionSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface AnswerBlock {
+  state: ControlTowerState;
+  headline: string;
+  takeaway: string;
+  primary_value?: {
+    value: number | string | null;
+    unit: 'count' | 'percent' | 'percentage_point' | 'duration_ms' | 'date' | 'text';
+    formatted: string;
+  };
+  delta?: {
+    value: number | null;
+    unit: 'count' | 'percent' | 'percentage_point';
+    direction: 'up' | 'down' | 'flat' | 'unknown';
+    comparison_label: string;
+  };
+  why_it_matters: string;
+}
+
+export interface EvidenceBlock {
+  state: TrustState;
+  as_of: string;
+  freshness: 'fresh' | 'stale' | 'unknown';
+  source_refs: Array<
+    | { kind: 'metric'; key: string; purpose: string }
+    | { kind: 'funnel'; key: string; goal: string }
+    | { kind: 'release'; id: string }
+    | { kind: 'experiment'; key: string }
+    | { kind: 'usage_ledger'; meter: 'events_stored' }
+    | { kind: 'operator_rule'; rule_id: string; rule_version: number }
+  >;
+  aggregation?: string;
+  denominator?: { label: string; value: number | null };
+  sample?: { eligible: number | null; observed: number | null; coverage: number | null };
+  warnings: Array<{ code: string; message: string; remediation_action_id?: string }>;
+  unavailable_reasons: Array<{ code: string; message: string; prerequisite_action_id?: string }>;
+  reproducible_query?: Record<string, unknown>;
+}
+
+export type ControlTowerAction =
+  | { id: string; kind: 'navigate'; label: string; href: string }
+  | { id: string; kind: 'run_typed_query'; label: string; query: Record<string, unknown> }
+  | { id: string; kind: 'copy_agent_task'; label: string; task: string }
+  | { id: string; kind: 'open_confirmation'; label: string; mutation: string; impact: string }
+  | { id: string; kind: 'retry'; label: string };
+
+export interface AttentionItem {
+  id: string;
+  rule_id: string;
+  rule_version: number;
+  severity: AttentionSeverity;
+  state: 'open' | 'acknowledged' | 'resolved' | 'unavailable';
+  title: string;
+  reason: string;
+  impact: string;
+  affected: Array<{ kind: 'answer' | 'metric' | 'funnel' | 'project' | 'customer'; ref: string }>;
+  evidence: EvidenceBlock;
+  primary_action: ControlTowerAction;
+}
+
+export interface ControlTowerResult {
+  schema_version: 1;
+  request_id: string;
+  generated_at: string;
+  scope: {
+    organization_id?: string;
+    project_slug?: string;
+    environment?: string;
+    window: { from: string; to: string; timezone: 'UTC' };
+    comparison?: { from: string; to: string; basis: 'previous_period' | 'previous_cycle' | 'none' };
+  };
+  answer: AnswerBlock;
+  attention: AttentionItem[];
+  evidence: EvidenceBlock;
+  primary_action: ControlTowerAction;
+  secondary_actions: ControlTowerAction[];
 }
 
 export type WebAnalyticsDimension =
@@ -1066,6 +1149,37 @@ export interface OrganizationUsage {
     name: string;
     quantity: number;
     environments: Array<{ env: string; quantity: number }>;
+  }>;
+}
+
+export interface UsageControlResult extends ControlTowerResult {
+  meter: 'events_stored';
+  cycle: { from: string; to: string; timezone: 'UTC' };
+  cap: {
+    state: 'finite' | 'not_configured';
+    value: number | null;
+    remaining: number | null;
+    consequence_at_100_percent: string | null;
+  };
+  pace: {
+    observed_days: number;
+    events_per_day_7d: number | null;
+    projected_cycle_end: number | null;
+    confidence: 'sufficient' | 'insufficient';
+  };
+  threshold_forecasts: Array<{
+    percent: 50 | 75 | 90 | 100;
+    state: 'reached' | 'projected' | 'not_projected' | 'not_applicable';
+    reached_or_projected_at: string | null;
+  }>;
+  contributors: Array<{
+    project_slug: string;
+    project_name: string;
+    environment: string;
+    accepted_events: number;
+    share: number | null;
+    change_7d: number | null;
+    last_ingest_at: string | null;
   }>;
 }
 

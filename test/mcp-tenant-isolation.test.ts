@@ -11,6 +11,8 @@ import type pg from 'pg';
 import { createPool } from '../src/db.js';
 import { buildServer } from '../src/http/server.js';
 import { TEST_DB_URL } from './urls.js';
+import { controlTowerResultSchema } from '../src/services/controlTower.js';
+import { usageControlResultSchema } from '../src/services/usage.js';
 
 const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const issuer = 'https://mcp-tenant-auth.poolstatis.test/';
@@ -137,7 +139,7 @@ beforeAll(async () => {
   (globalThis as { mcpTenantProjects?: { a: string; b: string; beta: string } }).mcpTenantProjects = {
     a: projectA, b: projectB, beta: betaProject,
   };
-});
+}, 60_000);
 
 afterAll(async () => {
   await secretClient?.close();
@@ -169,14 +171,38 @@ describe('MCP tenant isolation over stdio transport', () => {
       .toEqual(expect.arrayContaining(['shared_started', 'shared_completed']));
     const trend = await personalClient.callTool({ name: 'query_trend', arguments: { project: sharedSlug, query: { metric: 'shared_started', date_from: '-7d', env: 'prod' } } });
     const funnel = await personalClient.callTool({ name: 'query_funnel', arguments: { project: sharedSlug, query: { funnel: 'shared_activation', date_from: '-7d', env: 'prod' } } });
+    const controlTower = await secretClient.callTool({ name: 'get_control_tower', arguments: { project: sharedSlug, env: 'prod', range: '30d' } });
+    const deniedControlTower = await secretClient.callTool({ name: 'get_control_tower', arguments: { project: projects.b, env: 'prod' } });
+    const usageControl = await personalClient.callTool({ name: 'get_usage_control', arguments: { period: new Date().toISOString().slice(0, 7) } });
+    const deniedUsageControl = await secretClient.callTool({ name: 'get_usage_control', arguments: { period: new Date().toISOString().slice(0, 7) } });
     expect(trend.isError).not.toBe(true);
     expect(funnel.isError).not.toBe(true);
+    expect(controlTower.isError).not.toBe(true);
+    expect(controlTower.structuredContent).toMatchObject({ schema_version: 1, scope: { project_slug: sharedSlug } });
+    expect(() => controlTowerResultSchema.parse(controlTower.structuredContent)).not.toThrow();
+    expect(deniedControlTower.isError).toBe(true);
+    expect(deniedControlTower.content[0]?.text).toContain('project_scope');
+    expect(usageControl.isError).not.toBe(true);
+    expect(usageControl.structuredContent).toMatchObject({ schema_version: 1, meter: 'events_stored' });
+    expect(() => usageControlResultSchema.parse(usageControl.structuredContent)).not.toThrow();
+    expect(deniedUsageControl.isError).toBe(true);
     expect((trend.structuredContent as { series: Array<{ value: number }> }).series.reduce((sum, point) => sum + point.value, 0)).toBe(2);
+    expect(trend.structuredContent).toMatchObject({
+      answer: { state: 'ready' },
+      evidence: { source_refs: [{ kind: 'metric', key: 'shared_started', purpose: 'Measures shared_started for the isolated MCP process test.' }] },
+    });
     const steps = (funnel.structuredContent as { steps: Array<{ actors: number; conversion_from_start: number }> }).steps;
     expect(steps.map((step) => step.actors)).toEqual([2, 1]);
     expect(steps[1]?.conversion_from_start).toBe(0.5);
-    expect(JSON.stringify({ schema, trend, funnel })).not.toContain('beta-only');
-    expect(JSON.stringify({ schema, trend, funnel })).not.toContain('MCP Beta same slug');
+    expect(funnel.structuredContent).toMatchObject({
+      summary: {
+        overall_conversion: 0.5,
+        biggest_absolute_loss: { from_step: 0, to_step: 1, lost_actors: 1, drop_rate: 0.5 },
+      },
+      answer: { state: 'ready' },
+    });
+    expect(JSON.stringify({ schema, trend, funnel, controlTower, usageControl })).not.toContain('beta-only');
+    expect(JSON.stringify({ schema, trend, funnel, controlTower, usageControl })).not.toContain('MCP Beta same slug');
     const usageAfter = await pool.query("SELECT COALESCE(sum(quantity), 0)::int AS quantity, count(*)::int AS rows FROM usage_ledger WHERE meter_key = 'events_stored'");
     expect(usageAfter.rows[0]).toEqual(usageBefore.rows[0]);
     expect((await pool.query("SELECT DISTINCT meter_key FROM usage_ledger WHERE meter_key <> 'events_stored'")).rows).toEqual([]);

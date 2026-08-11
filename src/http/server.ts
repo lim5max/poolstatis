@@ -66,7 +66,10 @@ import {
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
 import type { OutboundPolicyOptions } from '../security/outbound.js';
-import { getOrganizationUsage, getOrganizationUsageActivity, getOrganizationUsageRange } from '../services/usage.js';
+import {
+  getOrganizationUsage, getOrganizationUsageActivity, getOrganizationUsageControl, getOrganizationUsageRange,
+} from '../services/usage.js';
+import { getProjectControlTower } from '../services/controlTower.js';
 import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
 import {
   acknowledgeOnboardingGate, getOnboardingStatus, recordAgentObservation, recordQueryRun,
@@ -473,6 +476,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         if (route === '/api/v1/me' || route === '/api/v1/onboarding') {
           requireKind(req.auth, 'user');
         } else if (route === '/api/v1/me/usage'
+          || route === '/api/v1/me/usage/control'
           || route === '/api/v1/me/usage/activity'
           || route === '/api/v1/me/usage/range') {
           requireUsageReadAccess(req.auth);
@@ -744,6 +748,15 @@ function registerPlatformRoutes(
     return getOrganizationUsage(ctx.pool, req.auth.orgId, period);
   });
 
+  app.get('/api/v1/me/usage/control', async (req) => {
+    requireUsageReadAccess(req.auth);
+    const { period } = req.query as { period?: string };
+    if (!period || !usagePeriodSchema.safeParse(period).success) {
+      throw badRequest('invalid_query_param', 'period must be a UTC month in YYYY-MM format');
+    }
+    return getOrganizationUsageControl(ctx.pool, req.auth.orgId, period);
+  });
+
   app.get('/api/v1/me/usage/range', async (req) => {
     requireUsageReadAccess(req.auth);
     const parsed = usageMonthRangeSchema.safeParse(req.query);
@@ -789,6 +802,26 @@ function registerPlatformRoutes(
       return { projects: all.filter((p) => p.slug === onlySlug), scope: 'project' };
     }
     return { projects: all, scope: 'org' };
+  });
+
+  app.get('/api/v1/projects/:slug/control-tower', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env = 'prod', range = '30d' } = req.query as { env?: string; range?: string };
+    if (!/^[a-zA-Z0-9_-]{1,50}$/.test(env)) {
+      throw badRequest('invalid_query_param', 'env must be a non-empty environment key');
+    }
+    const ranges = { '7d': 7, '30d': 30, '90d': 90 } as const;
+    if (!(range in ranges)) {
+      throw badRequest('invalid_query_param', 'range must be one of 7d, 30d or 90d');
+    }
+    return getProjectControlTower(
+      ctx.pool,
+      ctx.eventStore,
+      project,
+      env,
+      ranges[range as keyof typeof ranges],
+    );
   });
 
   app.post('/api/v1/projects', async (req, reply) => {

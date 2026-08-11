@@ -319,9 +319,11 @@ describe('@poolstatis/mcp release artifact', () => {
     try {
       expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.6.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
-      expect(tools.tools).toHaveLength(104);
+      expect(tools.tools).toHaveLength(106);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
+        'get_control_tower',
+        'get_usage_control',
         'get_project_schema',
         'get_web_overview',
         'list_web_sessions',

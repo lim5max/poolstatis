@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { activeMetric, api, createTestEnv, hoursAgo, type TestEnv } from './helpers.js';
+import { answerBlockSchema, evidenceBlockSchema, funnelSummarySchema } from '../src/services/controlTower.js';
 
 let env: TestEnv;
 const P = () => `/api/v1/projects/${env.projectSlug}`;
@@ -47,6 +48,22 @@ describe('trend queries', () => {
     const total = res.body.series.reduce((s: number, p: any) => s + p.value, 0);
     expect(total).toBe(3);
     expect(res.body.meta.date_range).toBeDefined();
+    expect(res.body.answer).toMatchObject({
+      state: 'ready',
+      primary_value: { value: 3, unit: 'count' },
+      why_it_matters: 'test metric for export, informs nothing real',
+    });
+    expect(res.body.evidence).toMatchObject({
+      state: 'trusted',
+      source_refs: [{ kind: 'metric', key: 'export', purpose: 'test metric for export, informs nothing real' }],
+      aggregation: 'count of accepted events',
+      sample: { eligible: null, observed: 3, coverage: null },
+      warnings: [],
+      unavailable_reasons: [],
+      reproducible_query: expect.objectContaining({ kind: 'trend', metric: 'export' }),
+    });
+    expect(() => answerBlockSchema.parse(res.body.answer)).not.toThrow();
+    expect(() => evidenceBlockSchema.parse(res.body.evidence)).not.toThrow();
   });
 
   it('counts unique actors', async () => {
@@ -129,6 +146,35 @@ describe('funnel queries', () => {
     expect(s2.actors).toBe(2); // u1 + u2 exported after signup within 7d window
     expect(s2.metric_key).toBe('export');
     expect(s2.conversion_from_start).toBeCloseTo(2 / 3, 3);
+    expect(res.body.summary).toEqual({
+      overall_conversion: 2 / 3,
+      previous_overall_conversion: null,
+      delta_percentage_points: null,
+      biggest_absolute_loss: {
+        from_step: 0,
+        to_step: 1,
+        lost_actors: 1,
+        drop_rate: 1 / 3,
+      },
+      biggest_percentage_loss: {
+        from_step: 0,
+        to_step: 1,
+        lost_actors: 1,
+        drop_rate: 1 / 3,
+      },
+    });
+    expect(res.body.answer).toMatchObject({
+      state: 'ready',
+      primary_value: { value: (2 / 3) * 100, unit: 'percent' },
+    });
+    expect(res.body.evidence).toMatchObject({
+      state: 'trusted',
+      denominator: { label: 'actors who reached signup', value: 3 },
+      reproducible_query: expect.objectContaining({ kind: 'funnel' }),
+    });
+    expect(() => answerBlockSchema.parse(res.body.answer)).not.toThrow();
+    expect(() => evidenceBlockSchema.parse(res.body.evidence)).not.toThrow();
+    expect(() => funnelSummarySchema.parse(res.body.summary)).not.toThrow();
   });
 
   it('respects the conversion window of a saved funnel', async () => {

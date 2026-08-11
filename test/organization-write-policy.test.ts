@@ -30,7 +30,7 @@ describe('organization write policy inventory', () => {
       source.matchAll(/app\.(post|put|patch|delete)\('([^']+)'/g),
       (match) => `${match[1]!.toUpperCase()} ${match[2]!}`,
     );
-    expect(allRoutes).toHaveLength(129);
+    expect(allRoutes).toHaveLength(131);
     expect(new Set(allRoutes).size).toBe(allRoutes.length);
     expect(routes).toHaveLength(78);
     expect(routes.every((route) =>
@@ -43,7 +43,7 @@ describe('organization write policy inventory', () => {
       });
     const allowed = allRoutes.filter((route) => !blocked.includes(route));
     expect(blocked).toHaveLength(67);
-    expect(allowed).toHaveLength(62);
+    expect(allowed).toHaveLength(64);
 
     const exemptions = routes
       .filter((route) => {
@@ -64,7 +64,7 @@ describe('organization write policy inventory', () => {
   it('keeps MCP on the centralized HTTP boundary and classifies every mutating tool call', async () => {
     const source = await readFile(resolve(repoDir, 'src/mcp/server.ts'), 'utf8');
     expect(source.match(/\bfetch\(/g)).toHaveLength(1);
-    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(104);
+    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(106);
 
     const calls = Array.from(
       source.matchAll(/api\(\s*'(POST|PATCH|DELETE)'\s*,\s*(`[^`]+`|'[^']+')/g),

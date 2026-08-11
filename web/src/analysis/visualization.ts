@@ -1,3 +1,5 @@
+import type { AnswerBlock, EvidenceBlock } from '../api/types';
+
 export type QueryInterval = 'hour' | 'day' | 'week' | 'month';
 export type PropertyFilter = {
   property: string;
@@ -63,6 +65,8 @@ export interface QueryMeta {
 export interface TrendQueryResult {
   kind: 'trend';
   series: Array<{ bucket: string; value: number; breakdown_value?: string }>;
+  answer?: AnswerBlock;
+  evidence?: EvidenceBlock;
   meta: QueryMeta;
 }
 
@@ -77,7 +81,23 @@ export interface FunnelQueryResult {
     conversion_from_prev: number | null;
     conversion_from_start: number | null;
   }>;
+  summary?: {
+    overall_conversion: number | null;
+    previous_overall_conversion: number | null;
+    delta_percentage_points: number | null;
+    biggest_absolute_loss: FunnelLoss | null;
+    biggest_percentage_loss: FunnelLoss | null;
+  };
+  answer?: AnswerBlock;
+  evidence?: EvidenceBlock;
   meta: QueryMeta;
+}
+
+export interface FunnelLoss {
+  from_step: number;
+  to_step: number;
+  lost_actors: number;
+  drop_rate: number | null;
 }
 
 export interface RetentionQueryResult {
