@@ -16,9 +16,18 @@ const THRESHOLD_STATES = ['reached', 'projected', 'not_projected', 'not_applicab
 const isRecord = (value: unknown): value is JsonRecord => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const isString = (value: unknown): value is string => typeof value === 'string';
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const isInteger = (value: unknown): value is number => Number.isSafeInteger(value);
+const isNonNegativeNumber = (value: unknown): value is number => isFiniteNumber(value) && value >= 0;
+const isNonNegativeInteger = (value: unknown): value is number => isInteger(value) && value >= 0;
+const isRatio = (value: unknown): value is number => isFiniteNumber(value) && value >= 0 && value <= 1;
 const isNullableNumber = (value: unknown): value is number | null => value === null || isFiniteNumber(value);
+const isNullableNonNegativeNumber = (value: unknown): value is number | null => value === null || isNonNegativeNumber(value);
+const isNullableRatio = (value: unknown): value is number | null => value === null || isRatio(value);
 const isNullableString = (value: unknown): value is string | null => value === null || isString(value);
-const isIsoDate = (value: unknown): value is string => isString(value) && Number.isFinite(Date.parse(value));
+const ISO_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+const isIsoDate = (value: unknown): value is string => isString(value)
+  && ISO_UTC_TIMESTAMP.test(value)
+  && Number.isFinite(Date.parse(value));
 const inEnum = <T extends readonly string[]>(value: unknown, values: T): value is T[number] => isString(value) && values.includes(value);
 const optionalString = (value: unknown) => value === undefined || isString(value);
 
@@ -60,7 +69,7 @@ function isSourceRef(value: unknown): boolean {
     case 'release': return isString(value.id);
     case 'experiment': return isString(value.key);
     case 'usage_ledger': return value.meter === 'events_stored';
-    case 'operator_rule': return isString(value.rule_id) && isFiniteNumber(value.rule_version);
+    case 'operator_rule': return isString(value.rule_id) && isNonNegativeInteger(value.rule_version);
     default: return false;
   }
 }
@@ -82,26 +91,34 @@ function isEvidence(value: unknown): boolean {
     || !Array.isArray(value.unavailable_reasons) || !value.unavailable_reasons.every(isUnavailableReason)
     || !optionalString(value.aggregation)) return false;
   if (value.denominator !== undefined && (!isRecord(value.denominator)
-    || !isString(value.denominator.label) || !isNullableNumber(value.denominator.value))) return false;
+    || !isString(value.denominator.label) || !isNullableNonNegativeNumber(value.denominator.value))) return false;
   if (value.sample !== undefined && (!isRecord(value.sample)
-    || !isNullableNumber(value.sample.eligible)
-    || !isNullableNumber(value.sample.observed)
-    || !isNullableNumber(value.sample.coverage))) return false;
+    || !isNullableNonNegativeNumber(value.sample.eligible)
+    || !isNullableNonNegativeNumber(value.sample.observed)
+    || !isNullableRatio(value.sample.coverage)
+    || (isFiniteNumber(value.sample.eligible) && isFiniteNumber(value.sample.observed)
+      && value.sample.observed > value.sample.eligible))) return false;
   return value.reproducible_query === undefined || isRecord(value.reproducible_query);
 }
 
 function isAttention(value: unknown): boolean {
   return isRecord(value)
-    && isString(value.id) && isString(value.rule_id) && isFiniteNumber(value.rule_version)
+    && isString(value.id) && isString(value.rule_id) && isNonNegativeInteger(value.rule_version)
     && inEnum(value.severity, ATTENTION_SEVERITIES) && inEnum(value.state, ATTENTION_STATES)
     && isString(value.title) && isString(value.reason) && isString(value.impact)
     && Array.isArray(value.affected) && value.affected.every((affected) => isRecord(affected)
       && inEnum(affected.kind, AFFECTED_KINDS) && isString(affected.ref))
-    && isEvidence(value.evidence) && isAction(value.primary_action);
+    && isEvidence(value.evidence)
+    && (value.priority === undefined || (isRecord(value.priority)
+      && typeof value.priority.blocking_now === 'boolean'
+      && isNullableString(value.priority.forecasted_at)
+      && (value.priority.forecasted_at === null || isIsoDate(value.priority.forecasted_at))))
+    && isAction(value.primary_action);
 }
 
 function isWindow(value: unknown): value is ControlTowerResult['scope']['window'] {
-  return isRecord(value) && isIsoDate(value.from) && isIsoDate(value.to) && value.timezone === 'UTC';
+  return isRecord(value) && isIsoDate(value.from) && isIsoDate(value.to) && value.timezone === 'UTC'
+    && Date.parse(value.from) <= Date.parse(value.to);
 }
 
 function isScope(value: unknown): boolean {
@@ -109,6 +126,7 @@ function isScope(value: unknown): boolean {
     || !optionalString(value.organization_id) || !optionalString(value.project_slug) || !optionalString(value.environment)) return false;
   if (value.comparison !== undefined) {
     return isRecord(value.comparison) && isIsoDate(value.comparison.from) && isIsoDate(value.comparison.to)
+      && Date.parse(value.comparison.from) <= Date.parse(value.comparison.to)
       && inEnum(value.comparison.basis, ['previous_period', 'previous_cycle', 'none'] as const);
   }
   return true;
@@ -162,13 +180,13 @@ export function decodeControlTowerResult(value: unknown): ControlTowerResult {
 
 function isContributor(value: unknown): boolean {
   return isRecord(value) && isString(value.project_slug) && isString(value.project_name)
-    && isString(value.environment) && isFiniteNumber(value.accepted_events)
-    && isNullableNumber(value.share) && isNullableNumber(value.change_7d) && isNullableString(value.last_ingest_at)
+    && isString(value.environment) && isNonNegativeInteger(value.accepted_events)
+    && isNullableRatio(value.share) && isNullableNumber(value.change_7d) && isNullableString(value.last_ingest_at)
     && (value.last_ingest_at === null || isIsoDate(value.last_ingest_at));
 }
 
 function isThreshold(value: unknown): boolean {
-  if (!isRecord(value) || ![50, 75, 90, 100].includes(Number(value.percent))
+  if (!isRecord(value) || !isFiniteNumber(value.percent) || ![50, 75, 90, 100].includes(value.percent)
     || !inEnum(value.state, THRESHOLD_STATES) || value.notification_state !== 'not_configured'
     || value.audit_source !== 'usage_ledger' || !isNullableString(value.reached_or_projected_at)) return false;
   return value.reached_or_projected_at === null || isIsoDate(value.reached_or_projected_at);
@@ -181,16 +199,24 @@ function isUsageControl(value: unknown): value is UsageControlResult {
   const reconciliation = value.reconciliation;
   return value.meter === 'events_stored' && isWindow(value.cycle)
     && isRecord(cap) && inEnum(cap.state, ['finite', 'not_configured'] as const)
-    && isNullableNumber(cap.value) && isNullableNumber(cap.remaining) && isNullableString(cap.consequence_at_100_percent)
-    && (cap.state === 'finite' ? isFiniteNumber(cap.value) : cap.value === null && cap.remaining === null)
-    && isRecord(pace) && isFiniteNumber(pace.observed_days) && isNullableNumber(pace.events_per_day_7d)
-    && isNullableNumber(pace.projected_cycle_end) && inEnum(pace.confidence, ['sufficient', 'insufficient'] as const)
-    && Array.isArray(value.threshold_forecasts) && value.threshold_forecasts.every(isThreshold)
+    && isNullableNonNegativeNumber(cap.value) && isNullableNonNegativeNumber(cap.remaining) && isNullableString(cap.consequence_at_100_percent)
+    && (cap.state === 'finite'
+      ? isNonNegativeNumber(cap.value) && isNonNegativeNumber(cap.remaining) && isString(cap.consequence_at_100_percent)
+      : cap.value === null && cap.remaining === null && cap.consequence_at_100_percent === null)
+    && isRecord(pace) && isNonNegativeInteger(pace.observed_days) && isNullableNonNegativeNumber(pace.events_per_day_7d)
+    && isNullableNonNegativeNumber(pace.projected_cycle_end) && inEnum(pace.confidence, ['sufficient', 'insufficient'] as const)
+    && Array.isArray(value.threshold_forecasts) && value.threshold_forecasts.length === 4
+    && value.threshold_forecasts.every((threshold, index) => isThreshold(threshold)
+      && threshold.percent === [50, 75, 90, 100][index])
     && Array.isArray(value.contributors) && value.contributors.every(isContributor)
-    && isRecord(reconciliation) && isFiniteNumber(reconciliation.metered_quantity)
-    && isFiniteNumber(reconciliation.attributed_quantity) && isFiniteNumber(reconciliation.difference)
-    && isFiniteNumber(reconciliation.unattributed_quantity) && isFiniteNumber(reconciliation.overattributed_quantity)
-    && inEnum(reconciliation.state, ['reconciled', 'partial'] as const);
+    && isRecord(reconciliation) && isNonNegativeInteger(reconciliation.metered_quantity)
+    && isNonNegativeInteger(reconciliation.attributed_quantity) && isInteger(reconciliation.difference)
+    && isNonNegativeInteger(reconciliation.unattributed_quantity) && isNonNegativeInteger(reconciliation.overattributed_quantity)
+    && reconciliation.difference === reconciliation.metered_quantity - reconciliation.attributed_quantity
+    && reconciliation.unattributed_quantity === Math.max(0, reconciliation.difference)
+    && reconciliation.overattributed_quantity === Math.max(0, -reconciliation.difference)
+    && inEnum(reconciliation.state, ['reconciled', 'partial'] as const)
+    && reconciliation.state === (reconciliation.difference === 0 ? 'reconciled' : 'partial');
 }
 
 function unavailableUsage(): UsageControlResult {

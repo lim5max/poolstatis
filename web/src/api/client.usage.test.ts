@@ -110,8 +110,8 @@ describe('PoolstatisClient usage', () => {
     const malformed = {
       schema_version: 1,
       request_id: 'req-malformed',
-      generated_at: 'not-a-date',
-      scope: { window: { from: 'not-a-date', to: 'also-not-a-date', timezone: 'UTC' } },
+      generated_at: '0',
+      scope: { window: { from: '0', to: 'also-not-a-date', timezone: 'UTC' } },
       answer: { state: 'ready', headline: 'Unsafe success', takeaway: 'Unsafe', why_it_matters: 'Unsafe' },
       attention: [],
       evidence: { state: 'trusted', freshness: 'fresh', as_of: 'not-a-date', source_refs: [], warnings: [], unavailable_reasons: [] },
@@ -154,5 +154,48 @@ describe('PoolstatisClient usage', () => {
     expect(result.cap).toMatchObject({ state: 'not_configured', value: null, remaining: null });
     expect(result.threshold_forecasts).toHaveLength(4);
     expect(result.threshold_forecasts.every((threshold) => threshold.state === 'not_applicable')).toBe(true);
+  });
+
+  it.each([
+    ['negative observed days', (payload: any) => { payload.pace.observed_days = -2; }],
+    ['negative ledger quantity', (payload: any) => { payload.reconciliation.metered_quantity = -1; }],
+    ['string threshold percent', (payload: any) => { payload.threshold_forecasts[0].percent = '50'; }],
+    ['negative contributor quantity', (payload: any) => { payload.contributors[0].accepted_events = -1; }],
+    ['out-of-range contributor share', (payload: any) => { payload.contributors[0].share = 1.5; }],
+  ])('fails closed for semantically invalid usage: %s', async (_name, mutate) => {
+    const payload: any = {
+      schema_version: 1,
+      request_id: 'req-usage-semantics',
+      generated_at: '2026-08-12T00:00:00.000Z',
+      scope: { window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-31T23:59:59.999Z', timezone: 'UTC' } },
+      answer: { state: 'ready', headline: 'Usage', takeaway: 'Usage', why_it_matters: 'Usage' },
+      attention: [],
+      evidence: { state: 'trusted', freshness: 'fresh', as_of: '2026-08-12T00:00:00.000Z', source_refs: [], warnings: [], unavailable_reasons: [] },
+      primary_action: { id: 'review', kind: 'navigate', label: 'Review', href: '/usage' },
+      secondary_actions: [],
+      meter: 'events_stored',
+      cycle: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-31T23:59:59.999Z', timezone: 'UTC' },
+      cap: { state: 'finite', value: 1_000, remaining: 900, consequence_at_100_percent: 'Pause ingest.' },
+      pace: { observed_days: 7, events_per_day_7d: 10, projected_cycle_end: 310, confidence: 'sufficient' },
+      threshold_forecasts: [50, 75, 90, 100].map((percent) => ({
+        percent, state: 'not_projected', reached_or_projected_at: null,
+        notification_state: 'not_configured', audit_source: 'usage_ledger',
+      })),
+      contributors: [{
+        project_slug: 'alpha', project_name: 'Alpha', environment: 'prod',
+        accepted_events: 100, share: 1, change_7d: 0, last_ingest_at: '2026-08-12T00:00:00.000Z',
+      }],
+      reconciliation: {
+        metered_quantity: 100, attributed_quantity: 100, difference: 0,
+        unattributed_quantity: 0, overattributed_quantity: 0, state: 'reconciled',
+      },
+    };
+    mutate(payload);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
+
+    const result = await new PoolstatisClient('https://core.example', 'pt_test').usageControl('2026-08');
+
+    expect(result.answer).toMatchObject({ state: 'unavailable', headline: 'Usage unavailable' });
+    expect(result.reconciliation).toMatchObject({ metered_quantity: 0, attributed_quantity: 0, state: 'partial' });
   });
 });
