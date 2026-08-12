@@ -638,7 +638,7 @@ function summarizeProductAnswer(
     ? 'Previous-period comparison is unavailable.'
     : Math.abs(result.summary.delta_percentage_points) < 0.05
       ? 'It is stable versus the previous exact period.'
-      : `${result.summary.delta_percentage_points > 0 ? 'Up' : 'Down'} ${Math.abs(result.summary.delta_percentage_points).toLocaleString()} percentage points versus the previous exact period.`;
+      : `${result.summary.delta_percentage_points > 0 ? 'Up' : 'Down'} ${formatPercentagePointMagnitude(result.summary.delta_percentage_points)} percentage points versus the previous exact period.`;
   return {
     takeaway: currentValue === null
       ? `${title} is rendered, but the server summary has no conversion denominator.`
@@ -870,6 +870,10 @@ function percent(value: number) {
 function signedPercentagePoints(value: number) {
   const points = Math.round(value * 10) / 10;
   return `${points > 0 ? '+' : ''}${points} pp`;
+}
+
+export function formatPercentagePointMagnitude(value: number): string {
+  return String(Math.round(Math.abs(value) * 10) / 10);
 }
 
 function fmtActors(value: number) {

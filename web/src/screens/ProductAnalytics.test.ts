@@ -7,7 +7,7 @@ import {
   scenarioPickerOptions,
   visualizationTitle,
 } from '../analysis/product';
-import { selectServerFunnelLoss } from './ProductAnalytics';
+import { formatPercentagePointMagnitude, selectServerFunnelLoss } from './ProductAnalytics';
 
 describe('Product analytics query and copy mapping', () => {
   it('builds registry-backed branches without raw event input', () => {
@@ -88,6 +88,11 @@ describe('Product analytics query and copy mapping', () => {
       dropRate: 0.4, overallConversion: 0.15, previousOverallConversion: 0.4,
       deltaPercentagePoints: -25,
     });
+  });
+
+  it('rounds percentage-point copy to one readable decimal', () => {
+    expect(formatPercentagePointMagnitude(8.548387096774194)).toBe('8.5');
+    expect(formatPercentagePointMagnitude(-12.45)).toBe('12.5');
   });
 
   it('fails closed when the deep-linked transition is not present in the server summary', () => {

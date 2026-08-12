@@ -1114,7 +1114,7 @@ export const webAnalyticsQuerySchema = z.object({
     'language',
     'timezone',
     'country',
-  ])).min(1).max(10).default(['route', 'device', 'browser']),
+  ])).max(10).default(['route', 'device', 'browser']),
   env: z.string().trim().min(1).max(100).default('prod'),
 }).strict();
 
