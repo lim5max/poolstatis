@@ -28,7 +28,13 @@ describe('control tower project ownership', () => {
     await new MonitorWorker(env.pool, {} as never, options, async () => ({
       current: { value: 2, events: 2 }, previous: { value: 0, events: 0 }, definitionFingerprint: 'owned-v1',
     })).runOnce(now);
-    await new NotificationWorker(env.pool, options).runOnce(new Date('2026-08-12T00:00:00.000Z'));
+    const deliveryDue = new Date('2026-08-12T00:00:00.000Z');
+    await env.pool.query(
+      `UPDATE notification_deliveries SET next_attempt_at = $2
+       WHERE project_id = $1 AND status IN ('pending', 'failed')`,
+      [env.projectId, deliveryDue],
+    );
+    await new NotificationWorker(env.pool, options).runOnce(deliveryDue);
     expect((await env.pool.query('SELECT count(*)::int AS count FROM notification_inbox WHERE project_id = $1', [env.projectId])).rows[0].count).toBe(1);
 
     const deleted = await api(env, env.personalToken, 'DELETE', `/api/v1/projects/${env.projectSlug}`, { confirm_slug: env.projectSlug });
