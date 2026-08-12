@@ -1,18 +1,21 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
+import {
+  activeMetric, api, createHumanReviewTestEnv, createTestEnv,
+  type HumanReviewTestEnv, type TestEnv,
+} from './helpers.js';
 import { proposeOutcome } from '../src/services/evaluation.js';
 
 const DAY = 86_400_000;
 
 describe('release evidence and immutable decision revisions', () => {
-  let env: TestEnv;
+  let env: HumanReviewTestEnv;
   let other: TestEnv;
   let anchor: Date;
 
   beforeAll(async () => {
-    env = await createTestEnv();
+    env = await createHumanReviewTestEnv();
     other = await createTestEnv();
     anchor = new Date(Date.now() - 4 * DAY);
     await activeMetric(env, {
@@ -44,6 +47,27 @@ describe('release evidence and immutable decision revisions', () => {
     expect(applied.status).toBe(200);
     await ingestWindowEvidence(env, anchor, env.ingestToken, 'decision-evidence-prod');
     await ingestWindowEvidence(env, anchor, env.ingestDevToken, 'decision-evidence-dev');
+
+    await activeMetric(other, {
+      key: 'activation_completed', type: 'unique_actors',
+      purpose: 'Measures whether signed-up actors reach the first product value moment.',
+      source: { event: 'activation.completed', filters: [] },
+    });
+    await activeMetric(other, {
+      key: 'invite_completed', type: 'unique_actors',
+      purpose: 'Protects the invite outcome while an onboarding change is observed.',
+      source: { event: 'invite.completed', filters: [] },
+    });
+    await api(other, other.secretToken, 'POST', path(other, '/properties'), {
+      key: 'plan', scope: 'event', value_type: 'string', status: 'trusted',
+      purpose: 'Segments decision evidence by the commercial plan selected by an actor.',
+    });
+    const otherDiff = await api(other, other.secretToken, 'POST', path(other, '/contracts/diff'), declaration);
+    const otherApplied = await api(other, other.secretToken, 'POST', path(other, '/contracts/apply'), {
+      declaration, expected_revision: otherDiff.body.expected_revision,
+    });
+    expect(otherApplied.status).toBe(200);
+    await ingestWindowEvidence(other, anchor, other.ingestToken, 'decision-evidence-selfhost');
   });
 
   afterAll(async () => {
@@ -88,13 +112,33 @@ describe('release evidence and immutable decision revisions', () => {
     });
     expect(evaluated.body.decision.proposed_rationale).toContain('50%');
 
-    const approved = await api(env, env.secretToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/approve`), {
+    const reviewBody = {
       rationale: 'The measured activation lift clears the declared threshold and the guardrail is stable.',
+    };
+    const personal = await api(env, env.ownerToken, 'POST', '/api/v1/me/tokens', {
+      label: 'Decision review read-only MCP',
+    });
+    expect(personal.status).toBe(201);
+    for (const [token, code] of [
+      [env.secretToken, 'human_user_required'],
+      [personal.body.token, 'human_user_required'],
+      [env.memberToken, 'insufficient_role'],
+    ] as const) {
+      const denied = await api(env, token, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/approve`), reviewBody);
+      expect(denied.status).toBe(403);
+      expect(denied.body.error.code).toBe(code);
+    }
+    const unchanged = await api(env, env.secretToken, 'GET', path(env, `/decisions/${evaluated.body.decision.id}`));
+    expect(unchanged.body.decision).toMatchObject({ status: 'proposed', current_revision: 1 });
+
+    const approved = await api(env, env.ownerToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/approve`), {
+      ...reviewBody,
     });
     expect(approved.status).toBe(200);
     expect(approved.body.decision).toMatchObject({
       status: 'approved', accepted_outcome: 'keep', current_revision: 2,
     });
+    expect(approved.body.revisions[1].actor).toBe(`user:${env.ownerUserId}`);
     expect(approved.body.revisions.map((revision: { action: string }) => revision.action))
       .toEqual(['proposed', 'approved']);
     expect(approved.body.release.status).toBe('decided');
@@ -122,12 +166,25 @@ describe('release evidence and immutable decision revisions', () => {
     )).rejects.toMatchObject({ code: '55000' });
   });
 
+  test('keeps ownerless personal-token review compatible in legacy self-host mode', async () => {
+    const release = await register(other, 'selfhost-review', 'shorter_onboarding', anchor);
+    const evaluated = await api(other, other.secretToken, 'POST', path(other, `/releases/${release.id}/evaluate`), {});
+    expect(evaluated.status).toBe(201);
+
+    const approved = await api(other, other.personalToken, 'POST', path(other, `/decisions/${evaluated.body.decision.id}/approve`), {
+      rationale: 'The local owner reviewed the trusted evidence and accepted the bounded proposal.',
+    });
+    expect(approved.status).toBe(200);
+    expect(approved.body.decision).toMatchObject({ status: 'approved', accepted_outcome: 'keep' });
+    expect(approved.body.revisions[1].actor).toMatch(/^key:/);
+  });
+
   test('preserves a rejected agent proposal and appends the human correction', async () => {
     const release = await register(env, 'decision-correct', 'shorter_onboarding', anchor);
     const evaluated = await api(env, env.secretToken, 'POST', path(env, `/releases/${release.id}/evaluate`), {});
     expect(evaluated.body.decision.proposed_outcome).toBe('keep');
 
-    const rejected = await api(env, env.secretToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/reject`), {
+    const rejected = await api(env, env.adminToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/reject`), {
       rationale: 'The agent did not account for a known campaign change in this observation window.',
     });
     expect(rejected.body.decision).toMatchObject({ status: 'rejected', accepted_outcome: null });
@@ -136,7 +193,7 @@ describe('release evidence and immutable decision revisions', () => {
       previous_snapshot: expect.objectContaining({ status: 'proposed', proposed_outcome: 'keep' }),
     });
 
-    const edited = await api(env, env.secretToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/edit`), {
+    const edited = await api(env, env.ownerToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/edit`), {
       outcome: 'keep',
       rationale: 'Keep the change, but record that the campaign is a confounder and recheck the next clean cohort.',
     });
@@ -256,7 +313,7 @@ describe('release evidence and immutable decision revisions', () => {
     ]));
     expect(distrusted.body.decision.proposed_outcome).toBe('inconclusive');
 
-    const forbiddenEdit = await api(env, env.secretToken, 'POST', path(env, `/decisions/${distrusted.body.decision.id}/edit`), {
+    const forbiddenEdit = await api(env, env.ownerToken, 'POST', path(env, `/decisions/${distrusted.body.decision.id}/edit`), {
       outcome: 'rollback',
       rationale: 'Force a directional conclusion despite the property trust blocker.',
     });

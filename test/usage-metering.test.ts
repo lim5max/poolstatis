@@ -3,6 +3,8 @@ import { PostgresEventStore } from '../src/stores/postgresEventStore.js';
 import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
 import { createProject } from '../src/services/projects.js';
 import { getOrganizationUsageActivity } from '../src/services/usage.js';
+import { createPool } from '../src/db.js';
+import { TEST_DB_URL } from './urls.js';
 
 let env: TestEnv;
 
@@ -262,6 +264,67 @@ describe('accepted-event metering', () => {
     });
     expect(retry.status).toBe(200);
     expect(retry.body.accepted).toBe(1);
+  });
+
+  it('keeps accepted ingest available with a one-connection pool when best-effort threshold evidence fails', async () => {
+    const isolated = await createTestEnv({ ingestBuffer: false });
+    const limitedPool = createPool(TEST_DB_URL, { max: 1 });
+    try {
+      const organizationId = (await isolated.pool.query<{ org_id: string }>(
+        'SELECT org_id::text FROM projects WHERE id = $1',
+        [isolated.projectId],
+      )).rows[0]!.org_id;
+      await isolated.pool.query(
+        `INSERT INTO organization_entitlements (org_id, meter_key, hard_limit, warning_thresholds)
+         VALUES ($1, 'events_stored', NULL, ARRAY[1]::bigint[])`,
+        [organizationId],
+      );
+      await isolated.pool.query(`
+        CREATE OR REPLACE FUNCTION fail_usage_warning_insert() RETURNS trigger AS $$
+        BEGIN RAISE EXCEPTION 'forced usage warning failure'; END; $$ LANGUAGE plpgsql;
+        CREATE TRIGGER usage_warning_failure BEFORE INSERT ON usage_warnings
+        FOR EACH ROW EXECUTE FUNCTION fail_usage_warning_insert();
+      `);
+
+      const accepted = await new PostgresEventStore(limitedPool, { managePartitions: false }).append([{
+        projectId: isolated.projectId,
+        env: 'prod',
+        event: 'warning.crossing',
+        timestamp: new Date(),
+        distinctId: 'warning-user',
+        sessionId: null,
+        properties: {},
+        registered: false,
+      }]);
+      expect(accepted.inserted).toBe(1);
+      expect(accepted.warnings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ meter: 'events_stored', threshold: 1, quantity: 1 }),
+      ]));
+      expect((await isolated.pool.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM events
+         WHERE project_id = $1 AND distinct_id = 'warning-user'`,
+        [isolated.projectId],
+      )).rows[0]?.count).toBe(1);
+      expect((await isolated.pool.query<{ quantity: string }>(
+        `SELECT quantity::text FROM organization_usage
+         WHERE org_id = $1 AND meter_key = 'events_stored'
+           AND period_start = date_trunc('month', now() AT TIME ZONE 'UTC')::date`,
+        [organizationId],
+      )).rows[0]?.quantity ?? '0').toBe('1');
+      expect((await isolated.pool.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM usage_warnings
+         WHERE org_id = $1 AND meter_key = 'events_stored'`,
+        [organizationId],
+      )).rows[0]?.count).toBe(0);
+
+      await isolated.pool.query(
+        'DROP TRIGGER usage_warning_failure ON usage_warnings; DROP FUNCTION fail_usage_warning_insert();',
+      );
+    } finally {
+      await isolated.pool.query('DROP TRIGGER IF EXISTS usage_warning_failure ON usage_warnings; DROP FUNCTION IF EXISTS fail_usage_warning_insert();').catch(() => {});
+      await limitedPool.end();
+      await isolated.close();
+    }
   });
 
   it('keeps completed batch IDs for at least 35 days before reclaiming them', async () => {

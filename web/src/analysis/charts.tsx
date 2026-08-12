@@ -245,7 +245,15 @@ export function LifecycleChart({ result }: { result: LifecycleQueryResult }) {
   );
 }
 
-export function ManualVisualizationRenderer({ spec, result }: { spec: VisualizationSpec; result: AnalysisQueryResult }) {
+export function ManualVisualizationRenderer({
+  spec,
+  result,
+  showEvidenceSummary = true,
+}: {
+  spec: VisualizationSpec;
+  result: AnalysisQueryResult;
+  showEvidenceSummary?: boolean;
+}) {
   const validation = validateVisualizationSpec(spec);
   if (!validation.valid) {
     return <div role="alert" className="rounded-panel border border-destructive/35 bg-destructive/8 p-4 text-sm text-destructive">Visualization contract rejected: {validation.errors.join('; ')}</div>;
@@ -278,13 +286,13 @@ export function ManualVisualizationRenderer({ spec, result }: { spec: Visualizat
         {result.kind === 'lifecycle' && renderer === 'lifecycle' && <LifecycleChart result={result} />}
       </div>
 
-      <div className="grid border-t bg-muted/25 text-xs sm:grid-cols-2 lg:grid-cols-5">
+      {showEvidenceSummary && <div className="grid border-t bg-muted/25 text-xs sm:grid-cols-2 lg:grid-cols-5">
         <EvidenceCell label="Scope"><code>{spec.project}</code> · <code>{spec.env}</code></EvidenceCell>
         <EvidenceCell label="Exact period">{formatUtcRange(spec.range.from, spec.range.to)}</EvidenceCell>
         <EvidenceCell label="Aggregation">{spec.evidence.aggregation}{spec.evidence.denominator ? ` / ${spec.evidence.denominator}` : ''}</EvidenceCell>
         <EvidenceCell label="Comparison">{spec.evidence.comparisonBasis}</EvidenceCell>
         <EvidenceCell label="Evidence">{spec.evidence.source} · sample {spec.evidence.sampleSize ?? 'unavailable'} · {spec.evidence.coverage}</EvidenceCell>
-      </div>
+      </div>}
 
       {spec.trust.blockers.length > 0 && (
         <div className="border-t px-4 py-3 text-xs sm:px-5">

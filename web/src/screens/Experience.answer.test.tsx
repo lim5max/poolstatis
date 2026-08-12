@@ -214,7 +214,7 @@ describe('Experience answer-first control surface', () => {
     render(<TooltipProvider><Experience /></TooltipProvider>);
 
     const answer = await screen.findByRole('region', { name: 'Aggregate friction answer' });
-    expect(within(answer).getByText(/^The largest observed adjacent reach decrease is pricing → payment/)).toHaveTextContent('21 fewer sessions (34 pp)');
+    expect(await within(answer).findByText(/^The largest observed adjacent reach decrease is pricing → payment/)).toHaveTextContent('21 fewer sessions (34 pp)');
     expect(within(answer).getByText('Trusted evidence')).toBeInTheDocument();
     expect(within(answer).getByText(/Observed · Trusted · 137 events ·/)).toBeInTheDocument();
     expect(within(answer).getByText('Evidence ready')).toBeInTheDocument();

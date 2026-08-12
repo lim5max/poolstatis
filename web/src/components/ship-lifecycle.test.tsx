@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Decision, DecisionAction, Experiment, Release } from '../api/types';
+import type { AccountMode, Decision, DecisionAction, Experiment, Release } from '../api/types';
 import { useStore } from '../store';
 import { Changes } from '../screens/Changes';
 import { Decisions } from '../screens/Decisions';
@@ -20,6 +20,18 @@ vi.mock('../store', async (importOriginal) => ({
 }));
 
 const mockedStore = vi.mocked(useStore);
+
+const hostedOwnerMode: AccountMode = {
+  schema_version: 1,
+  deployment: { mode: 'hosted', hosted_account: 'available' },
+  session: { kind: 'user', scope: 'organization', role: 'owner' },
+  capabilities: {
+    portfolio: 'available', compare_projects: true, manage_profile: true,
+    manage_personal_tokens: true, review_decisions: true, set_official_answers: true,
+    configure_usage_entitlement: 'unavailable_hosted', review_plan: 'unavailable', set_usage_alert: 'unavailable',
+  },
+  primary_action: { id: 'manage_hosted_account', kind: 'navigate', label: 'Manage account', href: '/profile' },
+};
 
 const release = (status: Release['status']): Release => ({
   id: `release-${status}`,
@@ -209,10 +221,35 @@ describe('Ship lifecycle', () => {
     const experimentRow = screen.getByRole('article', { name: 'Activation experiment' });
     expect(experimentRow).toHaveTextContent('Running');
     expect(experimentRow).toHaveTextContent('The experiment is collecting exposure evidence.');
-    expect(experimentRow).toHaveTextContent('OwnerNot recorded');
-    expect(experimentRow).toHaveTextContent('Expected decisionNot scheduled');
+    expect(experimentRow).toHaveTextContent('Linked release decision ownerUnavailable');
+    expect(experimentRow).toHaveTextContent('Linked release decision dateUnavailable');
     expect(screen.getAllByText('Outcome not available yet')).toHaveLength(2);
     screen.getAllByText('Technical details').forEach((summary) => expect(summary.closest('details')).not.toHaveAttribute('open'));
+  });
+
+  it('labels owner and timing as linked-release decision metadata', async () => {
+    const linked = {
+      ...release('observing'),
+      experiment_key: 'activation_running',
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        releases: vi.fn().mockResolvedValue([linked]),
+        decisions: vi.fn().mockResolvedValue([]),
+        experiments: vi.fn().mockResolvedValue([experiment('running')]),
+        contracts: vi.fn().mockResolvedValue([]),
+      },
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Changes /></MemoryRouter>);
+
+    const row = await screen.findByRole('article', { name: 'Activation experiment' });
+    expect(row).toHaveTextContent('Linked release decision ownergrowth-team');
+    expect(row).toHaveTextContent(/Linked release decision date.*Aug 11, 2026/);
+    fireEvent.click(within(row).getByText('Technical details'));
+    expect(row).toHaveTextContent(`Linked release ${linked.id}`);
   });
 
   it('marks the exact release requested by a Decisions handoff', async () => {
@@ -235,12 +272,82 @@ describe('Ship lifecycle', () => {
       },
       project: 'alpha',
       env: 'prod',
+      tokenKind: 'user',
+      account: { membership: { role: 'owner' } },
     } as never);
 
     render(<MemoryRouter initialEntries={['/changes?release=release-target']}><Changes /></MemoryRouter>);
 
     expect(await screen.findByRole('article', { name: 'Target release' })).toHaveAttribute('aria-current', 'true');
     expect(screen.getByRole('article', { name: 'Other release' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('reads an explicit funnel investigation handoff without treating it as a release decision', async () => {
+    const funnelInvestigation = vi.fn().mockResolvedValue({
+      id: '11111111-1111-4111-8111-111111111111', env: 'prod',
+      saved_funnel: {
+        id: 'funnel-1', key: 'activation', name: 'Activation',
+        goal: 'Measure whether actors reach the first meaningful outcome.',
+        steps: [], window_seconds: 86400,
+      },
+      transition: {
+        from_step: 0, to_step: 1, from_metric: 'started', to_metric: 'completed',
+        from_label: 'Started', to_label: 'Completed',
+      },
+      query_spec: {}, query_result: {}, evidence: {},
+      lineage: { query_fingerprint: 'a'.repeat(64), result_fingerprint: 'b'.repeat(64), artifact_fingerprint: 'c'.repeat(64) },
+      idempotency_key: 'ship-context', created_by: 'key:test', created_at: '2026-08-12T00:00:00.000Z',
+    });
+    const evaluateRelease = vi.fn();
+    mockedStore.mockReturnValue({
+      client: {
+        releases: vi.fn().mockResolvedValue([release('deployed')]),
+        decisions: vi.fn().mockResolvedValue([]),
+        experiments: vi.fn().mockResolvedValue([]),
+        contracts: vi.fn().mockResolvedValue([]),
+        funnelInvestigation,
+        evaluateRelease,
+      },
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter initialEntries={['/changes?investigation=11111111-1111-4111-8111-111111111111']}><Changes /></MemoryRouter>);
+
+    expect(await screen.findByText('Investigation carried into Ship')).toBeInTheDocument();
+    expect(funnelInvestigation).toHaveBeenCalledWith('alpha', '11111111-1111-4111-8111-111111111111');
+    expect(screen.getByText('Started → Completed')).toBeInTheDocument();
+    expect(screen.getByText(/Exact environment/)).toHaveTextContent('prod');
+    expect(screen.getByText(/does not attach itself to a release/)).toBeInTheDocument();
+    expect(screen.getByText('Evidence only')).toBeInTheDocument();
+    expect(evaluateRelease).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a handed-off investigation belongs to another environment', async () => {
+    const funnelInvestigation = vi.fn().mockResolvedValue({
+      id: '22222222-2222-4222-8222-222222222222', env: 'dev',
+      saved_funnel: { id: 'funnel-1', key: 'activation', name: 'Activation', goal: 'Measure activation.', steps: [], window_seconds: 86400 },
+      transition: { from_step: 0, to_step: 1, from_metric: 'started', to_metric: 'completed', from_label: 'Started', to_label: 'Completed' },
+      query_spec: {}, query_result: {}, evidence: {},
+      lineage: { query_fingerprint: 'a'.repeat(64), result_fingerprint: 'b'.repeat(64), artifact_fingerprint: 'c'.repeat(64) },
+      idempotency_key: 'ship-mismatch', created_by: 'key:test', created_at: '2026-08-12T00:00:00.000Z',
+    });
+    mockedStore.mockReturnValue({
+      client: {
+        releases: vi.fn().mockResolvedValue([]), decisions: vi.fn().mockResolvedValue([]),
+        experiments: vi.fn().mockResolvedValue([]), contracts: vi.fn().mockResolvedValue([]),
+        funnelInvestigation, evaluateRelease: vi.fn(),
+      },
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter initialEntries={['/changes?investigation=22222222-2222-4222-8222-222222222222']}><Changes /></MemoryRouter>);
+
+    const warning = await screen.findByText(/does not match the current Ship environment/);
+    expect(warning).toHaveTextContent('dev');
+    expect(warning).toHaveTextContent('prod');
+    expect(warning).toHaveTextContent('has not been carried into the current context');
+    expect(screen.queryByText('Investigation carried into Ship')).not.toBeInTheDocument();
+    expect(screen.queryByText('Evidence only')).not.toBeInTheDocument();
   });
 
   it('renders concluded experiment rows without inventing a decision or rollout change', async () => {
@@ -298,9 +405,12 @@ describe('Ship lifecycle', () => {
         webhookDeliveries: vi.fn().mockResolvedValue([]),
         decisionExplanations: vi.fn().mockResolvedValue([]),
         decisionActions: vi.fn().mockResolvedValue([preparedAction]),
+        accountMode: vi.fn().mockResolvedValue(hostedOwnerMode),
       },
       project: 'alpha',
       env: 'prod',
+      tokenKind: 'user',
+      account: { membership: { role: 'owner' } },
     } as never);
 
     render(<MemoryRouter><Decisions /></MemoryRouter>);
@@ -338,8 +448,12 @@ describe('Ship lifecycle', () => {
       webhookDeliveries: vi.fn().mockResolvedValue([]),
       decisionExplanations: vi.fn().mockResolvedValue([]),
       decisionActions: vi.fn().mockResolvedValue([]),
+      accountMode: vi.fn().mockResolvedValue(hostedOwnerMode),
     };
-    mockedStore.mockImplementation(() => ({ client, project: 'alpha', env: currentEnv }) as never);
+    mockedStore.mockImplementation(() => ({
+      client, project: 'alpha', env: currentEnv,
+      tokenKind: 'user', account: { membership: { role: 'owner' } },
+    }) as never);
 
     const { rerender } = render(<MemoryRouter><Decisions /></MemoryRouter>);
     await screen.findByText('Review: keep');
@@ -478,6 +592,7 @@ describe('Ship lifecycle', () => {
         decisionInbox: vi.fn().mockResolvedValue([]),
         decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
         webhookDeliveries: vi.fn().mockResolvedValue([]),
+        accountMode: vi.fn().mockResolvedValue(hostedOwnerMode),
       },
       project: 'alpha',
       env: 'prod',

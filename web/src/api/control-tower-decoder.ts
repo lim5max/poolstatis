@@ -57,13 +57,15 @@ function isAnswer(value: unknown): boolean {
       || !inEnum(value.primary_value.unit, VALUE_UNITS)
       || !isString(value.primary_value.formatted)) return false;
   }
-  if (value.delta !== undefined) {
-    if (!isRecord(value.delta) || !isNullableNumber(value.delta.value)
-      || !inEnum(value.delta.unit, DELTA_UNITS)
-      || !inEnum(value.delta.direction, DELTA_DIRECTIONS)
-      || !isString(value.delta.comparison_label)) return false;
-  }
+  if (value.delta !== undefined && !isDelta(value.delta)) return false;
   return true;
+}
+
+function isDelta(value: unknown): boolean {
+  return isRecord(value) && isNullableNumber(value.value)
+    && inEnum(value.unit, DELTA_UNITS)
+    && inEnum(value.direction, DELTA_DIRECTIONS)
+    && isString(value.comparison_label);
 }
 
 function isSourceRef(value: unknown): boolean {
@@ -114,6 +116,7 @@ function isAttention(value: unknown): boolean {
     && Array.isArray(value.affected) && value.affected.every((affected) => isRecord(affected)
       && inEnum(affected.kind, AFFECTED_KINDS) && isString(affected.ref))
     && isEvidence(value.evidence)
+    && (value.delta === undefined || isDelta(value.delta))
     && (value.priority === undefined || (isRecord(value.priority)
       && typeof value.priority.blocking_now === 'boolean'
       && isNullableString(value.priority.forecasted_at)
@@ -140,6 +143,8 @@ function isScope(value: unknown): boolean {
 function isControlTower(value: unknown): value is ControlTowerResult {
   return isRecord(value) && value.schema_version === 1 && isString(value.request_id)
     && isIsoDate(value.generated_at)
+    && (value.home_answer_surface === undefined || inEnum(value.home_answer_surface, ['website', 'product', 'legacy'] as const))
+    && (value.home_metric_key === undefined || isNullableString(value.home_metric_key))
     && (value.home_funnel_key === undefined || isNullableString(value.home_funnel_key))
     && isScope(value.scope) && isAnswer(value.answer)
     && Array.isArray(value.attention) && value.attention.every(isAttention)
@@ -157,6 +162,8 @@ function unavailableControlTower(headline = 'Answer unavailable'): ControlTowerR
     schema_version: 1,
     request_id: 'unsupported_response_contract',
     generated_at: now,
+    home_answer_surface: 'legacy',
+    home_metric_key: null,
     home_funnel_key: null,
     scope: { window: { from: now, to: now, timezone: 'UTC' } },
     answer: {
@@ -195,8 +202,16 @@ function isContributor(value: unknown): boolean {
 
 function isThreshold(value: unknown): boolean {
   if (!isRecord(value) || !isFiniteNumber(value.percent) || ![50, 75, 90, 100].includes(value.percent)
-    || !inEnum(value.state, THRESHOLD_STATES) || value.notification_state !== 'not_configured'
-    || value.audit_source !== 'usage_ledger' || !isNullableString(value.reached_or_projected_at)) return false;
+    || !inEnum(value.state, THRESHOLD_STATES)
+    || !inEnum(value.notification_state, ['not_configured', 'armed', 'recorded'] as const)
+    || !inEnum(value.audit_source, ['usage_ledger', 'organization_entitlement', 'usage_warning'] as const)
+    || !isNullableNonNegativeNumber(value.configured_threshold)
+    || !isNullableString(value.reached_or_projected_at)) return false;
+  if (value.notification_state === 'not_configured') {
+    if (value.configured_threshold !== null || value.audit_source !== 'usage_ledger') return false;
+  } else if (value.configured_threshold === null) return false;
+  else if (value.notification_state === 'armed' && value.audit_source !== 'organization_entitlement') return false;
+  else if (value.notification_state === 'recorded' && value.audit_source !== 'usage_warning') return false;
   return value.reached_or_projected_at === null || isIsoDate(value.reached_or_projected_at);
 }
 
@@ -206,7 +221,7 @@ function isUsageControl(value: unknown): value is UsageControlResult {
   const pace = value.pace;
   const reconciliation = value.reconciliation;
   return value.meter === 'events_stored' && isWindow(value.cycle)
-    && isRecord(cap) && inEnum(cap.state, ['finite', 'not_configured'] as const)
+    && isRecord(cap) && inEnum(cap.state, ['finite', 'not_configured', 'unavailable'] as const)
     && isNullableNonNegativeNumber(cap.value) && isNullableNonNegativeNumber(cap.remaining) && isNullableString(cap.consequence_at_100_percent)
     && (cap.state === 'finite'
       ? isNonNegativeNumber(cap.value) && isNonNegativeNumber(cap.remaining) && isString(cap.consequence_at_100_percent)
@@ -233,11 +248,11 @@ function unavailableUsage(): UsageControlResult {
     ...base,
     meter: 'events_stored',
     cycle: base.scope.window,
-    cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
+    cap: { state: 'unavailable', value: null, remaining: null, consequence_at_100_percent: null },
     pace: { observed_days: 0, events_per_day_7d: null, projected_cycle_end: null, confidence: 'insufficient' },
     threshold_forecasts: ([50, 75, 90, 100] as const).map((percent) => ({
       percent, state: 'not_applicable', reached_or_projected_at: null,
-      notification_state: 'not_configured', audit_source: 'usage_ledger',
+      configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger',
     })),
     contributors: [],
     reconciliation: {

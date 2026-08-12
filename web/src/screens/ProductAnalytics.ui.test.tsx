@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AccountMode } from '../api/types';
 import { useStore } from '../store';
 import { ProductAnalytics } from './ProductAnalytics';
 
@@ -10,7 +11,9 @@ vi.mock('../store', async (importOriginal) => ({
 }));
 
 vi.mock('../analysis/charts', () => ({
-  ManualVisualizationRenderer: () => <div role="img" aria-label="Product answer chart">Chart with table fallback</div>,
+  ManualVisualizationRenderer: ({ showEvidenceSummary }: { showEvidenceSummary?: boolean }) => (
+    <div role="img" aria-label="Product answer chart" data-evidence-summary={String(showEvidenceSummary)}>Chart with table fallback</div>
+  ),
 }));
 
 const mockedStore = vi.mocked(useStore);
@@ -20,6 +23,35 @@ const metric = {
   category: 'activation', tags: [], type: 'unique_actors', source: { event: 'product.used' }, status: 'active',
   owner: null, deprecation_reason: null, deprecated_at: null,
 } as const;
+
+function accountMode({
+  deployment = 'self_host', kind = 'secret', role = null, official = false,
+}: {
+  deployment?: 'hosted' | 'self_host';
+  kind?: 'secret' | 'personal' | 'user';
+  role?: 'owner' | 'admin' | 'member' | null;
+  official?: boolean;
+} = {}): AccountMode {
+  return {
+    schema_version: 1,
+    deployment: { mode: deployment, hosted_account: deployment === 'hosted' ? 'available' : 'not_configured' },
+    session: { kind, scope: kind === 'secret' ? 'project' : 'organization', role },
+    capabilities: {
+      portfolio: kind === 'secret' ? 'project_only' : 'available',
+      compare_projects: kind !== 'secret',
+      manage_profile: deployment === 'hosted' && kind === 'user',
+      manage_personal_tokens: false,
+      review_decisions: false,
+      set_official_answers: official,
+      configure_usage_entitlement: deployment === 'self_host' && kind === 'personal' ? 'available' : deployment === 'hosted' ? 'unavailable_hosted' : 'unavailable_scope',
+      review_plan: 'unavailable',
+      set_usage_alert: 'unavailable',
+    },
+    primary_action: deployment === 'hosted'
+      ? { id: kind === 'user' ? 'manage_hosted_account' : 'sign_in_to_manage_account', kind: 'navigate', label: 'Manage account', href: '/profile' }
+      : { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
+  };
+}
 
 function productStore(funnels: unknown[] = []) {
   return {
@@ -31,6 +63,8 @@ function productStore(funnels: unknown[] = []) {
       properties: vi.fn().mockResolvedValue([]),
       releases: vi.fn().mockResolvedValue([]),
       experiments: vi.fn().mockResolvedValue([]),
+      funnelInvestigations: vi.fn().mockResolvedValue([]),
+      createFunnelInvestigation: vi.fn(),
       query: vi.fn().mockResolvedValue({
         kind: 'trend',
         series: [{ bucket: '2026-08-05T00:00:00Z', value: 8 }],
@@ -47,7 +81,9 @@ function productStore(funnels: unknown[] = []) {
         identity: { distinct_id_coverage: 1, raw_actors: 8, resolved_actors: 8 }, properties: [], blockers: [], warnings: [],
       }),
       createAnalysisView: vi.fn().mockResolvedValue({ id: 'view-1' }),
+      setAnalysisViewOfficial: vi.fn(),
       evaluateRelease: vi.fn(),
+      accountMode: vi.fn().mockResolvedValue(accountMode()),
     },
   } as never;
 }
@@ -110,6 +146,7 @@ describe('Product answer-first surface', () => {
     expect(within(answer).getByText('No safely comparable period headline')).toBeInTheDocument();
     expect(within(answer).getByText(metric.purpose)).toBeInTheDocument();
     expect(within(answer).getByRole('img', { name: 'Product answer chart' })).toHaveTextContent('table fallback');
+    expect(within(answer).getByRole('img', { name: 'Product answer chart' })).toHaveAttribute('data-evidence-summary', 'false');
     expect(within(answer).getByText(/Aggregation:/)).not.toBeVisible();
     fireEvent.click(within(answer).getByText('Evidence'));
     expect(within(answer).getByText(/Aggregation:/)).toBeVisible();
@@ -143,6 +180,90 @@ describe('Product answer-first surface', () => {
     expect(screen.getByRole('button', { name: 'Answer saved' })).toBeDisabled();
     const savedPayload = current.client.createAnalysisView.mock.calls[0][1];
     expect(JSON.stringify(savedPayload)).not.toMatch(/"(?:sql|secret|token|distinct_id)"\s*:/i);
+  });
+
+  it('lets an owner save the current answer directly as official', async () => {
+    const current = productStore() as any;
+    current.client.accountMode.mockResolvedValueOnce(accountMode({ deployment: 'hosted', kind: 'user', role: 'owner', official: true }));
+    current.client.setAnalysisViewOfficial.mockResolvedValueOnce({ id: 'view-1', official: true });
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
+    const official = await screen.findByRole('button', { name: 'Save as official' });
+    expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
+    fireEvent.click(official);
+
+    await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledWith('alpha', 'view-1', true));
+    expect(current.client.createAnalysisView).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Official answer saved' })).toBeDisabled();
+  });
+
+  it('does not offer official status to a project secret', async () => {
+    const current = productStore() as any;
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
+    expect(await screen.findByRole('button', { name: 'Save answer' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save as official' })).not.toBeInTheDocument();
+  });
+
+  it('fails closed while the server-backed official capability is unavailable', async () => {
+    const current = productStore() as any;
+    current.client.accountMode.mockReturnValueOnce(new Promise(() => undefined));
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
+    expect(await screen.findByRole('button', { name: 'Save answer' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save as official' })).not.toBeInTheDocument();
+    expect(current.client.setAnalysisViewOfficial).not.toHaveBeenCalled();
+  });
+
+  it('keeps the saved answer and retries only the official mutation after a partial failure', async () => {
+    const current = productStore() as any;
+    current.client.accountMode.mockResolvedValueOnce(accountMode({ deployment: 'hosted', kind: 'user', role: 'admin', official: true }));
+    current.client.setAnalysisViewOfficial
+      .mockRejectedValueOnce(new Error('official write unavailable'))
+      .mockResolvedValueOnce({ id: 'view-1', official: true });
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save as official' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The answer was saved, but official status was not applied.');
+    expect(current.client.createAnalysisView).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry official status' }));
+
+    await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledTimes(2));
+    expect(current.client.createAnalysisView).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Official answer saved' })).toBeDisabled();
+  });
+
+  it('opens the exact registry metric requested by a readiness dependency link', async () => {
+    const exactMetric = {
+      ...metric,
+      id: 'm2',
+      key: 'activation_completed',
+      name: 'Activation completed',
+      source: { event: 'activation.completed' },
+    };
+    const current = productStore() as any;
+    current.client.metrics.mockResolvedValue([metric, exactMetric]);
+    mockedStore.mockReturnValue(current);
+
+    render(<MemoryRouter initialEntries={['/analyze/product?metric=activation_completed']}><ProductAnalytics /></MemoryRouter>);
+
+    expect(await screen.findByText(/Run the prebuilt answer for/)).toHaveTextContent('activation_completed');
+    fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
+    await waitFor(() => expect(current.client.query).toHaveBeenCalled());
+    expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({
+      kind: 'trend',
+      metric: 'activation_completed',
+      env: 'prod',
+    }));
   });
 
   it('downgrades a saved answer when the query evidence is partial even if registry trust passed', async () => {
@@ -206,17 +327,18 @@ describe('Product answer-first surface', () => {
       },
     ]) as any;
     current.client.query.mockResolvedValueOnce(funnelResult([100, 60, 30]));
-    current.client.releases.mockResolvedValueOnce([{
-      id: 'release-1', env: 'prod', status: 'observing', commit_sha: 'abcdef1234567890',
-      deployed_at: '2026-07-20T00:00:00Z',
-      contract_snapshot: { primary_metric_key: 'signup_completed', guardrail_metric_keys: [] },
-    }]);
-    current.client.experiments.mockResolvedValueOnce([{
-      id: 'experiment-1', key: 'signup_copy', name: 'Signup copy', env: 'prod', status: 'running',
-      primary_metric_key: 'signup_completed', secondary_metric_keys: [],
-      started_at: '2026-07-18T00:00:00Z', concluded_at: null,
-    }]);
-    current.client.evaluateRelease.mockResolvedValueOnce({ decision: { id: 'decision-1' }, idempotent: false });
+    current.client.createFunnelInvestigation.mockResolvedValueOnce({
+      investigation: {
+        id: '11111111-1111-4111-8111-111111111111',
+        env: 'prod',
+        saved_funnel: { id: 'f1', key: 'checkout', name: 'Checkout', goal: 'Complete signup', steps: [], window_seconds: 604800 },
+        transition: { from_step: 1, to_step: 2, from_metric: 'signup_started', to_metric: 'signup_completed', from_label: 'Started', to_label: 'Completed' },
+        query_spec: {}, query_result: {}, evidence: {},
+        lineage: { query_fingerprint: 'a'.repeat(64), result_fingerprint: 'b'.repeat(64), artifact_fingerprint: 'c'.repeat(64) },
+        idempotency_key: 'test-idempotency', created_by: 'key:test', created_at: '2026-08-06T00:00:00Z',
+      },
+      idempotent: false,
+    });
     mockedStore.mockReturnValue(current);
 
     render(<MemoryRouter initialEntries={['/analyze/funnels?funnel=checkout&env=prod&from_step=1&to_step=2']}><ProductAnalytics surface="funnels" /></MemoryRouter>);
@@ -235,12 +357,12 @@ describe('Product answer-first surface', () => {
     expect(screen.getByText('Biggest absolute')).toHaveTextContent('Visited → Started');
     expect(screen.getByText('Biggest percentage')).toHaveTextContent('Started → Completed');
     expect(screen.getByText(/Stable step order resolved an equal loss/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Release abcdef1234/ })).toHaveAttribute('href', '/changes');
-    expect(screen.getByRole('link', { name: /Experiment Signup copy/ })).toHaveAttribute('href', '/experiments');
-    expect(screen.getByRole('button', { name: 'Investigate this step' })).toHaveAttribute('data-variant', 'default');
+    expect(current.client.releases).not.toHaveBeenCalled();
+    expect(current.client.experiments).not.toHaveBeenCalled();
+    expect(screen.queryByText('Related change evidence')).not.toBeInTheDocument();
+    expect(screen.getByText(/does not infer a release or experiment/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Investigate Started → Completed' })).toHaveAttribute('data-variant', 'default');
     expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
-    const saveProposal = screen.getByRole('button', { name: 'Save proposal to Decisions' });
-    expect(saveProposal).toHaveAttribute('data-variant', 'outline');
     fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
     await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
     expect(current.client.createAnalysisView.mock.calls[0][1].answer).toMatchObject({
@@ -248,12 +370,17 @@ describe('Product answer-first surface', () => {
       primary_value: { value: 30, unit: 'percent', formatted: '30%' },
       delta: { value: -15, unit: 'percentage_point', direction: 'down' },
     });
-    fireEvent.click(saveProposal);
-    await waitFor(() => expect(current.client.evaluateRelease).toHaveBeenCalledWith('alpha', 'release-1'));
-    const openProposal = screen.getByRole('link', { name: 'Open proposal in Decisions' });
-    expect(openProposal).toHaveAttribute('href', '/decisions?decision=decision-1');
-    expect(openProposal).toHaveAttribute('data-variant', 'outline');
-    expect(screen.queryByText(/cannot be saved directly to Decisions/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Investigate Started → Completed' }));
+    await waitFor(() => expect(current.client.createFunnelInvestigation).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      funnel: 'checkout', env: 'prod', from_step: 1, to_step: 2,
+      date_from: '2026-07-07T00:00:00Z', date_to: '2026-08-06T00:00:00Z',
+    })));
+    expect(screen.getByText(/Saved artifact/)).toHaveTextContent('11111111-1111-4111-8111-111111111111');
+    expect(screen.getByRole('link', { name: /Continue through Ship with artifact/ })).toHaveAttribute('href', '/changes?investigation=11111111-1111-4111-8111-111111111111');
+    expect(screen.queryByRole('button', { name: 'Save proposal to Decisions' })).not.toBeInTheDocument();
+    expect(current.client.evaluateRelease).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy bounded task' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('Poolstatis investigation: 11111111-1111-4111-8111-111111111111')));
     expect(current.client.query).toHaveBeenCalledTimes(1);
     expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({ kind: 'funnel', funnel: 'checkout', env: 'prod' }));
   });

@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
-import { Usage, usageMonthPresetRange } from './Usage';
+import { parseUsageEntitlementForm, Usage, usageMonthPresetRange } from './Usage';
+import { ApiError } from '../api/client';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -14,6 +15,9 @@ const usage = vi.fn();
 const usageControl = vi.fn();
 const usageActivity = vi.fn();
 const usageRange = vi.fn();
+const usageEntitlement = vi.fn();
+const configureUsageEntitlement = vi.fn();
+const setProject = vi.fn();
 
 function monthOffset(offset: number): string {
   const now = new Date();
@@ -73,10 +77,10 @@ describe('Usage month range', () => {
       cap: { state: 'finite', value: 1_000, remaining: 380, consequence_at_100_percent: 'New accepted-event writes are rejected.' },
       pace: { observed_days: 3, events_per_day_7d: 62, projected_cycle_end: 1_922, confidence: 'sufficient' },
       threshold_forecasts: [
-        { percent: 50, state: 'reached', reached_or_projected_at: '2026-08-09T00:00:00.000Z', notification_state: 'not_configured', audit_source: 'usage_ledger' },
-        { percent: 75, state: 'projected', reached_or_projected_at: '2026-08-13T00:00:00.000Z', notification_state: 'not_configured', audit_source: 'usage_ledger' },
-        { percent: 90, state: 'projected', reached_or_projected_at: '2026-08-15T00:00:00.000Z', notification_state: 'not_configured', audit_source: 'usage_ledger' },
-        { percent: 100, state: 'projected', reached_or_projected_at: '2026-08-17T00:00:00.000Z', notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 50, state: 'reached', reached_or_projected_at: '2026-08-09T00:00:00.000Z', configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 75, state: 'projected', reached_or_projected_at: '2026-08-13T00:00:00.000Z', configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 90, state: 'projected', reached_or_projected_at: '2026-08-15T00:00:00.000Z', configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 100, state: 'projected', reached_or_projected_at: '2026-08-17T00:00:00.000Z', configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
       ],
       contributors: [{
         project_slug: 'alpha', project_name: 'Alpha', environment: 'prod', accepted_events: 620,
@@ -102,12 +106,13 @@ describe('Usage month range', () => {
     usageRange.mockImplementation(async (from: string, to: string) => rangeResponse(from, to));
     mockedStore.mockReturnValue({
       tokenKind: 'user', account: { membership: { role: 'owner' } },
+      setProject,
       client: { usage, usageControl, usageActivity, usageRange },
     } as never);
   });
 
   it('renders pace, forecast and contributors from the server-owned usage contract', async () => {
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     expect(await screen.findByTestId('usage-current-quantity')).toHaveTextContent('620');
     expect(screen.getByText('accepted events')).toBeInTheDocument();
@@ -118,8 +123,12 @@ describe('Usage month range', () => {
     expect(screen.getByText('1,922')).toBeInTheDocument();
     expect(screen.getByText('+25%')).toBeInTheDocument();
     expect(screen.getAllByText('Projected Aug 17, 2026')).toHaveLength(2);
-    expect(screen.getAllByText('Notification: Not configured')).toHaveLength(4);
-    expect(screen.getAllByText('Audit: usage ledger')).toHaveLength(4);
+    expect(screen.getAllByText('Record: Not configured')).toHaveLength(4);
+    expect(screen.getAllByText('Source: usage ledger')).toHaveLength(4);
+    const projectLink = screen.getByRole('link', { name: 'Open Alpha project health in prod' });
+    expect(projectLink).toHaveAttribute('href', '/projects?project=alpha&env=prod');
+    fireEvent.click(projectLink);
+    expect(setProject).toHaveBeenCalledWith('alpha', 'prod');
     expect(usageControl).toHaveBeenCalledOnce();
     expect(usageControl).toHaveBeenCalledWith(monthOffset(0));
     expect(usage).not.toHaveBeenCalled();
@@ -150,7 +159,7 @@ describe('Usage month range', () => {
       },
     });
 
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     expect(await screen.findByText('20 accepted events are not reconciled to retained project and environment contributors.')).toBeInTheDocument();
     expect(screen.getByText('600 of 620 events attributed')).toBeInTheDocument();
@@ -177,12 +186,13 @@ describe('Usage month range', () => {
         percent: threshold.percent,
         state: 'not_applicable',
         reached_or_projected_at: null,
+        configured_threshold: null,
         notification_state: 'not_configured',
         audit_source: 'usage_ledger',
       })),
     });
 
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     expect(await screen.findByText('No hard cap configured')).toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
@@ -190,12 +200,33 @@ describe('Usage month range', () => {
   });
 
   it('uses self-hosted usage actions without implying a hosted plan mutation', async () => {
+    usageEntitlement.mockResolvedValue({
+      schema_version: 1,
+      meter: 'events_stored',
+      revision: 1,
+      hard_limit: 1_000,
+      warning_thresholds: [500, 750, 900, 1_000],
+      current_usage: 620,
+      remaining: 380,
+      changed: false,
+      consequences: {
+        scope: 'organization_all_projects_and_environments',
+        cap_enforcement: 'accepted_batches_exceeding_cap_are_rejected',
+        threshold_recording: 'crossings_recorded_in_core_without_external_delivery',
+        effective_cycle: monthOffset(0),
+      },
+      audit: { source: 'usage_entitlement_revisions', latest: null },
+    });
+    configureUsageEntitlement.mockResolvedValue({});
     mockedStore.mockReturnValue({
       tokenKind: 'personal', account: null,
       client: {
-        usageControl, usageActivity, usageRange,
+        usageControl, usageActivity, usageRange, usageEntitlement, configureUsageEntitlement,
         accountMode: vi.fn().mockResolvedValue({
           deployment: { mode: 'self_host', hosted_account: 'not_configured' },
+          capabilities: {
+            configure_usage_entitlement: 'available', review_plan: 'unavailable', set_usage_alert: 'unavailable',
+          },
           primary_action: { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
         }),
       },
@@ -203,9 +234,150 @@ describe('Usage month range', () => {
 
     render(<MemoryRouter><Usage /></MemoryRouter>);
 
-    expect(await screen.findByRole('link', { name: 'Configure cap' })).toHaveAttribute('href', '/setup');
-    expect(screen.getByRole('button', { name: 'Review contributors' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Review plan' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure cap' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('no email or webhook is delivered');
+    fireEvent.change(screen.getByLabelText('Hard limit'), { target: { value: '1200' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use 50 / 75 / 90 / 100%' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply configuration' }));
+    await waitFor(() => expect(configureUsageEntitlement).toHaveBeenCalledWith({
+      expected_revision: 1,
+      hard_limit: 1200,
+      warning_thresholds: [600, 900, 1080, 1200],
+      reason: 'Update self-host usage protection from the Usage page.',
+    }));
+    expect(await screen.findByRole('button', { name: 'Review contributors' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review plan' })).not.toBeInTheDocument();
+  });
+
+  it('reloads and rebases the form after an entitlement revision conflict', async () => {
+    const revisionOne = {
+      schema_version: 1 as const,
+      meter: 'events_stored' as const,
+      revision: 1,
+      hard_limit: 1_000,
+      warning_thresholds: [500, 750, 900, 1_000],
+      current_usage: 620,
+      remaining: 380,
+      changed: false,
+      consequences: {
+        scope: 'organization_all_projects_and_environments' as const,
+        cap_enforcement: 'accepted_batches_exceeding_cap_are_rejected' as const,
+        threshold_recording: 'crossings_recorded_in_core_without_external_delivery' as const,
+        effective_cycle: monthOffset(0),
+      },
+      audit: { source: 'usage_entitlement_revisions' as const, latest: null },
+    };
+    const revisionTwo = {
+      ...revisionOne,
+      revision: 2,
+      hard_limit: 1_400,
+      remaining: 780,
+      audit: {
+        source: 'usage_entitlement_revisions' as const,
+        latest: {
+          revision: 2,
+          actor_kind: 'personal_token' as const,
+          reason: 'Concurrent owner adjustment.',
+          created_at: '2026-08-12T00:00:00.000Z',
+        },
+      },
+    };
+    usageEntitlement.mockResolvedValueOnce(revisionOne).mockResolvedValue(revisionTwo);
+    configureUsageEntitlement
+      .mockRejectedValueOnce(new ApiError(
+        'usage_entitlement_revision_conflict',
+        'the usage entitlement changed after it was read',
+        undefined,
+        409,
+      ))
+      .mockResolvedValueOnce(revisionTwo);
+    mockedStore.mockReturnValue({
+      tokenKind: 'personal', account: null,
+      client: {
+        usageControl, usageActivity, usageRange, usageEntitlement, configureUsageEntitlement,
+        accountMode: vi.fn().mockResolvedValue({
+          deployment: { mode: 'self_host', hosted_account: 'not_configured' },
+          capabilities: {
+            configure_usage_entitlement: 'available', review_plan: 'unavailable', set_usage_alert: 'unavailable',
+          },
+          primary_action: { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
+        }),
+      },
+    } as never);
+
+    render(<MemoryRouter><Usage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure cap' }));
+    fireEvent.change(screen.getByLabelText('Hard limit'), { target: { value: '1200' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply configuration' }));
+
+    expect(await screen.findByText('Configuration changed elsewhere. Current values were reloaded; review and apply again.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Hard limit')).toHaveValue('1400');
+    expect(screen.getByText('Last change · revision 2 · Concurrent owner adjustment.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Hard limit'), { target: { value: '1500' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply configuration' }));
+    await waitFor(() => expect(configureUsageEntitlement).toHaveBeenLastCalledWith(expect.objectContaining({
+      expected_revision: 2,
+      hard_limit: 1500,
+    })));
+  });
+
+  it('renders unavailable entitlement evidence without claiming enforcement is off', async () => {
+    const base = await usageControl();
+    usageControl.mockResolvedValue({
+      ...base,
+      answer: {
+        state: 'unavailable', headline: 'Usage unavailable', takeaway: 'No trustworthy usage result is available.',
+        primary_value: null, why_it_matters: 'Usage evidence must be reloaded.',
+      },
+      evidence: { ...base.evidence, state: 'unavailable', freshness: 'unknown' },
+      cap: { state: 'unavailable', value: null, remaining: null, consequence_at_100_percent: null },
+    });
+
+    render(<MemoryRouter><Usage /></MemoryRouter>);
+
+    expect(await screen.findByText('Entitlement unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Usage entitlement evidence is unavailable; enforcement state is unknown.')).toBeInTheDocument();
+    expect(screen.getByText('Usage response could not be verified.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry usage' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(screen.queryByText('No hard cap configured')).not.toBeInTheDocument();
+    expect(screen.queryByText('Enforcement is off; accepted events continue to be metered.')).not.toBeInTheDocument();
+    expect(screen.queryByText('No events')).not.toBeInTheDocument();
+    expect(screen.queryByText('0 of 0 events attributed')).not.toBeInTheDocument();
+    expect(screen.queryByText('No cap · inactive')).not.toBeInTheDocument();
+    expect(screen.queryByText('Hard-limit consequence is not configured.')).not.toBeInTheDocument();
+  });
+
+  it('shows hosted plan and delivered alerts as unavailable without fake actions', async () => {
+    mockedStore.mockReturnValue({
+      tokenKind: 'user', account: { membership: { role: 'owner' } },
+      client: {
+        usageControl, usageActivity, usageRange,
+        accountMode: vi.fn().mockResolvedValue({
+          deployment: { mode: 'hosted', hosted_account: 'available' },
+          capabilities: {
+            configure_usage_entitlement: 'unavailable_hosted', review_plan: 'unavailable', set_usage_alert: 'unavailable',
+          },
+          primary_action: { id: 'manage_hosted_account', kind: 'navigate', label: 'Manage account', href: 'https://auth.poolstatis.xyz/profile' },
+        }),
+      },
+    } as never);
+
+    render(<MemoryRouter><Usage /></MemoryRouter>);
+
+    expect(await screen.findByText('Plan changes and delivered usage alerts are unavailable in Core.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review plan' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set alert' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Configure cap' })).not.toBeInTheDocument();
+  });
+
+  it('validates cap and recorded-threshold consequences before writing', () => {
+    expect(parseUsageEntitlementForm({ hardLimit: '619', thresholds: '', currentUsage: 620 }))
+      .toEqual({ error: 'Hard limit cannot be below current usage (620).' });
+    expect(parseUsageEntitlementForm({ hardLimit: '1000', thresholds: '900, 800', currentUsage: 620 }))
+      .toEqual({ error: 'Recorded thresholds must be unique and strictly ascending.' });
+    expect(parseUsageEntitlementForm({ hardLimit: '', thresholds: '800', currentUsage: 620 }))
+      .toEqual({ hard_limit: null, warning_thresholds: [800] });
   });
 
   it('avoids smooth scrolling when reduced motion is requested', async () => {
@@ -225,14 +397,14 @@ describe('Usage month range', () => {
       dispatchEvent: vi.fn(),
     });
 
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Review contributors' }));
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
   });
 
   it('defaults to the current UTC month and exposes current/last/3/6 month presets', async () => {
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageRange).toHaveBeenCalledWith(monthOffset(0), monthOffset(0)));
@@ -248,7 +420,7 @@ describe('Usage month range', () => {
   });
 
   it('validates custom bounds before requesting and explains ledger attribution gaps', async () => {
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
     fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageRange).toHaveBeenCalledOnce());
     expect(await screen.findByText('2 events without retained project attribution')).toBeInTheDocument();

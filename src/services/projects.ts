@@ -1,7 +1,9 @@
 import type pg from 'pg';
 import { generateToken, type KeyKind } from '../keys.js';
-import { notFound } from '../errors.js';
+import { ApiError, notFound } from '../errors.js';
 import type { EventStore } from '../stores/eventStore.js';
+import { listActiveContractsBounded } from './contracts.js';
+import type { QueryService } from './query.js';
 
 export interface Project {
   id: string;
@@ -292,9 +294,31 @@ export interface ProjectWithStats extends Pick<Project, 'slug' | 'name' | 'timez
   last_event_at: string | null;
   registered_coverage_30d: number | null;
   key_outcome_available: boolean;
+  key_outcome_readiness: KeyOutcomeReadiness;
   health: 'healthy' | 'needs_attention' | 'no_data';
   attention: string[];
   health_evaluation: ProjectHealthEvaluation;
+}
+
+export interface KeyOutcomeReadiness {
+  state: 'ready' | 'unavailable';
+  contract_key: string | null;
+  metric_key: string | null;
+  evaluated_at: string;
+  guardrail: {
+    id: 'key_outcome_queryable';
+    state: 'pass' | 'fail';
+    reason_code:
+      | 'query_succeeded'
+      | 'no_active_contract'
+      | 'no_queryable_outcome'
+      | 'outcome_query_failed'
+      | 'external_environment_scope_unverified'
+      | 'contract_selection_bounded'
+      | 'environment_scope_required';
+    reason: string;
+    observed_events: number | null;
+  };
 }
 
 export interface ProjectPortfolioRow extends ProjectWithStats {
@@ -324,19 +348,25 @@ export interface ProjectHealthEvaluation {
   source: 'server';
   evaluated_at: string;
   guardrails: Array<{
-    id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'metric_review_queue';
+    id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'key_outcome_queryable' | 'metric_review_queue';
     state: 'pass' | 'fail' | 'not_applicable';
     observed: number | null;
     expectation: string;
   }>;
 }
 
+export const PORTFOLIO_PROJECT_CONCURRENCY = 4;
+export const KEY_OUTCOME_CONTRACT_LIMIT = 5;
+
 export function evaluateProjectHealth(input: {
   events30d: number;
   registeredCoverage30d: number | null;
   activeOutcomeContracts: number;
   proposedMetrics: number;
+  keyOutcomeReadiness?: KeyOutcomeReadiness;
 }, evaluatedAt = new Date()): Pick<ProjectWithStats, 'health' | 'attention' | 'health_evaluation'> {
+  const outcomeScoped = input.keyOutcomeReadiness !== undefined;
+  const outcomeReady = input.keyOutcomeReadiness?.state === 'ready';
   const guardrails: ProjectHealthEvaluation['guardrails'] = [
     {
       id: 'recent_data',
@@ -353,10 +383,12 @@ export function evaluateProjectHealth(input: {
       expectation: 'Registered coverage is at least 99%',
     },
     {
-      id: 'active_outcome',
-      state: input.activeOutcomeContracts > 0 ? 'pass' : 'fail',
-      observed: input.activeOutcomeContracts,
-      expectation: 'At least 1 active measurement contract',
+      id: outcomeScoped ? 'key_outcome_queryable' : 'active_outcome',
+      state: outcomeScoped ? (outcomeReady ? 'pass' : 'fail') : input.activeOutcomeContracts > 0 ? 'pass' : 'fail',
+      observed: outcomeScoped ? (outcomeReady ? 1 : 0) : input.activeOutcomeContracts,
+      expectation: outcomeScoped
+        ? 'At least 1 active outcome passes the typed 30-day query guardrail'
+        : 'At least 1 active measurement contract',
     },
     {
       id: 'metric_review_queue',
@@ -367,7 +399,9 @@ export function evaluateProjectHealth(input: {
   ];
   const attention: string[] = [];
   if (guardrails[0]!.state === 'fail') attention.push('No events in 30 days');
-  if (guardrails[2]!.state === 'fail') attention.push('No active measurement contract');
+  if (guardrails[2]!.state === 'fail') {
+    attention.push(outcomeScoped ? 'Key outcome is not queryable' : 'No active measurement contract');
+  }
   if (guardrails[1]!.state === 'fail') attention.push('Off-standard event volume');
   if (guardrails[3]!.state === 'fail') {
     attention.push(`${input.proposedMetrics} metric${input.proposedMetrics === 1 ? '' : 's'} awaiting review`);
@@ -387,7 +421,12 @@ export async function listProjectsWithStats(
   pool: pg.Pool,
   eventStore: EventStore,
   orgId: string,
-  options: { env?: string; projectId?: string; evaluatedAt?: Date } = {},
+  options: {
+    env?: string;
+    projectId?: string;
+    evaluatedAt?: Date;
+    outcomeReadinessEvaluator?: (projectId: string) => Promise<KeyOutcomeReadiness>;
+  } = {},
 ): Promise<ProjectWithStats[]> {
   const params: unknown[] = [orgId];
   const projectPredicate = options.projectId === undefined
@@ -421,7 +460,7 @@ export async function listProjectsWithStats(
       .map((stats) => [stats.project_id, stats]),
   );
   const evaluatedAt = options.evaluatedAt ?? new Date();
-  return rows.map((row) => {
+  return mapWithConcurrency(rows, PORTFOLIO_PROJECT_CONCURRENCY, async (row) => {
     const activeMetrics = Number(row.active_metrics);
     const proposedMetrics = Number(row.proposed_metrics);
     const activeOutcomeContracts = Number(row.active_outcome_contracts);
@@ -434,11 +473,15 @@ export async function listProjectsWithStats(
     };
     const events30d = events.events_30d;
     const coverage = events30d === 0 ? null : events.registered_events_30d / events30d;
+    const keyOutcomeReadiness = options.outcomeReadinessEvaluator
+      ? await options.outcomeReadinessEvaluator(row.id as string)
+      : unscopedKeyOutcomeReadiness(evaluatedAt);
     const evaluatedHealth = evaluateProjectHealth({
       events30d,
       registeredCoverage30d: coverage,
       activeOutcomeContracts,
       proposedMetrics,
+      ...(options.outcomeReadinessEvaluator ? { keyOutcomeReadiness } : {}),
     }, evaluatedAt);
     return {
       slug: row.slug,
@@ -453,10 +496,151 @@ export async function listProjectsWithStats(
       events_30d: events30d,
       last_event_at: events.last_event_at,
       registered_coverage_30d: coverage,
-      key_outcome_available: activeOutcomeContracts > 0,
+      key_outcome_available: keyOutcomeReadiness.state === 'ready',
+      key_outcome_readiness: keyOutcomeReadiness,
       ...evaluatedHealth,
     };
   });
+}
+
+export function unscopedKeyOutcomeReadiness(evaluatedAt = new Date()): KeyOutcomeReadiness {
+  return {
+    state: 'unavailable',
+    contract_key: null,
+    metric_key: null,
+    evaluated_at: evaluatedAt.toISOString(),
+    guardrail: {
+      id: 'key_outcome_queryable',
+      state: 'fail',
+      reason_code: 'environment_scope_required',
+      reason: 'Choose an environment before evaluating the typed key-outcome query.',
+      observed_events: null,
+    },
+  };
+}
+
+export async function evaluateKeyOutcomeReadiness(
+  pool: pg.Pool,
+  query: QueryService,
+  projectId: string,
+  env: string,
+  evaluatedAt = new Date(),
+): Promise<KeyOutcomeReadiness> {
+  const selection = await listActiveContractsBounded(pool, projectId, KEY_OUTCOME_CONTRACT_LIMIT);
+  const contracts = selection.contracts;
+  if (contracts.length === 0) {
+    return unavailableKeyOutcomeReadiness(
+      evaluatedAt,
+      'no_active_contract',
+      'No active measurement contract selects a key outcome for this project.',
+    );
+  }
+  const sourceRows = await pool.query<{ key: string; source: Record<string, unknown> }>(
+    `SELECT key, source FROM metrics
+     WHERE project_id = $1 AND key = ANY($2::text[])`,
+    [projectId, contracts.map((contract) => contract.primary_metric_key)],
+  );
+  const metricSources = new Map(sourceRows.rows.map((metric) => [metric.key, metric.source]));
+  const from = new Date(evaluatedAt.getTime() - 30 * 86_400_000);
+  let unexpectedFailure = false;
+  let externalWithoutEnvironmentScope = 0;
+  for (const contract of contracts) {
+    const source = metricSources.get(contract.primary_metric_key);
+    if (source?.data_source === 'posthog') {
+      // Source connections currently prove a PostHog project, not a trusted
+      // mapping from a Poolstatis environment to a PostHog environment.
+      externalWithoutEnvironmentScope += 1;
+      continue;
+    }
+    try {
+      const result = await query.aggregateMetricWindow(projectId, {
+        metricKey: contract.primary_metric_key,
+        env,
+        filters: contract.target_filters,
+        properties: [...new Set(contract.target_filters.map((filter) => filter.property))],
+        from,
+        to: evaluatedAt,
+        windowName: 'observed',
+      });
+      return {
+        state: 'ready',
+        contract_key: contract.key,
+        metric_key: contract.primary_metric_key,
+        evaluated_at: evaluatedAt.toISOString(),
+        guardrail: {
+          id: 'key_outcome_queryable',
+          state: 'pass',
+          reason_code: 'query_succeeded',
+          reason: `The typed 30-day outcome query completed for ${env}.`,
+          observed_events: result.result.events,
+        },
+      };
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.statusCode >= 500) unexpectedFailure = true;
+    }
+  }
+  if (selection.truncated) {
+    return unavailableKeyOutcomeReadiness(
+      evaluatedAt,
+      'contract_selection_bounded',
+      `Only the first ${KEY_OUTCOME_CONTRACT_LIMIT} active contracts in key order were evaluated. Narrow or archive the contract set before using portfolio readiness.`,
+    );
+  }
+  if (externalWithoutEnvironmentScope > 0 && !unexpectedFailure) {
+    return unavailableKeyOutcomeReadiness(
+      evaluatedAt,
+      'external_environment_scope_unverified',
+      `The selected ${env} environment is not mapped to a trusted PostHog environment, so this outcome is unavailable for environment-scoped portfolio status.`,
+    );
+  }
+  return unavailableKeyOutcomeReadiness(
+    evaluatedAt,
+    unexpectedFailure ? 'outcome_query_failed' : 'no_queryable_outcome',
+    unexpectedFailure
+      ? 'The typed outcome query could not be evaluated. Retry before using this outcome.'
+      : 'No active contract passed the typed outcome query guardrail. Review its metric and source.',
+  );
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index]!, index);
+    }
+  };
+  await Promise.all(Array.from(
+    { length: Math.min(Math.max(1, concurrency), values.length) },
+    () => worker(),
+  ));
+  return results;
+}
+
+function unavailableKeyOutcomeReadiness(
+  evaluatedAt: Date,
+  reasonCode: KeyOutcomeReadiness['guardrail']['reason_code'],
+  reason: string,
+): KeyOutcomeReadiness {
+  return {
+    state: 'unavailable',
+    contract_key: null,
+    metric_key: null,
+    evaluated_at: evaluatedAt.toISOString(),
+    guardrail: {
+      id: 'key_outcome_queryable',
+      state: 'fail',
+      reason_code: reasonCode,
+      reason,
+      observed_events: null,
+    },
+  };
 }
 
 function safeUsageQuantity(value: string | number): number {
@@ -470,6 +654,7 @@ function safeUsageQuantity(value: string | number): number {
 export async function getProjectPortfolio(
   pool: pg.Pool,
   eventStore: EventStore,
+  query: QueryService,
   orgId: string,
   env: string,
   credential: 'organization' | 'project',
@@ -483,6 +668,13 @@ export async function getProjectPortfolio(
     env,
     ...(projectId ? { projectId } : {}),
     evaluatedAt: now,
+    outcomeReadinessEvaluator: (scopedProjectId) => evaluateKeyOutcomeReadiness(
+      pool,
+      query,
+      scopedProjectId,
+      env,
+      now,
+    ),
   });
   const usageParams: unknown[] = [orgId, env, cycleFrom.toISOString().slice(0, 10)];
   const projectPredicate = projectId === undefined

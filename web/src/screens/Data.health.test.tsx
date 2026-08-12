@@ -22,6 +22,7 @@ const health = {
     accepted_basis: 'durable event rows by ingested_at',
     rejected_basis: 'privacy-safe warning occurrences recorded after data-health tracking began',
     rejected_history_first_observed_at: '2026-08-10T00:00:00.000Z',
+    issue_novelty_basis: 'current 24 hourly buckets compared with the immediately preceding 24 hourly buckets',
   },
   summary: { accepted_24h: 240, rejected_24h: 2, accepted_7d: 950, rejected_7d: 3 },
   windows: {
@@ -51,6 +52,12 @@ const health = {
     count: 2,
     first_seen: '2026-08-11T10:00:00.000Z',
     last_seen: '2026-08-11T12:00:00.000Z',
+    novelty: {
+      state: 'new' as const,
+      basis: 'privacy-safe warning occurrences' as const,
+      current_window: { from: '2026-08-10T13:00:00.000Z', to: '2026-08-11T12:00:00.000Z', count: 2 },
+      comparison_baseline: { from: '2026-08-09T13:00:00.000Z', to: '2026-08-10T13:00:00.000Z', count: 0 },
+    },
     affected_answer_ids: ['home', 'product:checkout_failed'],
     repair_action: { kind: 'navigate' as const, label: 'Inspect registered event', href: '/data?tab=events&event=checkout.failed' },
     watermark: { count: 2, last_seen: '2026-08-11T12:00:00.000Z' },
@@ -128,6 +135,8 @@ describe('Events data-health control', () => {
     expect(screen.getByRole('heading', { name: 'Improvements' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Doing well' })).toBeInTheDocument();
     expect(screen.getByText('Rejected observations need repair')).toBeInTheDocument();
+    expect(screen.getByText('New in current 24h')).toBeInTheDocument();
+    expect(screen.getByText('2 in current 24h · none in previous 24h')).toBeInTheDocument();
     expect(screen.getByText('Accepted events are flowing')).toBeInTheDocument();
     expect(screen.getByText(/home, product:checkout_failed/)).toBeInTheDocument();
     expect(screen.queryByText(/raw payload/i)).not.toBeInTheDocument();

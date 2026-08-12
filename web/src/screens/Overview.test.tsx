@@ -39,6 +39,9 @@ function controlTowerResponse() {
     schema_version: 1,
     request_id: 'control-request',
     generated_at: '2026-08-06T00:00:00.000Z',
+    home_answer_surface: 'website',
+    home_metric_key: 'web_page_views',
+    home_funnel_key: null,
     scope: {
       project_slug: 'alpha',
       environment: 'prod',
@@ -143,6 +146,7 @@ describe('goal-aware Attention', () => {
           title: 'Server-ordered funnel blocker',
           reason: 'The saved path has an unavailable step.',
           impact: 'The conversion answer remains partial.',
+          delta: { value: -12.45, unit: 'percentage_point', direction: 'down', comparison_label: 'previous exact period' },
           evidence: { ...server.evidence, as_of: '2026-08-05T00:00:00.000Z', freshness: 'stale' },
           primary_action: { id: 'review_funnel', kind: 'navigate', label: 'Review funnel', href: '/analyze/funnels' },
         },
@@ -172,6 +176,7 @@ describe('goal-aware Attention', () => {
 
     expect(await screen.findByRole('heading', { name: 'Server-ordered measurement blocker' })).toBeInTheDocument();
     expect(screen.getByText('This item exists only in the canonical control-tower response.')).toBeInTheDocument();
+    expect(screen.getByText('-12.5 pp · previous exact period')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Review definition/ })).toHaveAttribute('href', '/registry');
     expect(screen.getByRole('link', { name: /Review funnel/ })).toHaveAttribute('href', '/analyze/funnels');
     expect(screen.getByRole('link', { name: /Review usage/ })).toHaveAttribute('href', '/usage');
@@ -201,6 +206,7 @@ describe('goal-aware Attention', () => {
         title: 'Biggest loss: Visited → Started signup',
         reason: '5 actors were lost at this step (62.5%).',
         impact: 'See whether qualified visitors begin signup.',
+        delta: { value: -12.5, unit: 'percentage_point', direction: 'down', comparison_label: 'previous exact period' },
         affected: [{ kind: 'funnel', ref: 'website_signup' }],
         evidence: {
           ...server.evidence,
@@ -258,6 +264,7 @@ describe('goal-aware Attention', () => {
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Customize dashboard' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Biggest loss: Visited → Started signup' })).toBeInTheDocument();
+    expect(screen.getByText('Overall funnel conversion:')).toBeInTheDocument();
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
     expect(outcomes).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
     expect(outcomes.children).toHaveLength(4);
@@ -359,6 +366,10 @@ describe('goal-aware Attention', () => {
 
   it('does not claim a biggest funnel drop-off when the funnel result is unavailable', async () => {
     const client = websiteClient();
+    client.controlTower.mockResolvedValue({
+      ...controlTowerResponse(),
+      home_funnel_key: 'website_signup',
+    });
     client.funnels.mockResolvedValue([{
       id: 'signup-funnel',
       key: 'website_signup',
@@ -407,6 +418,11 @@ describe('goal-aware Attention', () => {
 
   it('renders unavailable product evidence as unavailable, never as a fabricated zero', async () => {
     const client = websiteClient('website') as Record<string, any>;
+    client.controlTower = vi.fn().mockResolvedValue({
+      ...controlTowerResponse(),
+      home_answer_surface: 'product',
+      home_metric_key: 'weekly_active_users',
+    });
     client.projectIntent = vi.fn().mockResolvedValue({ intent: { project_mode: 'product', goal_ids: ['feature_adoption'], primary_goal_id: 'feature_adoption' } });
     client.metrics = vi.fn().mockResolvedValue([productMetric]);
     client.query = vi.fn().mockRejectedValue(new Error('query unavailable'));

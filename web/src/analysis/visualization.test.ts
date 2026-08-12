@@ -167,8 +167,23 @@ describe('VisualizationSpec contract', () => {
     };
     expect(validateVisualizationSpec(funnelSpec)).toEqual({ valid: true, errors: [] });
 
+    const conversionQuery = {
+      kind: 'funnel' as const,
+      conversion_metric: 'web_signup_conversion',
+      date_from: validSpec.range.from,
+      date_to: validSpec.range.to,
+      env: 'prod',
+    };
+    const conversionSpec = {
+      ...funnelSpec,
+      source: { kind: 'funnel' as const, key: 'web_signup_conversion', query: conversionQuery },
+      actions: [{ kind: 'open_query' as const, query: conversionQuery }],
+    };
+    expect(validateVisualizationSpec(conversionSpec)).toEqual({ valid: true, errors: [] });
+
     for (const query of [
       { ...funnelQuery, steps: [] },
+      { ...funnelQuery, conversion_metric: 'web_signup_conversion' },
       { ...funnelQuery, steps: [{ metric: 'signup' }] },
       {
         kind: 'funnel',

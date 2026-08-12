@@ -12,3 +12,9 @@ export const PUBLISHED_MCP_TOOL_GROUPS = [
   ['Diagnostics', ['list_ingest_warnings', 'list_data_quality_issues']],
   ['Insights', ['list_insights', 'create_insight', 'resolve_insight']],
 ] as const;
+
+export const SOURCE_ONLY_MCP_TOOLS_PENDING_PUBLICATION = [
+  'create_funnel_investigation',
+  'list_funnel_investigations',
+  'get_funnel_investigation',
+] as const;

@@ -27,6 +27,10 @@ function renderProjects() {
   return render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><Projects /></MemoryRouter>);
 }
 
+function renderUsage() {
+  return render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><Usage /></MemoryRouter>);
+}
+
 describe('cloud workspace project controls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -301,10 +305,10 @@ describe('organization usage ledger', () => {
       cap: { state: 'finite', value: 2000, remaining: 800, consequence_at_100_percent: 'A batch that would exceed the limit is rejected.' },
       pace: { observed_days: 7, events_per_day_7d: 40, projected_cycle_end: 1800, confidence: 'sufficient' },
       threshold_forecasts: [
-        { percent: 50, state: 'reached', reached_or_projected_at: `${period}-12T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-        { percent: 75, state: 'projected', reached_or_projected_at: `${period}-20T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-        { percent: 90, state: 'projected', reached_or_projected_at: `${period}-26T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-        { percent: 100, state: 'not_projected', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 50, state: 'reached', reached_or_projected_at: `${period}-12T00:00:00.000Z`, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 75, state: 'projected', reached_or_projected_at: `${period}-20T00:00:00.000Z`, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 90, state: 'projected', reached_or_projected_at: `${period}-26T00:00:00.000Z`, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 100, state: 'not_projected', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
       ],
       contributors: [{
         project_slug: 'alpha', project_name: 'Alpha', environment: 'prod',
@@ -351,7 +355,7 @@ describe('organization usage ledger', () => {
 
   it('separates accepted-event activity ranges from the monthly quota ledger', async () => {
     mockedStore.mockReturnValue(usageStore());
-    render(<Usage />);
+    renderUsage();
 
     fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     expect(await screen.findByRole('heading', { name: 'Accepted-event activity' })).toBeInTheDocument();
@@ -370,7 +374,7 @@ describe('organization usage ledger', () => {
 
   it('validates custom activity dates before making another request', async () => {
     mockedStore.mockReturnValue(usageStore());
-    render(<Usage />);
+    renderUsage();
     fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageActivity).toHaveBeenCalledOnce());
 
@@ -382,7 +386,7 @@ describe('organization usage ledger', () => {
   it('uses a strict UTC calendar month and renders the events_stored ledger with a mobile-safe breakdown', async () => {
     const expectedMonth = new Date().toISOString().slice(0, 7);
     mockedStore.mockReturnValue(usageStore());
-    render(<Usage />);
+    renderUsage();
     await waitFor(() => expect(usageControl).toHaveBeenCalledWith(expectedMonth));
     expect(screen.getByText(`${expectedMonth} UTC`)).toBeInTheDocument();
     expect(screen.getByTestId('usage-current-quantity')).toHaveTextContent('1,200');
@@ -399,7 +403,7 @@ describe('organization usage ledger', () => {
     let resolveUsage: ((value: unknown) => void) | undefined;
     usageControl.mockReturnValue(new Promise((resolve) => { resolveUsage = resolve; }));
     mockedStore.mockReturnValue(usageStore());
-    const view = render(<Usage />);
+    const view = renderUsage();
     expect(screen.getByText('Loading usage ledger…')).toBeInTheDocument();
     resolveUsage?.(usageControlResult({
       answer: {
@@ -414,7 +418,7 @@ describe('organization usage ledger', () => {
       },
       threshold_forecasts: [50, 75, 90, 100].map((percent) => ({
         percent: percent as 50 | 75 | 90 | 100, state: 'not_applicable' as const, reached_or_projected_at: null,
-        notification_state: 'not_configured' as const, audit_source: 'usage_ledger' as const,
+        configured_threshold: null, notification_state: 'not_configured' as const, audit_source: 'usage_ledger' as const,
       })),
     }));
     await screen.findByText(/No stored events in/);
@@ -423,7 +427,7 @@ describe('organization usage ledger', () => {
     view.unmount();
 
     usageControl.mockRejectedValue(new Error('usage read failed'));
-    render(<Usage />);
+    renderUsage();
     await screen.findByText(/usage read failed/);
   });
 
@@ -437,9 +441,9 @@ describe('organization usage ledger', () => {
       contributors: [],
     }));
     mockedStore.mockReturnValue(usageStore());
-    render(<Usage />);
+    renderUsage();
     await screen.findByText('Hard limit reached');
-    const meter = screen.getByRole('img', { name: '0 percent of the configured hard limit used' });
+    const meter = screen.getByRole('img', { name: '100 percent of the configured hard limit used' });
     expect(meter.innerHTML).not.toContain('NaN');
     expect(screen.getAllByText('At 0 events, a batch that would exceed the limit is rejected.')).toHaveLength(2);
   });

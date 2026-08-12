@@ -352,7 +352,7 @@ Surface-specific block order:
 | Home | 1-3 Attention items -> key outcomes -> funnel snapshot -> recent activity -> evidence/system context |
 | Web | readiness or Web-health answer -> KPI/trend -> one selected breakdown -> secondary dimension tabs -> evidence |
 | Product | template/question -> current answer -> chart -> follow-up/save action -> Evidence disclosure |
-| Funnels | biggest loss answer -> funnel visualization -> named investigate action -> compatible release/experiment context -> Evidence |
+| Funnels | biggest loss answer -> funnel visualization -> named investigate action -> immutable investigation artifact -> explicit Ship handoff -> Evidence |
 | People | data-health limitation or interesting-entity queue -> bounded reasons/windows -> exact lookup -> privacy/provenance |
 | Ship | current lifecycle/blocker -> one next action -> release/experiment/decision rail -> technical audit |
 | Setup | next server gate -> proof/freshness -> one action -> completed gates -> advanced connection/settings |
@@ -582,8 +582,10 @@ the strongest current surface.
 - `HC-FUNNEL-02` The answer names the affected step and funnel goal.
 - `HC-FUNNEL-03` Primary action `Investigate <step A> -> <step B>` opens a bounded typed
   breakdown/agent task; it does not modify the funnel.
-- `HC-FUNNEL-04` P1 links evidence to a release/experiment when an explicit compatible
-  reference exists and can save a proposal to Decisions.
+- `HC-FUNNEL-04` P1 persists an immutable project/environment-scoped investigation with
+  saved-funnel snapshot, exact query/result/evidence lineage, creator and timestamp. A later
+  Ship flow must cite that artifact and explicitly select the relevant change; time/metric
+  overlap never creates a compatibility claim or Decisions proposal.
 - `HC-FUNNEL-05` Ties use stable step order and explain both equal losses in Evidence.
 
 ### 10.5 People — P1
@@ -1417,46 +1419,49 @@ The program is done only when:
 
 ### 25.1 Read-back snapshot — 2026-08-12
 
-This snapshot was produced from Core `origin/main` at `4fbfdf8` and private Cloud
-`origin/main` at `d20d628`. It is a requirement-by-requirement source/test audit, not a
-replacement for final browser, release and production evidence. The HTML audit's status
-summary must not be treated as independent proof because it is the source specification.
+This snapshot was refreshed from the Core integration candidate based on `origin/main`
+`de85d58` with implementation commits through `a155a26`, and private Cloud `origin/main`
+at `7bc6469`. It is a requirement-by-requirement source, test and local browser read-back,
+not a replacement for final merge and production evidence. The HTML audit's status summary
+must not be treated as independent proof because it is the source specification.
 
 | Requirement area | Status | Proven now | Residual required work |
 | --- | --- | --- | --- |
-| HC-HOME-01..06 | partial | Server-ranked top-three Attention, impact/freshness/action, outcomes, funnel and activity | Add per-item change/delta and complete moderated ten-second proof |
-| HC-WEB-01..05 | partial | Ordered readiness, traffic health/delta, lazy independent breakdowns and partial headline | Compute the selected outcome/conversion answer instead of only declaring outcome readiness; expose complete answer evidence |
-| HC-ANSWER-01..05 | partial | Canonical takeaway/trust/purpose, chart, follow-up task and validated saved/official answer backend | Remove duplicate always-open provenance, avoid blocking the first answer on comparison/trust, and offer an authorized direct Save as official path |
-| HC-FUNNEL-01..05 | partial | Overall/comparison/biggest losses/lost actors/goal and release/experiment handoff | Persist investigation evidence before proposal, name the exact transition in the action and keep causality explicitly unclaimed |
-| HC-PEOPLE-01..04 | partial | Privacy-safe factual order, bounded reason/window, exact lookup and one data-health block | Implement purpose-backed recently activated/stalled/at-risk/changed-segment ranking; do not substitute a heuristic |
-| HC-SHIP-01..04 | partial | Guided empty state, real prerequisites/action and release blocker/owner/decision date | Add real experiment owner/expected-decision facts or keep them explicitly unavailable |
-| HC-SETUP-01..05 | partial | Server next gate, collapsed completed connection, proof timestamps and read-back | Record per-gate latency/freshness and distinguish a saved decision from a generic saved insight |
-| HC-DEF-01..04 | partial | Four group counts/severity, server-ranked fix and affected saved answers | Extend the dependency graph to built-in Home/Web/Product/Funnel answers |
-| HC-EVENTS-01..04 | partial | 24h/7d trends, improvements vs doing-well, affected answers and watermark verification | Add bounded novelty semantics so a signature can truthfully be called new |
-| HC-REG-01..04 | partial | Health counts, purpose/review, used-by impact and immutable revision API | Render revision history and define `unused` consistently with built-in answer consumers |
+| HC-HOME-01..06 | verified | Server-ranked top-three Attention, reason/impact/freshness/action, outcomes, funnel and activity; desktop and mobile rendering verified | The moderated ten-second comprehension test remains a launch-validation criterion, not missing product behavior |
+| HC-WEB-01..05 | verified | Ordered readiness, computed outcome/conversion, traffic health/delta, lazy independent breakdowns, evidence and partial availability | Re-measure cold/warm performance after production release; no semantic gap remains in the implemented contract |
+| HC-ANSWER-01..05 | verified | Canonical takeaway/trust/purpose, chart, one follow-up action, collapsed evidence and authorized saved/official answer flow | Keep the same hierarchy when future answer types are added |
+| HC-FUNNEL-01..05 | verified | Overall/comparison/biggest losses/lost actors/goal, exact named transition, immutable investigation lineage and environment-safe explicit Ship handoff | Do not infer releases/experiments or causality; publish the pending MCP tools only in a separately versioned package after registry read-back |
+| HC-PEOPLE-01..04 | partial | Privacy-safe factual order, exact lookup, missing-identity health block and purpose-backed recently-activated ranking | Add real sources for stalled, at-risk and changed-segment ranking; the UI intentionally reports these capabilities unavailable instead of inventing heuristics |
+| HC-SHIP-01..04 | verified | Guided empty state, real prerequisites/action, release blocker/owner/decision date and explicit unavailable experiment ownership | Populate experiment owner/date only when a trusted lifecycle source exists |
+| HC-SETUP-01..05 | partial | Server next gate, collapsed completed connection, proof timestamps/read-back and saved-decision distinction | Persist and render latency/freshness for every gate; current proof timestamp does not reconstruct per-gate latency |
+| HC-DEF-01..04 | verified | Four group counts/severity, server-ranked fix, affected saved answers and built-in Home/Web/Product/Funnel dependencies | Extend the same dependency registry when new built-in answers ship |
+| HC-EVENTS-01..04 | verified | 24h/7d trends, improvements vs doing-well, affected answers, bounded novelty semantics and watermark verification | Keep novelty window explicit when new warning types are added |
+| HC-REG-01..04 | verified | Health counts, purpose/review, used-by impact, consistent built-in-consumer usage and rendered immutable revision history | None in the accepted P0/P1 contract |
 | HC-EXP-01..04 | verified | Guided privacy-first setup, illustrative preview, aggregate friction answer/readiness and prohibited raw-capture boundary | Re-check in the final browser matrix |
-| HC-EXPERIMENT-01..04 | partial | Readiness, atomic prepare, lifecycle links, versioned monitors and immutable pause proposal | Expose proposal target/thresholds contextually in Experiment UI; human identity must remain the only mutation reviewer |
-| HC-DECISION-01..04 | partial | Eligible-release empty flow, server queue order, assumptions/gaps/reversibility and truthful action status | Enforce human owner/admin on classic decision and follow-up approvals; current MCP mutation path contradicts the human-control promise |
+| HC-EXPERIMENT-01..04 | verified | Readiness, atomic prepare, lifecycle links, versioned monitors and contextual immutable pause proposals | Human identity remains the only mutation reviewer by contract |
+| HC-DECISION-01..04 | verified | Eligible-release empty flow, server queue order, assumptions/gaps/reversibility, truthful action status and enforced human owner/admin approvals | Agent paths may prepare evidence or proposals but must not gain approval authority |
 | HC-KEYS-01..04 | verified | Masked scope/env/age/last use, server rotation policy, exact revoke impact and neutral type color | Re-check focus and mobile table presentation in final browser matrix |
-| HC-USAGE-01..07 | partial | Compact plan/pace/forecast/contributors/no-cap narrative, threshold evidence and responsive layout | Link contributors to project health, wire real notification ownership/audit and make Configure cap/Set alert actions reach real capabilities |
-| HC-PROJECTS-01..04 | partial | Env-scoped portfolio, last event, health, usage, attention, create dialog and semantic comparison fail-closed behavior | Replace configured-contract proxy with current queryable outcome availability |
+| HC-USAGE-01..07 | verified | Compact plan/pace/forecast/contributors, project-health links, atomic entitlement revisioning, best-effort threshold evidence that cannot break ingest, truthful finite/no-cap/unavailable states and real Configure cap action | Hosted billing-plan changes and delivered notification channels remain outside Core and are explicitly unavailable, not simulated |
+| HC-PROJECTS-01..04 | verified | Env-scoped portfolio, last event, health, usage, attention, create dialog and current queryable-outcome availability | None in the accepted portfolio contract |
 | HC-PROFILE-01..03 | verified | Profile is account-only and truthfully separates hosted/self-host mode and action | Re-check hosted authenticated route in final release smoke |
-| HC-OP-01..08 | partial | Canonical server queue, bounded warning signatures, affected projects, four detail tabs, immutable actions, privacy/economics separation | Put forecast/last action in queue and Customers, fail closed on incomplete list contracts, prove positive cap-breach path and full-list filtering |
-| Shared state / shell | partial | Home/Usage signals, truthful finite/no-cap color, mobile drawer, focus/reduced-motion primitives | Make uncapped usage compact and accessible instead of `aria-hidden`; finish full state/browser matrix |
-| P2 program | partial | Scheduled semantic feed, semantic comparison, versioned metric impact, monitors/notifications and human-reviewed pause proposals exist | Complete contextual UI, notification routing ownership and role-aware presentation without relaxing approval gates |
+| HC-OP-01..08 | verified | Canonical server queue, bounded warning signatures, affected projects, forecast/last action, four detail tabs, complete-list filtering, positive cap-breach path, immutable actions and privacy/economics separation | Production deployment/read-back is a release gate, not an implementation gap |
+| Shared state / shell | verified | Home/Usage signals, truthful finite/no-cap/unavailable states, accessible uncapped summary, mobile drawer, focus/reduced-motion primitives and desktop/mobile browser matrix | Continue the same state contract for future global signals |
+| P2 program | partial | Scheduled semantic feed, semantic comparison, versioned metric impact, monitors/notifications and human-reviewed pause proposals exist | Complete notification-delivery ownership and broader role-aware presentation without relaxing approval gates |
 
 ### 25.2 Current verification notes
 
-- Core typecheck passes on this snapshot.
-- A fresh full web run exposed one asynchronous assertion in the Decision handoff test: the
-  row became selected before the detail request assertion was awaited. The product code
-  already issued the request; the test now waits for the observable request and passes in
-  repeated focused runs. The full suite must be rerun after integration.
-- Independent focused Core UI audit passed 58 relevant tests. Independent Cloud audit passed
-  38 API/control-tower tests, 71 operator-web tests and five browser checks on `d20d628`.
-- The compact Usage release has already passed local desktop/mobile rendering and production
-  lineage/health checks, but the broader program remains incomplete while any row above is
-  `partial`.
+- Core typecheck/build and the complete disposable-Postgres backend run pass: 112 test files
+  passed, one skipped; 642 tests passed and four skipped.
+- The complete web run passes 55 files and 389 tests. SDK passes 64 tests plus typecheck/build.
+  MCP build and packed-tarball tests pass; the package is 37,572 bytes packed and 147,361
+  bytes unpacked across 13 files.
+- Local browser read-back used real API responses at 1440x900, 1024x768, 390x844 and
+  360x800 across Home, Web, Product, Funnels, People, Usage and Setup. No application alert,
+  global horizontal overflow or application-origin console error was observed; the browser
+  only reported unrelated wallet-extension warnings.
+- Independent Cloud review passed its focused API/operator-web suites and five browser checks
+  before merge to `7bc6469`. Final merge, immutable image and production read-back remain
+  separate release gates.
 
 ### 25.3 Integration rule for subsequent slices
 

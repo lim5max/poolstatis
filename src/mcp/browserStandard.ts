@@ -1,4 +1,4 @@
-export const BROWSER_ANALYTICS_STANDARD = `# Poolstatis Browser Analytics Standard (v1)
+export const BROWSER_ANALYTICS_STANDARD: string = `# Poolstatis Browser Analytics Standard (v1)
 
 Browser Analytics starts collection immediately and remains privacy-bounded.
 

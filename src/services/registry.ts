@@ -383,6 +383,18 @@ export async function deleteMetric(pool: pg.Pool, projectId: string, key: string
 }
 
 export async function deleteFunnel(pool: pg.Pool, projectId: string, key: string): Promise<{ key: string }> {
+  const investigation = await pool.query(
+    'SELECT id FROM funnel_investigations WHERE project_id = $1 AND funnel_key = $2 LIMIT 1',
+    [projectId, key],
+  );
+  if (investigation.rowCount) {
+    throw new ApiError(
+      409,
+      'funnel_in_use',
+      `funnel "${key}" is retained by immutable investigation evidence`,
+      'keep the saved funnel so its persisted investigation lineage remains reproducible',
+    );
+  }
   const { rowCount } = await pool.query(
     'DELETE FROM funnels WHERE project_id = $1 AND key = $2',
     [projectId, key],

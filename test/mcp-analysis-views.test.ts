@@ -117,6 +117,11 @@ describe('saved answers and readiness MCP parity', () => {
       schema_version: 1,
       project: env.projectSlug,
       env: 'prod',
+      answer_dependencies: expect.arrayContaining([
+        expect.objectContaining({ answer_id: 'home', surface: 'home', href: '/' }),
+        expect.objectContaining({ answer_id: 'product:activation_completed', surface: 'product' }),
+        expect.objectContaining({ answer_id: id, surface: 'saved' }),
+      ]),
       groups: [
         { key: 'tracking_plan' },
         { key: 'properties' },

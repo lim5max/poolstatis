@@ -89,7 +89,7 @@ describe('PoolstatisClient usage', () => {
       cycle: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', timezone: 'UTC' },
       cap: { state: 'future_cap', value: 100, remaining: 50, consequence_at_100_percent: 'Pause ingest.' },
       pace: { observed_days: 7, events_per_day_7d: 10, projected_cycle_end: 300, confidence: 'future_confidence' },
-      threshold_forecasts: [{ percent: 75, state: 'future_threshold', reached_or_projected_at: null, notification_state: 'future_notification', audit_source: 'usage_ledger' }],
+      threshold_forecasts: [{ percent: 75, state: 'future_threshold', reached_or_projected_at: null, configured_threshold: null, notification_state: 'future_notification', audit_source: 'usage_ledger' }],
       contributors: [],
       reconciliation: { metered_quantity: 50, attributed_quantity: 50, difference: 0, unattributed_quantity: 0, overattributed_quantity: 0, state: 'future_reconciliation' },
     };
@@ -101,7 +101,7 @@ describe('PoolstatisClient usage', () => {
     const result = await new PoolstatisClient('https://core.example', 'pt_test').usageControl('2026-08');
 
     expect(result.answer.state).toBe('unavailable');
-    expect(result.cap).toMatchObject({ state: 'not_configured', value: null, remaining: null });
+    expect(result.cap).toMatchObject({ state: 'unavailable', value: null, remaining: null });
     expect(result.pace.confidence).toBe('insufficient');
     expect(result.threshold_forecasts[0]).toMatchObject({ state: 'not_applicable', notification_state: 'not_configured' });
     expect(result.reconciliation.state).toBe('partial');
@@ -149,6 +149,33 @@ describe('PoolstatisClient usage', () => {
     expect(result.answer).toMatchObject({ state: 'unavailable', headline: 'Answer unavailable' });
   });
 
+  it('accepts only a typed server-owned delta on attention items', () => {
+    const base = {
+      schema_version: 1,
+      request_id: 'req-attention-delta',
+      generated_at: '2026-08-12T00:00:00.000Z',
+      scope: { window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-12T00:00:00.000Z', timezone: 'UTC' } },
+      answer: { state: 'ready', headline: 'Funnel', takeaway: 'Measured loss', why_it_matters: 'Review the goal.' },
+      attention: [{
+        id: 'funnel.biggest_loss.signup', rule_id: 'funnel.biggest_loss', rule_version: 1,
+        severity: 'info', state: 'open', title: 'Biggest loss', reason: '12 actors were lost.', impact: 'Complete signup.', affected: [],
+        delta: { value: -12.5, unit: 'percentage_point', direction: 'down', comparison_label: 'previous exact period' },
+        evidence: { state: 'trusted', freshness: 'fresh', as_of: '2026-08-12T00:00:00.000Z', source_refs: [], warnings: [], unavailable_reasons: [] },
+        primary_action: { id: 'investigate', kind: 'navigate', label: 'Investigate', href: '/analyze/funnels' },
+      }],
+      evidence: { state: 'trusted', freshness: 'fresh', as_of: '2026-08-12T00:00:00.000Z', source_refs: [], warnings: [], unavailable_reasons: [] },
+      primary_action: { id: 'investigate', kind: 'navigate', label: 'Investigate', href: '/analyze/funnels' },
+      secondary_actions: [],
+    };
+
+    const attention = base.attention[0]!;
+    expect(decodeControlTowerResult(base).attention[0]?.delta).toEqual(attention.delta);
+    expect(decodeControlTowerResult({
+      ...base,
+      attention: [{ ...attention, delta: { ...attention.delta, unit: 'future_unit' } }],
+    }).attention).toEqual([]);
+  });
+
   it('never leaks partial usage fields when the current-schema shape is malformed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       schema_version: 1,
@@ -163,7 +190,7 @@ describe('PoolstatisClient usage', () => {
       meter: 'events_stored',
       cap: { state: 'finite', value: 100, remaining: 99, consequence_at_100_percent: 'Pause ingest.' },
       pace: { observed_days: 7, events_per_day_7d: 1, projected_cycle_end: 31, confidence: 'sufficient' },
-      threshold_forecasts: [{ percent: 75, state: 'projected', reached_or_projected_at: 'invalid-date', notification_state: 'not_configured', audit_source: 'usage_ledger' }],
+      threshold_forecasts: [{ percent: 75, state: 'projected', reached_or_projected_at: 'invalid-date', configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' }],
       contributors: [],
       reconciliation: { metered_quantity: 1, attributed_quantity: 1, difference: 0, unattributed_quantity: 0, overattributed_quantity: 0, state: 'reconciled' },
     }), { status: 200 }));
@@ -172,7 +199,7 @@ describe('PoolstatisClient usage', () => {
 
     expect(result.answer).toMatchObject({ state: 'unavailable', headline: 'Usage unavailable' });
     expect(result.cycle).toEqual(result.scope.window);
-    expect(result.cap).toMatchObject({ state: 'not_configured', value: null, remaining: null });
+    expect(result.cap).toMatchObject({ state: 'unavailable', value: null, remaining: null });
     expect(result.threshold_forecasts).toHaveLength(4);
     expect(result.threshold_forecasts.every((threshold) => threshold.state === 'not_applicable')).toBe(true);
   });
@@ -200,7 +227,7 @@ describe('PoolstatisClient usage', () => {
       pace: { observed_days: 7, events_per_day_7d: 10, projected_cycle_end: 310, confidence: 'sufficient' },
       threshold_forecasts: [50, 75, 90, 100].map((percent) => ({
         percent, state: 'not_projected', reached_or_projected_at: null,
-        notification_state: 'not_configured', audit_source: 'usage_ledger',
+        configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger',
       })),
       contributors: [{
         project_slug: 'alpha', project_name: 'Alpha', environment: 'prod',

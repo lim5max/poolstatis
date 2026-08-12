@@ -12,6 +12,13 @@ export interface DataHealthWatermark {
   last_seen: string;
 }
 
+export interface DataHealthIssueNovelty {
+  state: 'new' | 'recurring' | 'historical';
+  basis: 'privacy-safe warning occurrences';
+  current_window: { from: string; to: string; count: number };
+  comparison_baseline: { from: string; to: string; count: number };
+}
+
 export interface DataHealthIssueSignature {
   signature_id: string;
   kind: WarningKind;
@@ -21,6 +28,7 @@ export interface DataHealthIssueSignature {
   count: number;
   first_seen: string;
   last_seen: string;
+  novelty: DataHealthIssueNovelty;
   affected_answer_ids: string[];
   repair_action: { kind: 'navigate'; label: string; href: string };
   watermark: DataHealthWatermark;
@@ -43,6 +51,7 @@ interface WarningRow {
 }
 
 interface RejectedPointRow { bucket: Date; rejected: string }
+interface WarningNoveltyRow { signature_id: string; current_count: string; baseline_count: string }
 
 const KIND_PRESENTATION: Record<WarningKind, {
   category: DataHealthIssueSignature['category'];
@@ -63,6 +72,7 @@ export async function getProjectDataHealth(
 ) {
   const last24 = bucketWindow(now, 'hour', 24);
   const last7 = bucketWindow(now, 'day', 7);
+  const previous24 = { from: new Date(last24.from.getTime() - 24 * 60 * 60 * 1000), to: last24.from };
   const [accepted24, accepted7, rejected24, rejected7, warningResult, metrics, funnels, views, coverage] = await Promise.all([
     eventStore.acceptedIngestTrend({ projectId: project.id, env, ...last24, interval: 'hour' }),
     eventStore.acceptedIngestTrend({ projectId: project.id, env, ...last7, interval: 'day' }),
@@ -87,6 +97,14 @@ export async function getProjectDataHealth(
       [project.id, env],
     ),
   ]);
+  const noveltyBySignature = await warningNovelty(
+    pool,
+    project.id,
+    env,
+    warningResult.rows.map((warning) => warning.signature_id),
+    previous24,
+    last24,
+  );
 
   const metricEvents = activeMetricEvents(metrics);
   const metricKeysByEvent = invertMetricEvents(metricEvents);
@@ -118,6 +136,23 @@ export async function getProjectDataHealth(
           href: `/data?signature=${encodeURIComponent(warning.signature_id)}`,
         };
     const presentation = KIND_PRESENTATION[warning.kind];
+    const windowCounts = noveltyBySignature.get(warning.signature_id) ?? { current: 0, baseline: 0 };
+    const novelty: DataHealthIssueNovelty = {
+      state: windowCounts.current > 0
+        ? windowCounts.baseline === 0 ? 'new' : 'recurring'
+        : 'historical',
+      basis: 'privacy-safe warning occurrences',
+      current_window: {
+        from: last24.from.toISOString(),
+        to: last24.to.toISOString(),
+        count: windowCounts.current,
+      },
+      comparison_baseline: {
+        from: previous24.from.toISOString(),
+        to: previous24.to.toISOString(),
+        count: windowCounts.baseline,
+      },
+    };
     return {
       signature_id: warning.signature_id,
       kind: warning.kind,
@@ -127,6 +162,7 @@ export async function getProjectDataHealth(
       count: watermark.count,
       first_seen: warning.first_seen.toISOString(),
       last_seen: watermark.last_seen,
+      novelty,
       affected_answer_ids: [...affected].sort(),
       repair_action: repairAction,
       watermark,
@@ -149,6 +185,7 @@ export async function getProjectDataHealth(
     coverage: {
       accepted_basis: 'durable event rows by ingested_at',
       rejected_basis: 'privacy-safe warning occurrences recorded after data-health tracking began',
+      issue_novelty_basis: 'current 24 hourly buckets compared with the immediately preceding 24 hourly buckets',
       rejected_history_first_observed_at: rejectedHistoryFirstObservedAt,
     },
     summary: {
@@ -159,14 +196,16 @@ export async function getProjectDataHealth(
     },
     windows: { last_24h: window24, last_7d: window7 },
     issue_signatures: issueSignatures,
-    improvements: issueSignatures.map((issue) => ({
-      signature_id: issue.signature_id,
-      severity: issue.kind === 'rejected' ? 'high' as const : 'medium' as const,
-      title: KIND_PRESENTATION[issue.kind].title,
-      affected_answer_ids: issue.affected_answer_ids,
-      repair_action: issue.repair_action,
-      verify_after_fix: issue.verify_after_fix,
-    })),
+    improvements: issueSignatures
+      .filter((issue) => issue.novelty.state !== 'historical')
+      .map((issue) => ({
+        signature_id: issue.signature_id,
+        severity: issue.kind === 'rejected' ? 'high' as const : 'medium' as const,
+        title: KIND_PRESENTATION[issue.kind].title,
+        affected_answer_ids: issue.affected_answer_ids,
+        repair_action: issue.repair_action,
+        verify_after_fix: issue.verify_after_fix,
+      })),
     doing_well: [
       ...(window24.accepted_total > 0 ? [{
         code: 'accepted_events_flowing' as const,
@@ -175,6 +214,38 @@ export async function getProjectDataHealth(
       }] : []),
     ],
   };
+}
+
+async function warningNovelty(
+  pool: pg.Pool,
+  projectId: string,
+  env: string,
+  signatureIds: string[],
+  baseline: { from: Date; to: Date },
+  current: { from: Date; to: Date },
+): Promise<Map<string, { current: number; baseline: number }>> {
+  if (signatureIds.length === 0) return new Map();
+  const result = await pool.query<WarningNoveltyRow>(
+    `SELECT warning.signature_id,
+       COALESCE(sum(occurrence.count) FILTER (
+         WHERE occurrence.bucket >= $4 AND occurrence.bucket <= $5
+       ), 0)::text AS current_count,
+       COALESCE(sum(occurrence.count) FILTER (
+         WHERE occurrence.bucket >= $3 AND occurrence.bucket < $4
+       ), 0)::text AS baseline_count
+     FROM ingest_warnings warning
+     LEFT JOIN ingest_warning_occurrences occurrence
+       ON occurrence.signature_id = warning.signature_id
+       AND occurrence.bucket >= $3 AND occurrence.bucket <= $5
+     WHERE warning.project_id = $1 AND warning.env = $2
+       AND warning.signature_id = ANY($6::uuid[])
+     GROUP BY warning.signature_id`,
+    [projectId, env, baseline.from, current.from, current.to, signatureIds],
+  );
+  return new Map(result.rows.map((row) => [
+    row.signature_id,
+    { current: Number(row.current_count), baseline: Number(row.baseline_count) },
+  ] as const));
 }
 
 export async function verifyProjectDataHealthFix(

@@ -236,14 +236,23 @@ get_web_overview(project, {metric, key_metric?, date_from, date_to?, dimensions?
 list_web_sessions(project, {metric, key_metric?, date_from, date_to?, filters?, limit?, env?})
 get_web_session(project, {metric, key_metric?, actor_id?, session_id, date_from, date_to?, filters?, page_limit?, env?})
 get_page_engagement(project, {metric, actor_id?, page_view_id, date_from, date_to?, filters?, env?})
-query_funnel(project, {funnel | steps, date_from, date_to?, env?})
+query_funnel(project, {funnel | steps | conversion_metric, date_from, date_to?, env?})
   // каждый step возвращает metric_key, purpose, category, actors и conversion_*
+create_funnel_investigation(project, {idempotency_key, funnel, env, date_from,
+  date_to, from_step, to_step})
+  // сервер повторяет saved-funnel query и сохраняет immutable result/evidence lineage
+list_funnel_investigations(project, {env?, funnel?, limit?})
+get_funnel_investigation(project, id)
+  // artifact descriptive, not causal; его id нужно явно передать в последующую работу
 query_retention(project, {start_metric, return_metric?, interval, periods, date_from, env?})
 query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning/resurrecting/dormant
 query_stickiness(project, {metric, interval, date_from, env?})
 query_entities(project, {entity_type, filters?, limit, order_by?})
 list_actors(project, {env?, from?, to?, limit?, cursor?, order?, search?,
-  propertyFilters?, activityMetric?})
+  propertyFilters?, activityMetric?, interesting?})
+  // interesting_desc supports only
+  // {reason: "recently_activated", metric: "<active native activation metric>"}
+  // stalled / at_risk / changed_segment fail closed until typed sources exist
 
 propose_browser_analytics(project, route_keys[]) // finite reviewed vocabulary; atomic
 get_person(project, {distinct_id, env?, from?, to?, limit?, cursor?})
@@ -253,6 +262,12 @@ list_ingest_warnings(project, {env?, kind?})   // rejected/unregistered/clock_sk
 list_data_quality_issues(project, {env?, limit?, since_days?})
   // semantic conflicts: e.g. brief.completed exists, but entity status is still "new"
 ```
+
+Три `*_funnel_investigation` tools доступны в Core source/local runner и
+зарезервированы для следующего MCP package release. Опубликованный
+`@poolstatis/mcp@0.6.0` их ещё не содержит; до отдельного publish gate используйте
+REST endpoints. Номер в `packages/mcp/package.json` сам по себе не является
+свидетельством публикации.
 
 MCP tools expose structured JSON output (`structuredContent`) with a text JSON fallback for older clients.
 Web tools используют только typed Query DSL и registry metric keys: raw SQL и

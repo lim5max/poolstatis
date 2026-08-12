@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import type { AccountMode } from '../api/types';
 import { useStore } from '../store';
 import { SavedAnswers } from './SavedAnswers';
 
@@ -14,6 +15,28 @@ const mockedStore = vi.mocked(useStore);
 const analysisViews = vi.fn();
 const archiveAnalysisView = vi.fn();
 const setAnalysisViewOfficial = vi.fn();
+const accountMode = vi.fn();
+
+function selfHostMode(kind: 'secret' | 'personal'): AccountMode {
+  const personal = kind === 'personal';
+  return {
+    schema_version: 1,
+    deployment: { mode: 'self_host', hosted_account: 'not_configured' },
+    session: { kind, scope: personal ? 'organization' : 'project', role: null },
+    capabilities: {
+      portfolio: personal ? 'available' : 'project_only',
+      compare_projects: personal,
+      manage_profile: false,
+      manage_personal_tokens: false,
+      review_decisions: personal,
+      set_official_answers: personal,
+      configure_usage_entitlement: personal ? 'available' : 'unavailable_scope',
+      review_plan: 'unavailable',
+      set_usage_alert: 'unavailable',
+    },
+    primary_action: { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
+  };
+}
 
 const savedAnswer = {
   id: '61b9b73d-89c2-4a31-b2fd-09008920a282',
@@ -60,12 +83,13 @@ describe('SavedAnswers route-ready screen', () => {
     analysisViews.mockResolvedValue([savedAnswer]);
     archiveAnalysisView.mockResolvedValue({ ...savedAnswer, status: 'archived', official: false });
     setAnalysisViewOfficial.mockResolvedValue({ ...savedAnswer, official: false });
+    accountMode.mockResolvedValue(selfHostMode('personal'));
     mockedStore.mockReturnValue({
       project: 'alpha',
       env: 'prod',
       tokenKind: 'personal',
       account: null,
-      client: { analysisViews, archiveAnalysisView, setAnalysisViewOfficial },
+      client: { analysisViews, archiveAnalysisView, setAnalysisViewOfficial, accountMode },
     } as never);
   });
 
@@ -100,9 +124,10 @@ describe('SavedAnswers route-ready screen', () => {
   });
 
   it('does not expose an official mutation to a project secret credential', async () => {
+    accountMode.mockResolvedValueOnce(selfHostMode('secret'));
     mockedStore.mockReturnValue({
       project: 'alpha', env: 'prod', tokenKind: 'secret', account: null,
-      client: { analysisViews, archiveAnalysisView, setAnalysisViewOfficial },
+      client: { analysisViews, archiveAnalysisView, setAnalysisViewOfficial, accountMode },
     } as never);
     renderScreen();
     await screen.findByText('Activation completion');

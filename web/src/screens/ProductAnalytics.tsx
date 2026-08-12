@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ErrorNote, Loading } from '@/components/ui';
 import { AnswerCanvas, CanonicalAnswer, type EvidenceTrust } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { CreateSavedAnswerInput, Experiment, Funnel, MeasurementTrust, Metric, Release } from '../api/types';
+import type { CreateSavedAnswerInput, Funnel, FunnelInvestigation, MeasurementTrust, Metric } from '../api/types';
 import { useAsync, useStore } from '../store';
 import {
   ANALYSIS_TEMPLATES,
@@ -35,6 +35,7 @@ import {
   type MetricView,
 } from '../analysis/product';
 import { previousPeriodQuery as previousAnalysisPeriodQuery, summarizeAnswer, type StandardAnswerSummary } from '../analysis/semanticHealth';
+import { accountMutationAccess, mutationAllowed } from '../account-capabilities';
 
 interface AnalysisRun {
   spec: VisualizationSpec;
@@ -49,11 +50,6 @@ interface RequestedFunnelTransition {
   toStep: number;
 }
 
-export interface RelatedFunnelEvidence {
-  releases: Release[];
-  experiments: Experiment[];
-}
-
 const OPTION_TARGET = 'min-h-11 md:min-h-8';
 
 export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' | 'funnels' } = {}) {
@@ -61,6 +57,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const [params] = useSearchParams();
   const funnelSurface = surface === 'funnels';
   const requestedFunnel = funnelSurface ? params.get('funnel') ?? '' : '';
+  const requestedMetric = funnelSurface ? '' : params.get('metric') ?? '';
+  const requestedResource = funnelSurface ? requestedFunnel : requestedMetric;
   const requestedTransition = funnelSurface
     ? requestedFunnelTransition(params.get('from_step'), params.get('to_step'))
     : null;
@@ -84,15 +82,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       properties: properties.filter((property) => property.scope === 'event' && property.status === 'trusted'),
     };
   }, [project, env]);
-  const relatedEvidence = useAsync(async (): Promise<RelatedFunnelEvidence> => {
-    if (!funnelSurface || !client || !project) return { releases: [], experiments: [] };
-    const [releases, experiments] = await Promise.all([
-      client.releases(project, { env }),
-      client.experiments(project),
-    ]);
-    return { releases, experiments };
-  }, [client, project, env, funnelSurface]);
-  const [resourceKey, setResourceKey] = useState(requestedFunnel);
+  const accountMode = useAsync(() => client!.accountMode(), [client]);
+  const [resourceKey, setResourceKey] = useState(requestedResource);
   const [range, setRange] = useState<TimeRangePreset>(template.defaultRange);
   const [interval, setInterval] = useState<QueryInterval>('day');
   const [metricView, setMetricView] = useState<MetricView>('trend');
@@ -101,6 +92,15 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const [runError, setRunError] = useState<{ scope: string; message: string } | null>(null);
   const [running, setRunning] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [officialSaveState, setOfficialSaveState] = useState<'idle' | 'saving' | 'saved' | 'saved_unofficial' | 'error'>('idle');
+  const [savedAnswerId, setSavedAnswerId] = useState<string | null>(null);
+  const officialSaveAccess = accountMutationAccess(
+    accountMode.data,
+    'set_official_answers',
+    accountMode.loading,
+    accountMode.error,
+  );
+  const officialSaveAllowed = mutationAllowed(officialSaveAccess);
   const runGeneration = useRef(0);
   const currentScope = `${project ?? 'none'}:${env}`;
   const scopeRef = useRef(currentScope);
@@ -109,15 +109,17 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
 
   useEffect(() => {
     runGeneration.current += 1;
-    setResourceKey(requestedFunnel);
+    setResourceKey(requestedResource);
     setRun(null);
     setRunError(null);
     setRunning(false);
     setSaveState('idle');
+    setOfficialSaveState('idle');
+    setSavedAnswerId(null);
     return () => {
       runGeneration.current += 1;
     };
-  }, [project, env, requestedFunnel]);
+  }, [project, env, requestedResource]);
 
   const compatibleMetrics = useMemo(
     () => (registry.data?.metrics ?? []).filter((metric) => metric.type !== 'conversion' && metric.type !== 'state'),
@@ -143,6 +145,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunError(null);
     setRunning(false);
     setSaveState('idle');
+    setOfficialSaveState('idle');
+    setSavedAnswerId(null);
   };
 
   const execute = async () => {
@@ -154,6 +158,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     const runEnv = env;
     setRunning(true);
     setSaveState('idle');
+    setOfficialSaveState('idle');
+    setSavedAnswerId(null);
     setRunError(null);
     setRun(null);
     const dates = exactRange(range);
@@ -218,6 +224,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunError(null);
     setRunning(false);
     setSaveState('idle');
+    setOfficialSaveState('idle');
+    setSavedAnswerId(null);
   };
 
   if (registry.loading) return <Loading what="reading registry capabilities…" />;
@@ -233,14 +241,34 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     pointCount,
   });
 
-  const saveAnswer = async () => {
-    if (!currentRun || !project || saveState === 'saving' || saveState === 'saved') return;
-    setSaveState('saving');
+  const saveAnswer = async (makeOfficial = false) => {
+    if (!currentRun || !client || !project || saveState === 'saving' || officialSaveState === 'saving') return;
+    if (makeOfficial && (!officialSaveAllowed || officialSaveState === 'saved')) return;
+    if (!makeOfficial && saveState === 'saved') return;
+
+    let answerId = savedAnswerId;
+    if (!answerId) {
+      setSaveState('saving');
+      if (makeOfficial) setOfficialSaveState('saving');
+      try {
+        const saved = await client.createAnalysisView(project, savedAnswerInput(currentRun, template.key));
+        answerId = saved.id;
+        setSavedAnswerId(saved.id);
+        setSaveState('saved');
+      } catch {
+        setSaveState('error');
+        if (makeOfficial) setOfficialSaveState('error');
+        return;
+      }
+    }
+
+    if (!makeOfficial) return;
+    setOfficialSaveState('saving');
     try {
-      await client!.createAnalysisView(project, savedAnswerInput(currentRun, template.key));
-      setSaveState('saved');
+      await client.setAnalysisViewOfficial(project, answerId, true);
+      setOfficialSaveState('saved');
     } catch {
-      setSaveState('error');
+      setOfficialSaveState('saved_unofficial');
     }
   };
 
@@ -326,8 +354,6 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           funnel={registry.data?.funnels.find((item) => item.key === (currentRun.spec.source.kind === 'funnel' ? currentRun.spec.source.key : '')) ?? null}
           result={currentRun.result}
           requestedTransition={requestedTransition}
-          relatedEvidence={relatedEvidence.data ?? { releases: [], experiments: [] }}
-          relatedEvidenceUnavailable={Boolean(relatedEvidence.error)}
           env={env}
         />
       )}
@@ -343,9 +369,11 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           followUp={currentRun.summary.followUp}
           followUpTask={followUpAgentTask(currentRun.spec, currentRun.summary)}
           saveState={saveState}
+          officialSaveState={officialSaveAllowed ? officialSaveState : 'hidden'}
           saveVariant={funnelSurface ? 'outline' : 'default'}
           onSave={() => void saveAnswer()}
-          chart={<ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
+          onSaveOfficial={officialSaveAllowed ? () => void saveAnswer(true) : undefined}
+          chart={<ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} showEvidenceSummary={false} />}
           evidence={<>Aggregation: {currentRun.spec.evidence.aggregation}. Sample: {currentRun.spec.evidence.sampleSize ?? 'unavailable'}. Coverage: {currentRun.spec.evidence.coverage}. Comparison: {currentRun.spec.evidence.comparisonBasis}. Computed from {currentRun.spec.evidence.source} at {new Date(currentRun.spec.evidence.computedAt).toLocaleString()}.</>}
         />
       )}
@@ -610,7 +638,7 @@ function summarizeProductAnswer(
     ? 'Previous-period comparison is unavailable.'
     : Math.abs(result.summary.delta_percentage_points) < 0.05
       ? 'It is stable versus the previous exact period.'
-      : `${result.summary.delta_percentage_points > 0 ? 'Up' : 'Down'} ${Math.abs(result.summary.delta_percentage_points).toLocaleString()} percentage points versus the previous exact period.`;
+      : `${result.summary.delta_percentage_points > 0 ? 'Up' : 'Down'} ${formatPercentagePointMagnitude(result.summary.delta_percentage_points)} percentage points versus the previous exact period.`;
   return {
     takeaway: currentValue === null
       ? `${title} is rendered, but the server summary has no conversion denominator.`
@@ -628,6 +656,8 @@ function summarizeProductAnswer(
 
 export interface FunnelLossSummary {
   kind: 'absolute' | 'percentage';
+  fromStep: number;
+  toStep: number;
   fromLabel: string;
   toLabel: string;
   fromMetric: string;
@@ -658,6 +688,8 @@ export function selectServerFunnelLoss(
   if (!from || !to) return null;
   return {
     kind: selected.kind,
+    fromStep: selected.loss.from_step,
+    toStep: selected.loss.to_step,
     fromLabel: from.label,
     toLabel: to.label,
     fromMetric: from.metric_key,
@@ -674,25 +706,29 @@ function FunnelBiggestLoss({
   funnel,
   result,
   requestedTransition,
-  relatedEvidence,
-  relatedEvidenceUnavailable,
   env,
 }: {
   funnel: Funnel | null;
   result: FunnelQueryResult;
   requestedTransition: RequestedFunnelTransition | null;
-  relatedEvidence: RelatedFunnelEvidence;
-  relatedEvidenceUnavailable: boolean;
   env: string;
 }) {
   const { client, project } = useStore();
   const [taskVisible, setTaskVisible] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [proposalState, setProposalState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [proposalDecisionId, setProposalDecisionId] = useState<string | null>(null);
+  const [investigationState, setInvestigationState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [investigationId, setInvestigationId] = useState<string | null>(null);
+  const [idempotencyKey, setIdempotencyKey] = useState('');
+  const investigations = useAsync(async (): Promise<FunnelInvestigation[]> => {
+    if (!client || !project || !funnel) return [];
+    return client.funnelInvestigations(project, { env, funnel: funnel.key, limit: 10 });
+  }, [client, project, env, funnel?.key]);
   useEffect(() => {
-    setProposalState('idle');
-    setProposalDecisionId(null);
+    setInvestigationState('idle');
+    setInvestigationId(null);
+    setIdempotencyKey(globalThis.crypto?.randomUUID?.() ?? `funnel-${Date.now()}-${Math.random()}`);
+    setTaskVisible(false);
+    setCopied(false);
   }, [env, funnel?.key, result.meta.computed_at]);
   const summary = selectServerFunnelLoss(result, requestedTransition);
   if (!funnel) return null;
@@ -712,11 +748,11 @@ function FunnelBiggestLoss({
   if (summary.lostActors === 0) {
     return <AnswerCanvas><div className="p-4 sm:p-5"><div className="text-sm font-medium text-muted-foreground">Biggest loss</div><h2 className="mt-1 text-xl font-semibold">No measured loss in this period</h2><p className="mt-2 text-sm text-muted-foreground">Every measured actor reached each saved funnel step. No loss or investigate action is implied.</p></div></AnswerCanvas>;
   }
-  const compatible = selectCompatibleFunnelEvidence(result, summary.toMetric, relatedEvidence, env);
-  const proposalRelease = compatible.releases.find((release) => release.status === 'deployed' || release.status === 'observing') ?? null;
   const absoluteLabel = funnelLossLabel(result, result.summary?.biggest_absolute_loss ?? null);
   const percentageLabel = funnelLossLabel(result, result.summary?.biggest_percentage_loss ?? null);
-  const task = `Investigate the biggest measured loss in funnel ${funnel.key} without changing its definition.\n\nGoal: ${funnel.goal}\nEnvironment and exact period are in the attached Poolstatis query.\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nCurrent loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nUse registered metrics and trusted properties only. Compare safe breakdowns, report sample and data-quality limits, and prepare an evidence-backed proposal for human review.`;
+  const task = investigationId
+    ? `Investigate one measured transition without changing its definition.\n\nPoolstatis investigation: ${investigationId}\nProject: ${project}\nSaved funnel: ${funnel.key}\nGoal: ${funnel.goal}\nEnvironment: ${env}\nExact UTC range: ${result.meta.date_range.from} to ${result.meta.date_range.to}\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nObserved loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nRead the immutable artifact from GET /api/v1/projects/${project}/funnel-investigations/${investigationId}. The equivalent MCP tool is source/local only until the next package release; @poolstatis/mcp@0.6.0 does not include it. Use registered metrics and trusted properties only. Report sample and data-quality limits. Treat every result as descriptive, not causal, and cite the investigation id in any later release work.`
+    : '';
   const copyTask = async () => {
     try {
       await navigator.clipboard.writeText(task);
@@ -725,15 +761,24 @@ function FunnelBiggestLoss({
       setTaskVisible(true);
     }
   };
-  const saveProposal = async () => {
-    if (!proposalRelease || !client || !project || proposalState === 'saving' || proposalState === 'saved') return;
-    setProposalState('saving');
+  const saveInvestigation = async () => {
+    if (!client || !project || !idempotencyKey || investigationState === 'saving' || investigationState === 'saved') return;
+    setInvestigationState('saving');
     try {
-      const saved = await client.evaluateRelease(project, proposalRelease.id);
-      setProposalDecisionId(saved.decision.id);
-      setProposalState('saved');
+      const saved = await client.createFunnelInvestigation(project, {
+        idempotency_key: idempotencyKey,
+        funnel: funnel.key,
+        env,
+        date_from: result.meta.date_range.from,
+        date_to: result.meta.date_range.to,
+        from_step: summary.fromStep,
+        to_step: summary.toStep,
+      });
+      setInvestigationId(saved.investigation.id);
+      setInvestigationState('saved');
+      investigations.reload();
     } catch {
-      setProposalState('error');
+      setInvestigationState('error');
     }
   };
   return (
@@ -754,7 +799,13 @@ function FunnelBiggestLoss({
             <FunnelFact label="Affected goal" value={funnel.goal} />
           </div>
         </div>
-        <Button className="h-11 w-full lg:w-auto" onClick={() => void copyTask()}>{copied ? 'Investigation copied' : 'Investigate this step'}</Button>
+        <div className="flex w-full flex-col gap-2 lg:w-auto">
+          <Button className="h-11 w-full" onClick={() => void saveInvestigation()} disabled={!idempotencyKey || investigationState === 'saving' || investigationState === 'saved'}>
+            {investigationState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
+            {investigationState === 'saving' ? 'Saving evidence…' : investigationState === 'saved' ? 'Investigation saved' : `Investigate ${summary.fromLabel} → ${summary.toLabel}`}
+          </Button>
+          {investigationId ? <Button className="h-11 w-full" variant="outline" onClick={() => void copyTask()}>{copied ? 'Task copied' : 'Copy bounded task'}</Button> : null}
+        </div>
       </div>
       {result.evidence?.warnings.length ? (
         <div className="border-t px-4 py-3 text-sm sm:px-5">
@@ -763,41 +814,31 @@ function FunnelBiggestLoss({
         </div>
       ) : null}
       <div className="border-t px-4 py-4 text-sm sm:px-5">
-        <div className="font-medium">Related change evidence</div>
-        {compatible.releases.length === 0 && compatible.experiments.length === 0 ? (
-          <p className="mt-1 text-muted-foreground">
-            {relatedEvidenceUnavailable
-              ? 'Release and experiment evidence could not be read.'
-              : 'No compatible release or experiment overlaps this environment, metric and exact period.'}
-          </p>
-        ) : (
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
-            {compatible.releases.map((release) => (
-              <Link key={release.id} className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">
-                Release {release.commit_sha.slice(0, 10)}
-              </Link>
-            ))}
-            {compatible.experiments.map((experiment) => (
-              <Link key={experiment.id} className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/experiments">
-                Experiment {experiment.name}
-              </Link>
+        <div className="font-medium">Immutable investigation evidence</div>
+        <p className="mt-1 text-muted-foreground">Saving reruns this saved funnel and stores the exact query, result, evidence, creator and SHA-256 lineage. It does not create a causal claim or a Decisions proposal.</p>
+        {investigationId ? <p className="mt-2">Saved artifact <code className="break-all">{investigationId}</code>. Reference this id in any later release evaluation.</p> : null}
+        {investigationState === 'error' ? <p role="alert" className="mt-2 text-destructive">The evidence could not be reproduced and persisted. Rerun the funnel and try again.</p> : null}
+        {investigations.loading ? <p className="mt-2 text-muted-foreground">Reading saved investigations…</p> : investigations.error ? <p className="mt-2 text-muted-foreground">Saved investigations are temporarily unavailable.</p> : investigations.data?.length ? (
+          <div className="mt-3 space-y-2">
+            {investigations.data.map((investigation) => (
+              <div key={investigation.id} className="rounded-control border bg-muted/20 p-3">
+                <div className="font-medium">{investigation.transition.from_label} → {investigation.transition.to_label}</div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <code className="break-all">{investigation.id}</code>
+                  <span>{new Date(investigation.created_at).toLocaleString()}</span>
+                  <span>by {investigation.created_by}</span>
+                </div>
+              </div>
             ))}
           </div>
-        )}
+        ) : <p className="mt-2 text-muted-foreground">No persisted investigation exists for this saved funnel and environment yet.</p>}
+      </div>
+      <div className="border-t px-4 py-4 text-sm sm:px-5">
+        <div className="font-medium">Explicit Ship handoff</div>
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          {proposalDecisionId ? (
-            <Button asChild variant="outline"><Link to={`/decisions?decision=${encodeURIComponent(proposalDecisionId)}`}>Open proposal in Decisions</Link></Button>
-          ) : proposalRelease ? (
-            <Button type="button" variant="outline" onClick={() => void saveProposal()} disabled={proposalState === 'saving'}>
-              {proposalState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
-              {proposalState === 'saving' ? 'Saving proposal…' : 'Save proposal to Decisions'}
-            </Button>
-          ) : (
-            <p className="text-muted-foreground">Link a compatible registered release before creating a Decisions proposal.</p>
-          )}
-          <Link className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">Continue through Ship</Link>
+          <p className="text-muted-foreground">Poolstatis does not infer a release or experiment from metric and time overlap. Persist this investigation, then explicitly choose the relevant change in Ship.</p>
+          {investigationId ? <Link className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to={`/changes?investigation=${encodeURIComponent(investigationId)}`}>Continue through Ship with artifact {investigationId.slice(0, 8)}</Link> : null}
         </div>
-        {proposalState === 'error' && <p role="alert" className="mt-2 text-destructive">The release evidence could not be evaluated. Review its frozen contract and try again.</p>}
       </div>
       {taskVisible && (
         <div className="border-t p-4 sm:p-5">
@@ -831,6 +872,10 @@ function signedPercentagePoints(value: number) {
   return `${points > 0 ? '+' : ''}${points} pp`;
 }
 
+export function formatPercentagePointMagnitude(value: number): string {
+  return String(Math.round(Math.abs(value) * 10) / 10);
+}
+
 function fmtActors(value: number) {
   return `${value.toLocaleString()} ${value === 1 ? 'actor' : 'actors'}`;
 }
@@ -848,36 +893,6 @@ function funnelLossLabel(result: FunnelQueryResult, loss: NonNullable<FunnelQuer
   const from = result.steps[loss.from_step];
   const to = result.steps[loss.to_step];
   return from && to ? `${from.label} → ${to.label}` : 'Unavailable';
-}
-
-export function selectCompatibleFunnelEvidence(
-  result: FunnelQueryResult,
-  metricKey: string,
-  evidence: RelatedFunnelEvidence,
-  env: string,
-): RelatedFunnelEvidence {
-  const from = Date.parse(result.meta.date_range.from);
-  const to = Date.parse(result.meta.date_range.to);
-  const releases = evidence.releases.filter((release) => {
-    const deployedAt = Date.parse(release.deployed_at ?? '');
-    return release.env === env
-      && ['deployed', 'observing', 'decided'].includes(release.status)
-      && release.contract_snapshot.primary_metric_key === metricKey
-      && Number.isFinite(deployedAt)
-      && deployedAt >= from
-      && deployedAt <= to;
-  });
-  const experiments = evidence.experiments.filter((experiment) => {
-    const startedAt = Date.parse(experiment.started_at ?? '');
-    const concludedAt = experiment.concluded_at ? Date.parse(experiment.concluded_at) : Number.POSITIVE_INFINITY;
-    return experiment.env === env
-      && ['running', 'concluded'].includes(experiment.status)
-      && experiment.primary_metric_key === metricKey
-      && Number.isFinite(startedAt)
-      && startedAt <= to
-      && concludedAt >= from;
-  });
-  return { releases, experiments };
 }
 
 function Control({ label, children }: { label: string; children: React.ReactNode }) {

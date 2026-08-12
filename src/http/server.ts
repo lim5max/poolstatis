@@ -21,7 +21,8 @@ import type { SetupTaskProvider } from '../services/setupTaskProvider.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
   createApiKey, createProject, deleteProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
-  evaluateProjectHealth, getProjectPortfolio, listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
+  evaluateProjectHealth, getProjectPortfolio, listProjectsWithStats, revokeApiKey, revokePersonalApiKey,
+  unscopedKeyOutcomeReadiness, type Project,
 } from '../services/projects.js';
 import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
 import {
@@ -77,11 +78,15 @@ import {
   approveAction, getAction, listActions, prepareAction, rejectAction, retryAction,
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
+import {
+  createFunnelInvestigation, getFunnelInvestigation, listFunnelInvestigations,
+} from '../services/funnelInvestigations.js';
 import { registerAutomationRoutes } from './automationRoutes.js';
 import type { OutboundPolicyOptions } from '../security/outbound.js';
 import {
   getOrganizationUsage, getOrganizationUsageActivity, getOrganizationUsageControl, getOrganizationUsageRange,
 } from '../services/usage.js';
+import { configureUsageEntitlement, getUsageEntitlementControl } from '../services/usageEntitlements.js';
 import { getProjectControlTower } from '../services/controlTower.js';
 import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
 import {
@@ -92,12 +97,13 @@ import {
   RateLimitExceeded, TenantRateLimiter, type TenantRateLimitOptions,
 } from '../services/rateLimiter.js';
 import {
-  deprecateMetricSchema, applyExperimentDecisionSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, prepareExperimentSchema, rejectDecisionActionSchema, reviewDecisionSchema,
+  deprecateMetricSchema, applyExperimentDecisionSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, funnelInvestigationCreateSchema, measurementDeclarationSchema, prepareDecisionActionSchema, prepareExperimentSchema, rejectDecisionActionSchema, reviewDecisionSchema,
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   metricDefinitionApplySchema, metricDefinitionPreviewSchema, semanticProjectComparisonSchema,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
   browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usageDateSchema, usageMonthRangeSchema, usagePeriodSchema,
+  usageEntitlementUpdateSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -183,30 +189,46 @@ function authOwner(auth: AuthContext): string {
   return auth.keyId ? `key:${auth.keyId}` : `user:${auth.userId}`;
 }
 
-export interface HumanAutomationReviewer {
+export interface HumanReviewer {
   actor: string;
   role: 'owner' | 'admin';
 }
 
-/** Automation proposal review is a human control, never an API-key capability. */
-export function requireHumanAutomationReviewer(auth: AuthContext): HumanAutomationReviewer {
-  if (auth.kind !== 'user' || !auth.userId) {
-    throw new ApiError(
-      403,
-      'human_user_required',
-      'automation proposals can only be approved or rejected by an authenticated human user',
-      'open the admin with a signed-in workspace owner or admin; API keys and MCP remain read-only for proposals',
-    );
+/**
+ * Hosted review requires a signed-in owner/admin. Ownerless self-host personal
+ * tokens predate hosted identity and retain local-admin compatibility; Core
+ * cannot distinguish admin UI from MCP when both use that same token.
+ */
+export function requireHumanReviewer(auth: AuthContext, hosted = false): HumanReviewer {
+  if (auth.kind === 'user' && auth.userId) {
+    if (auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+      throw new ApiError(
+        403,
+        'insufficient_role',
+        'this workspace role cannot record the review',
+        'ask a workspace owner or admin to review the frozen evidence and payload',
+      );
+    }
+    return { actor: authOwner(auth), role: auth.userRole };
   }
-  if (auth.userRole !== 'owner' && auth.userRole !== 'admin') {
-    throw new ApiError(
-      403,
-      'insufficient_role',
-      'this workspace role cannot review automation proposals',
-      'ask a workspace owner or admin to review the frozen proposal',
-    );
+  if (!hosted && auth.kind === 'personal' && auth.userId === undefined && auth.userRole === undefined) {
+    return { actor: authOwner(auth), role: 'owner' };
   }
-  return { actor: authOwner(auth), role: auth.userRole };
+  throw new ApiError(
+    403,
+    'human_user_required',
+    'this review can only be recorded by an authenticated human user',
+    hosted
+      ? 'open the admin with a signed-in workspace owner or admin; hosted API keys and MCP remain read-only for review and execution'
+      : 'use the local admin with its ownerless self-host personal token; project keys remain read-only for review and execution',
+  );
+}
+
+export type HumanAutomationReviewer = HumanReviewer;
+
+/** Kept as the automation route contract while sharing the same human-only boundary. */
+export function requireHumanAutomationReviewer(auth: AuthContext, hosted = false): HumanAutomationReviewer {
+  return requireHumanReviewer(auth, hosted);
 }
 
 /** Hosted identities fail closed without a current owner/admin role. */
@@ -252,6 +274,25 @@ function requireUsageReadAccess(auth: AuthContext): void {
     'insufficient_scope',
     'organization usage requires a hosted user or organization-wide personal token',
     'use a hosted user session or a personal token with no project scope',
+  );
+}
+
+/** Core entitlement writes are local self-host controls, never hosted billing mutations. */
+function requireSelfHostUsageEntitlementAccess(auth: AuthContext, hosted: boolean): void {
+  if (hosted) {
+    throw new ApiError(
+      403,
+      'usage_entitlement_unavailable_hosted',
+      'hosted usage entitlements are not managed by the Core customer API',
+      'review usage here; plan, credit and operator limit changes remain in the private hosted control plane',
+    );
+  }
+  if (auth.kind === 'personal' && auth.projectId === null && hasOrganizationManagementRole(auth)) return;
+  throw new ApiError(
+    403,
+    'insufficient_scope',
+    'self-host usage entitlement changes require an organization-wide personal token',
+    'use a legacy self-host pt_ token; project secret keys cannot change organization limits',
   );
 }
 
@@ -531,6 +572,8 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
           || route === '/api/v1/me/usage/activity'
           || route === '/api/v1/me/usage/range') {
           requireUsageReadAccess(req.auth);
+        } else if (route === '/api/v1/me/usage/entitlement') {
+          requireSelfHostUsageEntitlementAccess(req.auth, Boolean(options.auth));
         } else if (route === '/api/v1/me/tokens' && req.method === 'POST') {
           requireTokenIssuanceAccess(req.auth);
         } else if (route === '/api/v1/me/tokens' || route === '/api/v1/me/tokens/:id') {
@@ -793,7 +836,7 @@ function registerPlatformRoutes(
     platform,
     resolveProject,
     actor: (req) => authOwner(req.auth),
-    humanReviewer: (req) => requireHumanAutomationReviewer(req.auth),
+    humanReviewer: (req) => requireHumanAutomationReviewer(req.auth, hosted),
   });
 
   app.get('/api/v1/account-mode', async (req) => {
@@ -866,6 +909,21 @@ function registerPlatformRoutes(
     return getOrganizationUsageActivity(ctx.pool, req.auth.orgId, from.data, to.data);
   });
 
+  app.get('/api/v1/me/usage/entitlement', async (req) => {
+    requireSelfHostUsageEntitlementAccess(req.auth, hosted);
+    return getUsageEntitlementControl(ctx.pool, req.auth.orgId);
+  });
+
+  app.put('/api/v1/me/usage/entitlement', async (req) => {
+    requireSelfHostUsageEntitlementAccess(req.auth, hosted);
+    return configureUsageEntitlement(
+      ctx.pool,
+      req.auth.orgId,
+      usageEntitlementUpdateSchema.parse(req.body),
+      authOwner(req.auth),
+    );
+  });
+
   app.get('/api/v1/projects', async (req) => {
     platform(req);
     const all = await listProjectsWithStats(ctx.pool, ctx.eventStore, req.auth.orgId);
@@ -892,6 +950,7 @@ function registerPlatformRoutes(
     return getProjectPortfolio(
       ctx.pool,
       ctx.eventStore,
+      ctx.query,
       req.auth.orgId,
       env,
       projectScoped ? 'project' : 'organization',
@@ -941,6 +1000,7 @@ function registerPlatformRoutes(
         events_24h: 0, events_7d: 0, events_30d: 0,
         last_event_at: null, registered_coverage_30d: null,
         key_outcome_available: false,
+        key_outcome_readiness: unscopedKeyOutcomeReadiness(),
         ...evaluatedHealth,
       });
     } catch (err) {
@@ -1617,6 +1677,49 @@ function registerPlatformRoutes(
     return result;
   });
 
+  app.post('/api/v1/projects/:slug/funnel-investigations', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const result = await createFunnelInvestigation(
+      ctx.pool,
+      ctx.query,
+      project.id,
+      funnelInvestigationCreateSchema.parse(req.body),
+      authOwner(req.auth),
+    );
+    return reply.status(result.idempotent ? 200 : 201).send(result);
+  });
+
+  app.get('/api/v1/projects/:slug/funnel-investigations', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env, funnel, limit } = req.query as { env?: string; funnel?: string; limit?: string };
+    if (env !== undefined && (env.trim().length < 1 || env.trim().length > 100)) {
+      throw badRequest('invalid_query_param', 'env must contain between 1 and 100 characters');
+    }
+    if (funnel !== undefined && !z.string().regex(/^[a-z][a-z0-9_]*$/).max(100).safeParse(funnel).success) {
+      throw badRequest('invalid_query_param', 'funnel must be a saved funnel key');
+    }
+    const parsedLimit = limit === undefined ? 50 : Number(limit);
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      throw badRequest('invalid_query_param', 'limit must be an integer between 1 and 100');
+    }
+    return {
+      investigations: await listFunnelInvestigations(ctx.pool, project.id, {
+        ...(env ? { env: env.trim() } : {}),
+        ...(funnel ? { funnel } : {}),
+        limit: parsedLimit,
+      }),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/funnel-investigations/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const id = z.string().uuid().parse((req.params as { id: string }).id);
+    return { investigation: await getFunnelInvestigation(ctx.pool, project.id, id) };
+  });
+
   app.post('/api/v1/projects/:slug/identity-links', async (req, reply) => {
     platform(req);
     const project = await resolveProject(req);
@@ -1989,22 +2092,25 @@ function registerPlatformRoutes(
 
   app.post('/api/v1/projects/:slug/decisions/:id/approve', async (req) => {
     platform(req);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const { rationale } = reviewDecisionSchema.parse(req.body);
-    return reviseDecision(ctx.pool, project.id, id, { action: 'approve', rationale }, authOwner(req.auth));
+    return reviseDecision(ctx.pool, project.id, id, { action: 'approve', rationale }, reviewer.actor);
   });
 
   app.post('/api/v1/projects/:slug/decisions/:id/reject', async (req) => {
     platform(req);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const { rationale } = reviewDecisionSchema.parse(req.body);
-    return reviseDecision(ctx.pool, project.id, id, { action: 'reject', rationale }, authOwner(req.auth));
+    return reviseDecision(ctx.pool, project.id, id, { action: 'reject', rationale }, reviewer.actor);
   });
 
   app.post('/api/v1/projects/:slug/decisions/:id/edit', async (req) => {
     platform(req);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const { outcome, rationale } = editDecisionSchema.parse(req.body);
@@ -2013,7 +2119,7 @@ function registerPlatformRoutes(
       project.id,
       id,
       { action: 'edit', outcome, rationale },
-      authOwner(req.auth),
+      reviewer.actor,
     );
   });
 
@@ -2058,27 +2164,30 @@ function registerPlatformRoutes(
 
   app.post('/api/v1/projects/:slug/actions/:id/approve', async (req) => {
     platform(req);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const body = approveDecisionActionSchema.parse(req.body);
-    return approveAction(ctx.pool, project.id, id, body.confirmation_fingerprint, authOwner(req.auth), {
+    return approveAction(ctx.pool, project.id, id, body.confirmation_fingerprint, reviewer.actor, {
       enqueueWebhook: (input) => ctx.webhooks.enqueueAction(input),
     });
   });
 
   app.post('/api/v1/projects/:slug/actions/:id/reject', async (req) => {
     platform(req);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const body = rejectDecisionActionSchema.parse(req.body);
-    return rejectAction(ctx.pool, project.id, id, body.rationale, authOwner(req.auth));
+    return rejectAction(ctx.pool, project.id, id, body.rationale, reviewer.actor);
   });
 
   app.post('/api/v1/projects/:slug/actions/:id/retry', async (req) => {
     platform(req);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
-    return retryAction(ctx.pool, project.id, id, authOwner(req.auth), {
+    return retryAction(ctx.pool, project.id, id, reviewer.actor, {
       enqueueWebhook: (input) => ctx.webhooks.enqueueAction(input),
     });
   });

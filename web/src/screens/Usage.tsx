@@ -7,7 +7,9 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { AccountMode, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, UsageControlResult } from '../api/types';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import type { AccountMode, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, UsageControlResult, UsageEntitlementControl } from '../api/types';
+import { ApiError } from '../api/client';
 
 function currentUtcMonth(): string {
   return new Date().toISOString().slice(0, 7);
@@ -248,18 +250,27 @@ function formatForecastDate(value: string | null): string | null {
     .format(new Date(value));
 }
 
-function UsageHero({ usage, planName, mode, onReviewContributors }: {
+function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure, onRetry }: {
   usage: UsageControlResult;
   planName: string | null;
   mode: AccountMode | null;
   onReviewContributors: () => void;
+  onConfigure: () => void;
+  onRetry: () => void;
 }) {
   const capped = usage.cap.state === 'finite' && usage.cap.value !== null;
+  const capUnavailable = usage.cap.state === 'unavailable'
+    || usage.answer.state === 'unavailable'
+    || usage.evidence.state === 'unavailable';
   const quantity = typeof usage.answer.primary_value?.value === 'number' ? usage.answer.primary_value.value : null;
-  const progress = capped && quantity !== null && usage.cap.value! > 0
-    ? Math.max(0, Math.min(1, quantity / usage.cap.value!))
+  const progress = capped && quantity !== null
+    ? usage.cap.value === 0
+      ? 1
+      : Math.max(0, Math.min(1, quantity / usage.cap.value!))
     : null;
-  const status = capped
+  const status = capUnavailable
+    ? 'Entitlement unavailable'
+    : capped
     ? usage.cap.remaining === 0 ? 'Hard limit reached' : `${whole(usage.cap.remaining ?? 0)} events remaining`
     : 'No hard cap configured';
   const hardLimitForecast = usage.threshold_forecasts.find((threshold) => threshold.percent === 100);
@@ -289,7 +300,9 @@ function UsageHero({ usage, planName, mode, onReviewContributors }: {
         <div className="sm:text-right">
           <div className="text-sm font-medium">{status}</div>
           <div className="mt-1 text-sm text-muted-foreground">
-            {capped ? `${whole(usage.cap.value!)} event limit` : 'Metered only · no maximum implied'}
+            {capUnavailable
+              ? 'No operational conclusion available'
+              : capped ? `${whole(usage.cap.value!)} event limit` : 'Metered only · no maximum implied'}
           </div>
         </div>
       </div>
@@ -301,28 +314,29 @@ function UsageHero({ usage, planName, mode, onReviewContributors }: {
         <UsageFact label="Cycle forecast" value={usage.pace.projected_cycle_end === null ? 'Unavailable' : whole(Math.round(usage.pace.projected_cycle_end))} note={forecastNote} />
         <UsageFact
           label="Attributed"
-          value={attributedPercent === null ? 'No events' : `${attributedPercent}%`}
-          note={attributedPercent === null ? 'Nothing to reconcile' : `${whole(usage.reconciliation.attributed_quantity)} of ${whole(usage.reconciliation.metered_quantity)}`}
+          value={capUnavailable ? 'Unavailable' : attributedPercent === null ? 'No events' : `${attributedPercent}%`}
+          note={capUnavailable ? 'No trustworthy reconciliation' : attributedPercent === null ? 'Nothing to reconcile' : `${whole(usage.reconciliation.attributed_quantity)} of ${whole(usage.reconciliation.metered_quantity)}`}
         />
       </dl>
       <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-xl text-sm text-muted-foreground">
-          {usage.cap.consequence_at_100_percent ?? 'Enforcement is off; accepted events continue to be metered.'}
+          {capUnavailable
+            ? 'Usage entitlement evidence is unavailable; enforcement state is unknown.'
+            : usage.cap.consequence_at_100_percent ?? 'Enforcement is off; accepted events continue to be metered.'}
         </p>
         <div className="flex flex-wrap gap-2">
-          {mode?.deployment.mode === 'self_host' && !capped && (
-            <Button asChild className="h-11"><Link to={mode.primary_action.href}>Configure cap</Link></Button>
+          {capUnavailable ? (
+            <Button className="h-11" onClick={onRetry}>Retry usage</Button>
+          ) : mode?.capabilities.configure_usage_entitlement === 'available' && !capped && (
+            <Button className="h-11" onClick={onConfigure}>Configure cap</Button>
           )}
-          {mode?.deployment.mode === 'hosted' && (
-            <Button asChild className="h-11"><Link to="/profile">Review plan</Link></Button>
-          )}
-          <Button
+          {!capUnavailable && <Button
             className="h-11 shrink-0"
-            variant={(mode?.deployment.mode === 'self_host' && !capped) || mode?.deployment.mode === 'hosted' ? 'outline' : 'default'}
+            variant={mode?.capabilities.configure_usage_entitlement === 'available' && !capped ? 'outline' : 'default'}
             onClick={onReviewContributors}
-          >Review contributors</Button>
-          {mode?.deployment.mode === 'self_host' && capped && (
-            <Button asChild variant="outline" className="h-11"><Link to={mode.primary_action.href}>Configure cap</Link></Button>
+          >Review contributors</Button>}
+          {!capUnavailable && mode?.capabilities.configure_usage_entitlement === 'available' && capped && (
+            <Button variant="outline" className="h-11" onClick={onConfigure}>Configure cap</Button>
           )}
         </div>
       </div>
@@ -344,6 +358,7 @@ function UsageFact({ label, value, note }: { label: string; value: string; note:
 }
 
 function CurrentContributors({ usage }: { usage: UsageControlResult }) {
+  const { setProject } = useStore();
   const reconciliation = usage.reconciliation;
   const reconciliationMessage = reconciliation.unattributed_quantity > 0
     ? `${whole(reconciliation.unattributed_quantity)} accepted events are not reconciled to retained project and environment contributors.`
@@ -360,7 +375,12 @@ function CurrentContributors({ usage }: { usage: UsageControlResult }) {
           <TableBody>{usage.contributors.map((project) => (
             <TableRow key={`${project.project_slug}:${project.environment}`}>
               <TableCell>
-                <div className="font-medium">{project.project_name}</div>
+                <Link
+                  to={`/projects?project=${encodeURIComponent(project.project_slug)}&env=${encodeURIComponent(project.environment)}`}
+                  onClick={() => setProject(project.project_slug, project.environment)}
+                  aria-label={`Open ${project.project_name} project health in ${project.environment}`}
+                  className="font-medium underline-offset-4 hover:underline"
+                >{project.project_name}</Link>
                 <code className="block text-sm text-muted-foreground">{project.project_slug}</code>
                 <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground md:hidden">
                   <code>{project.environment}</code>
@@ -422,8 +442,8 @@ function UsageThresholds({ usage }: { usage: UsageControlResult }) {
             <div>
               <div><span className="font-mono tabular-nums">{threshold.percent}%</span><span className="ml-2 text-muted-foreground">{THRESHOLD_MEANING[threshold.percent]}</span></div>
               <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-                <span>Notification: {threshold.notification_state === 'not_configured' ? 'Not configured' : threshold.notification_state}</span>
-                <span>Audit: {threshold.audit_source.replace('_', ' ')}</span>
+                <span>Record: {threshold.notification_state === 'not_configured' ? 'Not configured' : threshold.notification_state === 'armed' ? 'Armed in Core' : 'Recorded in Core'}</span>
+                <span>Source: {threshold.audit_source.replaceAll('_', ' ')}</span>
               </div>
             </div>
             <span className={threshold.state === 'reached' || threshold.state === 'projected'
@@ -442,6 +462,125 @@ function UsageThresholds({ usage }: { usage: UsageControlResult }) {
   );
 }
 
+export function parseUsageEntitlementForm(input: {
+  hardLimit: string;
+  thresholds: string;
+  currentUsage: number;
+}): { hard_limit: number | null; warning_thresholds: number[] } | { error: string } {
+  const capText = input.hardLimit.trim();
+  const hardLimit = capText === '' ? null : Number(capText);
+  if (hardLimit !== null && (!Number.isSafeInteger(hardLimit) || hardLimit < 0)) {
+    return { error: 'Hard limit must be a non-negative whole number, or blank for no cap.' };
+  }
+  if (hardLimit !== null && hardLimit < input.currentUsage) {
+    return { error: `Hard limit cannot be below current usage (${whole(input.currentUsage)}).` };
+  }
+  const thresholdTexts = input.thresholds.split(',').map((value) => value.trim()).filter(Boolean);
+  const warningThresholds = thresholdTexts.map(Number);
+  if (warningThresholds.some((value) => !Number.isSafeInteger(value) || value < 1)) {
+    return { error: 'Recorded thresholds must be comma-separated positive whole numbers.' };
+  }
+  if (warningThresholds.length > 16) return { error: 'Use 16 recorded thresholds or fewer.' };
+  if (warningThresholds.some((value, index) => index > 0 && value <= warningThresholds[index - 1]!)) {
+    return { error: 'Recorded thresholds must be unique and strictly ascending.' };
+  }
+  if (hardLimit !== null && warningThresholds.some((value) => value > hardLimit)) {
+    return { error: 'A recorded threshold cannot be above the hard limit.' };
+  }
+  return { hard_limit: hardLimit, warning_thresholds: warningThresholds };
+}
+
+function UsageEntitlementDialog({ entitlement, onCancel, onSaved, onConflict }: {
+  entitlement: UsageEntitlementControl;
+  onCancel: () => void;
+  onSaved: (input: { expected_revision: number; hard_limit: number | null; warning_thresholds: number[]; reason: string }) => Promise<void>;
+  onConflict: () => Promise<UsageEntitlementControl>;
+}) {
+  const [currentEntitlement, setCurrentEntitlement] = useState(entitlement);
+  const [hardLimit, setHardLimit] = useState(currentEntitlement.hard_limit?.toString() ?? '');
+  const [thresholds, setThresholds] = useState(currentEntitlement.warning_thresholds.join(', '));
+  const [reason, setReason] = useState('Update self-host usage protection from the Usage page.');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const suggestedThresholds = () => {
+    const cap = Number(hardLimit);
+    if (!Number.isSafeInteger(cap) || cap < 0) {
+      setError('Enter a valid hard limit before applying percentage thresholds.');
+      return;
+    }
+    if (cap === 0) {
+      setThresholds('');
+      setError(null);
+      return;
+    }
+    setThresholds([...new Set([50, 75, 90, 100].map((percent) => Math.ceil(cap * percent / 100)))].join(', '));
+    setError(null);
+  };
+  const submit = async () => {
+    const parsed = parseUsageEntitlementForm({ hardLimit, thresholds, currentUsage: currentEntitlement.current_usage });
+    if ('error' in parsed) { setError(parsed.error); return; }
+    if (reason.trim().length < 10) { setError('Reason must contain at least 10 characters.'); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      await onSaved({ expected_revision: currentEntitlement.revision, ...parsed, reason: reason.trim() });
+    } catch (nextError) {
+      if (nextError instanceof ApiError && nextError.code === 'usage_entitlement_revision_conflict') {
+        try {
+          const refreshed = await onConflict();
+          setCurrentEntitlement(refreshed);
+          setHardLimit(refreshed.hard_limit?.toString() ?? '');
+          setThresholds(refreshed.warning_thresholds.join(', '));
+          setError('Configuration changed elsewhere. Current values were reloaded; review and apply again.');
+          setBusy(false);
+          return;
+        } catch (refreshError) {
+          setError(refreshError instanceof Error ? refreshError.message : 'Could not reload usage configuration.');
+          setBusy(false);
+          return;
+        }
+      }
+      setError(nextError instanceof Error ? nextError.message : 'Usage configuration failed.');
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && !busy && onCancel()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="serif font-normal text-xl">Configure self-host usage</DialogTitle>
+          <DialogDescription>Applies to every project and environment in this organization.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
+          <Label className="grid gap-1.5 text-sm">
+            Hard limit
+            <Input aria-label="Hard limit" inputMode="numeric" value={hardLimit} onChange={(event) => setHardLimit(event.target.value)} placeholder="Blank means no Core cap" />
+            <span className="text-xs text-muted-foreground">Current cycle: {whole(currentEntitlement.current_usage)} accepted events.</span>
+          </Label>
+          <Label className="grid gap-1.5 text-sm">
+            Recorded thresholds
+            <Input aria-label="Recorded thresholds" value={thresholds} onChange={(event) => setThresholds(event.target.value)} placeholder="500, 750, 900, 1000" />
+          </Label>
+          <div><Button type="button" variant="outline" onClick={suggestedThresholds}>Use 50 / 75 / 90 / 100%</Button></div>
+          <Label className="grid gap-1.5 text-sm">
+            Reason
+            <Input aria-label="Configuration reason" value={reason} onChange={(event) => setReason(event.target.value)} />
+          </Label>
+          <div className="rounded-control border bg-muted/30 p-3 text-sm text-muted-foreground">
+            A batch exceeding the cap is rejected. Threshold crossings are recorded in Core; no email or webhook is delivered.
+          </div>
+          {currentEntitlement.audit.latest && <p className="text-xs text-muted-foreground">Last change · revision {currentEntitlement.audit.latest.revision} · {currentEntitlement.audit.latest.reason}</p>}
+          {error && <ErrorNote>{error}</ErrorNote>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button onClick={submit} disabled={busy}>{busy ? 'Applying…' : 'Apply configuration'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function Usage() {
   const { client, tokenKind, account } = useStore();
   const currentPeriod = currentUtcMonth();
@@ -450,6 +589,7 @@ export function Usage() {
   const [monthSelection, setMonthSelection] = useState(() => usageMonthPresetRange('current', currentPeriod));
   const [monthPreset, setMonthPreset] = useState<MonthRangePreset | null>('current');
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [configureOpen, setConfigureOpen] = useState(false);
   const allowed = tokenKind === 'personal' || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
   const result = useAsync(() => client && allowed ? client.usageControl(currentPeriod) : Promise.resolve(null), [client, allowed, currentPeriod]);
   const mode = useAsync(
@@ -457,6 +597,13 @@ export function Usage() {
       ? client.accountMode().catch(() => null)
       : Promise.resolve(null),
     [client, allowed],
+  );
+  const entitlementAvailable = mode.data?.capabilities.configure_usage_entitlement === 'available';
+  const entitlement = useAsync(
+    () => client && allowed && entitlementAvailable && typeof client.usageEntitlement === 'function'
+      ? client.usageEntitlement()
+      : Promise.resolve(null),
+    [client, allowed, entitlementAvailable],
   );
   const activityError = validateUsageActivityRange(activitySelection);
   const activity = useAsync(
@@ -474,6 +621,9 @@ export function Usage() {
   }
 
   const usage = result.data;
+  const usageUnavailable = usage?.answer.state === 'unavailable'
+    || usage?.evidence.state === 'unavailable'
+    || usage?.cap.state === 'unavailable';
   return (
     <div className="space-y-4">
       <header>
@@ -486,14 +636,24 @@ export function Usage() {
             usage={usage}
             planName={account?.billing?.plan?.name ?? null}
             mode={mode.data}
+            onConfigure={() => setConfigureOpen(true)}
+            onRetry={result.reload}
             onReviewContributors={() => document.getElementById('usage-contributors-title')?.scrollIntoView({
               behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
               block: 'start',
             })}
           />
-          {usage.attention.map((item) => <WarningNote key={item.id}>{item.title}: {item.impact}</WarningNote>)}
-          <div aria-labelledby="usage-contributors-title"><CurrentContributors usage={usage} /></div>
-          <UsageThresholds usage={usage} />
+          {usageUnavailable
+            ? <RecoverableError onRetry={result.reload}>Usage response could not be verified.</RecoverableError>
+            : <>
+              {mode.data?.deployment.mode === 'hosted' && (
+                <p className="text-sm text-muted-foreground">Plan changes and delivered usage alerts are unavailable in Core.</p>
+              )}
+              {entitlementAvailable && entitlement.error && <RecoverableError onRetry={entitlement.reload}>{entitlement.error}</RecoverableError>}
+              {usage.attention.map((item) => <WarningNote key={item.id}>{item.title}: {item.impact}</WarningNote>)}
+              <div aria-labelledby="usage-contributors-title"><CurrentContributors usage={usage} /></div>
+              <UsageThresholds usage={usage} />
+            </>}
         </>
       )}
       <details className="rounded-panel border bg-card" onToggle={(event) => setHistoryOpen(event.currentTarget.open)}>
@@ -524,6 +684,24 @@ export function Usage() {
           />
         </div>
       </details>
+      {configureOpen && entitlement.data && client && (
+        <UsageEntitlementDialog
+          entitlement={entitlement.data}
+          onCancel={() => setConfigureOpen(false)}
+          onSaved={async (input) => {
+            await client.configureUsageEntitlement(input);
+            setConfigureOpen(false);
+            entitlement.reload();
+            result.reload();
+          }}
+          onConflict={async () => {
+            const refreshed = await client.usageEntitlement();
+            entitlement.reload();
+            result.reload();
+            return refreshed;
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -76,7 +76,7 @@ describe('project control tower', () => {
     expect(serialized).not.toContain('private@example.com');
     expect(() => controlTowerResultSchema.parse(result.body)).not.toThrow();
     expect(Object.keys(result.body).sort()).toEqual([
-      'answer', 'attention', 'evidence', 'generated_at', 'home_funnel_key', 'primary_action', 'request_id',
+      'answer', 'attention', 'evidence', 'generated_at', 'home_answer_surface', 'home_funnel_key', 'home_metric_key', 'primary_action', 'request_id',
       'schema_version', 'scope', 'secondary_actions',
     ]);
   });
@@ -211,13 +211,17 @@ describe('project control tower', () => {
       const ingested = await api(funnelEnv, funnelEnv.ingestToken, 'POST', '/i/v1/events', {
         batch_id: 'control-tower-funnel-loss',
         events: [
+          { event: 'tower.entered', distinct_id: 'tower-prev-a', timestamp: hoursAgo(24 * 40) },
+          { event: 'tower.completed', distinct_id: 'tower-prev-a', timestamp: hoursAgo(24 * 40 - 1) },
+          { event: 'tower.entered', distinct_id: 'tower-prev-b', timestamp: hoursAgo(24 * 39) },
+          { event: 'tower.completed', distinct_id: 'tower-prev-b', timestamp: hoursAgo(24 * 39 - 1) },
           { event: 'tower.entered', distinct_id: 'tower-a', timestamp: hoursAgo(4) },
           { event: 'tower.completed', distinct_id: 'tower-a', timestamp: hoursAgo(3) },
           { event: 'tower.entered', distinct_id: 'tower-b', timestamp: hoursAgo(2) },
           { event: 'tower.entered', distinct_id: 'tower-c', timestamp: hoursAgo(1) },
         ],
       });
-      expect(ingested.body.accepted).toBe(4);
+      expect(ingested.body.accepted).toBe(8);
 
       const result = await api(
         funnelEnv,
@@ -227,6 +231,13 @@ describe('project control tower', () => {
       );
 
       expect(result.status).toBe(200);
+      const funnelAttention = result.body.attention.find((item: { id: string }) => item.id === 'funnel.biggest_loss.tower_activation');
+      expect(funnelAttention.delta).toMatchObject({
+        unit: 'percentage_point',
+        direction: 'down',
+        comparison_label: 'previous exact period',
+      });
+      expect(funnelAttention.delta.value).toBeCloseTo(-66.6667, 3);
       expect(result.body.attention).toEqual(expect.arrayContaining([
         expect.objectContaining({
           id: 'funnel.biggest_loss.tower_activation',
@@ -309,6 +320,8 @@ describe('project control tower', () => {
       );
 
       expect(result.status).toBe(200);
+      expect(result.body.home_answer_surface).toBe('product');
+      expect(result.body.home_metric_key).toBe('activation_completed');
       expect(result.body.home_funnel_key).toBe('z_activation_path');
       expect(result.body.attention).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -316,6 +329,17 @@ describe('project control tower', () => {
           affected: [{ kind: 'funnel', ref: 'z_activation_path' }],
         }),
       ]));
+      const readiness = await api(
+        funnelEnv,
+        funnelEnv.secretToken,
+        'GET',
+        `/api/v1/projects/${funnelEnv.projectSlug}/readiness?env=prod`,
+      );
+      const homeDependency = readiness.body.answer_dependencies.find((answer: { answer_id: string }) => answer.answer_id === 'home');
+      expect(homeDependency).toMatchObject({
+        funnel_key: result.body.home_funnel_key,
+        metric_keys: expect.arrayContaining([result.body.home_metric_key]),
+      });
     } finally {
       await funnelEnv.close();
     }
@@ -350,6 +374,11 @@ describe('organization usage control', () => {
          ($1, $3, 'dev', 'events_stored', $4::date, 10, 'tower-other-now', 'tower-other-now', now())`,
       [orgId, env.projectId, other.id, `${period}-01`],
     );
+    await env.pool.query(
+      `INSERT INTO usage_warnings (org_id, meter_key, period_start, threshold, quantity)
+       VALUES ($1, 'events_stored', $2::date, 50, 60)`,
+      [orgId, `${period}-01`],
+    );
 
     const result = await api(env, env.personalToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
 
@@ -362,10 +391,10 @@ describe('organization usage control', () => {
       cap: { state: 'finite', value: 100, remaining: 30, consequence_at_100_percent: expect.any(String) },
       pace: { observed_days: 2, events_per_day_7d: 10, projected_cycle_end: expect.any(Number), confidence: 'sufficient' },
       threshold_forecasts: [
-        expect.objectContaining({ percent: 50, state: 'reached', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
-        expect.objectContaining({ percent: 75, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
-        expect.objectContaining({ percent: 90, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
-        expect.objectContaining({ percent: 100, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
+        expect.objectContaining({ percent: 50, configured_threshold: 50, state: 'reached', reached_or_projected_at: expect.any(String), notification_state: 'recorded', audit_source: 'usage_warning' }),
+        expect.objectContaining({ percent: 75, configured_threshold: 75, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'armed', audit_source: 'organization_entitlement' }),
+        expect.objectContaining({ percent: 90, configured_threshold: 90, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'armed', audit_source: 'organization_entitlement' }),
+        expect.objectContaining({ percent: 100, configured_threshold: null, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
       ],
       contributors: expect.arrayContaining([
         expect.objectContaining({
@@ -428,13 +457,14 @@ describe('organization usage control', () => {
       const result = await api(foreign, foreign.personalToken, 'GET', `/api/v1/me/usage/control?period=${period}&org_id=ignored`);
       expect(result.status).toBe(200);
       expect(result.body).toMatchObject({
+        answer: { state: 'empty' },
         cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
         pace: { observed_days: 0, events_per_day_7d: null, projected_cycle_end: null, confidence: 'insufficient' },
         threshold_forecasts: [
-          { percent: 50, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-          { percent: 75, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-          { percent: 90, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-          { percent: 100, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 50, state: 'not_applicable', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 75, state: 'not_applicable', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 90, state: 'not_applicable', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 100, state: 'not_applicable', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
         ],
         contributors: [],
         reconciliation: {
@@ -446,10 +476,56 @@ describe('organization usage control', () => {
           state: 'reconciled',
         },
       });
+      await foreign.pool.query(
+        `INSERT INTO organization_entitlements (org_id, meter_key, hard_limit, warning_thresholds)
+         SELECT org_id, 'events_stored', 100, ARRAY[]::bigint[] FROM projects WHERE id = $1`,
+        [foreign.projectId],
+      );
+      const cappedEmpty = await api(foreign, foreign.personalToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
+      expect(cappedEmpty.body).toMatchObject({
+        answer: { state: 'empty' },
+        cap: { state: 'finite', value: 100, remaining: 100 },
+      });
       const secret = await api(foreign, foreign.secretToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
       expect(secret.status).toBe(403);
     } finally {
       await foreign.close();
+    }
+  });
+
+  it('treats a zero cap as an active blocking state even with zero accepted events', async () => {
+    const zero = await createTestEnv({ ingestBuffer: false });
+    try {
+      const organizationId = (await zero.pool.query<{ org_id: string }>(
+        'SELECT org_id::text FROM projects WHERE id = $1',
+        [zero.projectId],
+      )).rows[0]!.org_id;
+      await zero.pool.query(
+        `INSERT INTO organization_entitlements (org_id, meter_key, hard_limit, warning_thresholds)
+         VALUES ($1, 'events_stored', 0, ARRAY[0]::bigint[])`,
+        [organizationId],
+      );
+
+      const period = new Date().toISOString().slice(0, 7);
+      const result = await api(zero, zero.personalToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        answer: {
+          state: 'partial',
+          headline: 'No events can be accepted',
+          takeaway: expect.stringContaining('hard limit is zero'),
+        },
+        cap: { state: 'finite', value: 0, remaining: 0 },
+        attention: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'usage.threshold.100',
+            severity: 'critical',
+            priority: { blocking_now: true, forecasted_at: null },
+          }),
+        ]),
+      });
+    } finally {
+      await zero.close();
     }
   });
 

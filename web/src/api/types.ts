@@ -80,13 +80,13 @@ export type UpdateSavedAnswerInput = Partial<Pick<
 export type MeasurementReadinessSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info' | 'none';
 export type MeasurementReadinessGroupKey = 'tracking_plan' | 'properties' | 'identity' | 'data_sources';
 export interface MeasurementReadinessRepairAction {
-  action_code: 'activate_metric' | 'repair_funnel' | 'review_property' | 'verify_identity' | 'connect_data_source' | 'verify_data_source';
+  action_code: 'register_metric' | 'activate_metric' | 'configure_answer' | 'repair_funnel' | 'review_property' | 'verify_identity' | 'connect_data_source' | 'verify_data_source';
   kind: 'navigate';
   label: string;
   href: string;
 }
 export interface MeasurementReadinessGap {
-  code: 'metric_inactive' | 'funnel_definition_incomplete' | 'property_untrusted'
+  code: 'metric_missing' | 'metric_inactive' | 'answer_not_queryable' | 'funnel_definition_incomplete' | 'property_untrusted'
     | 'identity_evidence_unavailable' | 'identity_coverage_incomplete'
     | 'data_source_missing' | 'data_source_unverified';
   severity: Exclude<MeasurementReadinessSeverity, 'none'>;
@@ -104,6 +104,15 @@ export interface MeasurementReadinessGroup {
   repair_action: MeasurementReadinessRepairAction | null;
   evidence: Record<string, number>;
 }
+export interface MeasurementAnswerDependency {
+  answer_id: string;
+  surface: 'home' | 'web' | 'product' | 'funnel' | 'saved';
+  label: string;
+  href: string;
+  metric_keys: string[];
+  property_keys: string[];
+  funnel_key: string | null;
+}
 export interface MeasurementReadiness {
   schema_version: 1;
   generated_at: string;
@@ -114,6 +123,7 @@ export interface MeasurementReadiness {
     incomplete_count: number;
     highest_severity: MeasurementReadinessSeverity;
   };
+  answer_dependencies: MeasurementAnswerDependency[];
   groups: MeasurementReadinessGroup[];
   fix_next: (MeasurementReadinessRepairAction & {
     group: MeasurementReadinessGroupKey;
@@ -168,6 +178,27 @@ export interface Funnel {
   window_seconds: number;
 }
 
+export interface FunnelInvestigation {
+  id: string;
+  env: string;
+  saved_funnel: Funnel;
+  transition: {
+    from_step: number;
+    to_step: number;
+    from_metric: string;
+    to_metric: string;
+    from_label: string;
+    to_label: string;
+  };
+  query_spec: Record<string, unknown>;
+  query_result: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  lineage: { query_fingerprint: string; result_fingerprint: string; artifact_fingerprint: string };
+  idempotency_key: string;
+  created_by: string;
+  created_at: string;
+}
+
 export type FeatureFlagStatus = 'draft' | 'active' | 'archived';
 
 export interface FeatureFlagVariant {
@@ -198,10 +229,12 @@ export interface MonitorPolicy {
   id: string; policy_key: string; name: string; current_version: number;
   status: 'active' | 'paused' | 'archived'; next_evaluation_at: string;
   revision: {
-    metric_key: string; env: string; comparison_rule: string; threshold: number;
+    metric_key: string; env: string; target_kind: 'project' | 'release' | 'experiment';
+    target_id: string | null; comparison_rule: string; threshold: number;
     minimum_sample: number; window_minutes: number; cadence_minutes: number;
     cooldown_seconds: number; owner: string; destination_ids: string[];
-    proposal_kind: 'pause' | 'rollback' | null; version: number;
+    proposal_kind: 'pause' | 'rollback' | null; proposal_target: Record<string, unknown> | null;
+    version: number;
   };
 }
 
@@ -216,7 +249,8 @@ export interface InsightFeedSchedule {
 }
 
 export interface AutomationProposal {
-  id: string; kind: 'pause' | 'rollback'; status: 'proposed' | 'approved' | 'rejected';
+  id: string; policy_id: string; finding_id: string;
+  kind: 'pause' | 'rollback'; status: 'proposed' | 'approved' | 'rejected';
   target: Record<string, unknown>; payload: Record<string, unknown>; undo: Record<string, unknown>;
   confirmation_fingerprint: string; proposed_by?: string; reviewed_by?: string | null;
   reviewed_at?: string | null; review_rationale: string | null; created_at: string;
@@ -598,6 +632,7 @@ export interface AttentionItem {
   impact: string;
   affected: Array<{ kind: 'answer' | 'metric' | 'funnel' | 'project' | 'customer'; ref: string }>;
   evidence: EvidenceBlock;
+  delta?: AnswerBlock['delta'];
   primary_action: ControlTowerAction;
 }
 
@@ -605,6 +640,8 @@ export interface ControlTowerResult {
   schema_version: 1;
   request_id: string;
   generated_at: string;
+  home_answer_surface?: 'website' | 'product' | 'legacy';
+  home_metric_key?: string | null;
   home_funnel_key?: string | null;
   scope: {
     organization_id?: string;
@@ -782,13 +819,28 @@ export interface ProjectWithStats {
   last_event_at: string | null;
   registered_coverage_30d: number | null;
   key_outcome_available: boolean;
+  key_outcome_readiness: {
+    state: 'ready' | 'unavailable';
+    contract_key: string | null;
+    metric_key: string | null;
+    evaluated_at: string;
+    guardrail: {
+      id: 'key_outcome_queryable';
+      state: 'pass' | 'fail';
+      reason_code: 'query_succeeded' | 'no_active_contract' | 'no_queryable_outcome'
+        | 'outcome_query_failed' | 'external_environment_scope_unverified'
+        | 'contract_selection_bounded' | 'environment_scope_required';
+      reason: string;
+      observed_events: number | null;
+    };
+  };
   health: 'healthy' | 'needs_attention' | 'no_data';
   attention: string[];
   health_evaluation: {
     source: 'server';
     evaluated_at: string;
     guardrails: Array<{
-      id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'metric_review_queue';
+      id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'key_outcome_queryable' | 'metric_review_queue';
       state: 'pass' | 'fail' | 'not_applicable';
       observed: number | null;
       expectation: string;
@@ -835,6 +887,11 @@ export interface AccountMode {
     compare_projects: boolean;
     manage_profile: boolean;
     manage_personal_tokens: boolean;
+    review_decisions: boolean;
+    set_official_answers: boolean;
+    configure_usage_entitlement: 'available' | 'unavailable_hosted' | 'unavailable_scope';
+    review_plan: 'unavailable';
+    set_usage_alert: 'unavailable';
   };
   primary_action: {
     id: 'manage_hosted_account' | 'sign_in_to_manage_account' | 'open_local_setup';
@@ -1406,6 +1463,7 @@ export interface DataHealthResult {
     accepted_basis: string;
     rejected_basis: string;
     rejected_history_first_observed_at: string | null;
+    issue_novelty_basis: string;
   };
   summary: { accepted_24h: number; rejected_24h: number; accepted_7d: number; rejected_7d: number };
   windows: { last_24h: DataHealthWindow; last_7d: DataHealthWindow };
@@ -1418,6 +1476,12 @@ export interface DataHealthResult {
     count: number;
     first_seen: string;
     last_seen: string;
+    novelty: {
+      state: 'new' | 'recurring' | 'historical';
+      basis: 'privacy-safe warning occurrences';
+      current_window: { from: string; to: string; count: number };
+      comparison_baseline: { from: string; to: string; count: number };
+    };
     affected_answer_ids: string[];
     repair_action: { kind: 'navigate'; label: string; href: string };
     watermark: DataHealthWatermark;
@@ -1604,7 +1668,7 @@ export interface UsageControlResult extends ControlTowerResult {
   meter: 'events_stored';
   cycle: { from: string; to: string; timezone: 'UTC' };
   cap: {
-    state: 'finite' | 'not_configured';
+    state: 'finite' | 'not_configured' | 'unavailable';
     value: number | null;
     remaining: number | null;
     consequence_at_100_percent: string | null;
@@ -1619,8 +1683,9 @@ export interface UsageControlResult extends ControlTowerResult {
     percent: 50 | 75 | 90 | 100;
     state: 'reached' | 'projected' | 'not_projected' | 'not_applicable';
     reached_or_projected_at: string | null;
-    notification_state: 'not_configured';
-    audit_source: 'usage_ledger';
+    configured_threshold: number | null;
+    notification_state: 'not_configured' | 'armed' | 'recorded';
+    audit_source: 'usage_ledger' | 'organization_entitlement' | 'usage_warning';
   }>;
   contributors: Array<{
     project_slug: string;
@@ -1638,6 +1703,32 @@ export interface UsageControlResult extends ControlTowerResult {
     unattributed_quantity: number;
     overattributed_quantity: number;
     state: 'reconciled' | 'partial';
+  };
+}
+
+export interface UsageEntitlementControl {
+  schema_version: 1;
+  meter: 'events_stored';
+  revision: number;
+  hard_limit: number | null;
+  warning_thresholds: number[];
+  current_usage: number;
+  remaining: number | null;
+  changed: boolean;
+  consequences: {
+    scope: 'organization_all_projects_and_environments';
+    cap_enforcement: 'accepted_batches_exceeding_cap_are_rejected' | 'accepted_events_continue_without_core_cap';
+    threshold_recording: 'crossings_recorded_in_core_without_external_delivery' | 'not_configured';
+    effective_cycle: string;
+  };
+  audit: {
+    source: 'usage_entitlement_revisions';
+    latest: null | {
+      revision: number;
+      actor_kind: 'personal_token' | 'hosted_user' | 'unknown';
+      reason: string;
+      created_at: string;
+    };
   };
 }
 

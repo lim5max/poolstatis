@@ -22,17 +22,22 @@ import {
   releaseOutcome,
   type ShipStage,
 } from '../components/ship-lifecycle';
-import type { Decision, DecisionDetail, Experiment, MeasurementContract, Release } from '../api/types';
+import type { Decision, DecisionDetail, Experiment, FunnelInvestigation, MeasurementContract, Release } from '../api/types';
 
 type LifecycleItem =
   | { kind: 'release'; id: string; stage: ShipStage; updatedAt: string; release: Release; detail?: DecisionDetail }
-  | { kind: 'experiment'; id: string; stage: ShipStage; updatedAt: string; experiment: Experiment };
+  | { kind: 'experiment'; id: string; stage: ShipStage; updatedAt: string; experiment: Experiment; linkedRelease?: Release };
 
 export function Changes() {
   const { client, project, env } = useStore();
   const [params] = useSearchParams();
   const requestedReleaseId = params.get('release');
   const requestedExperimentKey = params.get('experiment');
+  const requestedInvestigationId = params.get('investigation');
+  const investigation = useAsync(async (): Promise<FunnelInvestigation | null> => {
+    if (!requestedInvestigationId) return null;
+    return client!.funnelInvestigation(project!, requestedInvestigationId);
+  }, [client, project, requestedInvestigationId]);
   const audit = useAsync(async () => {
     const [releases, listedDecisions, experiments, contracts] = await Promise.all([
       client!.releases(project!, { env }),
@@ -94,6 +99,7 @@ export function Changes() {
     }),
     ...experiments.map((experiment): LifecycleItem => ({
       kind: 'experiment', id: experiment.id, stage: deriveExperimentStage(experiment), updatedAt: experiment.updated_at, experiment,
+      linkedRelease: linkedExperimentRelease(experiment, releases),
     })),
   ].sort((a, b) => SHIP_STAGES.indexOf(a.stage) - SHIP_STAGES.indexOf(b.stage)
     || Number(!isRequestedShipItem(a, requestedReleaseId, requestedExperimentKey)) - Number(!isRequestedShipItem(b, requestedReleaseId, requestedExperimentKey))
@@ -108,6 +114,29 @@ export function Changes() {
           Follow every release and experiment from preparation to a human-reviewed outcome.
         </p>
       </header>
+      {requestedInvestigationId ? (
+        investigation.loading ? <Loading what="reading funnel investigation…" />
+          : investigation.error ? <ErrorNote>{investigation.error}</ErrorNote>
+            : investigation.data && investigation.data.env !== env ? (
+              <ErrorNote>
+                Investigation environment <code>{investigation.data.env}</code> does not match the current Ship environment <code>{env}</code>. Switch to the exact artifact environment before using this evidence; it has not been carried into the current context.
+              </ErrorNote>
+            )
+            : investigation.data ? (
+              <Panel title="Investigation carried into Ship" right={<Badge variant="outline">Evidence only</Badge>}>
+                <div className="space-y-2 text-sm">
+                  <div className="font-medium">{investigation.data.transition.from_label} → {investigation.data.transition.to_label}</div>
+                  <p className="text-muted-foreground">{investigation.data.saved_funnel.goal}</p>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <code className="break-all">{investigation.data.id}</code>
+                    <span>Exact environment <code>{investigation.data.env}</code></span>
+                    <span>{new Date(investigation.data.created_at).toLocaleString()}</span>
+                  </div>
+                  <p className="text-muted-foreground">This immutable artifact is descriptive context. It does not attach itself to a release, claim causality, or start an evaluation.</p>
+                </div>
+              </Panel>
+            ) : null
+      ) : null}
       {items.length === 0 ? (
         <>
           <GuidedFirstValue
@@ -180,7 +209,7 @@ export function Changes() {
                 <div className="divide-y">
                   {stageItems.map((item) => item.kind === 'release'
                     ? <ReleaseLifecycleRow key={`release:${item.id}`} release={item.release} detail={item.detail} busy={busy === item.id} requested={item.id === requestedReleaseId} onEvaluate={() => evaluate(item.release)} />
-                    : <ExperimentLifecycleRow key={`experiment:${item.id}`} experiment={item.experiment} requested={item.experiment.key === requestedExperimentKey} />)}
+                    : <ExperimentLifecycleRow key={`experiment:${item.id}`} experiment={item.experiment} linkedRelease={item.linkedRelease} requested={item.experiment.key === requestedExperimentKey} />)}
                 </div>
               </section>
             );
@@ -372,9 +401,12 @@ function ReleaseLifecycleRow({ release, detail, busy, requested, onEvaluate }: {
   );
 }
 
-function ExperimentLifecycleRow({ experiment, requested }: { experiment: Experiment; requested: boolean }) {
+function ExperimentLifecycleRow({ experiment, linkedRelease, requested }: { experiment: Experiment; linkedRelease?: Release; requested: boolean }) {
   const stage = deriveExperimentStage(experiment);
   const outcome = experimentOutcome(experiment);
+  const expectedDecisionAt = linkedRelease
+    ? linkedRelease.next_evaluation_at ?? expectedDecisionDate(linkedRelease)
+    : null;
   return (
     <article aria-label={experiment.name} aria-current={requested ? 'true' : undefined} data-ship-experiment={experiment.key} tabIndex={requested ? -1 : undefined} className={`grid min-w-0 gap-4 p-4 outline-none lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:p-5 ${requested ? 'bg-primary/5 ring-1 ring-inset ring-primary/30' : ''}`}>
       <div className="min-w-0">
@@ -389,8 +421,8 @@ function ExperimentLifecycleRow({ experiment, requested }: { experiment: Experim
       <div className="flex items-start lg:justify-end"><Button asChild size="sm" variant="outline"><Link to="/experiments">Open experiment</Link></Button></div>
       <dl className="grid min-w-0 gap-3 rounded-control border bg-muted/20 p-3 text-xs sm:grid-cols-3 lg:col-span-3">
         <div className="min-w-0"><dt className="text-muted-foreground">Blocker</dt><dd className="mt-1 break-words font-medium">{experiment.status === 'running' ? 'Collecting exposure evidence.' : experiment.status === 'draft' ? 'Experiment has not started.' : 'No recorded blocker.'}</dd></div>
-        <div className="min-w-0"><dt className="text-muted-foreground">Owner</dt><dd className="mt-1 break-words font-medium">Not recorded</dd></div>
-        <div className="min-w-0"><dt className="text-muted-foreground">Expected decision</dt><dd className="mt-1 break-words font-medium">{experiment.concluded_at ? formatDate(experiment.concluded_at) : 'Not scheduled'}</dd></div>
+        <div className="min-w-0"><dt className="text-muted-foreground">Linked release decision owner</dt><dd className="mt-1 break-words font-medium">{linkedRelease?.contract_snapshot.decision_owner ?? 'Unavailable'}</dd></div>
+        <div className="min-w-0"><dt className="text-muted-foreground">Linked release decision date</dt><dd className="mt-1 break-words font-medium">{expectedDecisionAt ? formatDate(expectedDecisionAt) : 'Unavailable'}</dd></div>
       </dl>
       <details className="group/disclosure min-w-0 lg:col-span-3">
         <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8">Technical details</DisclosureSummary>
@@ -401,6 +433,7 @@ function ExperimentLifecycleRow({ experiment, requested }: { experiment: Experim
           <span>Metric <code>{experiment.primary_metric_key}</code></span>
           <span>Flag <code>{experiment.flag_key}</code></span>
           <span>Snapshot <code>{experiment.snapshot_integrity}</code></span>
+          {linkedRelease && <span>Linked release <code className="break-all">{linkedRelease.id}</code></span>}
         </div>
       </details>
     </article>
@@ -426,6 +459,12 @@ function expectedDecisionDate(release: Release): string | null {
   const deployedAt = new Date(release.deployed_at).getTime();
   if (!Number.isFinite(deployedAt)) return null;
   return new Date(deployedAt + release.contract_snapshot.observation_window_days * 86_400_000).toISOString();
+}
+
+function linkedExperimentRelease(experiment: Experiment, releases: Release[]): Release | undefined {
+  return releases
+    .filter((release) => release.experiment_key === experiment.key)
+    .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())[0];
 }
 
 function isRequestedShipItem(

@@ -20,11 +20,14 @@ import {
   experimentOutcome,
 } from '../components/ship-lifecycle';
 import type {
+  AutomationProposal,
   Experiment,
   ExperimentReadiness,
   ExperimentResult,
   FeatureFlag,
   Metric,
+  MonitorFinding,
+  MonitorPolicy,
 } from '../api/types';
 
 type DeliveryIntent = 'rollout' | 'experiment' | 'config';
@@ -64,6 +67,9 @@ export function Experiments() {
   const [intent, setIntent] = useState<DeliveryIntent | null>(null);
   const { data, error, loading, reload } = useAsync(async () => Promise.all([
     client!.flags(project!), client!.experiments(project!), client!.metrics(project!),
+  ]), [project]);
+  const automation = useAsync(async () => Promise.all([
+    client!.monitorPolicies(project!), client!.monitorFindings(project!), client!.automationProposals(project!),
   ]), [project]);
 
   if (loading) return <Loading what="reading feature delivery…" />;
@@ -175,7 +181,16 @@ export function Experiments() {
 
       <div role="tabpanel">
         {tab === 'experiments'
-          ? <ExperimentBoard experiments={visibleExperiments} flags={visibleFlags} env={env} onChanged={reload} />
+          ? <ExperimentBoard
+              experiments={visibleExperiments}
+              flags={visibleFlags}
+              env={env}
+              automation={automation.data ? {
+                policies: automation.data[0], findings: automation.data[1], proposals: automation.data[2],
+              } : null}
+              automationError={automation.error}
+              onChanged={() => { reload(); automation.reload(); }}
+            />
           : <FlagsBoard flags={visibleFlags} env={env} onChanged={reload} />}
       </div>
     </div>
@@ -436,11 +451,15 @@ function ExperimentBoard({
   experiments,
   flags,
   env,
+  automation,
+  automationError,
   onChanged,
 }: {
   experiments: Experiment[];
   flags: FeatureFlag[];
   env: string;
+  automation: ExperimentAutomationData | null;
+  automationError: string | null;
   onChanged: () => void;
 }) {
   const groups = [
@@ -466,6 +485,8 @@ function ExperimentBoard({
                 experiment={experiment}
                 flag={flags.find((flag) => flag.key === experiment.flag_key)}
                 env={env}
+                automation={automationForExperiment(experiment, automation)}
+                automationUnavailable={Boolean(automationError)}
                 onChanged={onChanged}
               />
             ))}
@@ -503,11 +524,15 @@ function ExperimentCard({
   experiment,
   flag,
   env,
+  automation,
+  automationUnavailable,
   onChanged,
 }: {
   experiment: Experiment;
   flag?: FeatureFlag;
   env: string;
+  automation: ExperimentAutomationContext;
+  automationUnavailable: boolean;
   onChanged: () => void;
 }) {
   const { client, project } = useStore();
@@ -558,6 +583,7 @@ function ExperimentCard({
         <Button asChild variant="outline" size="sm"><Link to={`/changes?experiment=${encodeURIComponent(experiment.key)}`}>Open in Ship</Link></Button>
         <Button asChild variant="outline" size="sm"><Link to={`/decisions?experiment=${encodeURIComponent(experiment.key)}`}>Open in Decisions</Link></Button>
       </div>
+      <ExperimentMonitoringContext context={automation} unavailable={automationUnavailable} />
       {legacyAllEnvironments && (
         <p className="mt-3 text-sm text-muted-foreground">Legacy all-environment experiments are read only here. Review every environment before using the legacy conclude operation.</p>
       )}
@@ -592,6 +618,83 @@ function ExperimentCard({
         </div>
       </details>
     </article>
+  );
+}
+
+interface ExperimentAutomationData {
+  policies: MonitorPolicy[];
+  findings: MonitorFinding[];
+  proposals: AutomationProposal[];
+}
+
+interface ExperimentAutomationContext {
+  policies: MonitorPolicy[];
+  findings: MonitorFinding[];
+  proposals: AutomationProposal[];
+}
+
+function automationForExperiment(
+  experiment: Experiment,
+  data: ExperimentAutomationData | null,
+): ExperimentAutomationContext {
+  if (!data || experiment.env === null) return { policies: [], findings: [], proposals: [] };
+  const policies = data.policies.filter((policy) => (
+    policy.revision.target_kind === 'experiment'
+      && policy.revision.target_id === experiment.id
+      && policy.revision.env === experiment.env
+  ));
+  const policyIds = new Set(policies.map((policy) => policy.id));
+  return {
+    policies,
+    findings: data.findings.filter((finding) => policyIds.has(finding.policy_id)),
+    proposals: data.proposals.filter((proposal) => policyIds.has(proposal.policy_id)),
+  };
+}
+
+function ExperimentMonitoringContext({ context, unavailable }: {
+  context: ExperimentAutomationContext;
+  unavailable: boolean;
+}) {
+  if (unavailable) {
+    return <p className="mt-3 text-xs text-muted-foreground" role="status">Monitoring context is temporarily unavailable. Experiment evidence and traffic state remain unchanged.</p>;
+  }
+  if (context.policies.length === 0) return null;
+  const latestFinding = [...context.findings].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
+  const pendingProposal = context.proposals.find((proposal) => proposal.status === 'proposed') ?? null;
+  return (
+    <section className="mt-3 rounded-panel border bg-muted/20 p-3" aria-label="Experiment monitoring">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium">Experiment monitoring</div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {context.policies.length} explicit {context.policies.length === 1 ? 'policy' : 'policies'} · {context.findings.length} immutable {context.findings.length === 1 ? 'finding' : 'findings'}
+          </p>
+        </div>
+        <Button asChild variant="outline" size="sm"><Link to="/control-tower">Open control tower</Link></Button>
+      </div>
+      <div className="mt-3 space-y-2">
+        {context.policies.map((policy) => (
+          <div key={policy.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <Badge variant="outline">{policy.status}</Badge>
+            <span className="font-medium">{policy.name}</span>
+            <span className="text-muted-foreground">
+              <code>{policy.revision.metric_key}</code> · {policy.revision.comparison_rule.replaceAll('_', ' ')} {policy.revision.threshold} · minimum {policy.revision.minimum_sample} · owner {policy.revision.owner}
+            </span>
+          </div>
+        ))}
+      </div>
+      {latestFinding && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Latest finding <time dateTime={latestFinding.created_at}>{new Date(latestFinding.created_at).toLocaleString()}</time> · severity {latestFinding.severity}.
+        </p>
+      )}
+      {pendingProposal && (
+        <div className="mt-3 border-t pt-3 text-sm">
+          <div className="flex flex-wrap items-center gap-2"><Badge variant="destructive">Review required</Badge><span className="font-medium">{pendingProposal.kind} proposal</span></div>
+          <p className="mt-1 text-xs text-muted-foreground">The monitor froze exact target, payload, undo state, and fingerprint. The proposal has not changed traffic; only a signed-in owner or admin may review it.</p>
+        </div>
+      )}
+    </section>
   );
 }
 

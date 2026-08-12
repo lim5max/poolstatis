@@ -41,6 +41,12 @@ describe('web analytics Query DSL', () => {
       dimensions: ['route', 'device', 'browser'],
       env: 'prod',
     });
+    expect(querySchema.parse({
+      kind: 'web_analytics',
+      metric: 'web_page_views',
+      date_from: '-7d',
+      dimensions: [],
+    })).toMatchObject({ dimensions: [] });
     expect(() => querySchema.parse({
       kind: 'web_sessions',
       metric: 'web_page_views',

@@ -237,12 +237,21 @@ export interface ActorSummary {
 }
 
 export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
-export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc' | 'interesting_desc';
 
 export type ActorOrderReason =
   | 'last_seen_in_window'
   | 'first_seen_in_window'
-  | 'event_volume_in_window';
+  | 'event_volume_in_window'
+  | 'recent_activation_in_window';
+
+export interface ActorRankReason {
+  kind: 'recently_activated';
+  metric_key: string;
+  metric_name: string;
+  metric_purpose: string;
+  observed_at: string;
+}
 
 export interface ActorListItem {
   distinct_id: string;
@@ -256,6 +265,7 @@ export interface ActorListItem {
   pinned_properties: Record<string, unknown>;
   identity_status: ActorIdentityStatus;
   order_reason: ActorOrderReason;
+  rank_reason: ActorRankReason | null;
   rank_evidence_window: { from: string; to: string };
 }
 
@@ -263,6 +273,7 @@ export interface ActorListItem {
 export interface ActorListRecord extends ActorListItem {
   distinct_events: number;
   registered_share: number;
+  interesting_at: string | null;
 }
 
 export interface ActorsKeyset {
@@ -281,6 +292,7 @@ export interface ActorsQuery {
   cursor?: ActorsKeyset;
   searchExactId?: string;
   activity?: FunnelStepQuery;
+  interesting?: FunnelStepQuery;
   trustedBrowserSessions: boolean;
 }
 

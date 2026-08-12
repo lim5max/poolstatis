@@ -27,6 +27,36 @@ beforeAll(async () => {
   );
   expect(created.status).toBe(201);
   affectedAnswerId = created.body.view.id;
+  expect((await api(
+    env,
+    env.secretToken,
+    'POST',
+    `/api/v1/projects/${env.projectSlug}/funnels`,
+    {
+      key: 'activation_path',
+      name: 'Activation path',
+      goal: 'Measures whether the first meaningful activation outcome is reached.',
+      steps: [
+        { metric_key: 'activation_completed', label: 'Activated' },
+        { metric_key: 'activation_completed', label: 'Activated again' },
+      ],
+      window_seconds: 86_400,
+    },
+  )).status).toBe(201);
+  expect((await api(
+    env,
+    env.secretToken,
+    'POST',
+    `/api/v1/projects/${env.projectSlug}/metrics`,
+    {
+      key: 'web_page_views',
+      name: 'Canonical page views',
+      type: 'count',
+      source: { event: 'page.viewed', filters: [] },
+      purpose: 'Measures accepted canonical browser page views for Web answers.',
+      tags: ['surface:web'],
+    },
+  )).status).toBe(201);
 });
 
 afterAll(async () => {
@@ -71,9 +101,29 @@ describe('server-owned measurement readiness', () => {
     expect(tracking.incomplete_count).toBeGreaterThan(0);
     expect(tracking.gaps).toContainEqual(expect.objectContaining({
       code: 'metric_inactive',
-      affected_answer_ids: [affectedAnswerId],
+      affected_answer_ids: expect.arrayContaining([
+        affectedAnswerId,
+        'funnel:activation_path',
+        'home',
+      ]),
       repair_action: expect.objectContaining({ action_code: 'activate_metric' }),
     }));
+    expect(tracking.gaps).toContainEqual(expect.objectContaining({
+      code: 'metric_inactive',
+      definition_ref: 'web_page_views',
+      affected_answer_ids: expect.arrayContaining(['web']),
+    }));
+    expect(readiness.body.answer_dependencies).toEqual(expect.arrayContaining([
+      expect.objectContaining({ answer_id: 'home', surface: 'home', href: '/' }),
+      expect.objectContaining({ answer_id: 'web', surface: 'web', href: '/analyze/web' }),
+      expect.objectContaining({
+        answer_id: 'funnel:activation_path',
+        surface: 'funnel',
+        funnel_key: 'activation_path',
+        metric_keys: ['activation_completed'],
+      }),
+      expect.objectContaining({ answer_id: affectedAnswerId, surface: 'saved' }),
+    ]));
 
     const properties = readiness.body.groups.find((group: { key: string }) => group.key === 'properties');
     expect(properties.gaps).toContainEqual(expect.objectContaining({
@@ -107,7 +157,12 @@ describe('server-owned measurement readiness', () => {
     expect(sources).toMatchObject({ highest_severity: 'critical' });
     expect(sources.gaps).toContainEqual(expect.objectContaining({
       code: 'data_source_missing',
-      affected_answer_ids: [affectedAnswerId],
+      affected_answer_ids: expect.arrayContaining([
+        affectedAnswerId,
+        'funnel:activation_path',
+        'home',
+        'web',
+      ]),
     }));
     expect(readiness.body.fix_next).toMatchObject({
       group: 'data_sources',
@@ -144,7 +199,106 @@ describe('server-owned measurement readiness', () => {
     expect(identity.gaps).toContainEqual(expect.objectContaining({
       code: 'identity_evidence_unavailable',
       definition_ref: 'retained_actor',
-      affected_answer_ids: [],
+      affected_answer_ids: expect.arrayContaining(['home', 'product:retained_actor']),
     }));
+    expect(readiness.body.answer_dependencies).toContainEqual(expect.objectContaining({
+      answer_id: 'product:retained_actor',
+      href: '/analyze/product?metric=retained_actor',
+    }));
+  });
+
+  it('reports missing required metrics and an unqueryable answer when the registry is empty', async () => {
+    const empty = await createTestEnv({ ingestBuffer: false });
+    try {
+      const intent = await api(empty, empty.secretToken, 'PUT', `/api/v1/projects/${empty.projectSlug}/intent`, {
+        project_mode: 'website',
+        website_domain: 'example.com',
+        goal_ids: ['website_traffic'],
+        custom_goal: null,
+        primary_goal_id: 'website_traffic',
+      });
+      expect(intent.status).toBe(200);
+
+      const readiness = await api(
+        empty,
+        empty.secretToken,
+        'GET',
+        `/api/v1/projects/${empty.projectSlug}/readiness?env=prod`,
+      );
+      expect(readiness.status).toBe(200);
+      const tracking = readiness.body.groups.find((item: { key: string }) => item.key === 'tracking_plan');
+      expect(tracking.gaps).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: 'metric_missing',
+          definition_ref: 'web_page_views',
+          affected_answer_ids: expect.arrayContaining(['home', 'web']),
+          repair_action: expect.objectContaining({ action_code: 'register_metric' }),
+        }),
+        expect.objectContaining({
+          code: 'answer_not_queryable',
+          definition_ref: 'home',
+          affected_answer_ids: ['home'],
+          repair_action: expect.objectContaining({ action_code: 'configure_answer' }),
+        }),
+      ]));
+      expect(readiness.body.fix_next).toMatchObject({
+        gap_code: 'metric_missing',
+        action_code: 'register_metric',
+      });
+    } finally {
+      await empty.close();
+    }
+  });
+
+  it('links a proposed Web conversion to the Web answer without treating it as queryable', async () => {
+    const proposed = await createTestEnv({ ingestBuffer: false });
+    try {
+      const created = await api(
+        proposed,
+        proposed.secretToken,
+        'POST',
+        `/api/v1/projects/${proposed.projectSlug}/metrics`,
+        {
+          key: 'web_signup_conversion',
+          name: 'Web signup conversion',
+          type: 'conversion',
+          source: {
+            from: { event: 'web.signup_started', filters: [] },
+            to: { event: 'web.signup_completed', filters: [] },
+            window_seconds: 86_400,
+          },
+          purpose: 'Measures whether a website visitor completes the registered signup outcome.',
+          tags: ['surface:web'],
+        },
+      );
+      expect(created.status).toBe(201);
+
+      const readiness = await api(
+        proposed,
+        proposed.secretToken,
+        'GET',
+        `/api/v1/projects/${proposed.projectSlug}/readiness?env=prod`,
+      );
+      expect(readiness.status).toBe(200);
+      expect(readiness.body.answer_dependencies).toContainEqual(expect.objectContaining({
+        answer_id: 'web',
+        surface: 'web',
+        href: '/analyze/web',
+        metric_keys: expect.arrayContaining(['web_page_views', 'web_signup_conversion']),
+      }));
+      const tracking = readiness.body.groups.find((group: { key: string }) => group.key === 'tracking_plan');
+      expect(tracking.gaps).toContainEqual(expect.objectContaining({
+        code: 'metric_inactive',
+        definition_ref: 'web_signup_conversion',
+        affected_answer_ids: expect.arrayContaining(['web']),
+      }));
+      expect(tracking.gaps).toContainEqual(expect.objectContaining({
+        code: 'answer_not_queryable',
+        definition_ref: 'web',
+        affected_answer_ids: ['web'],
+      }));
+    } finally {
+      await proposed.close();
+    }
   });
 });

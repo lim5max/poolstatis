@@ -30,9 +30,9 @@ describe('organization write policy inventory', () => {
       source.matchAll(/app\.(post|put|patch|delete)\('([^']+)'/g),
       (match) => `${match[1]!.toUpperCase()} ${match[2]!}`,
     );
-    expect(allRoutes).toHaveLength(146);
+    expect(allRoutes).toHaveLength(151);
     expect(new Set(allRoutes).size).toBe(allRoutes.length);
-    expect(routes).toHaveLength(86);
+    expect(routes).toHaveLength(88);
     expect(routes.every((route) =>
       route.includes(' /api/v1/') || route.includes(' /i/v1/'))).toBe(true);
 
@@ -42,8 +42,8 @@ describe('organization write policy inventory', () => {
         return requiresOrganizationWriteReadiness(method, path);
       });
     const allowed = allRoutes.filter((route) => !blocked.includes(route));
-    expect(blocked).toHaveLength(72);
-    expect(allowed).toHaveLength(74);
+    expect(blocked).toHaveLength(74);
+    expect(allowed).toHaveLength(77);
 
     const exemptions = routes
       .filter((route) => {
@@ -64,7 +64,7 @@ describe('organization write policy inventory', () => {
   it('keeps MCP on the centralized HTTP boundary and classifies every mutating tool call', async () => {
     const source = await readFile(resolve(repoDir, 'src/mcp/server.ts'), 'utf8');
     expect(source.match(/\bfetch\(/g)).toHaveLength(1);
-    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(140);
+    expect(Array.from(source.matchAll(/^jsonTool\(/gm))).toHaveLength(143);
 
     const calls = Array.from(
       source.matchAll(/api\(\s*'(POST|PUT|PATCH|DELETE)'\s*,\s*(`[^`]+`|'[^']+')/g),
@@ -76,7 +76,7 @@ describe('organization write policy inventory', () => {
         };
       },
     );
-    expect(calls).toHaveLength(88);
+    expect(calls).toHaveLength(89);
     expect(calls.every(({ route }) => route.startsWith('/api/v1/'))).toBe(true);
 
     const exemptMcpCalls = calls
@@ -84,7 +84,7 @@ describe('organization write policy inventory', () => {
         !requiresOrganizationWriteReadiness(method, route))
       .map(({ method, route }) => `${method} ${route}`);
     expect(exemptMcpCalls).toHaveLength(30);
-    expect(calls.length - exemptMcpCalls.length).toBe(58);
+    expect(calls.length - exemptMcpCalls.length).toBe(59);
     expect(new Set(exemptMcpCalls)).toEqual(new Set([
       'POST /api/v1/projects/:slug/onboarding/observe-agent',
       'POST /api/v1/projects/:slug/events/backfill/preview',

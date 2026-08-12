@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { Metric } from '../api/types';
 import { useStore } from '../store';
-import { WebAnalytics, hasAcceptedCanonicalPageViews, hasWebOutcome } from './WebAnalytics';
+import { WebAnalytics, hasAcceptedCanonicalPageViews, hasWebOutcome, previousExactRange, webConversionMetric, webOutcomeMetric } from './WebAnalytics';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -17,6 +17,16 @@ vi.mock('../analysis/charts', () => ({
 
 const mockedStore = vi.mocked(useStore);
 const routerFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 const metric = {
   id: 'web',
@@ -41,6 +51,20 @@ const webOutcome = {
   tags: ['surface:web'],
   source: { event: 'signup.completed' },
 } as const;
+const webConversion = {
+  ...webOutcome,
+  id: 'web-signup-conversion',
+  key: 'web_signup_conversion',
+  name: 'Visit to signup',
+  purpose: 'Measures whether a website visit reaches a completed signup within one hour.',
+  tags: ['surface:web'],
+  type: 'conversion',
+  source: {
+    from: { event: 'page.viewed', filters: [] },
+    to: { event: 'signup.completed', filters: [] },
+    window_seconds: 3600,
+  },
+} satisfies Metric;
 
 const property = (key: string, enumValues: string[] | null = null) => ({
   id: `property-${key}`,
@@ -226,6 +250,17 @@ describe('Web analytics partial availability', () => {
     } as never);
   });
 
+  it('anchors the previous exact period to the returned current date range', () => {
+    expect(previousExactRange({
+      from: '2026-07-01T00:00:00.000Z',
+      to: '2026-07-31T00:00:00.000Z',
+    })).toEqual({
+      from: '2026-06-01T00:00:00.000Z',
+      to: '2026-07-01T00:00:00.000Z',
+    });
+    expect(previousExactRange({ from: 'invalid', to: '2026-07-31T00:00:00.000Z' })).toBeNull();
+  });
+
   it('keeps traffic, UTM source and sessions visible when routes are unavailable', async () => {
     render(
       <TooltipProvider>
@@ -277,6 +312,33 @@ describe('Web analytics partial availability', () => {
   });
 
   it('leads a ready Web workspace with a trusted answer and previous-period delta before the chart', async () => {
+    const query = vi.fn().mockImplementation((_project, input) => {
+      if (input.metric !== webOutcome.key) {
+        return Promise.resolve({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } });
+      }
+      const value = input.date_to === '2026-07-01T00:00:00.000Z' ? 8 : 12;
+      return Promise.resolve({
+        kind: 'trend',
+        series: [{ bucket: input.date_to ?? '2026-07-31', value }],
+        answer: {
+          state: 'ready', headline: `${webOutcome.name}: ${value}`, takeaway: `${value} matched.`,
+          primary_value: { value, unit: 'count', formatted: String(value) },
+          why_it_matters: webOutcome.purpose,
+        },
+        evidence: {
+          state: 'trusted', as_of: '2026-07-31T00:00:00.000Z', freshness: 'fresh',
+          source_refs: [{ kind: 'metric', key: webOutcome.key, purpose: webOutcome.purpose }],
+          aggregation: 'count of accepted events', warnings: [], unavailable_reasons: [],
+        },
+        meta: {
+          computed_at: input.date_to ? '2026-07-31T00:00:01.000Z' : '2026-07-31T00:00:00.000Z',
+          date_range: input.date_to
+            ? { from: '2026-06-01T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' }
+            : { from: '2026-07-01T00:00:00.000Z', to: '2026-07-31T00:00:00.000Z' },
+          sampling: null,
+        },
+      });
+    });
     mockedStore.mockReturnValue({
       project: 'y1blin-com',
       env: 'prod',
@@ -284,7 +346,7 @@ describe('Web analytics partial availability', () => {
         metrics: vi.fn().mockResolvedValue([metric, webOutcome]),
         properties,
         operationalQuery,
-        query: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } }),
+        query,
         measurementTrust: vi.fn().mockResolvedValue({ status: 'trusted', primary_metric: { observed_events: 20 }, blockers: [], warnings: [] }),
       },
     } as never);
@@ -295,6 +357,15 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
     expect(await screen.findByText('No change versus the previous 30 days.')).toBeInTheDocument();
     expect(await screen.findByText(/Trusted measurement/)).toBeInTheDocument();
+    expect(await screen.findByText('Signup completed: 12')).toBeInTheDocument();
+    expect(await screen.findByText('Up 50.0% versus the previous 30 days.')).toBeInTheDocument();
+    expect(screen.getByText('count of accepted events')).toBeInTheDocument();
+    expect(query.mock.calls.filter(([, input]) => input.metric === webOutcome.key)).toEqual([
+      expect.arrayContaining([expect.objectContaining({ date_from: '-30d', date_to: null, env: 'prod' })]),
+      expect.arrayContaining([expect.objectContaining({
+        date_from: '2026-06-01T00:00:00.000Z', date_to: '2026-07-01T00:00:00.000Z', env: 'prod',
+      })]),
+    ]);
     const chart = await screen.findByTestId('web-trend');
     expect(answer.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_analytics')).toEqual(
@@ -303,6 +374,227 @@ describe('Web analytics partial availability', () => {
         expect.arrayContaining([expect.objectContaining({ date_from: '-60d', date_to: '-30d' })]),
       ]),
     );
+  });
+
+  it('keeps traffic readable and never turns an unavailable outcome query into zero', async () => {
+    const query = vi.fn((_project, input) => input.metric === webOutcome.key
+      ? Promise.reject(new Error('outcome source unavailable'))
+      : Promise.resolve({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } }));
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webOutcome]), properties, operationalQuery, query,
+        measurementTrust: vi.fn().mockResolvedValue({ status: 'trusted', primary_metric: { observed_events: 20 }, blockers: [], warnings: [] }),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+    expect(await screen.findByText(/could not be measured for this exact period/)).toBeInTheDocument();
+    expect(screen.getByText('outcome source unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Signup completed: 0')).not.toBeInTheDocument();
+  });
+
+  it('runs the active web conversion against the exact Web result period and renders measured evidence', async () => {
+    const query = vi.fn((_project, input) => {
+      if (input.kind === 'trend') {
+        return Promise.resolve({
+          kind: 'trend', series: [],
+          meta: {
+            computed_at: '2026-07-31T00:00:00.000Z',
+            date_range: { from: '2026-07-01T00:00:00.000Z', to: '2026-07-31T00:00:00.000Z' },
+            sampling: null, source: 'native',
+          },
+        });
+      }
+      if (input.kind === 'funnel') {
+        return Promise.resolve({
+          kind: 'funnel',
+          steps: [
+            { label: 'Entered Visit to signup', metric_key: webConversion.key, purpose: webConversion.purpose, category: null, actors: 8, conversion_from_prev: 1, conversion_from_start: 1 },
+            { label: 'Reached Visit to signup', metric_key: webConversion.key, purpose: webConversion.purpose, category: null, actors: 3, conversion_from_prev: 0.375, conversion_from_start: 0.375 },
+          ],
+          summary: {
+            overall_conversion: 0.375,
+            previous_overall_conversion: 0.25,
+            delta_percentage_points: 12.5,
+            biggest_absolute_loss: { from_step: 0, to_step: 1, lost_actors: 5, drop_rate: 0.625 },
+            biggest_percentage_loss: { from_step: 0, to_step: 1, lost_actors: 5, drop_rate: 0.625 },
+          },
+          answer: {
+            state: 'ready', headline: '37.5% reached Visit to signup',
+            takeaway: '3 of 8 actors reached the final step.',
+            primary_value: { value: 37.5, unit: 'percent', formatted: '37.5%' },
+            delta: { value: 12.5, unit: 'percentage_point', direction: 'up', comparison_label: 'previous exact period' },
+            why_it_matters: webConversion.purpose,
+          },
+          evidence: {
+            state: 'trusted', as_of: '2026-07-31T00:00:00.000Z', freshness: 'fresh',
+            source_refs: [{ kind: 'metric', key: webConversion.key, purpose: webConversion.purpose }],
+            aggregation: 'ordered unique actors within the registered conversion window',
+            denominator: { label: `actors who entered ${webConversion.key}`, value: 8 },
+            sample: { eligible: 8, observed: 3, coverage: 0.375 },
+            warnings: [], unavailable_reasons: [], reproducible_query: input,
+          },
+          meta: {
+            computed_at: '2026-07-31T00:00:00.000Z',
+            date_range: { from: '2026-07-01T00:00:00.000Z', to: '2026-07-31T00:00:00.000Z' },
+            sampling: null, source: 'native',
+          },
+        });
+      }
+      throw new Error(`Unexpected query kind: ${input.kind}`);
+    });
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webConversion]), properties, operationalQuery, query,
+        measurementTrust: vi.fn().mockResolvedValue({ status: 'trusted', primary_metric: { observed_events: 20 }, blockers: [], warnings: [] }),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Conversions' }), { button: 0, ctrlKey: false });
+
+    expect(await screen.findByRole('heading', { name: 'Visit to signup' })).toBeInTheDocument();
+    expect(screen.getAllByText('37.5%')).toHaveLength(2);
+    expect(screen.getByText('+12.5 pp versus previous exact period')).toBeInTheDocument();
+    expect(screen.getByText('3 of 8 actors converted')).toBeInTheDocument();
+    expect(screen.getByText(/Exact UTC window · \[2026-07-01T00:00:00.000Z, 2026-07-31T00:00:00.000Z\)/)).toBeInTheDocument();
+    expect(query).toHaveBeenCalledWith('y1blin-com', {
+      kind: 'funnel',
+      conversion_metric: 'web_signup_conversion',
+      date_from: '2026-07-01T00:00:00.000Z',
+      date_to: '2026-07-31T00:00:00.000Z',
+      env: 'prod',
+    });
+  });
+
+  it('reruns conversion for an exact range change with the same computed_at and ignores the stale response', async () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const sameComputedAt = '2026-08-01T00:00:00.000Z';
+    const thirtyDayRange = {
+      from: '2026-07-01T00:00:00.000Z',
+      to: '2026-07-31T00:00:00.000Z',
+    };
+    const sevenDayRange = {
+      from: '2026-07-24T00:00:00.000Z',
+      to: '2026-07-31T00:00:00.000Z',
+    };
+    const thirtyDayConversion = deferred<ReturnType<typeof conversionResult>>();
+    const sevenDayConversion = deferred<ReturnType<typeof conversionResult>>();
+    const scopedOperationalQuery = vi.fn(async (project, input) => {
+      const result = await operationalQuery(project, input);
+      if (input.kind !== 'web_analytics') return result;
+      const exactRange = input.date_from === '-7d' ? sevenDayRange : thirtyDayRange;
+      return {
+        ...result,
+        meta: { ...result.meta, computed_at: sameComputedAt, date_range: exactRange },
+      };
+    });
+    const query = vi.fn((_project, input) => {
+      if (input.kind === 'trend') {
+        return Promise.resolve({
+          kind: 'trend', series: [],
+          meta: {
+            computed_at: sameComputedAt,
+            date_range: thirtyDayRange,
+            sampling: null,
+            source: 'native',
+          },
+        });
+      }
+      if (input.kind === 'funnel') {
+        return input.date_from === sevenDayRange.from
+          ? sevenDayConversion.promise
+          : thirtyDayConversion.promise;
+      }
+      throw new Error(`Unexpected query kind: ${input.kind}`);
+    });
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webConversion]),
+        properties,
+        operationalQuery: scopedOperationalQuery,
+        query,
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Conversions' }), { button: 0, ctrlKey: false });
+    await waitFor(() => expect(query).toHaveBeenCalledWith('y1blin-com', expect.objectContaining({
+      kind: 'funnel',
+      date_from: thirtyDayRange.from,
+      date_to: thirtyDayRange.to,
+    })));
+
+    const period = screen.getByRole('combobox', { name: 'Period' });
+    fireEvent.keyDown(period, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'Last 7 days' }));
+    await waitFor(() => expect(query).toHaveBeenCalledWith('y1blin-com', expect.objectContaining({
+      kind: 'funnel',
+      date_from: sevenDayRange.from,
+      date_to: sevenDayRange.to,
+    })));
+
+    await act(async () => {
+      sevenDayConversion.resolve(conversionResult(sevenDayRange, 8, 4));
+    });
+    expect(await screen.findAllByText('50.0%')).toHaveLength(2);
+
+    await act(async () => {
+      thirtyDayConversion.resolve(conversionResult(thirtyDayRange, 10, 1));
+    });
+    expect(screen.getAllByText('50.0%')).toHaveLength(2);
+    expect(screen.queryByText('10.0%')).not.toBeInTheDocument();
+    expect(query.mock.calls.filter(([, input]) => input.kind === 'funnel').map(([, input]) => ({
+      from: input.date_from,
+      to: input.date_to,
+    }))).toEqual(expect.arrayContaining([thirtyDayRange, sevenDayRange]));
+  });
+
+  it('does not turn a missing conversion denominator into zero percent', async () => {
+    const query = vi.fn((_project, input) => input.kind === 'trend'
+      ? Promise.resolve({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null, source: 'native' } })
+      : Promise.resolve({
+        kind: 'funnel',
+        steps: [
+          { label: 'Entered Visit to signup', metric_key: webConversion.key, purpose: webConversion.purpose, category: null, actors: 0, conversion_from_prev: 1, conversion_from_start: 1 },
+          { label: 'Reached Visit to signup', metric_key: webConversion.key, purpose: webConversion.purpose, category: null, actors: 0, conversion_from_prev: null, conversion_from_start: null },
+        ],
+        summary: { overall_conversion: null, previous_overall_conversion: null, delta_percentage_points: null, biggest_absolute_loss: null, biggest_percentage_loss: null },
+        answer: { state: 'empty', headline: 'No actors entered this funnel', takeaway: 'The selected window has no measured funnel denominator.', why_it_matters: webConversion.purpose },
+        evidence: {
+          state: 'partial', as_of: '2026-07-31T00:00:00.000Z', freshness: 'fresh',
+          source_refs: [{ kind: 'metric', key: webConversion.key, purpose: webConversion.purpose }],
+          aggregation: 'ordered unique actors within the registered conversion window',
+          denominator: { label: `actors who entered ${webConversion.key}`, value: null },
+          sample: { eligible: null, observed: null, coverage: null }, warnings: [],
+          unavailable_reasons: [{ code: 'missing_denominator', message: 'No actors reached the first step.' }],
+          reproducible_query: input,
+        },
+        meta: {
+          computed_at: '2026-07-31T00:00:00.000Z',
+          date_range: { from: '2026-07-01T00:00:00.000Z', to: '2026-07-31T00:00:00.000Z' },
+          sampling: null, source: 'native',
+        },
+      }));
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com', env: 'prod',
+      client: { metrics: vi.fn().mockResolvedValue([metric, webConversion]), properties, operationalQuery, query },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Conversions' }), { button: 0, ctrlKey: false });
+
+    expect(await screen.findByText('No measured denominator')).toBeInTheDocument();
+    expect(screen.getByText('Conversion rate is unavailable; no actor reached the registered start source in this period.')).toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 
   it('keeps the current Web health answer when the previous-period comparison is unavailable', async () => {
@@ -535,6 +827,46 @@ describe('Web analytics partial availability', () => {
   });
 });
 
+function conversionResult(
+  range: { from: string; to: string },
+  entered: number,
+  converted: number,
+) {
+  const conversion = converted / entered;
+  return {
+    kind: 'funnel' as const,
+    steps: [
+      {
+        label: 'Entered Visit to signup', metric_key: webConversion.key,
+        purpose: webConversion.purpose, category: null, actors: entered,
+        conversion_from_prev: 1, conversion_from_start: 1,
+      },
+      {
+        label: 'Reached Visit to signup', metric_key: webConversion.key,
+        purpose: webConversion.purpose, category: null, actors: converted,
+        conversion_from_prev: conversion, conversion_from_start: conversion,
+      },
+    ],
+    summary: {
+      overall_conversion: conversion,
+      previous_overall_conversion: null,
+      delta_percentage_points: null,
+      biggest_absolute_loss: null,
+      biggest_percentage_loss: null,
+    },
+    evidence: {
+      state: 'trusted' as const,
+      aggregation: 'ordered unique actors within the registered conversion window',
+    },
+    meta: {
+      computed_at: '2026-08-01T00:00:00.000Z',
+      date_range: range,
+      sampling: null,
+      source: 'native' as const,
+    },
+  };
+}
+
 describe('Web setup readiness', () => {
   it('requires accepted page views in the selected period for canonical readiness', () => {
     expect(hasAcceptedCanonicalPageViews(0)).toBe(false);
@@ -550,5 +882,15 @@ describe('Web setup readiness', () => {
     expect(hasWebOutcome([canonical, unrelated])).toBe(false);
     expect(hasWebOutcome([canonical, webOutcome])).toBe(true);
     expect(hasWebOutcome([canonical, webConversion])).toBe(true);
+    expect(webOutcomeMetric([canonical, webConversion, webOutcome])?.key).toBe(webOutcome.key);
+  });
+
+  it('selects one active native web conversion deterministically', () => {
+    const later = { ...webConversion, id: 'z', key: 'z_conversion' } satisfies Metric;
+    const earlier = { ...webConversion, id: 'a', key: 'a_conversion' } satisfies Metric;
+    const proposed = { ...webConversion, id: 'p', key: 'proposed_conversion', status: 'proposed' as const } satisfies Metric;
+
+    expect(webConversionMetric([later, proposed, earlier])?.key).toBe('a_conversion');
+    expect(webConversionMetric([{ ...earlier, tags: ['surface:bot'] }])).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AnswerCanvas } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
 import { isRedundantKey } from '@/lib/utils';
-import type { MeasurementContract, MeasurementReadiness, MeasurementReadinessGroup, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
+import type { MeasurementAnswerDependency, MeasurementContract, MeasurementReadiness, MeasurementReadinessGroup, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
 import { buildMeasurementReadiness, type ReadinessGroup } from '../analysis/semanticHealth';
 
 interface MetricTrustRow {
@@ -107,12 +107,12 @@ export function Measurement() {
     {serverReadiness && <MeasurementHealth readiness={serverReadiness} />}
 
     <AnswerCanvas>
-      <DefinitionGroup title="Tracking plan" readiness={group('tracking')} server={serverGroup('tracking_plan')} action="Review" focused={focusedGroup === 'tracking_plan'}>
+      <DefinitionGroup title="Tracking plan" readiness={group('tracking')} server={serverGroup('tracking_plan')} answerDependencies={serverReadiness?.answer_dependencies} action="Review" focused={focusedGroup === 'tracking_plan'}>
         <TrustOverview rows={trust} properties={properties.length} activeLinks={activeLinks} onRefresh={audit.reload} />
         <div className="mt-4"><ContractsPanel contracts={contracts} /></div>
       </DefinitionGroup>
 
-      <DefinitionGroup title="Properties" readiness={group('properties')} server={serverGroup('properties')} action="Open" focused={focusedGroup === 'properties' || Boolean(focusedProperty)}>
+      <DefinitionGroup title="Properties" readiness={group('properties')} server={serverGroup('properties')} answerDependencies={serverReadiness?.answer_dependencies} action="Open" focused={focusedGroup === 'properties' || Boolean(focusedProperty)}>
         <Panel title={<>Property meanings <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{properties.length}</span></>}>
       <p className="mb-4 max-w-3xl text-sm text-muted-foreground">Registered property meanings, value types, trust and observed coverage for this project.</p>
       {properties.length === 0 ? <p className="text-sm text-muted-foreground">No decision properties are registered yet.</p> : <div className="overflow-x-auto">
@@ -135,7 +135,7 @@ export function Measurement() {
         </Panel>
       </DefinitionGroup>
 
-      <DefinitionGroup title="Identity" readiness={group('identity')} server={serverGroup('identity')} action="View" focused={focusedGroup === 'identity'}>
+      <DefinitionGroup title="Identity" readiness={group('identity')} server={serverGroup('identity')} answerDependencies={serverReadiness?.answer_dependencies} action="View" focused={focusedGroup === 'identity'}>
         <Panel title="Identity links" right={<span className="text-xs text-muted-foreground">reversible · append-only audit</span>}>
       {identity.links.length === 0 ? <p className="text-sm text-muted-foreground">No anonymous-to-identified links have been recorded for <code>{env}</code>.</p> : <div className="overflow-x-auto">
         <Table><TableHeader><TableRow><TableHead>Source actor</TableHead><TableHead>Stable actor</TableHead><TableHead>Status</TableHead><TableHead>Created by</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
@@ -152,7 +152,7 @@ export function Measurement() {
         </Panel>
       </DefinitionGroup>
 
-      <DefinitionGroup title="Data sources" readiness={group('sources')} server={serverGroup('data_sources')} context={sources.length > 0 ? `${sources.length} external` : 'No external sources'} action="Manage" focused={focusedGroup === 'data_sources'}>
+      <DefinitionGroup title="Data sources" readiness={group('sources')} server={serverGroup('data_sources')} answerDependencies={serverReadiness?.answer_dependencies} context={sources.length > 0 ? `${sources.length} external` : 'No external sources'} action="Manage" focused={focusedGroup === 'data_sources'}>
         <Panel title="Data sources" right={<span className="text-xs text-muted-foreground">bounded read-only capabilities</span>}>
       {sources.length === 0 ? <p className="text-sm text-muted-foreground">No external source is configured. Native ingest readiness is shown in Setup; configure PostHog through MCP or the Platform API when raw data should remain external.</p> : <div className="space-y-3">
         {sources.map((source) => <div key={source.id} className="rounded-panel border bg-muted/20 p-4">
@@ -183,8 +183,8 @@ function MeasurementHealth({ readiness }: { readiness: MeasurementReadiness }) {
           </h2>
           <p className="mt-2 text-sm text-muted-foreground">
             {fix?.affected_answer_ids.length
-              ? <>Affected saved answers: <span className="font-mono text-xs text-foreground">{fix.affected_answer_ids.join(', ')}</span></>
-              : 'No saved answer is currently blocked by the highest-ranked gap.'}
+              ? <><span className="font-medium text-foreground">Affected answers:</span>{' '}<AffectedAnswerLinks answerIds={fix.affected_answer_ids} dependencies={readiness.answer_dependencies} /></>
+              : 'No current answer is blocked by the highest-ranked gap.'}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">Server evaluated at <time dateTime={readiness.generated_at}>{formatDate(readiness.generated_at)}</time> for {readiness.env}.</p>
         </div>
@@ -194,10 +194,11 @@ function MeasurementHealth({ readiness }: { readiness: MeasurementReadiness }) {
   );
 }
 
-function DefinitionGroup({ title, readiness, server, context, action, focused = false, children }: {
+function DefinitionGroup({ title, readiness, server, answerDependencies = [], context, action, focused = false, children }: {
   title: string;
   readiness: ReadinessGroup;
   server?: MeasurementReadinessGroup;
+  answerDependencies?: MeasurementAnswerDependency[];
   context?: string;
   action: string;
   focused?: boolean;
@@ -228,6 +229,12 @@ function DefinitionGroup({ title, readiness, server, context, action, focused = 
         <span className="col-start-2 col-end-4 text-right text-xs font-medium text-foreground group-open:hidden sm:col-auto">{action}</span>
       </DisclosureSummary>
       <div className="border-t bg-background/35 p-4 sm:p-5 [&_[data-slot=card]]:rounded-none [&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-none">
+        {affectedAnswers.length > 0 && (
+          <div className="mb-3 rounded-control border bg-card px-3 py-2 text-sm">
+            <span className="font-medium">Affected answers:</span>{' '}
+            <AffectedAnswerLinks answerIds={affectedAnswers} dependencies={answerDependencies} />
+          </div>
+        )}
         <div className="mb-4 rounded-control border bg-card px-3 py-2 text-sm">
           <span className="font-medium">Fix next:</span>{' '}
           {repairAction
@@ -238,6 +245,18 @@ function DefinitionGroup({ title, readiness, server, context, action, focused = 
       </div>
     </details>
   );
+}
+
+function AffectedAnswerLinks({ answerIds, dependencies }: {
+  answerIds: string[];
+  dependencies: MeasurementAnswerDependency[];
+}) {
+  const byId = new Map(dependencies.map((dependency) => [dependency.answer_id, dependency]));
+  return <span className="inline-flex flex-wrap gap-x-2 gap-y-1">{answerIds.map((answerId) => {
+    const dependency = byId.get(answerId);
+    const href = dependency?.href ?? `/analyze/saved?answer=${encodeURIComponent(answerId)}`;
+    return <Link key={answerId} className="font-mono text-xs text-foreground underline decoration-muted-foreground/60 underline-offset-4" to={href}>{dependency?.label ?? answerId}</Link>;
+  })}</span>;
 }
 
 const webDimensions: WebAnalyticsDimension[] = [

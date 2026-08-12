@@ -30,6 +30,21 @@ beforeAll(async () => {
     type: 'count',
     source: { event: 'activity.performed', filters: [] },
   });
+  await activeMetric(env, {
+    key: 'activation_completed',
+    name: 'Activation completed',
+    purpose: 'Identifies the first meaningful product outcome completed by an actor.',
+    type: 'unique_actors',
+    source: { event: 'activation.completed', filters: [] },
+  });
+  const categorizeActivation = await api(
+    env,
+    env.secretToken,
+    'PATCH',
+    `${project()}/metrics/activation_completed`,
+    { category: 'activation' },
+  );
+  expect(categorizeActivation.status).toBe(200);
   const browserSetup = await api(env, env.secretToken, 'POST', `${project()}/properties/browser-analytics`, {
     route_keys: ['home'],
   });
@@ -259,8 +274,9 @@ describe('actors Query DSL contract', () => {
     });
     expect(result.body.meta.capabilities.interesting_categories).toEqual({
       recently_activated: {
-        available: false,
-        requires: 'purpose_backed_activation_metric_or_funnel',
+        available: true,
+        requires: 'active_native_activation_metric',
+        metric_count: 1,
       },
       stalled: {
         available: false,
@@ -298,10 +314,130 @@ describe('actors Query DSL contract', () => {
     expect(result.body.meta.provenance).not.toHaveProperty('interesting_rank');
   });
 
-  it('rejects the unsupported generic interesting order', async () => {
+  it('ranks recently activated actors only from a selected purpose-backed activation metric', async () => {
+    const ingest = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [
+        {
+          event: 'activation.completed',
+          distinct_id: 'activation-earlier',
+          timestamp: '2026-05-10T10:00:00.000Z',
+          properties: { email: 'must-remain-redacted@example.test', plan: 'enterprise' },
+        },
+        {
+          event: 'activation.completed',
+          distinct_id: 'activation-later',
+          timestamp: '2026-05-12T10:00:00.000Z',
+          properties: { name: 'Must remain redacted' },
+        },
+        {
+          event: 'activity.performed',
+          distinct_id: 'not-activated',
+          timestamp: '2026-05-13T10:00:00.000Z',
+        },
+      ],
+    });
+    expect(ingest.status).toBe(200);
+
+    const result = await actors({
+      from: '2026-05-01T00:00:00.000Z',
+      to: '2026-06-01T00:00:00.000Z',
+      order: 'interesting_desc',
+      interesting: { reason: 'recently_activated', metric: 'activation_completed' },
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.actors.map((actor: any) => actor.distinct_id)).toEqual([
+      'activation-later',
+      'activation-earlier',
+    ]);
+    expect(result.body.actors[0]).toMatchObject({
+      order_reason: 'recent_activation_in_window',
+      rank_reason: {
+        kind: 'recently_activated',
+        metric_key: 'activation_completed',
+        metric_name: 'Activation completed',
+        metric_purpose: 'Identifies the first meaningful product outcome completed by an actor.',
+        observed_at: '2026-05-12T10:00:00.000Z',
+      },
+      rank_evidence_window: {
+        from: '2026-05-01T00:00:00.000Z',
+        to: '2026-06-01T00:00:00.000Z',
+      },
+      pinned_properties: {},
+    });
+    expect(JSON.stringify(result.body.actors)).not.toContain('must-remain-redacted');
+    expect(JSON.stringify(result.body.actors)).not.toContain('enterprise');
+    expect(result.body.meta).toMatchObject({
+      order: 'interesting_desc',
+      interesting: {
+        reason: 'recently_activated',
+        metric: {
+          key: 'activation_completed',
+          name: 'Activation completed',
+          purpose: 'Identifies the first meaningful product outcome completed by an actor.',
+          category: 'activation',
+          source: 'native',
+        },
+      },
+      capabilities: {
+        outcome_rank: { available: true, reason: 'recently_activated' },
+        interesting_categories: {
+          recently_activated: {
+            available: true,
+            requires: 'active_native_activation_metric',
+          },
+        },
+      },
+      provenance: {
+        ordering: {
+          selected: 'interesting_desc',
+          input: 'activation_event_timestamp',
+          relative_to: 'the exact query window',
+        },
+      },
+    });
+
+    const firstPage = await actors({
+      from: '2026-05-01T00:00:00.000Z',
+      to: '2026-06-01T00:00:00.000Z',
+      order: 'interesting_desc',
+      interesting: { reason: 'recently_activated', metric: 'activation_completed' },
+      limit: 1,
+    });
+    expect(firstPage.body.actors.map((actor: any) => actor.distinct_id)).toEqual(['activation-later']);
+    expect(firstPage.body.meta.next_cursor).toEqual(expect.any(String));
+    const secondPage = await actors({
+      from: '2026-05-01T00:00:00.000Z',
+      to: '2026-06-01T00:00:00.000Z',
+      order: 'interesting_desc',
+      interesting: { reason: 'recently_activated', metric: 'activation_completed' },
+      limit: 1,
+      cursor: firstPage.body.meta.next_cursor,
+    });
+    expect(secondPage.body.actors.map((actor: any) => actor.distinct_id)).toEqual(['activation-earlier']);
+  });
+
+  it('fails closed for unsupported or unproven interesting reasons', async () => {
+    for (const reason of ['stalled', 'at_risk', 'changed_segment']) {
+      const result = await actors({ order: 'interesting_desc', interesting: { reason } });
+      expect(result.status).toBe(400);
+      expect(result.body.error).toMatchObject({
+        code: 'actors_interesting_category_unavailable',
+        retryable: false,
+      });
+    }
+
+    const wrongCategory = await actors({
+      order: 'interesting_desc',
+      interesting: { reason: 'recently_activated', metric: 'actor_activity' },
+    });
+    expect(wrongCategory.status).toBe(400);
+    expect(wrongCategory.body.error.code).toBe('actors_interesting_metric_invalid');
+  });
+
+  it('rejects an interesting order without an explicit reason', async () => {
     const result = await actors({ order: 'interesting_desc' });
     expect(result.status).toBe(400);
-    expect(result.body.error.code).toBe('validation_error');
+    expect(result.body.error.code).toBe('actors_interesting_selection_required');
   });
 
   it('rejects empty IDs, oversized limits and cursors bound to another order', async () => {

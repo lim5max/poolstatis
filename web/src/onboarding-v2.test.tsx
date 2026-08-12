@@ -792,7 +792,7 @@ describe('condensed Setup', () => {
         { key: 'metrics_activated', complete: true, required: true, evidence: { metric_key: 'activation_completed' }, blocker: null, next_action: null },
         { key: 'data_quality_accepted', complete: true, required: true, evidence: { issues: 0 }, blocker: null, next_action: null },
         { key: 'first_query_produced', complete: true, required: true, evidence: { query_run_id: 'query-1', source: 'native', created_at: '2026-08-11T10:00:00.000Z' }, blocker: null, next_action: null },
-        { key: 'first_decision_saved', complete: true, required: true, evidence: { insight_id: 'insight-1', created_at: '2026-08-11T10:02:00.000Z' }, blocker: null, next_action: null },
+        { key: 'first_decision_saved', complete: true, required: true, evidence: { artifact_kind: 'saved_insight', insight_id: 'insight-1', created_at: '2026-08-11T10:02:00.000Z' }, blocker: null, next_action: null },
       ],
       next_blocker: null,
       final_result: {
@@ -815,6 +815,9 @@ describe('condensed Setup', () => {
 
     render(<MemoryRouter><Setup /></MemoryRouter>);
 
+    expect(await screen.findByText('Analysis loop is ready')).toBeInTheDocument();
+    expect(screen.getByText(/protected human decision remains a separate Ship lifecycle step/)).toBeInTheDocument();
+    expect(screen.getByText('First evidence-backed insight saved')).toBeInTheDocument();
     const result = await screen.findByRole('region', { name: 'Verified first outcome' });
     expect(result).toHaveTextContent('activation_completed');
     expect(result).toHaveTextContent('Measure completed activation after the setup funnel.');

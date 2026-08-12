@@ -3,19 +3,19 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
+import { activeMetric, api, createHumanReviewTestEnv, type HumanReviewTestEnv } from './helpers.js';
 
 const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DAY = 86_400_000;
 
 describe('continuous decision loop MCP parity', () => {
-  let env: TestEnv;
+  let env: HumanReviewTestEnv;
   let client: Client;
   let decisionId: string;
   let declaration: Record<string, unknown>;
 
   beforeAll(async () => {
-    env = await createTestEnv({ connectorEncryptionKey: 'mcp-c-encryption-key-controlled' });
+    env = await createHumanReviewTestEnv({ connectorEncryptionKey: 'mcp-c-encryption-key-controlled' });
     const anchor = new Date(Date.now() - 3 * DAY);
     await activeMetric(env, {
       key: 'activation_completed', type: 'unique_actors',
@@ -46,7 +46,7 @@ describe('continuous decision loop MCP parity', () => {
     });
     const evaluated = await api(env, env.secretToken, 'POST', path(`/releases/${release.body.id}/evaluate`), {});
     decisionId = evaluated.body.decision.id;
-    await api(env, env.secretToken, 'POST', path(`/decisions/${decisionId}/approve`), {
+    await api(env, env.ownerToken, 'POST', path(`/decisions/${decisionId}/approve`), {
       rationale: 'The trusted activation evidence clears the declared threshold.',
     });
     await env.app.listen({ host: '127.0.0.1', port: 0 });
@@ -90,10 +90,13 @@ describe('continuous decision loop MCP parity', () => {
       },
     });
     const action = (prepared.structuredContent as { action: { id: string; confirmation_fingerprint: string } }).action;
-    const approved = await client.callTool({
+    const denied = await client.callTool({
       name: 'approve_action', arguments: { project: env.projectSlug, id: action.id, confirmation_fingerprint: action.confirmation_fingerprint },
     });
-    expect(approved.structuredContent).toMatchObject({ action: { status: 'executed', approved_by: expect.stringMatching(/^key:/) } });
+    expect(denied.isError).toBe(true);
+    expect(denied.content[0]?.text).toContain('human_user_required');
+    const unchangedAction = await api(env, env.secretToken, 'GET', path(`/actions/${action.id}`));
+    expect(unchangedAction.body.action).toMatchObject({ status: 'prepared', approved_by: null });
 
     const inbox = await client.callTool({ name: 'get_decision_inbox', arguments: { project: env.projectSlug } });
     const restInbox = await api(env, env.secretToken, 'GET', path('/decision-inbox'));

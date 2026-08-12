@@ -29,7 +29,7 @@ interface Store {
   envError: string | null;
   availableEnvs: string[];
   setEnv: (e: string) => void;
-  setProject: (slug: string) => void;
+  setProject: (slug: string, env?: string) => void;
   retryEnvValidation: () => void;
   refreshProjects: () => Promise<void>;
   refreshAccount: () => Promise<void>;
@@ -100,9 +100,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setEnvState(e);
   }, [project]);
 
-  const setProject = useCallback((slug: string) => {
+  const setProject = useCallback((slug: string, targetEnv?: string) => {
     localStorage.setItem(PROJECT_KEY, slug);
-    setEnvState(savedProjectEnv(slug));
+    const nextEnv = targetEnv ?? savedProjectEnv(slug);
+    if (targetEnv) localStorage.setItem(projectEnvKey(slug), targetEnv);
+    setEnvState(nextEnv);
     setAvailableEnvs([]);
     setEnvReady(false);
     setEnvError(null);

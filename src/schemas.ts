@@ -779,6 +779,15 @@ export const metricSourceSchemas = {
     from: eventSourceBase,
     to: eventSourceBase,
     window_seconds: z.number().int().positive().default(3600),
+  }).superRefine((source, ctx) => {
+    for (const key of ['from', 'to'] as const) {
+      if (source[key].data_source !== 'posthog') continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key, 'data_source'],
+        message: 'PostHog conversion metrics are unsupported; define event metrics and query a funnel',
+      });
+    }
   }),
   state: z.object({
     entity_type: z.string().min(1),
@@ -839,13 +848,6 @@ export const registerMetricSchema = z
           code: z.ZodIssueCode.custom,
           path: ['source', ...(m.type === 'conversion' ? [index === 0 ? 'from' : 'to'] : []), 'source_connection_id'],
           message: 'native metric sources cannot reference an external connection',
-        });
-      }
-      if (m.type === 'conversion' && source.data_source === 'posthog') {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['source'],
-          message: 'PostHog conversion metrics are unsupported; define event metrics and query a funnel',
         });
       }
     }
@@ -1014,6 +1016,39 @@ export type EventRevisionPatch = z.infer<typeof eventRevisionPatchSchema>;
 /** UTC calendar month used by the server-side accepted-event meter. */
 export const usagePeriodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 
+const usageSafeIntegerSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const usagePositiveThresholdSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+
+export const usageEntitlementUpdateSchema = z.object({
+  expected_revision: z.number().int().min(0),
+  hard_limit: usageSafeIntegerSchema.nullable(),
+  warning_thresholds: z.array(usagePositiveThresholdSchema).max(16),
+  reason: z.string().trim().min(10).max(500),
+}).strict().superRefine((input, ctx) => {
+  let previous = -1;
+  for (const [index, threshold] of input.warning_thresholds.entries()) {
+    if (threshold <= previous) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['warning_thresholds', index],
+        message: 'thresholds must be unique and strictly ascending',
+      });
+      return;
+    }
+    previous = threshold;
+  }
+  if (input.hard_limit !== null) {
+    const beyondCap = input.warning_thresholds.findIndex((threshold) => threshold > input.hard_limit!);
+    if (beyondCap >= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['warning_thresholds', beyondCap],
+        message: 'a recorded threshold cannot be above the hard limit',
+      });
+    }
+  }
+});
+
 /** Bounded range months must also map to PostgreSQL calendar years. */
 export const usageRangePeriodSchema = usagePeriodSchema.refine((value) => !value.startsWith('0000-'));
 export const usageMonthRangeSchema = z.object({
@@ -1079,7 +1114,7 @@ export const webAnalyticsQuerySchema = z.object({
     'language',
     'timezone',
     'country',
-  ])).min(1).max(10).default(['route', 'device', 'browser']),
+  ])).max(10).default(['route', 'device', 'browser']),
   env: z.string().trim().min(1).max(100).default('prod'),
 }).strict();
 
@@ -1132,16 +1167,43 @@ export const pageEngagementQuerySchema = z.object({
   env: z.string().trim().min(1).max(100).default('prod'),
 }).strict();
 
-// funnel XOR steps is enforced in QueryService (zod .refine would break the
-// discriminated union below).
+// funnel XOR steps XOR conversion_metric is enforced in QueryService (zod
+// .refine would break the discriminated union below).
 export const funnelQuerySchema = z.object({
   kind: z.literal('funnel'),
   funnel: keySchema.optional(),
   steps: z.array(z.object({ metric: keySchema })).min(2).optional(),
+  conversion_metric: keySchema.optional(),
   date_from: dateStr,
   date_to: dateStr.nullable().optional(),
   env: z.string().default('prod'),
 });
+
+export const funnelInvestigationCreateSchema = z.object({
+  idempotency_key: z.string().trim().min(8).max(200),
+  funnel: keySchema,
+  env: z.string().trim().min(1).max(100).default('prod'),
+  date_from: z.string().datetime({ offset: true }),
+  date_to: z.string().datetime({ offset: true }),
+  from_step: z.number().int().nonnegative(),
+  to_step: z.number().int().positive(),
+}).strict().superRefine((input, ctx) => {
+  if (input.to_step !== input.from_step + 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['to_step'],
+      message: 'to_step must be the next saved funnel step after from_step',
+    });
+  }
+  if (Date.parse(input.date_to) <= Date.parse(input.date_from)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['date_to'],
+      message: 'date_to must be after date_from',
+    });
+  }
+});
+export type FunnelInvestigationCreateInput = z.infer<typeof funnelInvestigationCreateSchema>;
 
 export const entitiesQuerySchema = z.object({
   kind: z.literal('entities'),
@@ -1159,13 +1221,22 @@ export const actorsQuerySchema = z.object({
   to: dateStr.nullable().optional(),
   limit: z.number().int().min(1).max(100).default(50),
   cursor: z.string().trim().min(1).max(8192).optional(),
-  order: z.enum(['last_seen_desc', 'first_seen_desc', 'events_desc']).default('last_seen_desc'),
+  order: z.enum(['last_seen_desc', 'first_seen_desc', 'events_desc', 'interesting_desc']).default('last_seen_desc'),
   search: z.object({
     kind: z.literal('exact_id'),
     value: z.string().trim().min(1).max(200),
   }).strict().optional(),
   propertyFilters: z.array(propertyFilterSchema).max(20).default([]),
   activityMetric: keySchema.optional(),
+  interesting: z.discriminatedUnion('reason', [
+    z.object({
+      reason: z.literal('recently_activated'),
+      metric: keySchema,
+    }).strict(),
+    z.object({ reason: z.literal('stalled') }).strict(),
+    z.object({ reason: z.literal('at_risk') }).strict(),
+    z.object({ reason: z.literal('changed_segment') }).strict(),
+  ]).optional(),
 }).strict();
 
 export const personQuerySchema = z.object({

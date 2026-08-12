@@ -191,7 +191,7 @@ describe('usage concurrency protocol', () => {
     }
   });
 
-  it('linearizes entitlement deletion before ingest so removing a cap takes effect atomically', async () => {
+  it('linearizes an explicit null-cap update before ingest so removing a cap takes effect atomically', async () => {
     const isolated = await createTestEnv({ ingestBuffer: false });
     const writer = await isolated.pool.connect();
     try {
@@ -201,9 +201,13 @@ describe('usage concurrency protocol', () => {
         [orgId],
       );
       await writer.query('BEGIN');
-      await writer.query(`DELETE FROM organization_entitlements WHERE org_id = $1 AND meter_key = 'events_stored'`, [orgId]);
+      await writer.query(
+        `UPDATE organization_entitlements SET hard_limit = NULL
+         WHERE org_id = $1 AND meter_key = 'events_stored'`,
+        [orgId],
+      );
       const ingest = api(isolated, isolated.ingestToken, 'POST', '/i/v1/events', {
-        batch_id: 'entitlement-delete-race', events: [{ event: 'race.delete', distinct_id: 'race' }],
+        batch_id: 'entitlement-null-cap-race', events: [{ event: 'race.null_cap', distinct_id: 'race' }],
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
       await writer.query('COMMIT');

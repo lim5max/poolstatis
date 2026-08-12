@@ -73,7 +73,15 @@ describe('hosted StoreProvider connection', () => {
     const projects: ProjectWithStats[] = [{
       slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 0, proposed_metrics: 0, active_outcome_contracts: 0, funnels: 0,
       events_24h: 0, events_7d: 0, events_30d: 0, last_event_at: null, registered_coverage_30d: null,
-      key_outcome_available: false, health: 'no_data', attention: ['No events in 30 days', 'No active measurement contract'],
+      key_outcome_available: false,
+      key_outcome_readiness: {
+        state: 'unavailable', contract_key: null, metric_key: null, evaluated_at: '2026-08-11T12:00:00.000Z',
+        guardrail: {
+          id: 'key_outcome_queryable', state: 'fail', reason_code: 'environment_scope_required',
+          reason: 'Choose an environment before evaluating the typed key-outcome query.', observed_events: null,
+        },
+      },
+      health: 'no_data', attention: ['No events in 30 days', 'No active measurement contract'],
       health_evaluation: {
         source: 'server', evaluated_at: '2026-08-11T12:00:00.000Z',
         guardrails: [

@@ -135,8 +135,11 @@ Browser Analytics добавляет atomic setup endpoint
 
 ```
 GET    /api/v1/me/usage?period=YYYY-MM
+GET    /api/v1/me/usage/control?period=YYYY-MM
 GET    /api/v1/me/usage/range?from=YYYY-MM&to=YYYY-MM
 GET    /api/v1/me/usage/activity?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+GET    /api/v1/me/usage/entitlement
+PUT    /api/v1/me/usage/entitlement
 GET    /api/v1/account-mode
 GET    /api/v1/projects
 GET    /api/v1/projects/portfolio?env=prod
@@ -310,6 +313,19 @@ credential scope, role и capabilities выводятся сервером из 
 аутентифицированного контекста. Self-host возвращает
 `hosted_account: "not_configured"` и локальное setup-действие, не фиктивные
 hosted profile/billing controls.
+
+Self-hosted Core exposes `GET/PUT /api/v1/me/usage/entitlement` only to an
+organization-wide legacy `pt_` token. A project `sk_` is always rejected, and
+hosted sessions cannot use this endpoint as a billing backdoor. `PUT` requires
+`expected_revision`, a nullable safe-integer `hard_limit`, up to 16 ascending
+absolute `warning_thresholds`, and a human-readable `reason`. The transaction
+uses the same organization/meter advisory lock as ingest, rejects a cap below
+current UTC-cycle usage, and appends immutable audit before returning read-back.
+The response states the consequences directly: a batch exceeding a finite cap
+is rejected; threshold crossings are recorded in Core `usage_warnings`, but no
+email or webhook delivery is implied. Hosted plan, credit, operator-limit, and
+delivered-alert actions remain unavailable in Core and belong to the private
+hosted control plane.
 
 `/api/v1/me/usage` remains the monthly quota/projection contract. The additive
 `/api/v1/me/usage/range` endpoint returns an inclusive range of 1–12 UTC ingest
@@ -568,6 +584,19 @@ stored-event usage.
   "activityMetric": "activation_started", // registry key, never raw event
   "propertyFilters": []
 }
+
+// Purpose-backed interesting queue (only supported category)
+{
+  "kind": "actors",
+  "env": "prod",
+  "from": "-30d",
+  "order": "interesting_desc",
+  "interesting": {
+    "reason": "recently_activated",
+    "metric": "activation_completed"     // active native metric, category=activation
+  },
+  "propertyFilters": []
+}
 ```
 
 Операторы фильтров: `eq, ne, gt, gte, lt, lte, in, contains, is_set, is_not_set`.
@@ -581,7 +610,7 @@ filter/breakdown вызови `POST .../properties/acquisition-attribution`: о�
 `meta.note` такого trend явно говорит **Session landing attribution**: это связь
 с tagged landing в этой browser session, не causal credit кампании.
 
-Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки.
+Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки. `kind=funnel` принимает ровно один режим: сохранённый `funnel`, inline `steps` или `conversion_metric`. Последний разворачивает сервером зарегистрированные `source.from`, `source.to` и `window_seconds`; клиент не передаёт сырые события.
 
 `actors` также принимает только registry key в `activityMetric`. Search —
 только exact ID; substring scan отсутствует. Пока нет детерминированного
@@ -592,8 +621,15 @@ capability/provenance metadata. `linked` требует active server-owned link
 равен `unknown`. `top_events` bounded и включает только event names,
 помеченные `registered` при ingest. `session_count` равен `null`, если strict
 canonical Browser session evidence для actor/window не доказан.
+`interesting_desc` требует явный объект `interesting`. Сейчас сервер
+поддерживает только `recently_activated` с выбранной active native event metric
+категории `activation`; в каждой строке возвращаются её key/name/purpose,
+точный timestamp срабатывания и evidence window. `stalled`, `at_risk` и
+`changed_segment` fail closed с typed
+`actors_interesting_category_unavailable`, пока нет соответствующего typed
+semantic source. `activityMetric` и `interesting` нельзя комбинировать.
 Cursor v2 подписан HMAC по всему envelope, привязан к
-project/env/window/order/search/resolved activity source/session capability и
+project/env/window/order/search/resolved activity/interesting source/session capability и
 frozen `ingested_at` cutoff. Новые и late-ingested events не меняют следующие
 страницы; изменение actor-link graph инвалидирует cursor typed-ошибкой.
 Ключ выводится per project из server-only
@@ -629,6 +665,32 @@ canonical actor или связанных raw IDs. Response явно содер�
   ]
 }
 ```
+
+Из результата funnel нельзя автоматически вывести release decision. Перед
+передачей finding в Ship сохраните отдельный immutable artifact:
+
+```http
+POST /api/v1/projects/{slug}/funnel-investigations
+{
+  "idempotency_key": "checkout-step-2026-08-12",
+  "funnel": "checkout",
+  "env": "prod",
+  "date_from": "2026-08-05T00:00:00.000Z",
+  "date_to": "2026-08-12T00:00:00.000Z",
+  "from_step": 1,
+  "to_step": 2
+}
+```
+
+Клиент не передаёт готовые facts: сервер повторяет saved-funnel Query DSL и
+сохраняет snapshot definition, exact query/result/evidence, actor, timestamp и
+SHA-256 fingerprints. Artifact append-only и descriptive, not causal. Чтение:
+`GET /funnel-investigations?env=prod&funnel=checkout&limit=50` и
+`GET /funnel-investigations/{id}`. Позднейшая release evaluation должна ссылаться
+на конкретный investigation id, а не подбирать релиз по совпадению времени.
+Source/local MCP содержит эквивалентные tools, но опубликованный
+`@poolstatis/mcp@0.6.0` их ещё не содержит; публикация требует отдельного
+version bump и registry read-back по `docs/12-mcp-package-release.md`.
 
 ## Metric retirement and usage
 

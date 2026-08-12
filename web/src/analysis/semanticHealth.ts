@@ -260,13 +260,18 @@ export function buildRegistryHealth(
       ...(savedAnswers?.filter((answer) => savedAnswerMetricRefs(answer).includes(metric.key)).map((answer) => `Saved answer · ${answer.title}`) ?? []),
       ...(releases?.filter((release) => release.contract_snapshot.primary_metric_key === metric.key || release.contract_snapshot.guardrail_metric_keys.includes(metric.key)).map((release) => `Release · ${release.commit_sha.slice(0, 7)}`) ?? []),
     ];
+    const eventBased = metricSourceEvents(metric).length > 0;
     const answerSurfaces = metric.status === 'active' && metric.type !== 'conversion' && metric.type !== 'state'
-      ? ['Product answer', ...(metricSourceEvents(metric).length > 0 ? ['Retention answer', 'People activity filter'] : [])]
+      ? [
+          'Product answer',
+          ...(eventBased ? ['Retention answer'] : []),
+          ...(isNativePeopleActivityMetric(metric) ? ['People activity filter'] : []),
+        ]
       : [];
     return {
       key: metric.key,
       incomplete: metric.status === 'active' && observedEvents === 0,
-      unused: metric.status !== 'active' || explicit.length > 0
+      unused: metric.status !== 'active' || answerSurfaces.length > 0 || explicit.length > 0
         ? false
         : usage !== null && experiments !== null && savedAnswers !== null && releases !== null
           ? true
@@ -278,15 +283,25 @@ export function buildRegistryHealth(
   return {
     healthy: rows.filter((row) => {
       const metric = metrics.find((candidate) => candidate.key === row.key);
-      return metric?.status === 'active' && !row.incomplete && row.unused === false;
+      return metric?.status === 'active' && (row.observedEvents ?? 0) > 0 && !row.incomplete && row.unused === false;
     }).length,
     proposed: metrics.filter((metric) => metric.status === 'proposed').length,
     incomplete: rows.filter((row) => row.incomplete).length,
     deprecated: metrics.filter((metric) => metric.status === 'deprecated').length,
     unused: rows.filter((row) => row.unused === true).length,
-    usageUnavailable: rows.filter((row) => row.unused === null).length,
+    usageUnavailable: rows.filter((row) => {
+      const metric = metrics.find((candidate) => candidate.key === row.key);
+      return row.unused === null || (metric?.status === 'active' && row.observedEvents === null);
+    }).length,
     rows,
   };
+}
+
+function isNativePeopleActivityMetric(metric: Metric): boolean {
+  if (metric.status !== 'active' || metric.type === 'conversion' || metric.type === 'state') return false;
+  const source = metric.source as { event?: unknown; data_source?: unknown };
+  return typeof source.event === 'string'
+    && (source.data_source === undefined || source.data_source === 'native');
 }
 
 function savedAnswerMetricRefs(answer: SavedAnswer): string[] {

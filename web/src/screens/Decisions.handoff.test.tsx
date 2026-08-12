@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import type { AccountMode } from '../api/types';
 import { useStore } from '../store';
-import { Decisions } from './Decisions';
+import { Decisions, decisionReviewAccess } from './Decisions';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -10,6 +11,38 @@ vi.mock('../store', async (importOriginal) => ({
 }));
 
 const mockedStore = vi.mocked(useStore);
+
+function accountMode({
+  deployment = 'hosted', kind = 'user', role = 'owner', review = true,
+}: {
+  deployment?: 'hosted' | 'self_host';
+  kind?: 'secret' | 'personal' | 'user';
+  role?: 'owner' | 'admin' | 'member' | null;
+  review?: boolean;
+} = {}): AccountMode {
+  return {
+    schema_version: 1,
+    deployment: {
+      mode: deployment,
+      hosted_account: deployment === 'hosted' ? 'available' : 'not_configured',
+    },
+    session: { kind, scope: kind === 'secret' ? 'project' : 'organization', role },
+    capabilities: {
+      portfolio: kind === 'secret' ? 'project_only' : 'available',
+      compare_projects: kind !== 'secret',
+      manage_profile: deployment === 'hosted' && kind === 'user',
+      manage_personal_tokens: false,
+      review_decisions: review,
+      set_official_answers: false,
+      configure_usage_entitlement: deployment === 'self_host' && kind === 'personal' ? 'available' : deployment === 'hosted' ? 'unavailable_hosted' : 'unavailable_scope',
+      review_plan: 'unavailable',
+      set_usage_alert: 'unavailable',
+    },
+    primary_action: deployment === 'hosted'
+      ? { id: kind === 'user' ? 'manage_hosted_account' : 'sign_in_to_manage_account', kind: 'navigate', label: 'Manage account', href: '/profile' }
+      : { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
+  };
+}
 
 function decision(id: string, proposedOutcome: 'keep' | 'rollback', updatedAt: string) {
   return {
@@ -34,6 +67,17 @@ function decision(id: string, proposedOutcome: 'keep' | 'rollback', updatedAt: s
 }
 
 describe('Decisions handoff', () => {
+  it('keeps API keys and members read-only while allowing signed-in owner/admin review', () => {
+    expect(decisionReviewAccess(accountMode({ kind: 'secret', role: null, review: false }))).toBe('sign_in_required');
+    expect(decisionReviewAccess(accountMode({ kind: 'personal', role: 'owner', review: false }))).toBe('sign_in_required');
+    expect(decisionReviewAccess(accountMode({ role: 'member', review: false }))).toBe('insufficient_role');
+    expect(decisionReviewAccess(accountMode({ role: 'owner' }))).toBe('allowed');
+    expect(decisionReviewAccess(accountMode({ role: 'admin' }))).toBe('allowed');
+    expect(decisionReviewAccess(accountMode({ deployment: 'self_host', kind: 'personal', role: null }))).toBe('legacy_self_host');
+    expect(decisionReviewAccess(null, true)).toBe('loading');
+    expect(decisionReviewAccess(null, false, 'unavailable')).toBe('unavailable');
+  });
+
   it('selects the exact proposal referenced by the funnel handoff', async () => {
     const client = {
       decisions: vi.fn().mockResolvedValue([
@@ -45,6 +89,7 @@ describe('Decisions handoff', () => {
       decisionInbox: vi.fn().mockResolvedValue([]),
       decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
       webhookDeliveries: vi.fn().mockResolvedValue([]),
+      accountMode: vi.fn().mockResolvedValue(accountMode()),
     };
     mockedStore.mockReturnValue({ client, project: 'alpha', env: 'prod' } as never);
 
@@ -69,6 +114,7 @@ describe('Decisions handoff', () => {
       decisionInbox: vi.fn().mockResolvedValue([]),
       decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
       webhookDeliveries: vi.fn().mockResolvedValue([]),
+      accountMode: vi.fn().mockResolvedValue(accountMode()),
     };
     mockedStore.mockReturnValue({ client, project: 'alpha', env: 'prod' } as never);
 
@@ -89,6 +135,7 @@ describe('Decisions handoff', () => {
       decisionInbox: vi.fn().mockResolvedValue([]),
       decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
       webhookDeliveries: vi.fn().mockResolvedValue([]),
+      accountMode: vi.fn().mockResolvedValue(accountMode()),
     };
     mockedStore.mockReturnValue({ client, project: 'alpha', env: 'prod' } as never);
 

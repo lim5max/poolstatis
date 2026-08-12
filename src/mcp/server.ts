@@ -15,7 +15,7 @@ import {
   concludeExperimentSchema, createExperimentSchema, prepareExperimentSchema,
   createMetricCategorySchema,
   deprecateMetricSchema,
-  defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
+  defineFunnelSchema, entitiesQuerySchema, funnelInvestigationCreateSchema, funnelQuerySchema, lifecycleQuerySchema,
   experienceRouteRegistrationSchema, experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
   editDecisionSchema, eventRevisionPatchSchema, measurementDeclarationSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, propertyDefinitionSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
@@ -35,7 +35,17 @@ import {
   reviseMonitorPolicySchema,
 } from '../automationSchemas.js';
 
-export interface McpConfig { baseUrl: string; token: string; }
+export interface McpConfig {
+  baseUrl: string;
+  token: string;
+  distribution?: 'source' | 'published-0.6.0';
+}
+
+const SOURCE_ONLY_TOOLS_PENDING_PUBLICATION = new Set([
+  'create_funnel_investigation',
+  'list_funnel_investigations',
+  'get_funnel_investigation',
+]);
 
 /** Configuration is checked before stdio opens so a broken launcher cannot leak a token to protocol output. */
 export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOKEN?: string }): McpConfig {
@@ -55,6 +65,7 @@ export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOK
 }
 
 export function createMcpServer(config: Readonly<McpConfig>): McpServer {
+const distribution = config.distribution ?? 'published-0.6.0';
 async function api(method: string, path: string, body?: unknown): Promise<unknown> {
   const res = await fetch(`${config.baseUrl}${path}`, {
     method,
@@ -98,7 +109,10 @@ function wrap<A>(fn: (args: A) => Promise<unknown>): (args: A) => Promise<ToolRe
   };
 }
 
-const server = new McpServer({ name: 'poolstatis', version: '0.6.0' });
+const server = new McpServer({
+  name: 'poolstatis',
+  version: distribution === 'published-0.6.0' ? '0.6.0' : '0.6.0-source',
+});
 const project = z.string().describe('project slug, see list_projects');
 
 function asStructuredContent(data: unknown): Record<string, unknown> {
@@ -114,6 +128,7 @@ function jsonTool(
   inputSchema: z.ZodRawShape,
   handler: (args: any) => Promise<ToolResult>,
 ): void {
+  if (distribution === 'published-0.6.0' && SOURCE_ONLY_TOOLS_PENDING_PUBLICATION.has(name)) return;
   server.registerTool(
     name,
     { description, inputSchema, outputSchema: jsonOutputSchema },
@@ -132,7 +147,7 @@ jsonTool(
 
 jsonTool(
   'get_project_portfolio',
-  'Read environment-scoped project health and current UTC-cycle accepted usage from the immutable ingest-time usage ledger.',
+  'Read environment-scoped project health, current UTC-cycle accepted usage, and fail-closed key-outcome availability proven by a typed 30-day query guardrail.',
   { env: z.string().min(1).max(50).default('prod') },
   wrap(({ env }) => api('GET', `/api/v1/projects/portfolio?env=${encodeURIComponent(env)}`)),
 );
@@ -562,21 +577,21 @@ jsonTool(
 
 jsonTool(
   'approve_decision',
-  'Approve the agent proposal with an explicit human rationale. Approval records an immutable revision; it does not execute an external action.',
+  'Compatibility surface for decision review. Hosted MCP/API-key sessions are denied; a signed-in owner/admin must approve. Legacy ownerless self-host personal tokens remain compatible, and Core cannot distinguish admin UI from MCP when both use that token, so the human-only boundary is partial.',
   { project, id: z.string().uuid(), rationale: reviewDecisionSchema.shape.rationale },
   wrap(({ project: slug, id, rationale }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/approve`, { rationale })),
 );
 
 jsonTool(
   'reject_decision',
-  'Reject the agent proposal with an explicit rationale while preserving the original proposal in audit history.',
+  'Compatibility surface for decision review. Hosted MCP/API-key sessions are denied; a signed-in owner/admin must reject. Legacy ownerless self-host personal tokens remain compatible, and Core cannot distinguish admin UI from MCP when both use that token, so the human-only boundary is partial.',
   { project, id: z.string().uuid(), rationale: reviewDecisionSchema.shape.rationale },
   wrap(({ project: slug, id, rationale }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/reject`, { rationale })),
 );
 
 jsonTool(
   'edit_decision',
-  'Approve a human-corrected outcome/rationale while preserving the prior agent proposal and rejection history.',
+  'Compatibility surface for decision review. Hosted MCP/API-key sessions are denied; a signed-in owner/admin must save corrections. Legacy ownerless self-host personal tokens remain compatible, and Core cannot distinguish admin UI from MCP when both use that token, so the human-only boundary is partial.',
   {
     project,
     id: z.string().uuid(),
@@ -602,7 +617,7 @@ jsonTool(
 
 jsonTool(
   'approve_action',
-  'Execute only the exact previously prepared payload after human approval. The approval actor and fingerprint are audited; unsupported integrations stay inert.',
+  'Compatibility surface for approval-gated execution. Hosted MCP/API-key sessions are denied; a signed-in owner/admin must approve the frozen payload. Legacy ownerless self-host personal tokens remain compatible, and Core cannot distinguish admin UI from MCP when both use that token, so the human-only boundary is partial.',
   { project, id: z.string().uuid(), confirmation_fingerprint: approveDecisionActionSchema.shape.confirmation_fingerprint },
   wrap(({ project: slug, id, confirmation_fingerprint }) => api('POST', `/api/v1/projects/${slug}/actions/${id}/approve`, { confirmation_fingerprint })),
 );
@@ -1129,9 +1144,44 @@ jsonTool(
 
 jsonTool(
   'query_funnel',
-  'Step-by-step conversion for a saved funnel (by key) or inline steps (registry metric keys).',
+  'Step-by-step conversion for a saved funnel, inline registry metric steps, or one registered conversion metric.',
   { project, query: funnelQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'funnel', ...query })),
+);
+
+jsonTool(
+  'create_funnel_investigation',
+  'Persist immutable evidence for one adjacent transition in a saved funnel. Poolstatis reruns the exact project/environment query server-side; this creates evidence, not a causal claim or approved decision.',
+  { project, investigation: funnelInvestigationCreateSchema },
+  wrap(({ project: slug, investigation }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/funnel-investigations`,
+    investigation,
+  )),
+);
+
+jsonTool(
+  'list_funnel_investigations',
+  'List immutable saved-funnel investigation evidence for this project. Use an investigation id as the explicit lineage reference in later work; list order is newest first.',
+  {
+    project,
+    env: z.string().trim().min(1).max(100).optional(),
+    funnel: z.string().regex(/^[a-z][a-z0-9_]*$/).max(100).optional(),
+    limit: z.number().int().min(1).max(100).default(50),
+  },
+  wrap(({ project: slug, env, funnel, limit }) => {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (env) qs.set('env', env);
+    if (funnel) qs.set('funnel', funnel);
+    return api('GET', `/api/v1/projects/${slug}/funnel-investigations?${qs}`);
+  }),
+);
+
+jsonTool(
+  'get_funnel_investigation',
+  'Read one immutable saved-funnel investigation with exact query, result, evidence, creator, timestamps and SHA-256 lineage fingerprints.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/funnel-investigations/${id}`)),
 );
 
 jsonTool(
@@ -1143,7 +1193,7 @@ jsonTool(
 
 jsonTool(
   'list_actors',
-  'List bounded query-time canonical actors in an explicit factual order, with the exact evidence window, exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. Purpose-backed activation, stall, risk and segment ranking is unavailable; activityMetric must be a registry metric key and unsupported actor property filters fail closed.',
+  'List bounded query-time canonical actors with exact evidence windows, exact-ID search, opaque keyset pagination, registered top events and trust-qualified nullable Browser session counts. Factual orders are always available. interesting_desc supports only an explicit recently_activated reason backed by a selected active native registry metric in the activation category; stall, risk and segment-change reasons fail closed. Raw actor properties are never returned.',
   { project, query: actorsQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, {
     kind: 'actors',

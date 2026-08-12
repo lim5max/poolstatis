@@ -6,8 +6,11 @@ export interface PendingUsageWarning extends UsageWarning {
   periodStart: string;
 }
 
-/** Best-effort notification state; it never participates in accepted writes. */
-export async function recordUsageWarnings(pool: pg.Pool, warnings: PendingUsageWarning[]): Promise<void> {
+/** Best-effort notification evidence; it must never make an accepted write fail. */
+export async function recordUsageWarnings(
+  pool: pg.Pool | pg.PoolClient,
+  warnings: PendingUsageWarning[],
+): Promise<void> {
   if (warnings.length === 0) return;
   const params: unknown[] = [];
   const values = warnings.map((warning) => {

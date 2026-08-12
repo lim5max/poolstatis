@@ -3,18 +3,18 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
+import { activeMetric, api, createHumanReviewTestEnv, type HumanReviewTestEnv } from './helpers.js';
 
 const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DAY = 86_400_000;
 
 describe('measurement contract to approved decision over MCP', () => {
-  let env: TestEnv;
+  let env: HumanReviewTestEnv;
   let client: Client;
   let deployedAt: Date;
 
   beforeAll(async () => {
-    env = await createTestEnv();
+    env = await createHumanReviewTestEnv();
     deployedAt = new Date(Date.now() - 4 * DAY);
     await activeMetric(env, {
       key: 'activation_completed', type: 'unique_actors',
@@ -56,7 +56,7 @@ describe('measurement contract to approved decision over MCP', () => {
     await env.close();
   });
 
-  test('validates, diffs, applies, releases, evaluates and approves with REST-equivalent read-back', async () => {
+  test('validates, diffs, applies, releases and evaluates while MCP review fails closed', async () => {
     const names = (await client.listTools()).tools.map((tool) => tool.name);
     expect(names).toEqual(expect.arrayContaining([
       'validate_measurement_contracts', 'diff_measurement_contracts',
@@ -121,14 +121,26 @@ describe('measurement contract to approved decision over MCP', () => {
       decision: { proposed_outcome: 'keep', status: 'proposed' },
     });
     const decisionId = String((evaluated.structuredContent as { decision: { id: string } }).decision.id);
-    const approved = await client.callTool({
+    const denied = await client.callTool({
       name: 'approve_decision',
       arguments: {
         project: env.projectSlug, id: decisionId,
         rationale: 'The real activation lift clears the contract threshold with trusted evidence.',
       },
     });
-    expect(approved.structuredContent).toMatchObject({
+    expect(denied.isError).toBe(true);
+    expect(denied.content[0]?.text).toContain('human_user_required');
+    const stillProposed = await client.callTool({
+      name: 'get_decision', arguments: { project: env.projectSlug, id: decisionId },
+    });
+    expect(stillProposed.structuredContent).toMatchObject({
+      decision: { id: decisionId, status: 'proposed', current_revision: 1 },
+    });
+
+    const approved = await api(env, env.ownerToken, 'POST', `/api/v1/projects/${env.projectSlug}/decisions/${decisionId}/approve`, {
+      rationale: 'The real activation lift clears the contract threshold with trusted evidence.',
+    });
+    expect(approved.body).toMatchObject({
       decision: { id: decisionId, status: 'approved', accepted_outcome: 'keep' },
       release: { id: releaseId, status: 'decided' },
     });

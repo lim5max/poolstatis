@@ -54,8 +54,23 @@ beforeAll(async () => {
   );
   await env.pool.query(
     `INSERT INTO ingest_warning_occurrences (signature_id, bucket, count)
-     VALUES ($1, date_trunc('hour', now() - interval '48 hours'), 2)`,
+     VALUES ($1, date_trunc('hour', now() - interval '24 hours'), 2)`,
     [rejectedSignature.rows[0]!.signature_id],
+  );
+  const historicalSignature = await env.pool.query<{ signature_id: string }>(
+    `INSERT INTO ingest_warnings (
+       project_id, env, kind, event, detail, count, first_seen, last_seen
+     ) VALUES (
+       $1, 'prod', 'clock_skew', 'historical.clock', 'historical fixture', 1,
+       now() - interval '72 hours', now() - interval '72 hours'
+     )
+     RETURNING signature_id`,
+    [env.projectId],
+  );
+  await env.pool.query(
+    `INSERT INTO ingest_warning_occurrences (signature_id, bucket, count)
+     VALUES ($1, date_trunc('hour', now() - interval '72 hours'), 1)`,
+    [historicalSignature.rows[0]!.signature_id],
   );
 
   await env.app.listen({ host: '127.0.0.1', port: 0 });
@@ -120,6 +135,12 @@ describe('project data-health control contract', () => {
         href: '/data?tab=events&event=checkout.failed',
       },
       watermark: { count: 3, last_seen: expect.any(String) },
+      novelty: {
+        state: 'recurring',
+        basis: 'privacy-safe warning occurrences',
+        current_window: { count: 1, from: expect.any(String), to: expect.any(String) },
+        comparison_baseline: { count: 2, from: expect.any(String), to: expect.any(String) },
+      },
       verify_after_fix: {
         method: 'POST',
         href: `/api/v1/projects/${env.projectSlug}/data-health/verify`,
@@ -128,12 +149,24 @@ describe('project data-health control contract', () => {
     const unregistered = response.body.issue_signatures.find((issue: any) => issue.kind === 'unregistered');
     expect(unregistered.registered_event_name).toBeNull();
     expect(unregistered.repair_action.href).toContain(`signature=${encodeURIComponent(unregistered.signature_id)}`);
+    expect(unregistered.novelty).toMatchObject({
+      state: 'new',
+      current_window: { count: 1 },
+      comparison_baseline: { count: 0 },
+    });
+    const historical = response.body.issue_signatures.find((issue: any) => issue.registered_event_name === null && issue.kind === 'clock_skew');
+    expect(historical.novelty).toMatchObject({
+      state: 'historical',
+      current_window: { count: 0 },
+      comparison_baseline: { count: 0 },
+    });
 
     const serialized = JSON.stringify(response.body.issue_signatures);
     for (const prohibited of ['detail', 'sample', 'distinct_id', 'properties', 'accepted-checkout']) {
       expect(serialized).not.toContain(prohibited);
     }
     expect(response.body.improvements.map((finding: any) => finding.signature_id)).toContain(rejected.signature_id);
+    expect(response.body.improvements.map((finding: any) => finding.signature_id)).not.toContain(historical.signature_id);
     expect(response.body.doing_well).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'accepted_events_flowing' }),
     ]));

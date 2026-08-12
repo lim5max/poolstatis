@@ -223,7 +223,7 @@ function MetricsTable({
         <RegistryStat label="Proposed" value={health.proposed} note="Needs explicit activation" />
         <RegistryStat label="Incomplete" value={health.incomplete} note="Active, no source evidence · 30d" />
         <RegistryStat label="Deprecated" value={health.deprecated} note="Retained for semantic history" />
-        <RegistryStat label="Unused" value={health.unused} note={health.usageUnavailable > 0 ? `${health.usageUnavailable} need evidence refresh` : 'No saved funnel, insight or experiment'} />
+        <RegistryStat label="Unused" value={health.unused} note={health.usageUnavailable > 0 ? `${health.usageUnavailable} need evidence refresh` : 'No answer surface or registered consumer'} />
       </div>
       <Toolbar
         left={<SearchInput value={search} onChange={setSearch} placeholder="Search name, key, purpose…" />}
@@ -417,6 +417,33 @@ function DefinitionReviewDialog({
               <div><span className="text-xs text-muted-foreground">Aggregation</span><code className="block text-xs">{detail.data.current.aggregation}</code></div>
               <div><span className="text-xs text-muted-foreground">Fingerprint</span><code className="block truncate text-xs" title={detail.data.current.fingerprint}>{detail.data.current.fingerprint.slice(0, 12)}…</code></div>
             </div>
+            <details className="rounded-md border">
+              <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                Revision history · {detail.data.revisions.length}
+              </DisclosureSummary>
+              <ol className="space-y-2 border-t p-3">
+                {[...detail.data.revisions].sort((left, right) => right.revision - left.revision).map((revision) => (
+                  <li key={revision.id} className="rounded-md border bg-muted/10 p-3 text-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="font-medium">Revision {revision.revision} · {revisionActionLabel(revision.action)}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">{formatRevisionDate(revision.created_at)} · UTC</div>
+                      </div>
+                      <code className="text-xs text-muted-foreground">{revision.actor}</code>
+                    </div>
+                    <p className="mt-2 text-sm">{revision.definition.purpose}</p>
+                    <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                      <span>Aggregation · <code>{revision.aggregation}</code></span>
+                      <span className="min-w-0">Fingerprint · <code className="break-all" title={revision.fingerprint}>{revision.fingerprint.slice(0, 12)}…</code></span>
+                    </div>
+                    <details className="mt-2 text-xs text-muted-foreground">
+                      <DisclosureSummary className="cursor-pointer font-medium text-foreground">Definition snapshot</DisclosureSummary>
+                      <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-muted p-3 font-mono text-xs">{JSON.stringify(revision.definition, null, 2)}</pre>
+                    </details>
+                  </li>
+                ))}
+              </ol>
+            </details>
             <div className="space-y-1.5">
               <label htmlFor="metric-definition-purpose" className="text-xs text-muted-foreground">Purpose</label>
               <textarea id="metric-definition-purpose" value={purpose} onChange={(event) => change(() => setPurpose(event.target.value))} className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring" />
@@ -452,6 +479,20 @@ function DefinitionReviewDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function revisionActionLabel(action: 'created' | 'updated' | 'legacy_update'): string {
+  return action === 'legacy_update' ? 'compatibility update' : action;
+}
+
+function formatRevisionDate(value: string): string {
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return 'Unknown date';
+  return new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'UTC',
+  }).format(parsed);
 }
 
 function DeprecateDialog({ metric, onCancel, onConfirm }: { metric: Metric; onCancel: () => void; onConfirm: (reason: string) => Promise<void> }) {
@@ -633,7 +674,7 @@ function Section({ group, focusKey, categories, healthByKey, busy, onActivate, o
             <div className="flex flex-wrap gap-1">
               {health?.usedByAnswers.slice(0, 2).map((answer) => <Badge key={answer} variant="outline" className="max-w-40 truncate font-normal" title={answer}>{answer}</Badge>)}
               {(health?.usedByAnswers.length ?? 0) > 2 && <Badge variant="secondary">+{health!.usedByAnswers.length - 2}</Badge>}
-              {(health?.usedByAnswers.length ?? 0) === 0 && <span className="text-xs text-muted-foreground">{health?.unused === null ? 'Consumer evidence unavailable' : 'No saved consumer'}</span>}
+              {(health?.usedByAnswers.length ?? 0) === 0 && <span className="text-xs text-muted-foreground">{health?.unused === null ? 'Consumer evidence unavailable' : 'No known consumer'}</span>}
             </div>
             <details className="mt-1"><DisclosureSummary className="cursor-pointer text-xs font-medium text-foreground underline decoration-border underline-offset-2">Review evidence</DisclosureSummary><div className="mt-1 text-xs text-muted-foreground">{health?.unused === null ? 'Saved-consumer evidence is incomplete; no unused claim was made.' : health?.observedEvents == null ? 'Source evidence unavailable' : `${health.observedEvents} source events · 30d`}</div></details>
           </TableCell>

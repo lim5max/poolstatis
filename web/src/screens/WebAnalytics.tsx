@@ -25,8 +25,8 @@ import {
   type WebSessionsResult,
   type WebWorkspaceResult,
 } from '../analysis/operations';
-import type { VisualizationSpec } from '../analysis/visualization';
-import type { MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
+import type { FunnelQueryResult, TrendQueryResult, VisualizationSpec } from '../analysis/visualization';
+import type { MeasurementAnswerDependency, MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 import { useAsync, useStore } from '../store';
 import { AcquisitionPanel } from './Measurement';
 
@@ -77,6 +77,17 @@ interface WebTrendRead {
   result: WebWorkspaceResult['trend'];
 }
 
+interface WebOutcomeRead {
+  scope: string;
+  metric: Metric;
+  result: TrendQueryResult;
+}
+
+interface WebOutcomeComparisonRead {
+  scope: string;
+  result: TrendQueryResult;
+}
+
 interface WebTrustScopedRead {
   scope: string;
   result: WebTrustRead;
@@ -86,6 +97,12 @@ interface WebSecondaryRead {
   scope: string;
   dimension: WebDimension;
   result: WebAnalyticsResult;
+}
+
+interface WebConversionRead {
+  scope: string;
+  metric: Metric;
+  result: FunnelQueryResult;
 }
 
 interface WebSessionsRead {
@@ -165,7 +182,10 @@ export function WebAnalytics() {
   }), [project, env]);
   const readinessData = readiness.data?.scope === registryScope ? readiness.data.result : null;
   const metric = registryData?.metric ?? null;
+  const outcomeMetric = registryData ? webOutcomeMetric(registryData.metrics) : null;
+  const conversionMetric = webConversionMetric(registryData?.metrics ?? []);
   const primaryScope = `${registryScope}\u0000${range}\u0000${metric?.key ?? ''}`;
+  const outcomeScope = `${registryScope}\u0000${range}\u0000${outcomeMetric?.key ?? ''}`;
   const primary = useAsync<WebPrimaryRead | null>(async () => {
     if (!metric) return null;
     const base = {
@@ -207,6 +227,34 @@ export function WebAnalytics() {
     return { scope: primaryScope, result: await readWebTrust(client!, project!, env, metric.key) };
   }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at]);
   const trustData = trustRead.data?.scope === primaryScope ? trustRead.data.result : null;
+  const outcomeRead = useAsync<WebOutcomeRead | null>(async () => {
+    if (!outcomeMetric || outcomeMetric.type === 'conversion') return null;
+    const result = await client!.query(project!, {
+      kind: 'trend', metric: outcomeMetric.key, date_from: rangeDateFrom(range), date_to: null,
+      interval: 'day', filters: [], env,
+    });
+    if (result.kind !== 'trend') throw new Error('Outcome query returned an unexpected result kind');
+    return { scope: outcomeScope, metric: outcomeMetric, result };
+  }, [project, env, range, outcomeMetric?.key, outcomeMetric?.type]);
+  const outcomeData = outcomeRead.data?.scope === outcomeScope ? outcomeRead.data : null;
+  const outcomeComparison = useAsync<WebOutcomeComparisonRead | null>(async () => {
+    if (!outcomeMetric || !outcomeData) return null;
+    const previousRange = previousExactRange(outcomeData.result.meta.date_range);
+    if (!previousRange) throw new Error('Outcome comparison range is unavailable');
+    const result = await client!.query(project!, {
+      kind: 'trend', metric: outcomeMetric.key,
+      date_from: previousRange.from, date_to: previousRange.to,
+      interval: 'day', filters: [], env,
+    });
+    if (result.kind !== 'trend') throw new Error('Outcome comparison returned an unexpected result kind');
+    return { scope: outcomeScope, result };
+  }, [
+    project, env, range, outcomeMetric?.key, outcomeData?.result.meta.computed_at,
+    outcomeData?.result.meta.date_range?.from, outcomeData?.result.meta.date_range?.to,
+  ]);
+  const outcomeComparisonData = outcomeComparison.data?.scope === outcomeScope
+    ? outcomeComparison.data.result
+    : null;
   const operationalDimension = dimension !== 'conversion' ? dimension : null;
   const secondary = useAsync<WebSecondaryRead | null>(async () => {
     if (!metric || !primaryData || !breakdownRequested || !operationalDimension) return null;
@@ -222,6 +270,22 @@ export function WebAnalytics() {
   }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension, breakdownRequested]);
   const secondaryData = secondary.data?.scope === primaryScope
     && secondary.data.dimension === operationalDimension ? secondary.data.result : null;
+  const conversionFrom = primaryData?.overview.meta.date_range.from ?? '';
+  const conversionTo = primaryData?.overview.meta.date_range.to ?? '';
+  const conversionScope = `${primaryScope}\u0000${conversionMetric?.key ?? ''}\u0000${conversionFrom}\u0000${conversionTo}`;
+  const conversion = useAsync<WebConversionRead | null>(async () => {
+    if (!primaryData || dimension !== 'conversion' || !conversionMetric) return null;
+    const result = await client!.query(project!, {
+      kind: 'funnel',
+      conversion_metric: conversionMetric.key,
+      date_from: primaryData.overview.meta.date_range.from,
+      date_to: primaryData.overview.meta.date_range.to,
+      env,
+    });
+    if (result.kind !== 'funnel') throw new Error('Conversion query returned an unexpected result kind');
+    return { scope: conversionScope, metric: conversionMetric, result };
+  }, [project, env, dimension, conversionMetric?.key, conversionScope, conversionFrom, conversionTo]);
+  const conversionData = conversion.data?.scope === conversionScope ? conversion.data : null;
   const sessions = useAsync<WebSessionsRead | null>(async () => {
     if (!metric || !primaryData || !sessionsRequested) return null;
     const result = await client!.operationalQuery<WebSessionsResult>(project!, {
@@ -251,7 +315,7 @@ export function WebAnalytics() {
     return (
       <div className="space-y-5">
         <ScreenHeader range={range} onRange={setRange} showRange={false} />
-        <WebSetupOrder canonicalReady={false} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} />
+        <WebSetupOrder canonicalReady={false} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} answerDependencies={readinessData?.answer_dependencies ?? []} />
         <WebSetup metric={setupData.proposedMetric} onReady={registry.reload} />
       </div>
     );
@@ -282,7 +346,7 @@ export function WebAnalytics() {
       <ScreenHeader range={range} onRange={(value) => { setRange(value); setSelectedSession(null); }} />
 
       {(!canonicalReady || !acquisitionTrusted || !outcomeReady) && (
-        <WebSetupOrder canonicalReady={canonicalReady} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} />
+        <WebSetupOrder canonicalReady={canonicalReady} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} answerDependencies={readinessData?.answer_dependencies ?? []} />
       )}
 
       {canonicalReady && acquisitionTrusted && outcomeReady && (
@@ -294,6 +358,32 @@ export function WebAnalytics() {
           trust={trust}
           trustLoading={!trustData && !trustRead.error}
           env={env}
+        />
+      )}
+
+      {outcomeMetric && (
+        <WebOutcomeAnswer
+          metric={outcomeMetric}
+          current={outcomeData?.result ?? null}
+          currentState={outcomeMetric.type === 'conversion'
+            ? 'unsupported'
+            : outcomeRead.error
+              ? 'unavailable'
+              : outcomeData
+                ? 'ready'
+                : 'loading'}
+          currentError={outcomeRead.error}
+          previous={outcomeComparisonData}
+          comparisonState={outcomeComparisonData
+            ? 'ready'
+            : outcomeComparison.error
+              ? 'unavailable'
+              : outcomeData
+                ? 'loading'
+                : 'unavailable'}
+          range={range}
+          env={env}
+          onRetry={outcomeRead.reload}
         />
       )}
 
@@ -346,11 +436,23 @@ export function WebAnalytics() {
             </TabsList>
           </Tabs>
         </div>
-        {dimension === 'conversion' ? (
+        {dimension === 'conversion' && conversionMetric ? (
+          <WebConversionAnswer
+            metric={conversionMetric}
+            result={conversionData?.result ?? null}
+            loading={conversion.loading || (!conversionData && !conversion.error)}
+            error={conversion.error}
+            onRetry={conversion.reload}
+          />
+        ) : dimension === 'conversion' ? (
           <div className="border-y border-dashed px-4 py-7 text-center">
-            <div className="text-lg font-semibold">Choose a conversion to measure</div>
-            <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">The current canonical web response does not include a conversion outcome, so Poolstatis will not display a zero.</p>
-            <Button asChild variant="outline" className="mt-4 h-11"><Link to="/registry">Review outcomes</Link></Button>
+            <div className="text-lg font-semibold">{outcomeMetric ? outcomeMetric.name : 'Choose a conversion to measure'}</div>
+            <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
+              {outcomeMetric
+                ? `The registered ${outcomeMetric.key} outcome is measured above for this exact period; this tab does not reinterpret traffic as conversion.`
+                : 'No active non-page-view metric is mapped to surface:web, so Poolstatis will not display a zero.'}
+            </p>
+            <Button asChild variant="outline" className="mt-4 h-11"><Link to={outcomeMetric ? '/analyze' : '/registry'}>{outcomeMetric ? 'Analyze outcome' : 'Review outcomes'}</Link></Button>
           </div>
         ) : !breakdownRequested ? (
           <div className="flex flex-col items-start gap-3 border-y border-dashed px-4 py-7">
@@ -530,15 +632,208 @@ function WebHealthAnswer({ current, previous, comparisonState, range, trust, tru
   );
 }
 
+function WebOutcomeAnswer({ metric, current, currentState, currentError, previous, comparisonState, range, env, onRetry }: {
+  metric: Metric;
+  current: TrendQueryResult | null;
+  currentState: 'loading' | 'ready' | 'unavailable' | 'unsupported';
+  currentError: string | null;
+  previous: TrendQueryResult | null;
+  comparisonState: 'loading' | 'ready' | 'unavailable';
+  range: AnalyticsRange;
+  env: string;
+  onRetry: () => void;
+}) {
+  if (currentState === 'loading') {
+    return <AnswerCanvas><div className="p-4 sm:p-5"><Loading what={`Measuring ${metric.name}…`} /></div></AnswerCanvas>;
+  }
+  if (currentState === 'unsupported') {
+    return (
+      <AnswerCanvas>
+        <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:p-5">
+          <div>
+            <h2 className="text-lg font-semibold">Web outcome</h2>
+            <p className="mt-2 text-lg font-semibold">{metric.name} is registered, but not reproduced here</p>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              <code>{metric.key}</code> is a conversion definition. The typed trend query intentionally rejects conversion metrics, so this screen will not manufacture a rate or zero; query the registered funnel endpoints in Analyze.
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">{metric.purpose} · {env}</p>
+          </div>
+          <Button asChild variant="outline"><Link to="/analyze">Open Analyze</Link></Button>
+        </div>
+      </AnswerCanvas>
+    );
+  }
+  if (currentState === 'unavailable' || !current) {
+    return (
+      <AnswerCanvas>
+        <div className="p-4 sm:p-5">
+          <h2 className="text-lg font-semibold">Web outcome</h2>
+          <p className="mt-2 text-sm text-muted-foreground">{metric.name} could not be measured for this exact period. Traffic remains available and no zero is inferred.</p>
+          {currentError && <div className="mt-3"><ErrorNote>{currentError}</ErrorNote></div>}
+          <Button variant="outline" className="mt-3" onClick={onRetry}>Retry outcome</Button>
+        </div>
+      </AnswerCanvas>
+    );
+  }
+  const hasObservations = current.series.length > 0 && current.answer?.state !== 'empty';
+  const currentValue = webOutcomeValue(metric, current);
+  const previousValue = previous ? webOutcomeValue(metric, previous) : null;
+  const delta = currentValue !== null && previousValue !== null ? currentValue - previousValue : null;
+  const deltaRate = delta !== null && previousValue !== null && previousValue !== 0
+    ? delta / Math.abs(previousValue)
+    : null;
+  const days = Number.parseInt(range, 10);
+  const comparison = comparisonState === 'loading'
+    ? 'Previous exact-period comparison is loading.'
+    : comparisonState === 'unavailable' || delta === null
+      ? 'Previous exact-period comparison is unavailable.'
+      : delta === 0
+        ? `No change versus the previous ${days} days.`
+        : deltaRate === null
+          ? `${delta > 0 ? '+' : ''}${formatOutcomeNumber(delta)}; the previous period was zero, so percentage change is unavailable.`
+          : `${delta > 0 ? 'Up' : 'Down'} ${Math.abs(deltaRate * 100).toFixed(1)}% versus the previous ${days} days.`;
+  const trust = current.evidence?.state ?? 'unavailable';
+  const aggregation = current.evidence?.aggregation ?? 'Registered metric query; aggregation details unavailable.';
+  return (
+    <AnswerCanvas>
+      <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-5">
+        <div>
+          <h2 className="text-lg font-semibold">Web outcome</h2>
+          <p className="mt-2 text-xl font-semibold">
+            {hasObservations && currentValue !== null
+              ? `${metric.name}: ${current.answer?.primary_value?.formatted ?? formatOutcomeNumber(currentValue)}`
+              : `No ${metric.name} observations in this period`}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">{hasObservations ? comparison : 'The query returned no observations; this is not presented as a measured zero conversion.'}</p>
+          <p className="mt-2 text-xs text-muted-foreground"><code>{metric.key}</code> · {metric.purpose} · {env}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{aggregation}</p>
+        </div>
+        <Badge variant={trust === 'trusted' ? 'outline' : 'secondary'}>
+          {trust === 'trusted' ? 'Trusted query evidence' : `${trust} evidence`}
+        </Badge>
+      </div>
+    </AnswerCanvas>
+  );
+}
+
+function webOutcomeValue(metric: Metric, result: TrendQueryResult): number | null {
+  const primary = result.answer?.primary_value?.value;
+  if (typeof primary === 'number' && Number.isFinite(primary)) return primary;
+  if (metric.type === 'count') return result.series.reduce((sum, point) => sum + point.value, 0);
+  const source = metric.source as { agg?: string };
+  if (metric.type === 'value' && (source.agg ?? 'sum') === 'sum') {
+    return result.series.reduce((sum, point) => sum + point.value, 0);
+  }
+  return null;
+}
+
+function formatOutcomeNumber(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+}
+
 export function hasAcceptedCanonicalPageViews(pageViews: number) {
   return pageViews > 0;
 }
 
 export function hasWebOutcome(metrics: Metric[]) {
-  return metrics.some((metric) => metric.status === 'active'
+  return webOutcomeMetric(metrics) !== null;
+}
+
+export function webOutcomeMetric(metrics: Metric[]): Metric | null {
+  return metrics.filter((metric) => metric.status === 'active'
     && metric.key !== WEB_PAGE_VIEW_METRIC
     && metric.type !== 'state'
-    && metric.tags.includes('surface:web'));
+    && metric.tags.includes('surface:web'))
+    .sort((left, right) => {
+      const leftQueryable = left.type === 'conversion' ? 1 : 0;
+      const rightQueryable = right.type === 'conversion' ? 1 : 0;
+      return leftQueryable - rightQueryable || left.key.localeCompare(right.key);
+    })[0] ?? null;
+}
+
+export function previousExactRange(range?: { from: string; to: string }): { from: string; to: string } | null {
+  if (!range) return null;
+  const from = Date.parse(range.from);
+  const to = Date.parse(range.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return null;
+  return {
+    from: new Date(from - (to - from)).toISOString(),
+    to: new Date(from).toISOString(),
+  };
+}
+
+export function webConversionMetric(metrics: Metric[]): Metric | null {
+  return [...metrics]
+    .filter((metric) => metric.status === 'active'
+      && metric.type === 'conversion'
+      && metric.tags.includes('surface:web'))
+    .sort((left, right) => left.key.localeCompare(right.key))[0] ?? null;
+}
+
+function WebConversionAnswer({ metric, result, loading, error, onRetry }: {
+  metric: Metric;
+  result: FunnelQueryResult | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  if (loading) return <Loading what={`Loading ${metric.name} conversion…`} />;
+  if (error) {
+    return (
+      <div className="border-y border-dashed px-4 py-5">
+        <ErrorNote>{error}</ErrorNote>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button variant="outline" className="h-11" onClick={onRetry}>Retry conversion</Button>
+          <Button asChild variant="outline" className="h-11"><Link to="/registry">Review definition</Link></Button>
+        </div>
+      </div>
+    );
+  }
+  if (!result?.summary) {
+    return <EmptyState headline="Conversion unavailable" lead="The typed funnel response did not include a conversion summary." />;
+  }
+  const first = result.steps[0]?.actors ?? 0;
+  const last = result.steps.at(-1)?.actors ?? 0;
+  const current = result.summary.overall_conversion;
+  const previous = result.summary.previous_overall_conversion;
+  const delta = result.summary.delta_percentage_points;
+  const deltaLabel = delta === null
+    ? 'Previous exact-period comparison unavailable'
+    : `${delta > 0 ? '+' : ''}${Math.round(delta * 10) / 10} pp versus previous exact period`;
+  return (
+    <section className="border-y" aria-labelledby="web-conversion-title">
+      <div className="grid gap-4 px-4 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+        <div className="min-w-0">
+          <h3 id="web-conversion-title" className="text-lg font-semibold">{metric.name}</h3>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{metric.purpose}</p>
+          {current === null ? (
+            <>
+              <p className="mt-4 text-xl font-semibold">No measured denominator</p>
+              <p className="mt-1 text-sm text-muted-foreground">Conversion rate is unavailable; no actor reached the registered start source in this period.</p>
+            </>
+          ) : (
+            <>
+              <p className="mt-4 text-3xl font-semibold tabular-nums">{formatPercent(current)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{fmtNum(last)} of {fmtNum(first)} actors converted</p>
+            </>
+          )}
+        </div>
+        <Badge variant={result.evidence?.state === 'trusted' ? 'outline' : 'secondary'}>{deltaLabel}</Badge>
+      </div>
+      <div className="grid gap-3 border-t bg-muted/20 px-4 py-3 text-sm sm:grid-cols-3">
+        <ConversionFact label="Current conversion" value={current === null ? 'Unavailable' : formatPercent(current)} />
+        <ConversionFact label="Previous conversion" value={previous === null ? 'Unavailable' : formatPercent(previous)} />
+        <ConversionFact label="Converted actors" value={current === null ? 'Unavailable' : `${fmtNum(last)} of ${fmtNum(first)}`} />
+      </div>
+      <div className="border-t px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+        Exact UTC window · [{result.meta.date_range.from}, {result.meta.date_range.to}) · {result.evidence?.aggregation ?? 'registered conversion definition'} · {result.meta.source}
+      </div>
+    </section>
+  );
+}
+
+function ConversionFact({ label, value }: { label: string; value: string }) {
+  return <div><span className="text-muted-foreground">{label}</span><div className="mt-1 font-medium tabular-nums">{value}</div></div>;
 }
 
 function routeDefinitionsReady(properties: PropertyDefinition[]) {
@@ -546,11 +841,12 @@ function routeDefinitionsReady(properties: PropertyDefinition[]) {
   return route?.status === 'trusted' && (route.enum_values?.length ?? 0) > 0;
 }
 
-function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affectedAnswerIds = [] }: {
+function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affectedAnswerIds = [], answerDependencies = [] }: {
   canonicalReady: boolean;
   acquisitionReady: boolean;
   outcomeReady: boolean;
   affectedAnswerIds?: string[];
+  answerDependencies?: MeasurementAnswerDependency[];
 }) {
   const steps = [
     { title: 'Canonical page views', ready: canonicalReady, description: 'Active web_page_views metric and accepted browser events in this period.' },
@@ -576,11 +872,14 @@ function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affecte
         <div className="mt-4 border-t pt-3 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">Affected saved answers:</span>{' '}
           <span className="inline-flex flex-wrap gap-x-2 gap-y-1">
-            {affectedAnswerIds.map((answerId) => (
-              <Link key={answerId} className="font-mono text-foreground underline decoration-muted-foreground/60 underline-offset-4" to={`/analyze/saved?answer=${encodeURIComponent(answerId)}`}>
-                {answerId}
-              </Link>
-            ))}
+            {affectedAnswerIds.map((answerId) => {
+              const dependency = answerDependencies.find((candidate) => candidate.answer_id === answerId);
+              return (
+                <Link key={answerId} className="font-mono text-foreground underline decoration-muted-foreground/60 underline-offset-4" to={dependency?.href ?? `/analyze/saved?answer=${encodeURIComponent(answerId)}`}>
+                  {dependency?.label ?? answerId}
+                </Link>
+              );
+            })}
           </span>
         </div>
       )}
@@ -758,7 +1057,7 @@ function ScreenHeader({ range, onRange, showRange = true }: {
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="serif text-3xl sm:text-4xl">Web</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Traffic, pages, sources and supported conversions from canonical browser events.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Canonical browser traffic with purpose-backed registered web outcomes.</p>
       </div>
       {showRange && <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
         Period
