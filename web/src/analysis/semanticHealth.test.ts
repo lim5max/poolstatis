@@ -62,6 +62,19 @@ describe('semantic health helpers', () => {
     expect(health.rows[0]?.unused).toBe(false);
   });
 
+  it('does not claim that a PostHog metric is available as a native People activity filter', () => {
+    const metric = {
+      key: 'posthog_active', status: 'active', type: 'count',
+      source: { data_source: 'posthog', connection_id: 'posthog-main', event: 'active' },
+    } as never;
+    const health = buildRegistryHealth([metric], [], new Map([['posthog_active', {
+      observed_events: [{ event: 'active', count: 4 }], used_by: { funnels: [], insights: [] },
+    } as never]]));
+
+    expect(health.rows[0]?.usedByAnswers).toEqual(['Product answer', 'Retention answer']);
+    expect(health.rows[0]?.usedByAnswers).not.toContain('People activity filter');
+  });
+
   it('reports healthy and deprecated registry definitions explicitly', () => {
     const active = { key: 'active', status: 'active', type: 'count', source: { event: 'active' } } as never;
     const deprecated = { key: 'old', status: 'deprecated', type: 'count', source: { event: 'old' } } as never;

@@ -443,7 +443,7 @@ describe('organization usage ledger', () => {
     mockedStore.mockReturnValue(usageStore());
     renderUsage();
     await screen.findByText('Hard limit reached');
-    const meter = screen.getByRole('img', { name: '0 percent of the configured hard limit used' });
+    const meter = screen.getByRole('img', { name: '100 percent of the configured hard limit used' });
     expect(meter.innerHTML).not.toContain('NaN');
     expect(screen.getAllByText('At 0 events, a batch that would exceed the limit is rejected.')).toHaveLength(2);
   });

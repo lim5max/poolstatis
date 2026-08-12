@@ -14,6 +14,7 @@ const usage = vi.fn();
 const usageControl = vi.fn();
 const usageActivity = vi.fn();
 const usageRange = vi.fn();
+const setProject = vi.fn();
 
 function monthOffset(offset: number): string {
   const now = new Date();
@@ -102,6 +103,7 @@ describe('Usage month range', () => {
     usageRange.mockImplementation(async (from: string, to: string) => rangeResponse(from, to));
     mockedStore.mockReturnValue({
       tokenKind: 'user', account: { membership: { role: 'owner' } },
+      setProject,
       client: { usage, usageControl, usageActivity, usageRange },
     } as never);
   });
@@ -120,7 +122,10 @@ describe('Usage month range', () => {
     expect(screen.getAllByText('Projected Aug 17, 2026')).toHaveLength(2);
     expect(screen.getAllByText('Notification route: Not configured')).toHaveLength(4);
     expect(screen.getAllByText('Evidence: usage ledger')).toHaveLength(4);
-    expect(screen.getByRole('link', { name: 'Open Alpha project health' })).toHaveAttribute('href', '/projects');
+    const projectLink = screen.getByRole('link', { name: 'Open Alpha project health in prod' });
+    expect(projectLink).toHaveAttribute('href', '/projects?project=alpha&env=prod');
+    fireEvent.click(projectLink);
+    expect(setProject).toHaveBeenCalledWith('alpha', 'prod');
     expect(usageControl).toHaveBeenCalledOnce();
     expect(usageControl).toHaveBeenCalledWith(monthOffset(0));
     expect(usage).not.toHaveBeenCalled();

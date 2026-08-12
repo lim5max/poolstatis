@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
 import { DangerConfirm, Panel, EmptyState, ErrorNote, Loading, fmtNum, fmtRelative, TableScroll } from '../components/ui';
@@ -18,6 +18,21 @@ const UNAVAILABLE_PORTFOLIO = new Promise<null>(() => {});
 export function Projects() {
   const { projects, project, setProject, tokenKind, projectScope, account, client, refreshProjects, env } = useStore();
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
+  const focusedProject = searchParams.get('project');
+  const focusedEnvironment = searchParams.get('env');
+  const appliedContext = useRef<string | null>(null);
+  const requestedContext = focusedProject && focusedEnvironment
+    ? `${focusedProject}\u0000${focusedEnvironment}`
+    : null;
+  useEffect(() => {
+    if (requestedContext === appliedContext.current
+      || !focusedProject
+      || !focusedEnvironment
+      || !projects.some((candidate) => candidate.slug === focusedProject)) return;
+    appliedContext.current = requestedContext;
+    if (project !== focusedProject || env !== focusedEnvironment) setProject(focusedProject, focusedEnvironment);
+  }, [env, focusedEnvironment, focusedProject, project, projects, requestedContext, setProject]);
   const canCreate = tokenKind === 'personal'
     || (tokenKind === 'user' && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
   const open = (slug: string) => { setProject(slug); nav('/registry'); };
@@ -80,7 +95,11 @@ export function Projects() {
               {displayProjects.map((p) => {
                 const scoped = hasScopedPortfolio ? p as ProjectPortfolioRow : null;
                 return (
-                <TableRow key={p.slug}>
+                <TableRow
+                  key={p.slug}
+                  data-focus-project={p.slug === focusedProject ? 'true' : undefined}
+                  className={p.slug === focusedProject ? 'bg-accent/45' : undefined}
+                >
                   <TableCell><div className="font-medium flex items-center gap-2">{p.name}{p.slug === project && <Badge className="text-xs">selected</Badge>}</div><div className="text-xs text-muted-foreground">{p.slug} · {p.timezone}</div></TableCell>
                   <TableCell>
                     {scoped ? <><Badge variant={scoped.health === 'healthy' ? 'default' : 'outline'}>{scoped.health === 'healthy' ? 'Healthy' : scoped.health === 'needs_attention' ? 'Needs attention' : 'No data'}</Badge><ProjectHealthDetails evaluation={scoped.health_evaluation} /></> : <span className="text-xs text-muted-foreground">Unavailable for {env}</span>}

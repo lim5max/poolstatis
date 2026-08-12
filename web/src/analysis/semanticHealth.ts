@@ -260,8 +260,13 @@ export function buildRegistryHealth(
       ...(savedAnswers?.filter((answer) => savedAnswerMetricRefs(answer).includes(metric.key)).map((answer) => `Saved answer · ${answer.title}`) ?? []),
       ...(releases?.filter((release) => release.contract_snapshot.primary_metric_key === metric.key || release.contract_snapshot.guardrail_metric_keys.includes(metric.key)).map((release) => `Release · ${release.commit_sha.slice(0, 7)}`) ?? []),
     ];
+    const eventBased = metricSourceEvents(metric).length > 0;
     const answerSurfaces = metric.status === 'active' && metric.type !== 'conversion' && metric.type !== 'state'
-      ? ['Product answer', ...(metricSourceEvents(metric).length > 0 ? ['Retention answer', 'People activity filter'] : [])]
+      ? [
+          'Product answer',
+          ...(eventBased ? ['Retention answer'] : []),
+          ...(isNativePeopleActivityMetric(metric) ? ['People activity filter'] : []),
+        ]
       : [];
     return {
       key: metric.key,
@@ -290,6 +295,13 @@ export function buildRegistryHealth(
     }).length,
     rows,
   };
+}
+
+function isNativePeopleActivityMetric(metric: Metric): boolean {
+  if (metric.status !== 'active' || metric.type === 'conversion' || metric.type === 'state') return false;
+  const source = metric.source as { event?: unknown; data_source?: unknown };
+  return typeof source.event === 'string'
+    && (source.data_source === undefined || source.data_source === 'native');
 }
 
 function savedAnswerMetricRefs(answer: SavedAnswer): string[] {

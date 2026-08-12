@@ -196,14 +196,16 @@ export async function getProjectDataHealth(
     },
     windows: { last_24h: window24, last_7d: window7 },
     issue_signatures: issueSignatures,
-    improvements: issueSignatures.map((issue) => ({
-      signature_id: issue.signature_id,
-      severity: issue.kind === 'rejected' ? 'high' as const : 'medium' as const,
-      title: KIND_PRESENTATION[issue.kind].title,
-      affected_answer_ids: issue.affected_answer_ids,
-      repair_action: issue.repair_action,
-      verify_after_fix: issue.verify_after_fix,
-    })),
+    improvements: issueSignatures
+      .filter((issue) => issue.novelty.state !== 'historical')
+      .map((issue) => ({
+        signature_id: issue.signature_id,
+        severity: issue.kind === 'rejected' ? 'high' as const : 'medium' as const,
+        title: KIND_PRESENTATION[issue.kind].title,
+        affected_answer_ids: issue.affected_answer_ids,
+        repair_action: issue.repair_action,
+        verify_after_fix: issue.verify_after_fix,
+      })),
     doing_well: [
       ...(window24.accepted_total > 0 ? [{
         code: 'accepted_events_flowing' as const,

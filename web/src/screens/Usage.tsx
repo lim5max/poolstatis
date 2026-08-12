@@ -268,8 +268,10 @@ function UsageHero({ usage, planName, mode, onReviewContributors, onReviewCapGui
 }) {
   const capped = usage.cap.state === 'finite' && usage.cap.value !== null;
   const quantity = typeof usage.answer.primary_value?.value === 'number' ? usage.answer.primary_value.value : null;
-  const progress = capped && quantity !== null && usage.cap.value! > 0
-    ? Math.max(0, Math.min(1, quantity / usage.cap.value!))
+  const progress = capped && quantity !== null
+    ? usage.cap.value === 0
+      ? 1
+      : Math.max(0, Math.min(1, quantity / usage.cap.value!))
     : null;
   const status = capped
     ? usage.cap.remaining === 0 ? 'Hard limit reached' : `${whole(usage.cap.remaining ?? 0)} events remaining`
@@ -353,6 +355,7 @@ function UsageFact({ label, value, note }: { label: string; value: string; note:
 }
 
 function CurrentContributors({ usage }: { usage: UsageControlResult }) {
+  const { setProject } = useStore();
   const reconciliation = usage.reconciliation;
   const reconciliationMessage = reconciliation.unattributed_quantity > 0
     ? `${whole(reconciliation.unattributed_quantity)} accepted events are not reconciled to retained project and environment contributors.`
@@ -370,8 +373,9 @@ function CurrentContributors({ usage }: { usage: UsageControlResult }) {
             <TableRow key={`${project.project_slug}:${project.environment}`}>
               <TableCell>
                 <Link
-                  to="/projects"
-                  aria-label={`Open ${project.project_name} project health`}
+                  to={`/projects?project=${encodeURIComponent(project.project_slug)}&env=${encodeURIComponent(project.environment)}`}
+                  onClick={() => setProject(project.project_slug, project.environment)}
+                  aria-label={`Open ${project.project_name} project health in ${project.environment}`}
                   className="font-medium underline-offset-4 hover:underline"
                 >{project.project_name}</Link>
                 <code className="block text-sm text-muted-foreground">{project.project_slug}</code>

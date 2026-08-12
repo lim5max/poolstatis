@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
@@ -99,5 +99,22 @@ describe('project portfolio health', () => {
     expect(screen.getByRole('dialog')).toHaveTextContent('New project');
     expect(screen.getByLabelText('Slug')).toBeInTheDocument();
     expect(screen.getByLabelText('Name')).toBeInTheDocument();
+  });
+
+  it('applies a contributor deep link to the requested project and environment', async () => {
+    const setProject = vi.fn();
+    vi.mocked(useStore).mockReturnValue({
+      projects: [
+        { slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 1, funnels: 0, events_30d: 3 },
+        { slug: 'bravo', name: 'Bravo', timezone: 'UTC', active_metrics: 1, funnels: 0, events_30d: 4 },
+      ],
+      project: 'alpha', setProject, tokenKind: 'personal', projectScope: 'org', env: 'prod',
+      account: null, client: { deleteProject: vi.fn(), compareProjects: vi.fn() }, refreshProjects: vi.fn(),
+    } as never);
+
+    render(<MemoryRouter initialEntries={['/projects?project=bravo&env=staging']}><Projects /></MemoryRouter>);
+
+    await waitFor(() => expect(setProject).toHaveBeenCalledWith('bravo', 'staging'));
+    expect(screen.getByRole('row', { name: /Bravo/ })).toHaveAttribute('data-focus-project', 'true');
   });
 });

@@ -222,6 +222,13 @@ describe('customer admin shell', () => {
     } as never)).toEqual({ label: '1.2k this cycle', tone: 'neutral' });
   });
 
+  it('treats a zero hard cap as reached instead of showing zero percent', () => {
+    expect(usageNavigationSignal({
+      cap: { state: 'finite', value: 0, remaining: 0 },
+      answer: { primary_value: { value: 0 } },
+    } as never)).toEqual({ label: '100%', tone: 'danger' });
+  });
+
   it('uses semantic Hugeicons and readable neutral hover text', () => {
     render(<MemoryRouter initialEntries={['/analyze/web']}><App /></MemoryRouter>);
 

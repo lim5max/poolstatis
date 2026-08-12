@@ -425,7 +425,7 @@ export function usageNavigationSignal(usage: Pick<UsageControlResult, 'cap' | 'a
     return { label: `${formatCycleQuantity(usage.answer.primary_value?.value)} this cycle`, tone: 'neutral' };
   }
   const used = Math.max(0, usage.cap.value - (usage.cap.remaining ?? usage.cap.value));
-  const ratio = usage.cap.value === 0 ? 0 : used / usage.cap.value;
+  const ratio = usage.cap.value === 0 ? 1 : used / usage.cap.value;
   return {
     label: `${Math.round(ratio * 100)}%`,
     tone: ratio >= 1 ? 'danger' : ratio >= 0.75 ? 'warning' : 'neutral',
