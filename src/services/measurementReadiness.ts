@@ -470,7 +470,7 @@ export function buildAnswerDependencies(
   const activePageMetric = home.pageMetric;
   const primaryMetric = home.metric;
   const revenueMetric = home.revenueMetric;
-  const webOutcomeMetrics = activeMetrics.filter((metric) => metric.key !== 'web_page_views'
+  const webOutcomeMetrics = metrics.filter((metric) => metric.key !== 'web_page_views'
     && metric.type !== 'state'
     && metric.tags.includes('surface:web'));
   const homeFunnel = home.funnel;

@@ -249,4 +249,56 @@ describe('server-owned measurement readiness', () => {
       await empty.close();
     }
   });
+
+  it('links a proposed Web conversion to the Web answer without treating it as queryable', async () => {
+    const proposed = await createTestEnv({ ingestBuffer: false });
+    try {
+      const created = await api(
+        proposed,
+        proposed.secretToken,
+        'POST',
+        `/api/v1/projects/${proposed.projectSlug}/metrics`,
+        {
+          key: 'web_signup_conversion',
+          name: 'Web signup conversion',
+          type: 'conversion',
+          source: {
+            from: { event: 'web.signup_started', filters: [] },
+            to: { event: 'web.signup_completed', filters: [] },
+            window_seconds: 86_400,
+          },
+          purpose: 'Measures whether a website visitor completes the registered signup outcome.',
+          tags: ['surface:web'],
+        },
+      );
+      expect(created.status).toBe(201);
+
+      const readiness = await api(
+        proposed,
+        proposed.secretToken,
+        'GET',
+        `/api/v1/projects/${proposed.projectSlug}/readiness?env=prod`,
+      );
+      expect(readiness.status).toBe(200);
+      expect(readiness.body.answer_dependencies).toContainEqual(expect.objectContaining({
+        answer_id: 'web',
+        surface: 'web',
+        href: '/analyze/web',
+        metric_keys: expect.arrayContaining(['web_page_views', 'web_signup_conversion']),
+      }));
+      const tracking = readiness.body.groups.find((group: { key: string }) => group.key === 'tracking_plan');
+      expect(tracking.gaps).toContainEqual(expect.objectContaining({
+        code: 'metric_inactive',
+        definition_ref: 'web_signup_conversion',
+        affected_answer_ids: expect.arrayContaining(['web']),
+      }));
+      expect(tracking.gaps).toContainEqual(expect.objectContaining({
+        code: 'answer_not_queryable',
+        definition_ref: 'web',
+        affected_answer_ids: ['web'],
+      }));
+    } finally {
+      await proposed.close();
+    }
+  });
 });
