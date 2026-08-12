@@ -4,7 +4,7 @@ import { ArrowRight, Loader2 } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ErrorNote, Loading } from '@/components/ui';
+import { ErrorNote, Loading, PageHeading } from '@/components/ui';
 import { AnswerCanvas, CanonicalAnswer, type EvidenceTrust } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
 import type { CreateSavedAnswerInput, Funnel, FunnelInvestigation, MeasurementTrust, Metric } from '../api/types';
@@ -274,20 +274,19 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
 
   return (
     <div className="space-y-5">
-      <header className="max-w-3xl">
-        <h1 className="serif text-3xl sm:text-4xl">{funnelSurface ? 'Funnels' : 'Product'}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {funnelSurface
-            ? 'See where people stop before reaching a meaningful outcome.'
-            : 'Start with a registered outcome. Open query controls only when the answer needs a closer look.'}
-        </p>
-      </header>
+      <PageHeading
+        title={funnelSurface ? 'Funnels' : 'Product'}
+        lead={funnelSurface ? 'Find the biggest loss.' : 'Start with the outcome.'}
+        help={funnelSurface
+          ? 'The screen ranks observed step loss before showing query detail. Open the investigation only when the evidence needs a closer look.'
+          : 'Answers use registered metrics and the typed Query DSL. Query controls stay secondary until the result needs a closer look.'}
+      />
 
       {!funnelSurface && <section aria-labelledby="product-templates-title">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 id="product-templates-title" className="text-sm font-semibold">Answer templates</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Each answer stays inside the typed Query DSL.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Choose the question.</p>
           </div>
           <Badge variant="outline">schema v1</Badge>
         </div>

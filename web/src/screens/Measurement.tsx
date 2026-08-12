@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Loader2, Search } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { EmptyState, ErrorNote, HelpHint, Hint, Loading, Panel, RecoverableError, fmtNum } from '../components/ui';
+import { EmptyState, ErrorNote, HelpDisclosure, HelpHint, Hint, Loading, PageHeading, Panel, RecoverableError, fmtNum } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -99,10 +99,11 @@ export function Measurement() {
   const serverGroup = (key: MeasurementReadinessGroup['key']) => serverReadiness?.groups.find((item) => item.key === key);
 
   return <div className="space-y-5">
-    <header className="max-w-3xl">
-      <h1 className="serif text-3xl sm:text-4xl">Definitions</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Four groups define what this project measures and how much of it can be trusted.</p>
-    </header>
+    <PageHeading
+      title="Definitions"
+      lead="What is measured—and whether to trust it."
+      help="Four groups cover the tracking plan, properties, identity, and sources. Readiness combines registered semantics with observed server evidence."
+    />
 
     {serverReadiness && <MeasurementHealth readiness={serverReadiness} />}
 
@@ -178,15 +179,17 @@ function MeasurementHealth({ readiness }: { readiness: MeasurementReadiness }) {
     >
       <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
         <div>
-          <h2 className="text-xl font-semibold">
-            {gapCount === 0 ? 'Definitions support current answers' : `${gapCount} definition ${gapCount === 1 ? 'gap needs' : 'gaps need'} attention`}
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-semibold">
+              {gapCount === 0 ? 'Definitions support current answers' : `${gapCount} definition ${gapCount === 1 ? 'gap needs' : 'gaps need'} attention`}
+            </h2>
+            <HelpDisclosure ariaLabel="About measurement health evidence" label={<>Server evaluated <time dateTime={readiness.generated_at}>{formatDate(readiness.generated_at)}</time> for <code>{readiness.env}</code>.</>} />
+          </div>
           <p className="mt-2 text-sm text-muted-foreground">
             {fix?.affected_answer_ids.length
               ? <><span className="font-medium text-foreground">Affected answers:</span>{' '}<AffectedAnswerLinks answerIds={fix.affected_answer_ids} dependencies={readiness.answer_dependencies} /></>
               : 'No current answer is blocked by the highest-ranked gap.'}
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">Server evaluated at <time dateTime={readiness.generated_at}>{formatDate(readiness.generated_at)}</time> for {readiness.env}.</p>
         </div>
         {fix && <Button asChild><Link to={fix.href}>{fix.label}</Link></Button>}
       </div>

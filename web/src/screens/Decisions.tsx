@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { ErrorNote, Loading, Panel, RecoverableError } from '../components/ui';
+import { ErrorNote, Loading, PageHeading, Panel, RecoverableError } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -81,10 +81,12 @@ export function Decisions() {
     }
   };
   return <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
-    <header className="max-w-3xl">
-      <div className="flex flex-wrap items-center gap-3"><h1 className="serif text-3xl text-balance">Decision review</h1><Badge variant="outline" aria-label={`Current environment ${env}`}>Environment <code>{env}</code></Badge>{requestedExperimentKey && <Badge variant="outline">Experiment <code>{requestedExperimentKey}</code></Badge>}</div>
-      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Approve, correct, or reject an agent proposal against immutable evidence.</p>
-    </header>
+    <PageHeading
+      title="Decision review"
+      lead="Review the proposal against frozen evidence."
+      help="Approve, correct, or reject an agent proposal. A review records the human outcome; it does not deploy or change traffic."
+      actions={<><Badge variant="outline" aria-label={`Current environment ${env}`}>Environment <code>{env}</code></Badge>{requestedExperimentKey && <Badge variant="outline">Experiment <code>{requestedExperimentKey}</code></Badge>}</>}
+    />
     {list.data.decisions.length === 0 ? <>
       <GuidedFirstValue
         title="Create the first reviewable decision"

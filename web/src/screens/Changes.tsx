@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { GitCommit, Loader2 } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { ErrorNote, Loading, Panel, RecoverableError } from '../components/ui';
+import { ErrorNote, Loading, PageHeading, Panel, RecoverableError } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -108,12 +108,11 @@ export function Changes() {
 
   return (
     <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
-      <header className="max-w-3xl">
-        <h1 className="serif text-3xl text-balance">Ship</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Follow every release and experiment from preparation to a human-reviewed outcome.
-        </p>
-      </header>
+      <PageHeading
+        title="Ship"
+        lead="Release → evidence → decision."
+        help="Follow releases and experiments from preparation to a human-reviewed outcome. Nothing here claims causality before the registered observation window is evaluated."
+      />
       {requestedInvestigationId ? (
         investigation.loading ? <Loading what="reading funnel investigation…" />
           : investigation.error ? <ErrorNote>{investigation.error}</ErrorNote>

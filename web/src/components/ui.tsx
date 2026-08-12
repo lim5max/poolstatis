@@ -13,6 +13,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { DisclosureSummary } from '@/components/disclosure';
 import { cn } from '@/lib/utils';
 import type { FunnelStep, MetricStatus, MetricType } from '../api/types';
 
@@ -39,6 +40,48 @@ export function HelpHint({ label, ariaLabel }: { label: ReactNode; ariaLabel: st
         ?
       </button>
     </Hint>
+  );
+}
+
+/** Click-to-open help for scan-first page copy. Works without a tooltip context. */
+export function HelpDisclosure({ label, ariaLabel }: { label: ReactNode; ariaLabel: string }) {
+  return (
+    <details className="group relative shrink-0">
+      <DisclosureSummary
+        chevron={false}
+        aria-label={ariaLabel}
+        className="inline-flex size-5 cursor-pointer list-none items-center justify-center rounded-full border text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
+      >
+        ?
+      </DisclosureSummary>
+      <div className="absolute left-0 top-7 z-50 w-72 rounded-control border bg-popover p-3 text-left text-xs font-normal leading-relaxed text-popover-foreground shadow-md">
+        {label}
+      </div>
+    </details>
+  );
+}
+
+/** Consistent, scan-first page intro. Longer methodology belongs in `help`. */
+export function PageHeading({ title, lead, help, meta, actions, className }: {
+  title: ReactNode;
+  lead?: ReactNode;
+  help?: ReactNode;
+  meta?: ReactNode;
+  actions?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <header className={cn('flex flex-wrap items-end justify-between gap-3', className)}>
+      <div className="min-w-0 max-w-3xl">
+        {meta && <div className="mb-1 text-xs text-muted-foreground">{meta}</div>}
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="serif min-w-0 text-balance text-3xl font-normal sm:text-4xl">{title}</h1>
+          {help && <HelpDisclosure label={help} ariaLabel={`About ${typeof title === 'string' ? title : 'this page'}`} />}
+        </div>
+        {lead && <p className="mt-1 max-w-2xl text-pretty text-sm text-muted-foreground">{lead}</p>}
+      </div>
+      {actions && <div className="flex shrink-0 flex-wrap items-end gap-2">{actions}</div>}
+    </header>
   );
 }
 

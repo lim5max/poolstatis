@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Add, Check, Loader2, Target } from '@/components/icons';
 import { useAsync, useStore } from '../store';
-import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, fmtNum, fmtPct } from '../components/ui';
+import { EmptyState, ErrorNote, Loading, PageHeading, Panel, RecoverableError, fmtNum, fmtPct } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -82,12 +82,11 @@ export function Experiments() {
 
   return (
     <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
-      <header className="max-w-2xl">
-        <h1 className="serif text-3xl text-balance">Experiments &amp; flags</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Prepare and run traffic changes, then record the outcome after real exposure evidence.
-        </p>
-      </header>
+      <PageHeading
+        title="Experiments & flags"
+        lead="Prepare, expose, then decide."
+        help="Traffic changes stay inert until server readiness is verified. Outcomes are recorded only after real exposure evidence."
+      />
 
       {visibleExperiments.length === 0 && (
         <GuidedFirstValue

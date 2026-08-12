@@ -7,8 +7,9 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { EmptyState, ErrorNote, Loading, Panel, fmtNum } from '@/components/ui';
+import { EmptyState, ErrorNote, HelpDisclosure, Loading, PageHeading, Panel, fmtNum } from '@/components/ui';
 import { AnswerCanvas, EvidenceLine, KpiStrip, type EvidenceTrust } from '@/components/analytics';
+import { DisclosureSummary } from '@/components/disclosure';
 import { ManualVisualizationRenderer } from '../analysis/charts';
 import {
   WEB_PAGE_VIEW_METRIC,
@@ -617,10 +618,12 @@ function WebHealthAnswer({ current, previous, comparisonState, range, trust, tru
     <AnswerCanvas>
       <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-5">
         <div>
-          <h2 className="text-lg font-semibold">Web health</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold">Web health</h2>
+            <HelpDisclosure ariaLabel="About web health evidence" label={`${trustLabel}. ${fmtNum(observed)} observed events in ${env}.`} />
+          </div>
           <p className="mt-2 text-xl font-semibold">{fmtNum(currentViews)} canonical page views across {fmtNum(current.summary.sessions)} sessions</p>
           <p className="mt-1 text-sm text-muted-foreground">{comparison}</p>
-          <p className="mt-2 text-xs text-muted-foreground">{trustLabel} · {fmtNum(observed)} observed events · {env}</p>
         </div>
         <Badge variant={trust.result?.status === 'trusted' && !trust.unavailable ? 'outline' : 'secondary'}>
           {comparisonState === 'loading' ? 'Comparison loading'
@@ -651,12 +654,11 @@ function WebOutcomeAnswer({ metric, current, currentState, currentError, previou
       <AnswerCanvas>
         <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:p-5">
           <div>
-            <h2 className="text-lg font-semibold">Web outcome</h2>
-            <p className="mt-2 text-lg font-semibold">{metric.name} is registered, but not reproduced here</p>
-            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              <code>{metric.key}</code> is a conversion definition. The typed trend query intentionally rejects conversion metrics, so this screen will not manufacture a rate or zero; query the registered funnel endpoints in Analyze.
-            </p>
-            <p className="mt-2 text-xs text-muted-foreground">{metric.purpose} · {env}</p>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold">Web outcome</h2>
+              <HelpDisclosure ariaLabel="Why this outcome needs the funnel view" label={<><code>{metric.key}</code> is a conversion definition. Trend queries reject it, so this screen will not infer a rate or zero. {metric.purpose} · {env}</>} />
+            </div>
+            <p className="mt-2 text-lg font-semibold">{metric.name} needs the funnel view</p>
           </div>
           <Button asChild variant="outline"><Link to="/analyze">Open Analyze</Link></Button>
         </div>
@@ -698,15 +700,16 @@ function WebOutcomeAnswer({ metric, current, currentState, currentError, previou
     <AnswerCanvas>
       <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-5">
         <div>
-          <h2 className="text-lg font-semibold">Web outcome</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold">Web outcome</h2>
+            <HelpDisclosure ariaLabel="About web outcome evidence" label={<><code>{metric.key}</code> · {metric.purpose} · {env}. {aggregation}</>} />
+          </div>
           <p className="mt-2 text-xl font-semibold">
             {hasObservations && currentValue !== null
               ? `${metric.name}: ${current.answer?.primary_value?.formatted ?? formatOutcomeNumber(currentValue)}`
               : `No ${metric.name} observations in this period`}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">{hasObservations ? comparison : 'The query returned no observations; this is not presented as a measured zero conversion.'}</p>
-          <p className="mt-2 text-xs text-muted-foreground"><code>{metric.key}</code> · {metric.purpose} · {env}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{aggregation}</p>
         </div>
         <Badge variant={trust === 'trusted' ? 'outline' : 'secondary'}>
           {trust === 'trusted' ? 'Trusted query evidence' : `${trust} evidence`}
@@ -804,8 +807,10 @@ function WebConversionAnswer({ metric, result, loading, error, onRetry }: {
     <section className="border-y" aria-labelledby="web-conversion-title">
       <div className="grid gap-4 px-4 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
         <div className="min-w-0">
-          <h3 id="web-conversion-title" className="text-lg font-semibold">{metric.name}</h3>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{metric.purpose}</p>
+          <div className="flex items-center gap-2">
+            <h3 id="web-conversion-title" className="text-lg font-semibold">{metric.name}</h3>
+            <HelpDisclosure ariaLabel="About conversion evidence" label={<>{metric.purpose}<br />Exact UTC window: [{result.meta.date_range.from}, {result.meta.date_range.to}) · {result.evidence?.aggregation ?? 'registered conversion definition'} · {result.meta.source}</>} />
+          </div>
           {current === null ? (
             <>
               <p className="mt-4 text-xl font-semibold">No measured denominator</p>
@@ -824,9 +829,6 @@ function WebConversionAnswer({ metric, result, loading, error, onRetry }: {
         <ConversionFact label="Current conversion" value={current === null ? 'Unavailable' : formatPercent(current)} />
         <ConversionFact label="Previous conversion" value={previous === null ? 'Unavailable' : formatPercent(previous)} />
         <ConversionFact label="Converted actors" value={current === null ? 'Unavailable' : `${fmtNum(last)} of ${fmtNum(first)}`} />
-      </div>
-      <div className="border-t px-4 py-3 text-xs leading-relaxed text-muted-foreground">
-        Exact UTC window · [{result.meta.date_range.from}, {result.meta.date_range.to}) · {result.evidence?.aggregation ?? 'registered conversion definition'} · {result.meta.source}
       </div>
     </section>
   );
@@ -854,13 +856,14 @@ function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affecte
     { title: 'Outcome', ready: outcomeReady, description: 'One active non-page-view metric tagged surface:web for conversion or product value.' },
   ];
   const current = steps.findIndex((step) => !step.ready);
+  const next = current >= 0 ? steps[current] : null;
   return (
-    <section className="rounded-panel border bg-card p-4 sm:p-5" aria-labelledby="web-setup-order-title">
-      <div>
-        <h2 id="web-setup-order-title" className="text-sm font-semibold">Web setup order</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Finish the first incomplete prerequisite; later answers remain unavailable rather than showing zero.</p>
-      </div>
-      <ol className="mt-4 grid gap-3 lg:grid-cols-3">
+    <details className="rounded-panel border bg-card" aria-labelledby="web-setup-order-title">
+      <DisclosureSummary className="flex min-h-14 cursor-pointer items-center justify-between gap-3 px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
+        <span id="web-setup-order-title" className="font-semibold">Setup order</span>
+        <span className="text-muted-foreground">{next ? `Next: ${next.title}` : 'Ready'}</span>
+      </DisclosureSummary>
+      <ol className="grid gap-3 border-t p-4 sm:p-5 lg:grid-cols-3">
         {steps.map((step, index) => (
           <li key={step.title} className={`rounded-control border p-3 ${current === index ? 'border-primary/50 bg-primary/10' : step.ready ? 'bg-muted/30' : 'border-dashed'}`}>
             <div className="flex items-center justify-between gap-3 text-sm"><span className="font-medium">{index + 1}. {step.title}</span><span className="text-muted-foreground">{step.ready ? 'Ready' : current === index ? 'Next' : 'Pending'}</span></div>
@@ -869,7 +872,7 @@ function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affecte
         ))}
       </ol>
       {affectedAnswerIds.length > 0 && (
-        <div className="mt-4 border-t pt-3 text-xs text-muted-foreground">
+        <div className="border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
           <span className="font-medium text-foreground">Affected saved answers:</span>{' '}
           <span className="inline-flex flex-wrap gap-x-2 gap-y-1">
             {affectedAnswerIds.map((answerId) => {
@@ -883,7 +886,7 @@ function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affecte
           </span>
         </div>
       )}
-    </section>
+    </details>
   );
 }
 
@@ -938,10 +941,10 @@ function WebSetup({ metric, onReady }: { metric: Metric | null; onReady: () => v
   return (
     <>
       <KpiStrip items={[
-        { label: 'Visitors', value: null, fallback: 'Waiting for setup', note: 'Requires an accepted canonical page view' },
-        { label: 'Sessions', value: null, fallback: 'Waiting for setup', note: 'Requires an accepted canonical page view' },
-        { label: 'Sources & UTM', value: null, fallback: 'Waiting for setup', note: 'Requires trusted acquisition definitions' },
-        { label: 'Top pages', value: null, fallback: 'Waiting for setup', note: 'Requires a reviewed safe route vocabulary' },
+        { label: 'Visitors', value: null, fallback: '—' },
+        { label: 'Sessions', value: null, fallback: '—' },
+        { label: 'Sources & UTM', value: null, fallback: '—' },
+        { label: 'Top pages', value: null, fallback: '—' },
       ]} />
       <AnswerCanvas>
         {metric ? (
@@ -957,12 +960,12 @@ function WebSetup({ metric, onReady }: { metric: Metric | null; onReady: () => v
         ) : (
           <div className="p-5">
             <h2 className="text-lg font-semibold">Add website analytics</h2>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Name the safe route keys you want to compare. Poolstatis will create the page-view and UTM definitions for review.
-            </p>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Choose routes to compare.</p>
             <div className="mt-5 max-w-2xl">
-              <label htmlFor="web-route-keys" className="text-sm font-medium">Safe route keys</label>
-              <p className="mt-1 text-sm text-muted-foreground">Use stable names such as <code>home</code>, <code>pricing</code>, or <code>docs.article</code>. Do not paste full URLs.</p>
+              <div className="flex items-center gap-2">
+                <label htmlFor="web-route-keys" className="text-sm font-medium">Safe route keys</label>
+                <HelpDisclosure ariaLabel="About safe route keys" label={<>Use stable names such as <code>home</code>, <code>pricing</code>, or <code>docs.article</code>. Do not paste full URLs.</>} />
+              </div>
               <Input
                 id="web-route-keys"
                 className="mt-3 h-11"
@@ -1054,21 +1057,20 @@ function ScreenHeader({ range, onRange, showRange = true }: {
   showRange?: boolean;
 }) {
   return (
-    <header className="flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="serif text-3xl sm:text-4xl">Web</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Canonical browser traffic with purpose-backed registered web outcomes.</p>
-      </div>
-      {showRange && <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
-        Period
-        <Select value={range} onValueChange={(value) => onRange(value as AnalyticsRange)}>
-          <SelectTrigger className="!h-11 w-40"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {RANGE_OPTIONS.map((item) => <SelectItem className="min-h-11" key={item.value} value={item.value}>{item.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </label>}
-    </header>
+    <PageHeading
+      title="Web"
+      lead="Traffic, engagement, and outcomes."
+      help="Traffic uses canonical browser events. Outcomes appear only when a purpose-backed metric is registered and the exact query is supported."
+      actions={showRange ? <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+          Period
+          <Select value={range} onValueChange={(value) => onRange(value as AnalyticsRange)}>
+            <SelectTrigger className="!h-11 w-40"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {RANGE_OPTIONS.map((item) => <SelectItem className="min-h-11" key={item.value} value={item.value}>{item.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </label> : undefined}
+    />
   );
 }
 

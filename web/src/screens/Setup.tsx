@@ -10,7 +10,7 @@ import {
   type AgentId,
   type SetupTaskResponse,
 } from '../components/ProductConnectionGuide';
-import { Panel, Loading, DangerConfirm, ErrorNote } from '../components/ui';
+import { Panel, Loading, DangerConfirm, ErrorNote, PageHeading } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -27,6 +27,7 @@ import type { DecisionLoopOnboardingStatus, OnboardingGateKey, ProjectGoalId } f
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { DisclosureSummary } from '@/components/disclosure';
 
 const SKILLS_CLI = 'skills@1.5.22';
 const SKILLS_SOURCE = 'https://github.com/lim5max/poolstatis/archive/45af081344dc910933a0d274892e53cf417fa5fb.tar.gz';
@@ -241,11 +242,12 @@ export function Setup() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
-      <header>
-        <div className="mb-1 text-xs text-muted-foreground">{projectName} · {env}</div>
-        <h1 className="serif text-3xl font-normal">Setup</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">Follow the server-verified path from connection to the first protected decision.</p>
-      </header>
+      <PageHeading
+        title="Setup"
+        lead="Complete the next verified step."
+        help="Poolstatis checks each gate on the server, from connection to the first protected decision. Copying config or a task never marks a gate complete."
+        meta={<>{projectName} · {env}</>}
+      />
 
       <section className="rounded-panel border bg-card p-4 sm:p-5" aria-labelledby="setup-next-step-title" aria-live="polite">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
@@ -486,12 +488,12 @@ function setupGateLabel(gate: DecisionLoopOnboardingStatus['gates'][number]): st
 
 function SetupEvidenceLedger({ status }: { status: DecisionLoopOnboardingStatus }) {
   return (
-    <section className="overflow-hidden rounded-lg border bg-card" aria-labelledby="setup-evidence-title">
-      <div className="border-b px-4 py-3 sm:px-5">
-        <h2 id="setup-evidence-title" className="text-sm font-medium">Server-verified gate evidence</h2>
-        <p className="mt-1 text-xs text-muted-foreground">Exact bounded evidence returned for this project and environment. Copied keys, tasks, or config never complete a gate.</p>
-      </div>
-      <ol className="divide-y" aria-label="Setup gate evidence">
+    <details className="overflow-hidden rounded-panel border bg-card">
+      <DisclosureSummary className="flex min-h-14 cursor-pointer items-center justify-between gap-3 px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
+        <span className="font-medium">Server evidence</span>
+        <Badge variant="outline">{status.gates.filter((gate) => gate.complete).length}/{status.gates.length} verified</Badge>
+      </DisclosureSummary>
+      <ol className="divide-y border-t" aria-label="Setup gate evidence">
         {status.gates.map((gate) => {
           const timestamp = latestEvidenceTimestamp(gate.evidence);
           const entries = Object.entries(gate.evidence);
@@ -523,7 +525,7 @@ function SetupEvidenceLedger({ status }: { status: DecisionLoopOnboardingStatus 
           );
         })}
       </ol>
-    </section>
+    </details>
   );
 }
 

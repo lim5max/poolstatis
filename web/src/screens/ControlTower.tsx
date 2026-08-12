@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { DisclosureSummary } from '@/components/disclosure';
-import { EmptyState, ErrorNote, Loading, Panel, Stat } from '../components/ui';
+import { EmptyState, ErrorNote, HelpDisclosure, Loading, PageHeading, Panel, Stat } from '../components/ui';
 import type {
   AutomationInboxNotification, AutomationProposal, InsightFeedSchedule, InsightFeedSnapshot,
   MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination,
@@ -76,26 +76,21 @@ export function ControlTowerView({ data, busy, error, env = 'prod', reviewAccess
   const pending = data.proposals.filter((proposal) => proposal.status === 'proposed').length;
   return (
     <div className="space-y-4 [&_button]:min-h-11 sm:[&_button]:min-h-9">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="max-w-3xl">
-          <h1 className="serif text-3xl text-balance">Control tower</h1>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Configure bounded monitoring and scheduled agent answers. Automation freezes evidence and undo state; only a signed-in workspace owner or admin can record proposal review, and review never changes traffic or deploy state.
-          </p>
-        </div>
-        <Button variant="outline" onClick={onReload} disabled={busy}>Refresh</Button>
-      </header>
+      <PageHeading
+        title="Control tower"
+        lead="Monitors, scheduled answers, and review."
+        help="Automation freezes evidence and undo state. Only a signed-in workspace owner or admin can review proposals, and review never changes traffic or deploy state."
+        actions={<Button variant="outline" onClick={onReload} disabled={busy}>Refresh</Button>}
+      />
       {error && <ErrorNote>{error}</ErrorNote>}
       <div className="grid gap-3 sm:grid-cols-3">
         <Stat label="Active monitors" value={data.policies.filter((policy) => policy.status === 'active').length} sub={`${data.findings.length} immutable findings`} />
-        <Stat label="Review queue" value={pending} sub="API keys and MCP remain read-only; traffic is unchanged" />
+        <Stat label="Review queue" value={pending} sub="Human review only" />
         <Stat label="Scheduled feeds" value={data.schedules.filter((schedule) => schedule.status === 'active').length} sub={`${data.snapshots.length} immutable answers`} />
       </div>
       <Panel title="Notification routing" right={<Badge variant="outline">In-product + outbox</Badge>}>
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            External providers are not configured. The outbox stops at <code>ready_for_extension</code>; no webhook, email or chat provider is implied.
-          </p>
+          <p className="text-sm text-muted-foreground">External delivery is not configured.</p>
           <DestinationForm disabled={busy} onSubmit={onCreateDestination} />
           <div className="grid gap-2 sm:grid-cols-2">
             {data.destinations.map((destination) => <div key={destination.id} className="rounded-md border p-3">
@@ -147,7 +142,16 @@ function ProposalReview({ proposal, busy, reviewAccess, onReview }: {
 }) {
   const [rationale, setRationale] = useState('');
   return <article className="grid gap-3 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-    <div><div className="flex items-center gap-2"><Badge variant="outline">{proposal.kind}</Badge><Badge variant="outline">{proposal.status}</Badge></div><h3 className="mt-2 font-medium">Automation froze a proposal and its undo state</h3><p className="mt-1 text-sm text-muted-foreground">Review fingerprint <code className="break-all">{proposal.confirmation_fingerprint}</code>. Approval does not execute it.</p></div>
+    <div>
+      <div className="flex items-center gap-2"><Badge variant="outline">{proposal.kind}</Badge><Badge variant="outline">{proposal.status}</Badge></div>
+      <div className="mt-2 flex items-center gap-2">
+        <h3 className="font-medium">Proposal ready for review</h3>
+        <HelpDisclosure
+          ariaLabel="About proposal review evidence"
+          label={<>Frozen fingerprint <code className="break-all">{proposal.confirmation_fingerprint}</code>. Approval records review only; it does not execute the change.</>}
+        />
+      </div>
+    </div>
     {proposal.status === 'proposed' && reviewAccess === 'allowed' && <div className="space-y-2"><Label htmlFor={`rationale-${proposal.id}`}>Review rationale</Label><Textarea id={`rationale-${proposal.id}`} value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="Explain the evidence-backed operator decision" /><div className="flex gap-2"><Button disabled={busy || rationale.trim().length < 3} onClick={() => onReview(proposal.id, 'approve', proposal.confirmation_fingerprint, rationale.trim())}>Approve proposal</Button><Button variant="outline" disabled={busy || rationale.trim().length < 3} onClick={() => onReview(proposal.id, 'reject', proposal.confirmation_fingerprint, rationale.trim())}>Reject</Button></div></div>}
     {proposal.status === 'proposed' && reviewAccess !== 'allowed' && <p className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
       {reviewAccess === 'sign_in_required'
