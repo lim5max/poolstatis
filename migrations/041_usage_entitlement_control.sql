@@ -15,17 +15,10 @@ CREATE OR REPLACE FUNCTION poolstatis_advance_usage_entitlement_revision()
 RETURNS trigger AS $usage_entitlement_revision$
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    NEW.configuration_revision := CASE
-      WHEN NEW.hard_limit IS NOT NULL OR cardinality(NEW.warning_thresholds) > 0 THEN
-        COALESCE((
-          SELECT max(revision) FROM usage_entitlement_revisions
-          WHERE org_id = NEW.org_id AND meter_key = NEW.meter_key
-        ), 0) + 1
-      ELSE COALESCE((
-        SELECT max(revision) FROM usage_entitlement_revisions
-        WHERE org_id = NEW.org_id AND meter_key = NEW.meter_key
-      ), 0)
-    END;
+    NEW.configuration_revision := COALESCE((
+      SELECT max(revision) FROM usage_entitlement_revisions
+      WHERE org_id = NEW.org_id AND meter_key = NEW.meter_key
+    ), 0) + 1;
   ELSIF NEW.hard_limit IS DISTINCT FROM OLD.hard_limit
      OR NEW.warning_thresholds IS DISTINCT FROM OLD.warning_thresholds THEN
     NEW.configuration_revision := OLD.configuration_revision + 1;
