@@ -57,7 +57,7 @@ export interface RelatedFunnelEvidence {
 const OPTION_TARGET = 'min-h-11 md:min-h-8';
 
 export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' | 'funnels' } = {}) {
-  const { client, project, env } = useStore();
+  const { client, project, env, tokenKind, account } = useStore();
   const [params] = useSearchParams();
   const funnelSurface = surface === 'funnels';
   const requestedFunnel = funnelSurface ? params.get('funnel') ?? '' : '';
@@ -101,6 +101,11 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const [runError, setRunError] = useState<{ scope: string; message: string } | null>(null);
   const [running, setRunning] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [officialSaveState, setOfficialSaveState] = useState<'idle' | 'saving' | 'saved' | 'saved_unofficial' | 'error'>('idle');
+  const [savedAnswerId, setSavedAnswerId] = useState<string | null>(null);
+  const officialSaveAllowed = tokenKind === 'personal'
+    || (tokenKind === 'user'
+      && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
   const runGeneration = useRef(0);
   const currentScope = `${project ?? 'none'}:${env}`;
   const scopeRef = useRef(currentScope);
@@ -114,6 +119,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunError(null);
     setRunning(false);
     setSaveState('idle');
+    setOfficialSaveState('idle');
+    setSavedAnswerId(null);
     return () => {
       runGeneration.current += 1;
     };
@@ -143,6 +150,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunError(null);
     setRunning(false);
     setSaveState('idle');
+    setOfficialSaveState('idle');
+    setSavedAnswerId(null);
   };
 
   const execute = async () => {
@@ -154,6 +163,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     const runEnv = env;
     setRunning(true);
     setSaveState('idle');
+    setOfficialSaveState('idle');
+    setSavedAnswerId(null);
     setRunError(null);
     setRun(null);
     const dates = exactRange(range);
@@ -218,6 +229,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunError(null);
     setRunning(false);
     setSaveState('idle');
+    setOfficialSaveState('idle');
+    setSavedAnswerId(null);
   };
 
   if (registry.loading) return <Loading what="reading registry capabilities…" />;
@@ -233,14 +246,34 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     pointCount,
   });
 
-  const saveAnswer = async () => {
-    if (!currentRun || !project || saveState === 'saving' || saveState === 'saved') return;
-    setSaveState('saving');
+  const saveAnswer = async (makeOfficial = false) => {
+    if (!currentRun || !client || !project || saveState === 'saving' || officialSaveState === 'saving') return;
+    if (makeOfficial && (!officialSaveAllowed || officialSaveState === 'saved')) return;
+    if (!makeOfficial && saveState === 'saved') return;
+
+    let answerId = savedAnswerId;
+    if (!answerId) {
+      setSaveState('saving');
+      if (makeOfficial) setOfficialSaveState('saving');
+      try {
+        const saved = await client.createAnalysisView(project, savedAnswerInput(currentRun, template.key));
+        answerId = saved.id;
+        setSavedAnswerId(saved.id);
+        setSaveState('saved');
+      } catch {
+        setSaveState('error');
+        if (makeOfficial) setOfficialSaveState('error');
+        return;
+      }
+    }
+
+    if (!makeOfficial) return;
+    setOfficialSaveState('saving');
     try {
-      await client!.createAnalysisView(project, savedAnswerInput(currentRun, template.key));
-      setSaveState('saved');
+      await client.setAnalysisViewOfficial(project, answerId, true);
+      setOfficialSaveState('saved');
     } catch {
-      setSaveState('error');
+      setOfficialSaveState('saved_unofficial');
     }
   };
 
@@ -343,9 +376,11 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           followUp={currentRun.summary.followUp}
           followUpTask={followUpAgentTask(currentRun.spec, currentRun.summary)}
           saveState={saveState}
+          officialSaveState={officialSaveAllowed ? officialSaveState : 'hidden'}
           saveVariant={funnelSurface ? 'outline' : 'default'}
           onSave={() => void saveAnswer()}
-          chart={<ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} />}
+          onSaveOfficial={officialSaveAllowed ? () => void saveAnswer(true) : undefined}
+          chart={<ManualVisualizationRenderer spec={currentRun.spec} result={currentRun.result} showEvidenceSummary={false} />}
           evidence={<>Aggregation: {currentRun.spec.evidence.aggregation}. Sample: {currentRun.spec.evidence.sampleSize ?? 'unavailable'}. Coverage: {currentRun.spec.evidence.coverage}. Comparison: {currentRun.spec.evidence.comparisonBasis}. Computed from {currentRun.spec.evidence.source} at {new Date(currentRun.spec.evidence.computedAt).toLocaleString()}.</>}
         />
       )}
@@ -754,7 +789,7 @@ function FunnelBiggestLoss({
             <FunnelFact label="Affected goal" value={funnel.goal} />
           </div>
         </div>
-        <Button className="h-11 w-full lg:w-auto" onClick={() => void copyTask()}>{copied ? 'Investigation copied' : 'Investigate this step'}</Button>
+        <Button className="h-11 w-full lg:w-auto" onClick={() => void copyTask()}>{copied ? 'Investigation copied' : `Investigate ${summary.fromLabel} → ${summary.toLabel}`}</Button>
       </div>
       {result.evidence?.warnings.length ? (
         <div className="border-t px-4 py-3 text-sm sm:px-5">
@@ -790,13 +825,18 @@ function FunnelBiggestLoss({
           ) : proposalRelease ? (
             <Button type="button" variant="outline" onClick={() => void saveProposal()} disabled={proposalState === 'saving'}>
               {proposalState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
-              {proposalState === 'saving' ? 'Saving proposal…' : 'Save proposal to Decisions'}
+              {proposalState === 'saving' ? 'Evaluating release…' : 'Evaluate linked release for proposal'}
             </Button>
           ) : (
             <p className="text-muted-foreground">Link a compatible registered release before creating a Decisions proposal.</p>
           )}
           <Link className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">Continue through Ship</Link>
         </div>
+        {proposalRelease && !proposalDecisionId ? (
+          <p className="mt-2 text-muted-foreground">
+            The proposal comes only from the linked release&apos;s frozen contract and server evaluation. Copying the investigation task is not treated as evidence or causal proof.
+          </p>
+        ) : null}
         {proposalState === 'error' && <p role="alert" className="mt-2 text-destructive">The release evidence could not be evaluated. Review its frozen contract and try again.</p>}
       </div>
       {taskVisible && (

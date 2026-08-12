@@ -10,7 +10,9 @@ vi.mock('../store', async (importOriginal) => ({
 }));
 
 vi.mock('../analysis/charts', () => ({
-  ManualVisualizationRenderer: () => <div role="img" aria-label="Product answer chart">Chart with table fallback</div>,
+  ManualVisualizationRenderer: ({ showEvidenceSummary }: { showEvidenceSummary?: boolean }) => (
+    <div role="img" aria-label="Product answer chart" data-evidence-summary={String(showEvidenceSummary)}>Chart with table fallback</div>
+  ),
 }));
 
 const mockedStore = vi.mocked(useStore);
@@ -47,6 +49,7 @@ function productStore(funnels: unknown[] = []) {
         identity: { distinct_id_coverage: 1, raw_actors: 8, resolved_actors: 8 }, properties: [], blockers: [], warnings: [],
       }),
       createAnalysisView: vi.fn().mockResolvedValue({ id: 'view-1' }),
+      setAnalysisViewOfficial: vi.fn(),
       evaluateRelease: vi.fn(),
     },
   } as never;
@@ -110,6 +113,7 @@ describe('Product answer-first surface', () => {
     expect(within(answer).getByText('No safely comparable period headline')).toBeInTheDocument();
     expect(within(answer).getByText(metric.purpose)).toBeInTheDocument();
     expect(within(answer).getByRole('img', { name: 'Product answer chart' })).toHaveTextContent('table fallback');
+    expect(within(answer).getByRole('img', { name: 'Product answer chart' })).toHaveAttribute('data-evidence-summary', 'false');
     expect(within(answer).getByText(/Aggregation:/)).not.toBeVisible();
     fireEvent.click(within(answer).getByText('Evidence'));
     expect(within(answer).getByText(/Aggregation:/)).toBeVisible();
@@ -143,6 +147,35 @@ describe('Product answer-first surface', () => {
     expect(screen.getByRole('button', { name: 'Answer saved' })).toBeDisabled();
     const savedPayload = current.client.createAnalysisView.mock.calls[0][1];
     expect(JSON.stringify(savedPayload)).not.toMatch(/"(?:sql|secret|token|distinct_id)"\s*:/i);
+  });
+
+  it('lets an owner save the current answer directly as official', async () => {
+    const current = productStore() as any;
+    current.tokenKind = 'user';
+    current.account = { membership: { role: 'owner' } };
+    current.client.setAnalysisViewOfficial.mockResolvedValueOnce({ id: 'view-1', official: true });
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
+    const official = await screen.findByRole('button', { name: 'Save as official' });
+    expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
+    fireEvent.click(official);
+
+    await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledWith('alpha', 'view-1', true));
+    expect(current.client.createAnalysisView).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Official answer saved' })).toBeDisabled();
+  });
+
+  it('does not offer official status to a project secret', async () => {
+    const current = productStore() as any;
+    current.tokenKind = 'secret';
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
+    expect(await screen.findByRole('button', { name: 'Save answer' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save as official' })).not.toBeInTheDocument();
   });
 
   it('downgrades a saved answer when the query evidence is partial even if registry trust passed', async () => {
@@ -237,10 +270,11 @@ describe('Product answer-first surface', () => {
     expect(screen.getByText(/Stable step order resolved an equal loss/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Release abcdef1234/ })).toHaveAttribute('href', '/changes');
     expect(screen.getByRole('link', { name: /Experiment Signup copy/ })).toHaveAttribute('href', '/experiments');
-    expect(screen.getByRole('button', { name: 'Investigate this step' })).toHaveAttribute('data-variant', 'default');
+    expect(screen.getByRole('button', { name: 'Investigate Started → Completed' })).toHaveAttribute('data-variant', 'default');
     expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
-    const saveProposal = screen.getByRole('button', { name: 'Save proposal to Decisions' });
+    const saveProposal = screen.getByRole('button', { name: 'Evaluate linked release for proposal' });
     expect(saveProposal).toHaveAttribute('data-variant', 'outline');
+    expect(screen.getByText(/Copying the investigation task is not treated as evidence or causal proof/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
     await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
     expect(current.client.createAnalysisView.mock.calls[0][1].answer).toMatchObject({

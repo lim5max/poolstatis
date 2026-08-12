@@ -119,8 +119,10 @@ export function CanonicalAnswer({
   followUp,
   followUpTask,
   saveState,
+  officialSaveState = 'hidden',
   saveVariant = 'default',
   onSave,
+  onSaveOfficial,
   chart,
   evidence,
 }: {
@@ -133,8 +135,10 @@ export function CanonicalAnswer({
   followUp: string;
   followUpTask: string;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
+  officialSaveState?: 'hidden' | 'idle' | 'saving' | 'saved' | 'saved_unofficial' | 'error';
   saveVariant?: 'default' | 'outline';
   onSave: () => void;
+  onSaveOfficial?: () => void;
   chart: ReactNode;
   evidence: ReactNode;
 }) {
@@ -162,7 +166,24 @@ export function CanonicalAnswer({
             </p>
             <p className="mt-2 text-sm text-muted-foreground">Next question: {followUp}</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button type="button" variant={saveVariant} className="h-11" onClick={onSave} disabled={saveState === 'saving' || saveState === 'saved'}>
+              {officialSaveState !== 'hidden' && onSaveOfficial ? (
+                <Button
+                  type="button"
+                  className="h-11"
+                  onClick={onSaveOfficial}
+                  disabled={saveState === 'saving' || officialSaveState === 'saving' || officialSaveState === 'saved'}
+                >
+                  {officialSaveState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
+                  {officialSaveState === 'saved'
+                    ? 'Official answer saved'
+                    : officialSaveState === 'saving'
+                      ? 'Saving official answer…'
+                      : officialSaveState === 'saved_unofficial'
+                        ? 'Retry official status'
+                        : 'Save as official'}
+                </Button>
+              ) : null}
+              <Button type="button" variant={officialSaveState === 'hidden' ? saveVariant : 'outline'} className="h-11" onClick={onSave} disabled={saveState === 'saving' || saveState === 'saved' || officialSaveState === 'saving'}>
                 {saveState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
                 {saveState === 'saved' ? 'Answer saved' : saveState === 'saving' ? 'Saving answer…' : 'Save answer'}
               </Button>
@@ -171,6 +192,8 @@ export function CanonicalAnswer({
               </Button>
             </div>
             {saveState === 'error' && <p role="alert" className="mt-2 text-sm text-destructive">The answer could not be saved. Check access and try again.</p>}
+            {officialSaveState === 'saved_unofficial' && <p role="alert" className="mt-2 text-sm text-destructive">The answer was saved, but official status was not applied. Retry after checking owner or admin access.</p>}
+            {officialSaveState === 'error' && saveState !== 'error' && <p role="alert" className="mt-2 text-sm text-destructive">Official status could not be applied. Check owner or admin access and try again.</p>}
           </div>
           <div className="flex flex-wrap gap-2 sm:justify-end">
             <Badge variant={trust === 'trusted' ? 'default' : trust === 'blocked' ? 'destructive' : 'outline'}>
