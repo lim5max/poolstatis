@@ -266,7 +266,7 @@ export function buildRegistryHealth(
     return {
       key: metric.key,
       incomplete: metric.status === 'active' && observedEvents === 0,
-      unused: metric.status !== 'active' || explicit.length > 0
+      unused: metric.status !== 'active' || answerSurfaces.length > 0 || explicit.length > 0
         ? false
         : usage !== null && experiments !== null && savedAnswers !== null && releases !== null
           ? true
@@ -278,13 +278,16 @@ export function buildRegistryHealth(
   return {
     healthy: rows.filter((row) => {
       const metric = metrics.find((candidate) => candidate.key === row.key);
-      return metric?.status === 'active' && !row.incomplete && row.unused === false;
+      return metric?.status === 'active' && (row.observedEvents ?? 0) > 0 && !row.incomplete && row.unused === false;
     }).length,
     proposed: metrics.filter((metric) => metric.status === 'proposed').length,
     incomplete: rows.filter((row) => row.incomplete).length,
     deprecated: metrics.filter((metric) => metric.status === 'deprecated').length,
     unused: rows.filter((row) => row.unused === true).length,
-    usageUnavailable: rows.filter((row) => row.unused === null).length,
+    usageUnavailable: rows.filter((row) => {
+      const metric = metrics.find((candidate) => candidate.key === row.key);
+      return row.unused === null || (metric?.status === 'active' && row.observedEvents === null);
+    }).length,
     rows,
   };
 }

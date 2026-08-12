@@ -107,7 +107,7 @@ describe('Usage month range', () => {
   });
 
   it('renders pace, forecast and contributors from the server-owned usage contract', async () => {
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     expect(await screen.findByTestId('usage-current-quantity')).toHaveTextContent('620');
     expect(screen.getByText('accepted events')).toBeInTheDocument();
@@ -118,8 +118,9 @@ describe('Usage month range', () => {
     expect(screen.getByText('1,922')).toBeInTheDocument();
     expect(screen.getByText('+25%')).toBeInTheDocument();
     expect(screen.getAllByText('Projected Aug 17, 2026')).toHaveLength(2);
-    expect(screen.getAllByText('Notification: Not configured')).toHaveLength(4);
-    expect(screen.getAllByText('Audit: usage ledger')).toHaveLength(4);
+    expect(screen.getAllByText('Notification route: Not configured')).toHaveLength(4);
+    expect(screen.getAllByText('Evidence: usage ledger')).toHaveLength(4);
+    expect(screen.getByRole('link', { name: 'Open Alpha project health' })).toHaveAttribute('href', '/projects');
     expect(usageControl).toHaveBeenCalledOnce();
     expect(usageControl).toHaveBeenCalledWith(monthOffset(0));
     expect(usage).not.toHaveBeenCalled();
@@ -150,7 +151,7 @@ describe('Usage month range', () => {
       },
     });
 
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     expect(await screen.findByText('20 accepted events are not reconciled to retained project and environment contributors.')).toBeInTheDocument();
     expect(screen.getByText('600 of 620 events attributed')).toBeInTheDocument();
@@ -182,14 +183,14 @@ describe('Usage month range', () => {
       })),
     });
 
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     expect(await screen.findByText('No hard cap configured')).toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(screen.getByText('Metered only · no maximum implied')).toBeInTheDocument();
   });
 
-  it('uses self-hosted usage actions without implying a hosted plan mutation', async () => {
+  it('uses truthful self-hosted cap guidance without implying an in-product mutation', async () => {
     mockedStore.mockReturnValue({
       tokenKind: 'personal', account: null,
       client: {
@@ -203,9 +204,14 @@ describe('Usage month range', () => {
 
     render(<MemoryRouter><Usage /></MemoryRouter>);
 
-    expect(await screen.findByRole('link', { name: 'Configure cap' })).toHaveAttribute('href', '/setup');
+    expect(await screen.findByRole('button', { name: 'View cap guidance' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Review contributors' })).toBeInTheDocument();
+    expect(screen.getByText(/Core reads event caps from deployment configuration/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Configure cap' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set alert' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Review plan' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View cap guidance' }));
+    expect(screen.getByText('Threshold rules').closest('details')).toHaveAttribute('open');
   });
 
   it('avoids smooth scrolling when reduced motion is requested', async () => {
@@ -225,14 +231,14 @@ describe('Usage month range', () => {
       dispatchEvent: vi.fn(),
     });
 
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Review contributors' }));
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
   });
 
   it('defaults to the current UTC month and exposes current/last/3/6 month presets', async () => {
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
 
     fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageRange).toHaveBeenCalledWith(monthOffset(0), monthOffset(0)));
@@ -248,7 +254,7 @@ describe('Usage month range', () => {
   });
 
   it('validates custom bounds before requesting and explains ledger attribution gaps', async () => {
-    render(<Usage />);
+    render(<MemoryRouter><Usage /></MemoryRouter>);
     fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageRange).toHaveBeenCalledOnce());
     expect(await screen.findByText('2 events without retained project attribution')).toBeInTheDocument();

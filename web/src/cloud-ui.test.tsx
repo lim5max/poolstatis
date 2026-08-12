@@ -27,6 +27,10 @@ function renderProjects() {
   return render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><Projects /></MemoryRouter>);
 }
 
+function renderUsage() {
+  return render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><Usage /></MemoryRouter>);
+}
+
 describe('cloud workspace project controls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -351,7 +355,7 @@ describe('organization usage ledger', () => {
 
   it('separates accepted-event activity ranges from the monthly quota ledger', async () => {
     mockedStore.mockReturnValue(usageStore());
-    render(<Usage />);
+    renderUsage();
 
     fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     expect(await screen.findByRole('heading', { name: 'Accepted-event activity' })).toBeInTheDocument();
@@ -370,7 +374,7 @@ describe('organization usage ledger', () => {
 
   it('validates custom activity dates before making another request', async () => {
     mockedStore.mockReturnValue(usageStore());
-    render(<Usage />);
+    renderUsage();
     fireEvent.click(screen.getByText('Historical ledger and custom ranges'));
     await waitFor(() => expect(usageActivity).toHaveBeenCalledOnce());
 
@@ -382,7 +386,7 @@ describe('organization usage ledger', () => {
   it('uses a strict UTC calendar month and renders the events_stored ledger with a mobile-safe breakdown', async () => {
     const expectedMonth = new Date().toISOString().slice(0, 7);
     mockedStore.mockReturnValue(usageStore());
-    render(<Usage />);
+    renderUsage();
     await waitFor(() => expect(usageControl).toHaveBeenCalledWith(expectedMonth));
     expect(screen.getByText(`${expectedMonth} UTC`)).toBeInTheDocument();
     expect(screen.getByTestId('usage-current-quantity')).toHaveTextContent('1,200');
@@ -399,7 +403,7 @@ describe('organization usage ledger', () => {
     let resolveUsage: ((value: unknown) => void) | undefined;
     usageControl.mockReturnValue(new Promise((resolve) => { resolveUsage = resolve; }));
     mockedStore.mockReturnValue(usageStore());
-    const view = render(<Usage />);
+    const view = renderUsage();
     expect(screen.getByText('Loading usage ledger…')).toBeInTheDocument();
     resolveUsage?.(usageControlResult({
       answer: {
@@ -423,7 +427,7 @@ describe('organization usage ledger', () => {
     view.unmount();
 
     usageControl.mockRejectedValue(new Error('usage read failed'));
-    render(<Usage />);
+    renderUsage();
     await screen.findByText(/usage read failed/);
   });
 
@@ -437,7 +441,7 @@ describe('organization usage ledger', () => {
       contributors: [],
     }));
     mockedStore.mockReturnValue(usageStore());
-    render(<Usage />);
+    renderUsage();
     await screen.findByText('Hard limit reached');
     const meter = screen.getByRole('img', { name: '0 percent of the configured hard limit used' });
     expect(meter.innerHTML).not.toContain('NaN');

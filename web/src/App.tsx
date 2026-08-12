@@ -336,7 +336,7 @@ function NavigationRow({ item, signal, collapsed, onNavigate }: {
       end={item.to === '/'}
       onClick={onNavigate}
       title={collapsed ? item.label : undefined}
-      aria-label={collapsed ? item.label : undefined}
+      aria-label={item.label}
       className={({ isActive }) => cn(
         'flex min-h-11 items-center rounded-control text-sm transition-colors md:min-h-9',
         collapsed ? 'justify-center px-2' : 'gap-2.5 px-3',
@@ -349,7 +349,8 @@ function NavigationRow({ item, signal, collapsed, onNavigate }: {
       <span className={collapsed ? 'sr-only' : undefined}>{item.label}</span>
       {signal && (
         <span
-          aria-hidden="true"
+          role="status"
+          aria-label={`${item.label} status: ${signal.label}`}
           title={`${item.label}: ${signal.label}`}
           className={cn(
             'ml-auto max-w-32 truncate rounded-full px-1.5 py-0.5 text-xs font-medium tabular-nums',
@@ -432,8 +433,16 @@ export function usageNavigationSignal(usage: Pick<UsageControlResult, 'cap' | 'a
 }
 
 function formatCycleQuantity(value: number | string | null | undefined): string {
-  if (typeof value === 'number' && Number.isFinite(value)) return new Intl.NumberFormat('en-US').format(value);
-  if (typeof value === 'string' && /^\d+$/.test(value)) return new Intl.NumberFormat('en-US').format(BigInt(value));
+  const quantity = typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : typeof value === 'string' && /^\d+$/.test(value)
+      ? BigInt(value)
+      : null;
+  if (quantity !== null) {
+    return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
+      .format(quantity)
+      .replace(/([KMBT])$/, (suffix) => suffix.toLowerCase());
+  }
   return 'Unknown';
 }
 

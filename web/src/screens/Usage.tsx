@@ -13,6 +13,17 @@ function currentUtcMonth(): string {
   return new Date().toISOString().slice(0, 7);
 }
 
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+}
+
+function scrollToSection(section: HTMLElement | null): void {
+  section?.scrollIntoView?.({
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    block: 'start',
+  });
+}
+
 function whole(value: number | string): string {
   return new Intl.NumberFormat('en-US').format(typeof value === 'string' ? BigInt(value) : value);
 }
@@ -248,11 +259,12 @@ function formatForecastDate(value: string | null): string | null {
     .format(new Date(value));
 }
 
-function UsageHero({ usage, planName, mode, onReviewContributors }: {
+function UsageHero({ usage, planName, mode, onReviewContributors, onReviewCapGuidance }: {
   usage: UsageControlResult;
   planName: string | null;
   mode: AccountMode | null;
   onReviewContributors: () => void;
+  onReviewCapGuidance: () => void;
 }) {
   const capped = usage.cap.state === 'finite' && usage.cap.value !== null;
   const quantity = typeof usage.answer.primary_value?.value === 'number' ? usage.answer.primary_value.value : null;
@@ -310,9 +322,6 @@ function UsageHero({ usage, planName, mode, onReviewContributors }: {
           {usage.cap.consequence_at_100_percent ?? 'Enforcement is off; accepted events continue to be metered.'}
         </p>
         <div className="flex flex-wrap gap-2">
-          {mode?.deployment.mode === 'self_host' && !capped && (
-            <Button asChild className="h-11"><Link to={mode.primary_action.href}>Configure cap</Link></Button>
-          )}
           {mode?.deployment.mode === 'hosted' && (
             <Button asChild className="h-11"><Link to="/profile">Review plan</Link></Button>
           )}
@@ -321,8 +330,8 @@ function UsageHero({ usage, planName, mode, onReviewContributors }: {
             variant={(mode?.deployment.mode === 'self_host' && !capped) || mode?.deployment.mode === 'hosted' ? 'outline' : 'default'}
             onClick={onReviewContributors}
           >Review contributors</Button>
-          {mode?.deployment.mode === 'self_host' && capped && (
-            <Button asChild variant="outline" className="h-11"><Link to={mode.primary_action.href}>Configure cap</Link></Button>
+          {mode?.deployment.mode === 'self_host' && (
+            <Button variant="outline" className="h-11" onClick={onReviewCapGuidance}>View cap guidance</Button>
           )}
         </div>
       </div>
@@ -360,7 +369,11 @@ function CurrentContributors({ usage }: { usage: UsageControlResult }) {
           <TableBody>{usage.contributors.map((project) => (
             <TableRow key={`${project.project_slug}:${project.environment}`}>
               <TableCell>
-                <div className="font-medium">{project.project_name}</div>
+                <Link
+                  to="/projects"
+                  aria-label={`Open ${project.project_name} project health`}
+                  className="font-medium underline-offset-4 hover:underline"
+                >{project.project_name}</Link>
                 <code className="block text-sm text-muted-foreground">{project.project_slug}</code>
                 <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground md:hidden">
                   <code>{project.environment}</code>
@@ -410,7 +423,7 @@ function UsageThresholds({ usage }: { usage: UsageControlResult }) {
       ? `${reached} reached · ${projected} projected`
       : 'No threshold projected';
   return (
-    <details className="rounded-panel border bg-card">
+    <details id="usage-cap-guidance" className="scroll-mt-32 rounded-panel border bg-card">
       <DisclosureSummary className="flex min-h-14 cursor-pointer items-center justify-between gap-4 px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
         <span className="mr-auto font-semibold">Threshold rules</span>
         <span className="text-right text-muted-foreground">{summary}</span>
@@ -422,8 +435,8 @@ function UsageThresholds({ usage }: { usage: UsageControlResult }) {
             <div>
               <div><span className="font-mono tabular-nums">{threshold.percent}%</span><span className="ml-2 text-muted-foreground">{THRESHOLD_MEANING[threshold.percent]}</span></div>
               <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-                <span>Notification: {threshold.notification_state === 'not_configured' ? 'Not configured' : threshold.notification_state}</span>
-                <span>Audit: {threshold.audit_source.replace('_', ' ')}</span>
+                <span>Notification route: {threshold.notification_state === 'not_configured' ? 'Not configured' : threshold.notification_state}</span>
+                <span>Evidence: {threshold.audit_source.replace('_', ' ')}</span>
               </div>
             </div>
             <span className={threshold.state === 'reached' || threshold.state === 'projected'
@@ -437,6 +450,9 @@ function UsageThresholds({ usage }: { usage: UsageControlResult }) {
         ))}
         </div>
         <p className="mt-4 text-sm text-muted-foreground">{usage.cap.consequence_at_100_percent ?? 'Hard-limit consequence is not configured.'}</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Core reads event caps from deployment configuration. This customer UI shows the effective cap and evidence, but does not change it.
+        </p>
       </div>
     </details>
   );
@@ -486,10 +502,13 @@ export function Usage() {
             usage={usage}
             planName={account?.billing?.plan?.name ?? null}
             mode={mode.data}
-            onReviewContributors={() => document.getElementById('usage-contributors-title')?.scrollIntoView({
-              behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-              block: 'start',
-            })}
+            onReviewContributors={() => scrollToSection(document.getElementById('usage-contributors-title'))}
+            onReviewCapGuidance={() => {
+              const guidance = document.getElementById('usage-cap-guidance') as HTMLDetailsElement | null;
+              if (!guidance) return;
+              guidance.open = true;
+              scrollToSection(guidance);
+            }}
           />
           {usage.attention.map((item) => <WarningNote key={item.id}>{item.title}: {item.impact}</WarningNote>)}
           <div aria-labelledby="usage-contributors-title"><CurrentContributors usage={usage} /></div>

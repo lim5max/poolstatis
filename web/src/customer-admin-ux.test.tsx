@@ -208,8 +208,10 @@ describe('customer admin shell', () => {
 
     render(<MemoryRouter><App /></MemoryRouter>);
 
-    await waitFor(() => expect(within(screen.getByRole('link', { name: 'Home' })).getByText('2')).toBeInTheDocument());
-    const usageSignal = within(screen.getByRole('link', { name: 'Usage' })).getByText('80%');
+    const home = screen.getByRole('link', { name: 'Home' });
+    await waitFor(() => expect(within(home).getByRole('status', { name: 'Home status: 2' })).toBeInTheDocument());
+    const usageLink = screen.getByRole('link', { name: 'Usage' });
+    const usageSignal = within(usageLink).getByRole('status', { name: 'Usage status: 80%' });
     expect(usageSignal).toHaveClass('text-amber-700');
   });
 
@@ -217,7 +219,7 @@ describe('customer admin shell', () => {
     expect(usageNavigationSignal({
       cap: { state: 'not_configured', value: null, remaining: null },
       answer: { primary_value: { value: 1_234 } },
-    } as never)).toEqual({ label: '1,234 this cycle', tone: 'neutral' });
+    } as never)).toEqual({ label: '1.2k this cycle', tone: 'neutral' });
   });
 
   it('uses semantic Hugeicons and readable neutral hover text', () => {

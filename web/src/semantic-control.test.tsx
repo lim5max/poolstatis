@@ -201,10 +201,17 @@ describe('semantic control surfaces', () => {
       schema_version: 1,
       metric: { key: metric.key, name: metric.name, type: metric.type, status: metric.status },
       current: currentDefinition,
-      revisions: [{
-        id: 'revision-2', ...currentDefinition, action: 'created', actor: 'agent:test',
-        created_at: '2026-08-11T09:00:00.000Z',
-      }],
+      revisions: [
+        {
+          id: 'revision-1', ...currentDefinition, revision: 1,
+          definition: { ...currentDefinition.definition, purpose: 'Count users after the first meaningful onboarding action.' },
+          action: 'created', actor: 'agent:initial', created_at: '2026-08-10T09:00:00.000Z',
+        },
+        {
+          id: 'revision-2', ...currentDefinition, action: 'updated', actor: 'agent:test',
+          created_at: '2026-08-11T09:00:00.000Z',
+        },
+      ],
       impact: emptyImpact,
       primary_action: { id: 'preview_metric_definition', kind: 'navigate', label: 'Review a semantic change', href: '/registry' },
     });
@@ -259,6 +266,11 @@ describe('semantic control surfaces', () => {
 
     const editor = await screen.findByRole('dialog', { name: `Definition · ${metric.name}` });
     expect(within(editor).getByText('Revision 2')).toBeInTheDocument();
+    fireEvent.click(within(editor).getByText('Revision history · 2'));
+    expect(within(editor).getByText('Revision 2 · updated')).toBeInTheDocument();
+    expect(within(editor).getByText('Revision 1 · created')).toBeInTheDocument();
+    expect(within(editor).getByText('agent:initial')).toBeInTheDocument();
+    expect(within(editor).getByText('Count users after the first meaningful onboarding action.')).toBeInTheDocument();
     fireEvent.change(within(editor).getByLabelText('Purpose'), {
       target: { value: 'Count users after their first completed onboarding milestone.' },
     });

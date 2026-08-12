@@ -1407,6 +1407,7 @@ export interface DataHealthResult {
     accepted_basis: string;
     rejected_basis: string;
     rejected_history_first_observed_at: string | null;
+    issue_novelty_basis: string;
   };
   summary: { accepted_24h: number; rejected_24h: number; accepted_7d: number; rejected_7d: number };
   windows: { last_24h: DataHealthWindow; last_7d: DataHealthWindow };
@@ -1419,6 +1420,12 @@ export interface DataHealthResult {
     count: number;
     first_seen: string;
     last_seen: string;
+    novelty: {
+      state: 'new' | 'recurring' | 'historical';
+      basis: 'privacy-safe warning occurrences';
+      current_window: { from: string; to: string; count: number };
+      comparison_baseline: { from: string; to: string; count: number };
+    };
     affected_answer_ids: string[];
     repair_action: { kind: 'navigate'; label: string; href: string };
     watermark: DataHealthWatermark;

@@ -54,7 +54,7 @@ beforeAll(async () => {
   );
   await env.pool.query(
     `INSERT INTO ingest_warning_occurrences (signature_id, bucket, count)
-     VALUES ($1, date_trunc('hour', now() - interval '48 hours'), 2)`,
+     VALUES ($1, date_trunc('hour', now() - interval '24 hours'), 2)`,
     [rejectedSignature.rows[0]!.signature_id],
   );
 
@@ -120,6 +120,12 @@ describe('project data-health control contract', () => {
         href: '/data?tab=events&event=checkout.failed',
       },
       watermark: { count: 3, last_seen: expect.any(String) },
+      novelty: {
+        state: 'recurring',
+        basis: 'privacy-safe warning occurrences',
+        current_window: { count: 1, from: expect.any(String), to: expect.any(String) },
+        comparison_baseline: { count: 2, from: expect.any(String), to: expect.any(String) },
+      },
       verify_after_fix: {
         method: 'POST',
         href: `/api/v1/projects/${env.projectSlug}/data-health/verify`,
@@ -128,6 +134,11 @@ describe('project data-health control contract', () => {
     const unregistered = response.body.issue_signatures.find((issue: any) => issue.kind === 'unregistered');
     expect(unregistered.registered_event_name).toBeNull();
     expect(unregistered.repair_action.href).toContain(`signature=${encodeURIComponent(unregistered.signature_id)}`);
+    expect(unregistered.novelty).toMatchObject({
+      state: 'new',
+      current_window: { count: 1 },
+      comparison_baseline: { count: 0 },
+    });
 
     const serialized = JSON.stringify(response.body.issue_signatures);
     for (const prohibited of ['detail', 'sample', 'distinct_id', 'properties', 'accepted-checkout']) {

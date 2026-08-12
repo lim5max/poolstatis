@@ -79,10 +79,20 @@ export function DataHealthControl({ focusedSignature }: { focusedSignature?: str
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h4 className="text-sm font-medium">{finding.title}</h4>
-                  <Badge variant={finding.severity === 'high' ? 'destructive' : 'secondary'}>{finding.severity}</Badge>
+                  <div className="flex flex-wrap gap-1.5">
+                    {issue.novelty.state === 'new' && <Badge variant="outline">New in current 24h</Badge>}
+                    <Badge variant={finding.severity === 'high' ? 'destructive' : 'secondary'}>{finding.severity}</Badge>
+                  </div>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {fmtNum(issue.count)} occurrence{issue.count === 1 ? '' : 's'} · last seen {new Date(issue.last_seen).toLocaleString()}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {issue.novelty.state === 'new'
+                    ? `${fmtNum(issue.novelty.current_window.count)} in current 24h · none in previous 24h`
+                    : issue.novelty.state === 'recurring'
+                      ? `${fmtNum(issue.novelty.current_window.count)} in current 24h · ${fmtNum(issue.novelty.comparison_baseline.count)} in previous 24h`
+                      : 'No occurrence in current 24h · retained historical signature'}
                 </p>
                 {issue.registered_event_name && <code className="mt-2 block text-xs">{issue.registered_event_name}</code>}
                 <p className="mt-2 break-words text-xs">
@@ -103,6 +113,9 @@ export function DataHealthControl({ focusedSignature }: { focusedSignature?: str
                 <details className="mt-2 text-xs text-muted-foreground">
                   <DisclosureSummary className="cursor-pointer">Evidence watermark</DisclosureSummary>
                   <code className="mt-1 block break-all">{issue.signature_id} · {issue.watermark.count} · {issue.watermark.last_seen}</code>
+                  <code className="mt-1 block break-all">
+                    Novelty baseline · {issue.novelty.comparison_baseline.from} to {issue.novelty.comparison_baseline.to} · {issue.novelty.comparison_baseline.count}
+                  </code>
                 </details>
               </article>;
             })}

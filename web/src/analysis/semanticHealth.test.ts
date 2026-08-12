@@ -42,21 +42,24 @@ describe('semantic health helpers', () => {
     expect(health.doingGreat.map((item) => item.code)).not.toContain('entity_consistency');
   });
 
-  it('reports saved usage separately from generic answer availability', () => {
+  it('does not call a metric unused when it is available to an answer surface', () => {
     const metric = { key: 'active', status: 'active', type: 'count', source: { event: 'active' } } as never;
-    const health = buildRegistryHealth([metric], [], new Map([['active', {
-      observed_events: [{ event: 'active', count: 4 }],
-      used_by: { funnels: [], insights: [] },
-    } as never]]));
+    const conversion = { key: 'checkout', status: 'active', type: 'conversion', source: { from: { event: 'cart' }, to: { event: 'paid' } } } as never;
+    const health = buildRegistryHealth([metric, conversion], [], new Map([
+      ['active', { observed_events: [{ event: 'active', count: 4 }], used_by: { funnels: [], insights: [] } } as never],
+      ['checkout', { observed_events: [{ event: 'cart', count: 4 }], used_by: { funnels: [], insights: [] } } as never],
+    ]));
     expect(health.unused).toBe(1);
     expect(health.rows[0]?.usedByAnswers).toContain('Product answer');
+    expect(health.rows[0]?.unused).toBe(false);
+    expect(health.rows[1]?.unused).toBe(true);
   });
 
-  it('does not call a metric unused when saved-consumer evidence is unavailable', () => {
+  it('does not call an answer-surface metric unused when source evidence is unavailable', () => {
     const metric = { key: 'active', status: 'active', type: 'count', source: { event: 'active' } } as never;
     const health = buildRegistryHealth([metric], [], new Map([['active', null]]), null);
     expect(health).toMatchObject({ unused: 0, usageUnavailable: 1 });
-    expect(health.rows[0]?.unused).toBeNull();
+    expect(health.rows[0]?.unused).toBe(false);
   });
 
   it('reports healthy and deprecated registry definitions explicitly', () => {
