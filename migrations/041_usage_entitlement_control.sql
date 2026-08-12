@@ -7,9 +7,29 @@ ALTER TABLE organization_entitlements
 
 -- Existing configuration predates authored audit. Mark it as revision 1
 -- without inventing an actor; the first API change will append revision 2.
-UPDATE organization_entitlements
-SET configuration_revision = 1
-WHERE hard_limit IS NOT NULL OR cardinality(warning_thresholds) > 0;
+-- Migration 026 deliberately rejects multiple entitlement scopes in one
+-- transaction. Reset its transaction-local scope before each single-scope
+-- backfill so existing multi-organization installations can upgrade without
+-- weakening the runtime guard.
+DO $usage_entitlement_backfill$
+DECLARE
+  entitlement record;
+BEGIN
+  FOR entitlement IN
+    SELECT org_id, meter_key
+    FROM organization_entitlements
+    WHERE hard_limit IS NOT NULL OR cardinality(warning_thresholds) > 0
+    ORDER BY org_id, meter_key
+  LOOP
+    PERFORM set_config('poolstatis.usage_entitlement_scope', '', true);
+    UPDATE organization_entitlements
+    SET configuration_revision = 1
+    WHERE org_id = entitlement.org_id
+      AND meter_key = entitlement.meter_key;
+  END LOOP;
+  PERFORM set_config('poolstatis.usage_entitlement_scope', '', true);
+END
+$usage_entitlement_backfill$;
 
 CREATE OR REPLACE FUNCTION poolstatis_advance_usage_entitlement_revision()
 RETURNS trigger AS $usage_entitlement_revision$
