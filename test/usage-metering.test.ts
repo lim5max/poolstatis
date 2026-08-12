@@ -3,6 +3,8 @@ import { PostgresEventStore } from '../src/stores/postgresEventStore.js';
 import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
 import { createProject } from '../src/services/projects.js';
 import { getOrganizationUsageActivity } from '../src/services/usage.js';
+import { createPool } from '../src/db.js';
+import { TEST_DB_URL } from './urls.js';
 
 let env: TestEnv;
 
@@ -264,8 +266,9 @@ describe('accepted-event metering', () => {
     expect(retry.body.accepted).toBe(1);
   });
 
-  it('keeps accepted ingest available when best-effort threshold evidence fails', async () => {
+  it('keeps accepted ingest available with a one-connection pool when best-effort threshold evidence fails', async () => {
     const isolated = await createTestEnv({ ingestBuffer: false });
+    const limitedPool = createPool(TEST_DB_URL, { max: 1 });
     try {
       const organizationId = (await isolated.pool.query<{ org_id: string }>(
         'SELECT org_id::text FROM projects WHERE id = $1',
@@ -283,13 +286,18 @@ describe('accepted-event metering', () => {
         FOR EACH ROW EXECUTE FUNCTION fail_usage_warning_insert();
       `);
 
-      const accepted = await api(isolated, isolated.ingestToken, 'POST', '/i/v1/events', {
-        batch_id: 'warning-best-effort-events',
-        events: [{ event: 'warning.crossing', distinct_id: 'warning-user' }],
-      });
-      expect(accepted.status).toBe(200);
-      expect(accepted.body.accepted).toBe(1);
-      expect(accepted.body.warnings).toEqual(expect.arrayContaining([
+      const accepted = await new PostgresEventStore(limitedPool, { managePartitions: false }).append([{
+        projectId: isolated.projectId,
+        env: 'prod',
+        event: 'warning.crossing',
+        timestamp: new Date(),
+        distinctId: 'warning-user',
+        sessionId: null,
+        properties: {},
+        registered: false,
+      }]);
+      expect(accepted.inserted).toBe(1);
+      expect(accepted.warnings).toEqual(expect.arrayContaining([
         expect.objectContaining({ meter: 'events_stored', threshold: 1, quantity: 1 }),
       ]));
       expect((await isolated.pool.query<{ count: number }>(
@@ -314,6 +322,7 @@ describe('accepted-event metering', () => {
       );
     } finally {
       await isolated.pool.query('DROP TRIGGER IF EXISTS usage_warning_failure ON usage_warnings; DROP FUNCTION IF EXISTS fail_usage_warning_insert();').catch(() => {});
+      await limitedPool.end();
       await isolated.close();
     }
   });
