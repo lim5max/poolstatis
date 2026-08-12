@@ -211,13 +211,17 @@ describe('project control tower', () => {
       const ingested = await api(funnelEnv, funnelEnv.ingestToken, 'POST', '/i/v1/events', {
         batch_id: 'control-tower-funnel-loss',
         events: [
+          { event: 'tower.entered', distinct_id: 'tower-prev-a', timestamp: hoursAgo(24 * 40) },
+          { event: 'tower.completed', distinct_id: 'tower-prev-a', timestamp: hoursAgo(24 * 40 - 1) },
+          { event: 'tower.entered', distinct_id: 'tower-prev-b', timestamp: hoursAgo(24 * 39) },
+          { event: 'tower.completed', distinct_id: 'tower-prev-b', timestamp: hoursAgo(24 * 39 - 1) },
           { event: 'tower.entered', distinct_id: 'tower-a', timestamp: hoursAgo(4) },
           { event: 'tower.completed', distinct_id: 'tower-a', timestamp: hoursAgo(3) },
           { event: 'tower.entered', distinct_id: 'tower-b', timestamp: hoursAgo(2) },
           { event: 'tower.entered', distinct_id: 'tower-c', timestamp: hoursAgo(1) },
         ],
       });
-      expect(ingested.body.accepted).toBe(4);
+      expect(ingested.body.accepted).toBe(8);
 
       const result = await api(
         funnelEnv,
@@ -227,6 +231,13 @@ describe('project control tower', () => {
       );
 
       expect(result.status).toBe(200);
+      const funnelAttention = result.body.attention.find((item: { id: string }) => item.id === 'funnel.biggest_loss.tower_activation');
+      expect(funnelAttention.delta).toMatchObject({
+        unit: 'percentage_point',
+        direction: 'down',
+        comparison_label: 'previous exact period',
+      });
+      expect(funnelAttention.delta.value).toBeCloseTo(-66.6667, 3);
       expect(result.body.attention).toEqual(expect.arrayContaining([
         expect.objectContaining({
           id: 'funnel.biggest_loss.tower_activation',

@@ -109,6 +109,7 @@ export const attentionItemSchema = z.object({
     ref: z.string(),
   }).strict()),
   evidence: evidenceBlockSchema,
+  delta: answerBlockSchema.shape.delta,
   priority: z.object({
     blocking_now: z.boolean(),
     forecasted_at: z.string().datetime().nullable(),
@@ -192,6 +193,7 @@ async function funnelAttention(
       ? 'rate unavailable'
       : `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(loss.drop_rate * 100)}%`;
     const actionHref = `${href}&from_step=${loss.from_step}&to_step=${loss.to_step}`;
+    const delta = result.summary.delta_percentage_points;
     return {
       funnelKey: funnel.key,
       item: {
@@ -205,6 +207,14 @@ async function funnelAttention(
         impact: funnel.goal,
         affected: [{ kind: 'funnel', ref: funnel.key }],
         evidence: result.evidence,
+        ...(delta === null ? {} : {
+          delta: {
+            value: delta,
+            unit: 'percentage_point' as const,
+            direction: delta > 0 ? 'up' as const : delta < 0 ? 'down' as const : 'flat' as const,
+            comparison_label: 'previous exact period',
+          },
+        }),
         primary_action: {
           id: `investigate_funnel_step.${funnel.key}.${loss.from_step}.${loss.to_step}`,
           kind: 'navigate',

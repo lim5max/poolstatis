@@ -57,13 +57,15 @@ function isAnswer(value: unknown): boolean {
       || !inEnum(value.primary_value.unit, VALUE_UNITS)
       || !isString(value.primary_value.formatted)) return false;
   }
-  if (value.delta !== undefined) {
-    if (!isRecord(value.delta) || !isNullableNumber(value.delta.value)
-      || !inEnum(value.delta.unit, DELTA_UNITS)
-      || !inEnum(value.delta.direction, DELTA_DIRECTIONS)
-      || !isString(value.delta.comparison_label)) return false;
-  }
+  if (value.delta !== undefined && !isDelta(value.delta)) return false;
   return true;
+}
+
+function isDelta(value: unknown): boolean {
+  return isRecord(value) && isNullableNumber(value.value)
+    && inEnum(value.unit, DELTA_UNITS)
+    && inEnum(value.direction, DELTA_DIRECTIONS)
+    && isString(value.comparison_label);
 }
 
 function isSourceRef(value: unknown): boolean {
@@ -114,6 +116,7 @@ function isAttention(value: unknown): boolean {
     && Array.isArray(value.affected) && value.affected.every((affected) => isRecord(affected)
       && inEnum(affected.kind, AFFECTED_KINDS) && isString(affected.ref))
     && isEvidence(value.evidence)
+    && (value.delta === undefined || isDelta(value.delta))
     && (value.priority === undefined || (isRecord(value.priority)
       && typeof value.priority.blocking_now === 'boolean'
       && isNullableString(value.priority.forecasted_at)

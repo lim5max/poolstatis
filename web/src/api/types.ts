@@ -598,6 +598,7 @@ export interface AttentionItem {
   impact: string;
   affected: Array<{ kind: 'answer' | 'metric' | 'funnel' | 'project' | 'customer'; ref: string }>;
   evidence: EvidenceBlock;
+  delta?: AnswerBlock['delta'];
   primary_action: ControlTowerAction;
 }
 

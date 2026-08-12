@@ -149,6 +149,33 @@ describe('PoolstatisClient usage', () => {
     expect(result.answer).toMatchObject({ state: 'unavailable', headline: 'Answer unavailable' });
   });
 
+  it('accepts only a typed server-owned delta on attention items', () => {
+    const base = {
+      schema_version: 1,
+      request_id: 'req-attention-delta',
+      generated_at: '2026-08-12T00:00:00.000Z',
+      scope: { window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-12T00:00:00.000Z', timezone: 'UTC' } },
+      answer: { state: 'ready', headline: 'Funnel', takeaway: 'Measured loss', why_it_matters: 'Review the goal.' },
+      attention: [{
+        id: 'funnel.biggest_loss.signup', rule_id: 'funnel.biggest_loss', rule_version: 1,
+        severity: 'info', state: 'open', title: 'Biggest loss', reason: '12 actors were lost.', impact: 'Complete signup.', affected: [],
+        delta: { value: -12.5, unit: 'percentage_point', direction: 'down', comparison_label: 'previous exact period' },
+        evidence: { state: 'trusted', freshness: 'fresh', as_of: '2026-08-12T00:00:00.000Z', source_refs: [], warnings: [], unavailable_reasons: [] },
+        primary_action: { id: 'investigate', kind: 'navigate', label: 'Investigate', href: '/analyze/funnels' },
+      }],
+      evidence: { state: 'trusted', freshness: 'fresh', as_of: '2026-08-12T00:00:00.000Z', source_refs: [], warnings: [], unavailable_reasons: [] },
+      primary_action: { id: 'investigate', kind: 'navigate', label: 'Investigate', href: '/analyze/funnels' },
+      secondary_actions: [],
+    };
+
+    const attention = base.attention[0]!;
+    expect(decodeControlTowerResult(base).attention[0]?.delta).toEqual(attention.delta);
+    expect(decodeControlTowerResult({
+      ...base,
+      attention: [{ ...attention, delta: { ...attention.delta, unit: 'future_unit' } }],
+    }).attention).toEqual([]);
+  });
+
   it('never leaks partial usage fields when the current-schema shape is malformed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       schema_version: 1,

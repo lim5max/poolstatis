@@ -143,6 +143,7 @@ describe('goal-aware Attention', () => {
           title: 'Server-ordered funnel blocker',
           reason: 'The saved path has an unavailable step.',
           impact: 'The conversion answer remains partial.',
+          delta: { value: -12.45, unit: 'percentage_point', direction: 'down', comparison_label: 'previous exact period' },
           evidence: { ...server.evidence, as_of: '2026-08-05T00:00:00.000Z', freshness: 'stale' },
           primary_action: { id: 'review_funnel', kind: 'navigate', label: 'Review funnel', href: '/analyze/funnels' },
         },
@@ -172,6 +173,7 @@ describe('goal-aware Attention', () => {
 
     expect(await screen.findByRole('heading', { name: 'Server-ordered measurement blocker' })).toBeInTheDocument();
     expect(screen.getByText('This item exists only in the canonical control-tower response.')).toBeInTheDocument();
+    expect(screen.getByText('-12.5 pp · previous exact period')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Review definition/ })).toHaveAttribute('href', '/registry');
     expect(screen.getByRole('link', { name: /Review funnel/ })).toHaveAttribute('href', '/analyze/funnels');
     expect(screen.getByRole('link', { name: /Review usage/ })).toHaveAttribute('href', '/usage');

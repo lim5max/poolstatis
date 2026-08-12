@@ -202,10 +202,24 @@ function AttentionCard({ item, primary, telemetryUserId, onRetry }: {
       </div>
       <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
       <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
+      {item.delta && (
+        <p className="mt-3 text-sm">
+          <span className="font-medium">Change:</span>{' '}
+          <span className="text-muted-foreground">{attentionDeltaLabel(item.delta)}</span>
+        </p>
+      )}
       <p className="mt-3 border-t pt-3 text-sm"><span className="font-medium">Impact:</span> <span className="text-muted-foreground">{item.impact}</span></p>
       <AttentionAction action={item.primary_action} primary={primary} telemetryUserId={telemetryUserId} onRetry={onRetry} />
     </article>
   );
+}
+
+function attentionDeltaLabel(delta: NonNullable<AttentionItem['delta']>): string {
+  if (delta.value === null) return `Unavailable · ${delta.comparison_label}`;
+  const rounded = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(Math.abs(delta.value));
+  const signed = delta.value > 0 ? `+${rounded}` : delta.value < 0 ? `-${rounded}` : rounded;
+  const unit = delta.unit === 'percentage_point' ? 'pp' : delta.unit === 'percent' ? '%' : '';
+  return `${signed}${unit ? ` ${unit}` : ''} · ${delta.comparison_label}`;
 }
 
 function guardrailItem(result: ControlTowerResult): AttentionItem {
