@@ -1420,7 +1420,7 @@ The program is done only when:
 ### 25.1 Read-back snapshot — 2026-08-12
 
 This snapshot was refreshed from the Core integration candidate based on `origin/main`
-`de85d58` with implementation commits through `56cfd27`, and private Cloud `origin/main`
+`de85d58` with implementation commits through `a155a26`, and private Cloud `origin/main`
 at `7bc6469`. It is a requirement-by-requirement source, test and local browser read-back,
 not a replacement for final merge and production evidence. The HTML audit's status summary
 must not be treated as independent proof because it is the source specification.
