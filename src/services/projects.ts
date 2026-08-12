@@ -2,7 +2,7 @@ import type pg from 'pg';
 import { generateToken, type KeyKind } from '../keys.js';
 import { ApiError, notFound } from '../errors.js';
 import type { EventStore } from '../stores/eventStore.js';
-import { listContracts } from './contracts.js';
+import { listActiveContractsBounded } from './contracts.js';
 import type { QueryService } from './query.js';
 
 export interface Project {
@@ -313,6 +313,8 @@ export interface KeyOutcomeReadiness {
       | 'no_active_contract'
       | 'no_queryable_outcome'
       | 'outcome_query_failed'
+      | 'external_environment_scope_unverified'
+      | 'contract_selection_bounded'
       | 'environment_scope_required';
     reason: string;
     observed_events: number | null;
@@ -352,6 +354,9 @@ export interface ProjectHealthEvaluation {
     expectation: string;
   }>;
 }
+
+export const PORTFOLIO_PROJECT_CONCURRENCY = 4;
+export const KEY_OUTCOME_CONTRACT_LIMIT = 5;
 
 export function evaluateProjectHealth(input: {
   events30d: number;
@@ -455,7 +460,7 @@ export async function listProjectsWithStats(
       .map((stats) => [stats.project_id, stats]),
   );
   const evaluatedAt = options.evaluatedAt ?? new Date();
-  return Promise.all(rows.map(async (row) => {
+  return mapWithConcurrency(rows, PORTFOLIO_PROJECT_CONCURRENCY, async (row) => {
     const activeMetrics = Number(row.active_metrics);
     const proposedMetrics = Number(row.proposed_metrics);
     const activeOutcomeContracts = Number(row.active_outcome_contracts);
@@ -495,7 +500,7 @@ export async function listProjectsWithStats(
       key_outcome_readiness: keyOutcomeReadiness,
       ...evaluatedHealth,
     };
-  }));
+  });
 }
 
 export function unscopedKeyOutcomeReadiness(evaluatedAt = new Date()): KeyOutcomeReadiness {
@@ -521,7 +526,8 @@ export async function evaluateKeyOutcomeReadiness(
   env: string,
   evaluatedAt = new Date(),
 ): Promise<KeyOutcomeReadiness> {
-  const contracts = (await listContracts(pool, projectId)).filter((contract) => contract.status === 'active');
+  const selection = await listActiveContractsBounded(pool, projectId, KEY_OUTCOME_CONTRACT_LIMIT);
+  const contracts = selection.contracts;
   if (contracts.length === 0) {
     return unavailableKeyOutcomeReadiness(
       evaluatedAt,
@@ -529,9 +535,23 @@ export async function evaluateKeyOutcomeReadiness(
       'No active measurement contract selects a key outcome for this project.',
     );
   }
+  const sourceRows = await pool.query<{ key: string; source: Record<string, unknown> }>(
+    `SELECT key, source FROM metrics
+     WHERE project_id = $1 AND key = ANY($2::text[])`,
+    [projectId, contracts.map((contract) => contract.primary_metric_key)],
+  );
+  const metricSources = new Map(sourceRows.rows.map((metric) => [metric.key, metric.source]));
   const from = new Date(evaluatedAt.getTime() - 30 * 86_400_000);
   let unexpectedFailure = false;
+  let externalWithoutEnvironmentScope = 0;
   for (const contract of contracts) {
+    const source = metricSources.get(contract.primary_metric_key);
+    if (source?.data_source === 'posthog') {
+      // Source connections currently prove a PostHog project, not a trusted
+      // mapping from a Poolstatis environment to a PostHog environment.
+      externalWithoutEnvironmentScope += 1;
+      continue;
+    }
     try {
       const result = await query.aggregateMetricWindow(projectId, {
         metricKey: contract.primary_metric_key,
@@ -559,6 +579,20 @@ export async function evaluateKeyOutcomeReadiness(
       if (!(error instanceof ApiError) || error.statusCode >= 500) unexpectedFailure = true;
     }
   }
+  if (selection.truncated) {
+    return unavailableKeyOutcomeReadiness(
+      evaluatedAt,
+      'contract_selection_bounded',
+      `Only the first ${KEY_OUTCOME_CONTRACT_LIMIT} active contracts in key order were evaluated. Narrow or archive the contract set before using portfolio readiness.`,
+    );
+  }
+  if (externalWithoutEnvironmentScope > 0 && !unexpectedFailure) {
+    return unavailableKeyOutcomeReadiness(
+      evaluatedAt,
+      'external_environment_scope_unverified',
+      `The selected ${env} environment is not mapped to a trusted PostHog environment, so this outcome is unavailable for environment-scoped portfolio status.`,
+    );
+  }
   return unavailableKeyOutcomeReadiness(
     evaluatedAt,
     unexpectedFailure ? 'outcome_query_failed' : 'no_queryable_outcome',
@@ -566,6 +600,27 @@ export async function evaluateKeyOutcomeReadiness(
       ? 'The typed outcome query could not be evaluated. Retry before using this outcome.'
       : 'No active contract passed the typed outcome query guardrail. Review its metric and source.',
   );
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index]!, index);
+    }
+  };
+  await Promise.all(Array.from(
+    { length: Math.min(Math.max(1, concurrency), values.length) },
+    () => worker(),
+  ));
+  return results;
 }
 
 function unavailableKeyOutcomeReadiness(

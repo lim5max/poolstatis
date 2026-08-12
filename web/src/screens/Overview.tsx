@@ -58,16 +58,14 @@ export function Overview() {
         client!.funnels(project!),
         client!.schema(project!, env).catch(() => null),
       ]);
-      const primaryMetric = pickPrimaryMetric(metrics, intent?.primary_goal_id ?? null);
+      const primaryMetric = controlTower.home_metric_key
+        ? metrics.find((metric) => metric.key === controlTower.home_metric_key) ?? null
+        : null;
       const revenueMetric = metrics.find((metric) => metric.category === 'revenue') ?? null;
       const pageMetric = webPageMetric(metrics);
-      const funnelAnchor = intent?.project_mode === 'website'
-        || (intent?.project_mode === 'both' && prefersWebsite(intent.primary_goal_id))
-        ? pageMetric
-        : primaryMetric;
-      const homeFunnel = controlTower.home_funnel_key === undefined
-        ? pickHomeFunnel(funnels, intent?.primary_goal_id ?? null, funnelAnchor?.key ?? null)
-        : funnels.find((funnel) => funnel.key === controlTower.home_funnel_key) ?? null;
+      const homeFunnel = controlTower.home_funnel_key
+        ? funnels.find((funnel) => funnel.key === controlTower.home_funnel_key) ?? null
+        : null;
       const productAnswersEnabled = intent?.project_mode !== 'website';
       const websiteAnswersEnabled = intent?.project_mode !== 'product';
       const [product, website] = await Promise.all([
@@ -118,7 +116,8 @@ export function Overview() {
   if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   if (mode === 'both' && intent) {
-    return <BothHome answer={prefersWebsite(intent.primary_goal_id) ? website : product} product={product} websiteFirst={prefersWebsite(intent.primary_goal_id)} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+    const websiteFirst = controlTower.home_answer_surface === 'website';
+    return <BothHome answer={websiteFirst ? website : product} product={product} websiteFirst={websiteFirst} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   }
 
   // A missing intent row is legacy/unset. Keep the project useful and never
@@ -598,6 +597,7 @@ function homeAnswerTelemetry(data: {
   intent: ProjectIntentSummary | null;
   product: ProductAnswer;
   website: WebsiteAnswer;
+  controlTower: ControlTowerResult;
 }): { templateId: TelemetryHomeTemplate; trust: EvidenceTrust } {
   const mode = data.intent?.project_mode;
   if (mode === 'website') {
@@ -607,7 +607,7 @@ function homeAnswerTelemetry(data: {
     return { templateId: 'product_overview', trust: evidenceTrust(data.product.trust, data.product.trustUnavailable) };
   }
   if (mode === 'both' && data.intent) {
-    const websiteFirst = prefersWebsite(data.intent.primary_goal_id);
+    const websiteFirst = data.controlTower.home_answer_surface === 'website';
     return websiteFirst
       ? { templateId: 'both_website', trust: evidenceTrust(data.website.trust, data.website.trustUnavailable) }
       : { templateId: 'both_product', trust: evidenceTrust(data.product.trust, data.product.trustUnavailable) };
@@ -679,32 +679,6 @@ async function readProductAnswer(
       : Promise.resolve(null),
   ]);
   return { metric, trend, revenueMetric, revenueTrend, trust: trustResult.trust, trustUnavailable: trustResult.unavailable, funnel, funnelResult };
-}
-
-function pickPrimaryMetric(metrics: Metric[], primaryGoal: string | null): Metric | null {
-  if (!primaryGoal) return metrics.find((metric) => metric.type === 'unique_actors') ?? metrics[0] ?? null;
-  const tokens = primaryGoal.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 3);
-  return metrics.find((metric) => {
-    const haystack = `${metric.key} ${metric.name} ${metric.purpose} ${metric.category ?? ''}`.toLowerCase();
-    return tokens.some((token) => haystack.includes(token));
-  }) ?? metrics.find((metric) => metric.type === 'unique_actors') ?? metrics[0] ?? null;
-}
-
-function pickHomeFunnel(funnels: Funnel[], primaryGoal: string | null, anchorMetricKey: string | null): Funnel | null {
-  const ordered = [...funnels].sort((left, right) => left.key.localeCompare(right.key));
-  if (primaryGoal) {
-    const exactGoalFunnel = ordered.find((funnel) => funnel.key === primaryGoal);
-    if (exactGoalFunnel) return exactGoalFunnel;
-  }
-  if (anchorMetricKey) {
-    const anchoredFunnel = ordered.find((funnel) => funnel.steps.some((step) => step.metric_key === anchorMetricKey));
-    if (anchoredFunnel) return anchoredFunnel;
-  }
-  return ordered[0] ?? null;
-}
-
-function prefersWebsite(primaryGoal: string) {
-  return /(website|traffic|page|campaign|referral|content|conversion)/i.test(primaryGoal);
 }
 
 function metricAnswerValue(metric: Metric, trend: TrendQueryResult | null, trust: MeasurementTrust | null) {

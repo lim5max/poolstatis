@@ -39,6 +39,9 @@ function controlTowerResponse() {
     schema_version: 1,
     request_id: 'control-request',
     generated_at: '2026-08-06T00:00:00.000Z',
+    home_answer_surface: 'website',
+    home_metric_key: 'web_page_views',
+    home_funnel_key: null,
     scope: {
       project_slug: 'alpha',
       environment: 'prod',
@@ -363,6 +366,10 @@ describe('goal-aware Attention', () => {
 
   it('does not claim a biggest funnel drop-off when the funnel result is unavailable', async () => {
     const client = websiteClient();
+    client.controlTower.mockResolvedValue({
+      ...controlTowerResponse(),
+      home_funnel_key: 'website_signup',
+    });
     client.funnels.mockResolvedValue([{
       id: 'signup-funnel',
       key: 'website_signup',
@@ -411,6 +418,11 @@ describe('goal-aware Attention', () => {
 
   it('renders unavailable product evidence as unavailable, never as a fabricated zero', async () => {
     const client = websiteClient('website') as Record<string, any>;
+    client.controlTower = vi.fn().mockResolvedValue({
+      ...controlTowerResponse(),
+      home_answer_surface: 'product',
+      home_metric_key: 'weekly_active_users',
+    });
     client.projectIntent = vi.fn().mockResolvedValue({ intent: { project_mode: 'product', goal_ids: ['feature_adoption'], primary_goal_id: 'feature_adoption' } });
     client.metrics = vi.fn().mockResolvedValue([productMetric]);
     client.query = vi.fn().mockRejectedValue(new Error('query unavailable'));

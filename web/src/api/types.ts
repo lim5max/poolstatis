@@ -80,13 +80,13 @@ export type UpdateSavedAnswerInput = Partial<Pick<
 export type MeasurementReadinessSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info' | 'none';
 export type MeasurementReadinessGroupKey = 'tracking_plan' | 'properties' | 'identity' | 'data_sources';
 export interface MeasurementReadinessRepairAction {
-  action_code: 'activate_metric' | 'repair_funnel' | 'review_property' | 'verify_identity' | 'connect_data_source' | 'verify_data_source';
+  action_code: 'register_metric' | 'activate_metric' | 'configure_answer' | 'repair_funnel' | 'review_property' | 'verify_identity' | 'connect_data_source' | 'verify_data_source';
   kind: 'navigate';
   label: string;
   href: string;
 }
 export interface MeasurementReadinessGap {
-  code: 'metric_inactive' | 'funnel_definition_incomplete' | 'property_untrusted'
+  code: 'metric_missing' | 'metric_inactive' | 'answer_not_queryable' | 'funnel_definition_incomplete' | 'property_untrusted'
     | 'identity_evidence_unavailable' | 'identity_coverage_incomplete'
     | 'data_source_missing' | 'data_source_unverified';
   severity: Exclude<MeasurementReadinessSeverity, 'none'>;
@@ -640,6 +640,8 @@ export interface ControlTowerResult {
   schema_version: 1;
   request_id: string;
   generated_at: string;
+  home_answer_surface?: 'website' | 'product' | 'legacy';
+  home_metric_key?: string | null;
   home_funnel_key?: string | null;
   scope: {
     organization_id?: string;
@@ -826,7 +828,8 @@ export interface ProjectWithStats {
       id: 'key_outcome_queryable';
       state: 'pass' | 'fail';
       reason_code: 'query_succeeded' | 'no_active_contract' | 'no_queryable_outcome'
-        | 'outcome_query_failed' | 'environment_scope_required';
+        | 'outcome_query_failed' | 'external_environment_scope_unverified'
+        | 'contract_selection_bounded' | 'environment_scope_required';
       reason: string;
       observed_events: number | null;
     };

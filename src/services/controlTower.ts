@@ -5,7 +5,8 @@ import type { FunnelQueryInput, TrendQueryInput } from '../schemas.js';
 import type { EventStore } from '../stores/eventStore.js';
 import { getProjectIntent } from './projectIntents.js';
 import type { QueryService } from './query.js';
-import { listFunnels, type Funnel, type Metric } from './registry.js';
+import { listFunnels, listMetrics, type Metric } from './registry.js';
+import { resolveHomeAnswer, type HomeAnswerSelection } from './homeAnswer.js';
 import { listDataQualityIssues } from './dataQuality.js';
 import { listDecisions } from './decisions.js';
 import { getOnboardingStatus } from './onboarding.js';
@@ -121,6 +122,8 @@ export const controlTowerResultSchema = z.object({
   schema_version: z.literal(1),
   request_id: z.string(),
   generated_at: z.string().datetime(),
+  home_answer_surface: z.enum(['website', 'product', 'legacy']).optional(),
+  home_metric_key: z.string().nullable().optional(),
   home_funnel_key: z.string().nullable().optional(),
   scope: controlTowerScopeSchema,
   answer: answerBlockSchema,
@@ -140,39 +143,15 @@ export type ControlTowerAction = z.infer<typeof controlTowerActionSchema>;
 export type AttentionItem = z.infer<typeof attentionItemSchema>;
 export type ControlTowerResult = z.infer<typeof controlTowerResultSchema>;
 
-function selectHomeFunnel(funnels: Funnel[], primaryGoal: string | null): Funnel | null {
-  const ordered = [...funnels].sort((left, right) => left.key.localeCompare(right.key));
-  if (!primaryGoal) return ordered[0] ?? null;
-  const exact = ordered.find((funnel) => funnel.key === primaryGoal);
-  if (exact) return exact;
-  const tokens = primaryGoal.split('_').filter((token) => token.length > 3);
-  const ranked = ordered
-    .map((funnel) => {
-      const haystack = [
-        funnel.key,
-        funnel.name,
-        funnel.goal,
-        ...funnel.steps.flatMap((step) => [step.metric_key, step.label]),
-      ].join(' ').toLowerCase();
-      return { funnel, score: tokens.filter((token) => haystack.includes(token)).length };
-    })
-    .sort((left, right) => right.score - left.score || left.funnel.key.localeCompare(right.funnel.key));
-  return ranked[0]?.score ? ranked[0].funnel : ordered[0] ?? null;
-}
-
 async function funnelAttention(
-  pool: pg.Pool,
   queryService: QueryService,
   project: { id: string; slug: string },
   env: string,
   from: Date,
   now: Date,
+  home: HomeAnswerSelection,
 ): Promise<{ funnelKey: string | null; item: AttentionItem | null }> {
-  const [funnels, intent] = await Promise.all([
-    listFunnels(pool, project.id),
-    getProjectIntent(pool, project.id),
-  ]);
-  const funnel = selectHomeFunnel(funnels, intent?.primary_goal_id ?? null);
+  const funnel = home.funnel;
   if (!funnel) return { funnelKey: null, item: null };
   const href = `/analyze/funnels?funnel=${encodeURIComponent(funnel.key)}&env=${encodeURIComponent(env)}`;
   try {
@@ -401,12 +380,18 @@ export async function getProjectControlTower(
   now = new Date(),
 ): Promise<ControlTowerResult> {
   const from = new Date(now.getTime() - rangeDays * 86_400_000);
+  const [metrics, funnels, intent] = await Promise.all([
+    listMetrics(pool, project.id),
+    listFunnels(pool, project.id),
+    getProjectIntent(pool, project.id),
+  ]);
+  const home = resolveHomeAnswer(metrics, funnels, intent);
   const [onboarding, warnings, quality, decisions, homeFunnel] = await Promise.all([
     getOnboardingStatus(pool, eventStore, project.id, env),
     summarizeIngestWarningOccurrences(pool, project.id, { env, from, to: now }),
     listDataQualityIssues(pool, eventStore, project.id, env, { sinceDays: rangeDays }),
     listDecisions(pool, project.id, { status: 'proposed', env }),
-    funnelAttention(pool, queryService, project, env, from, now),
+    funnelAttention(queryService, project, env, from, now, home),
   ]);
   const funnelItem = homeFunnel.item;
   const attention: AttentionItem[] = [];
@@ -484,6 +469,8 @@ export async function getProjectControlTower(
     schema_version: 1,
     request_id: randomUUID(),
     generated_at: now.toISOString(),
+    home_answer_surface: home.surface,
+    home_metric_key: home.metric?.key ?? null,
     home_funnel_key: homeFunnel.funnelKey,
     scope: {
       project_slug: project.slug,

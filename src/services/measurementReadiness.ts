@@ -7,6 +7,7 @@ import {
 import { ACQUISITION_UTM_PROPERTIES } from './acquisitionAttribution.js';
 import { BROWSER_ANALYTICS_PROPERTIES } from './browserAnalytics.js';
 import { getProjectIntent, type StoredProjectIntent } from './projectIntents.js';
+import { resolveHomeAnswer } from './homeAnswer.js';
 import { listPropertyDefinitions } from './properties.js';
 import { listSourceConnections } from './posthog.js';
 import { listFunnels, listMetrics, type Funnel, type Metric } from './registry.js';
@@ -15,7 +16,7 @@ export type ReadinessSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info' 
 export type ReadinessGroupKey = 'tracking_plan' | 'properties' | 'identity' | 'data_sources';
 
 export interface ReadinessRepairAction {
-  action_code: 'activate_metric' | 'repair_funnel' | 'review_property' | 'verify_identity' | 'connect_data_source' | 'verify_data_source';
+  action_code: 'register_metric' | 'activate_metric' | 'configure_answer' | 'repair_funnel' | 'review_property' | 'verify_identity' | 'connect_data_source' | 'verify_data_source';
   kind: 'navigate';
   label: string;
   href: string;
@@ -23,7 +24,9 @@ export interface ReadinessRepairAction {
 
 export interface MeasurementReadinessGap {
   code:
+    | 'metric_missing'
     | 'metric_inactive'
+    | 'answer_not_queryable'
     | 'funnel_definition_incomplete'
     | 'property_untrusted'
     | 'identity_evidence_unavailable'
@@ -90,12 +93,14 @@ const SEVERITY_RANK: Record<ReadinessSeverity, number> = {
 };
 const GAP_CODE_ORDER: Record<MeasurementReadinessGap['code'], number> = {
   data_source_missing: 0,
-  metric_inactive: 1,
-  funnel_definition_incomplete: 2,
-  property_untrusted: 3,
-  identity_coverage_incomplete: 4,
-  data_source_unverified: 5,
-  identity_evidence_unavailable: 6,
+  metric_missing: 1,
+  metric_inactive: 2,
+  answer_not_queryable: 3,
+  funnel_definition_incomplete: 4,
+  property_untrusted: 5,
+  identity_coverage_incomplete: 6,
+  data_source_unverified: 7,
+  identity_evidence_unavailable: 8,
 };
 
 export async function getMeasurementReadiness(
@@ -128,7 +133,7 @@ export async function getMeasurementReadiness(
 
   const answerDependencies = buildAnswerDependencies(metrics, funnels, views, intent);
   const affected = dependencyIndexes(answerDependencies);
-  const tracking = trackingPlanGroup(metrics, funnels, affected.metrics);
+  const tracking = trackingPlanGroup(metrics, funnels, answerDependencies, affected.metrics);
   const propertyGroup = propertiesGroup(properties, affected.properties);
   const identity = await identityGroup(
     project.id,
@@ -180,9 +185,13 @@ export async function getMeasurementReadiness(
 function trackingPlanGroup(
   metrics: Metric[],
   funnels: Funnel[],
+  answers: MeasurementAnswerDependency[],
   affected: Map<string, string[]>,
 ): MeasurementReadinessGroup {
-  const activeMetrics = new Set(metrics.filter((metric) => metric.status === 'active').map((metric) => metric.key));
+  const activeMetrics = new Set(metrics
+    .filter((metric) => metric.status === 'active' && isDirectlyQueryableMetric(metric))
+    .map((metric) => metric.key));
+  const knownMetrics = new Set(metrics.map((metric) => metric.key));
   const gaps: MeasurementReadinessGap[] = metrics
     .filter((metric) => metric.status !== 'active')
     .map((metric) => ({
@@ -197,6 +206,21 @@ function trackingPlanGroup(
         href: `/registry?metric=${encodeURIComponent(metric.key)}`,
       },
     }));
+  for (const [metricKey, answerIds] of affected) {
+    if (knownMetrics.has(metricKey)) continue;
+    gaps.push({
+      code: 'metric_missing',
+      severity: 'high',
+      definition_ref: metricKey,
+      affected_answer_ids: answerIds,
+      repair_action: {
+        action_code: 'register_metric',
+        kind: 'navigate',
+        label: 'Register required metric',
+        href: `/registry?metric=${encodeURIComponent(metricKey)}`,
+      },
+    });
+  }
   let healthyFunnels = 0;
   for (const funnel of funnels) {
     const missing = funnel.steps.filter((step) => !activeMetrics.has(step.metric_key));
@@ -218,11 +242,31 @@ function trackingPlanGroup(
       },
     });
   }
+  const queryableFunnels = new Set(funnels
+    .filter((funnel) => funnel.steps.every((step) => activeMetrics.has(step.metric_key)))
+    .map((funnel) => funnel.key));
+  for (const answer of answers) {
+    const hasQueryableMetric = answer.metric_keys.some((key) => activeMetrics.has(key));
+    const hasQueryableFunnel = answer.funnel_key !== null && queryableFunnels.has(answer.funnel_key);
+    if (hasQueryableMetric || hasQueryableFunnel) continue;
+    gaps.push({
+      code: 'answer_not_queryable',
+      severity: 'medium',
+      definition_ref: answer.answer_id,
+      affected_answer_ids: [answer.answer_id],
+      repair_action: {
+        action_code: 'configure_answer',
+        kind: 'navigate',
+        label: 'Review answer dependencies',
+        href: `/measurement?answer=${encodeURIComponent(answer.answer_id)}`,
+      },
+    });
+  }
   return group(
     'tracking_plan',
     'Tracking plan',
     metrics.filter((metric) => metric.status === 'active').length + healthyFunnels,
-    metrics.filter((metric) => metric.status !== 'active').length + (funnels.length - healthyFunnels),
+    gaps.length,
     gaps,
     { metrics: metrics.length, funnels: funnels.length },
   );
@@ -410,6 +454,10 @@ function identityEventSources(metric: Metric): Array<{ event: string; filters: P
     : [];
 }
 
+function isDirectlyQueryableMetric(metric: Metric): boolean {
+  return metric.type === 'count' || metric.type === 'unique_actors' || metric.type === 'value';
+}
+
 export function buildAnswerDependencies(
   metrics: Metric[],
   funnels: Funnel[],
@@ -418,28 +466,21 @@ export function buildAnswerDependencies(
 ): MeasurementAnswerDependency[] {
   const activeMetrics = metrics.filter((metric) => metric.status === 'active');
   const metricByKey = new Map(metrics.map((metric) => [metric.key, metric]));
-  const activePageMetric = activeMetrics.find((metric) => metric.key === 'web_page_views' && metric.type === 'count') ?? null;
-  const primaryMetric = pickPrimaryMetric(activeMetrics, intent?.primary_goal_id ?? null);
-  const revenueMetric = activeMetrics.find((metric) => metric.category === 'revenue') ?? null;
+  const home = resolveHomeAnswer(metrics, funnels, intent);
+  const activePageMetric = home.pageMetric;
+  const primaryMetric = home.metric;
+  const revenueMetric = home.revenueMetric;
   const webOutcomeMetrics = activeMetrics.filter((metric) => metric.key !== 'web_page_views'
     && metric.type !== 'state'
     && metric.tags.includes('surface:web'));
-  const funnelAnchor = intent?.project_mode === 'website'
-    || (intent?.project_mode === 'both' && prefersWebsite(intent.primary_goal_id))
-    ? activePageMetric
-    : primaryMetric;
-  const homeFunnel = pickHomeFunnel(funnels, intent?.primary_goal_id ?? null, funnelAnchor?.key ?? null);
+  const homeFunnel = home.funnel;
   const homeMetrics = new Set<string>();
-  const homeMode = intent?.project_mode ?? null;
-  if (homeMode === 'website') {
-    if (activePageMetric) homeMetrics.add(activePageMetric.key);
-  } else if (homeMode === 'product') {
+  home.requiredMetricKeys.forEach((key) => homeMetrics.add(key));
+  if (home.surface === 'website') {
+    if (primaryMetric) homeMetrics.add(primaryMetric.key);
+  } else if (home.surface === 'product') {
     if (primaryMetric) homeMetrics.add(primaryMetric.key);
     if (revenueMetric) homeMetrics.add(revenueMetric.key);
-  } else if (homeMode === 'both' && intent) {
-    const preferred = prefersWebsite(intent.primary_goal_id) ? activePageMetric : primaryMetric;
-    if (preferred) homeMetrics.add(preferred.key);
-    if (!prefersWebsite(intent.primary_goal_id) && revenueMetric) homeMetrics.add(revenueMetric.key);
   } else {
     // Legacy Home chooses the first successful current answer at runtime. Both
     // candidates are real active semantics, so the dependency graph keeps the
@@ -487,7 +528,7 @@ export function buildAnswerDependencies(
       answerId: `product:${metric.key}`,
       surface: 'product',
       label: `Product · ${metric.name}`,
-      href: '/analyze/product',
+      href: `/analyze/product?metric=${encodeURIComponent(metric.key)}`,
       metricKeys: [metric.key],
       funnelKey: null,
       metricByKey,
@@ -598,32 +639,6 @@ function metricPropertyKeys(metric: Metric): string[] {
     addSource(metric.source);
   }
   return [...properties].sort();
-}
-
-function pickPrimaryMetric(metrics: Metric[], primaryGoal: string | null): Metric | null {
-  if (!primaryGoal) return metrics.find((metric) => metric.type === 'unique_actors') ?? metrics[0] ?? null;
-  const tokens = primaryGoal.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 3);
-  return metrics.find((metric) => {
-    const haystack = `${metric.key} ${metric.name} ${metric.purpose} ${metric.category ?? ''}`.toLowerCase();
-    return tokens.some((token) => haystack.includes(token));
-  }) ?? metrics.find((metric) => metric.type === 'unique_actors') ?? metrics[0] ?? null;
-}
-
-function pickHomeFunnel(funnels: Funnel[], primaryGoal: string | null, anchorMetricKey: string | null): Funnel | null {
-  const ordered = [...funnels].sort((left, right) => left.key.localeCompare(right.key));
-  if (primaryGoal) {
-    const exactGoalFunnel = ordered.find((funnel) => funnel.key === primaryGoal);
-    if (exactGoalFunnel) return exactGoalFunnel;
-  }
-  if (anchorMetricKey) {
-    const anchoredFunnel = ordered.find((funnel) => funnel.steps.some((step) => step.metric_key === anchorMetricKey));
-    if (anchoredFunnel) return anchoredFunnel;
-  }
-  return ordered[0] ?? null;
-}
-
-function prefersWebsite(primaryGoal: string): boolean {
-  return /(website|traffic|page|campaign|referral|content|conversion)/i.test(primaryGoal);
 }
 
 function addDependency(map: Map<string, Set<string>>, key: string, answerId: string): void {

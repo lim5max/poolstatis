@@ -190,6 +190,25 @@ export async function listContracts(
   return rows.map(rowToContract);
 }
 
+export async function listActiveContractsBounded(
+  pool: Queryable,
+  projectId: string,
+  limit: number,
+): Promise<{ contracts: MeasurementContract[]; truncated: boolean }> {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error('active contract limit must be a positive integer');
+  const { rows } = await pool.query(
+    `SELECT ${CONTRACT_COLS} FROM measurement_contracts
+     WHERE project_id = $1 AND status = 'active'
+     ORDER BY key
+     LIMIT $2`,
+    [projectId, limit + 1],
+  );
+  return {
+    contracts: rows.slice(0, limit).map(rowToContract),
+    truncated: rows.length > limit,
+  };
+}
+
 export async function getContract(
   pool: Queryable,
   projectId: string,

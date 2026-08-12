@@ -239,6 +239,30 @@ describe('Product answer-first surface', () => {
     expect(screen.getByRole('button', { name: 'Official answer saved' })).toBeDisabled();
   });
 
+  it('opens the exact registry metric requested by a readiness dependency link', async () => {
+    const exactMetric = {
+      ...metric,
+      id: 'm2',
+      key: 'activation_completed',
+      name: 'Activation completed',
+      source: { event: 'activation.completed' },
+    };
+    const current = productStore() as any;
+    current.client.metrics.mockResolvedValue([metric, exactMetric]);
+    mockedStore.mockReturnValue(current);
+
+    render(<MemoryRouter initialEntries={['/analyze/product?metric=activation_completed']}><ProductAnalytics /></MemoryRouter>);
+
+    expect(await screen.findByText(/Run the prebuilt answer for/)).toHaveTextContent('activation_completed');
+    fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
+    await waitFor(() => expect(current.client.query).toHaveBeenCalled());
+    expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({
+      kind: 'trend',
+      metric: 'activation_completed',
+      env: 'prod',
+    }));
+  });
+
   it('downgrades a saved answer when the query evidence is partial even if registry trust passed', async () => {
     const current = productStore() as any;
     current.client.query.mockResolvedValueOnce({

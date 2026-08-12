@@ -201,5 +201,52 @@ describe('server-owned measurement readiness', () => {
       definition_ref: 'retained_actor',
       affected_answer_ids: expect.arrayContaining(['home', 'product:retained_actor']),
     }));
+    expect(readiness.body.answer_dependencies).toContainEqual(expect.objectContaining({
+      answer_id: 'product:retained_actor',
+      href: '/analyze/product?metric=retained_actor',
+    }));
+  });
+
+  it('reports missing required metrics and an unqueryable answer when the registry is empty', async () => {
+    const empty = await createTestEnv({ ingestBuffer: false });
+    try {
+      const intent = await api(empty, empty.secretToken, 'PUT', `/api/v1/projects/${empty.projectSlug}/intent`, {
+        project_mode: 'website',
+        website_domain: 'example.com',
+        goal_ids: ['website_traffic'],
+        custom_goal: null,
+        primary_goal_id: 'website_traffic',
+      });
+      expect(intent.status).toBe(200);
+
+      const readiness = await api(
+        empty,
+        empty.secretToken,
+        'GET',
+        `/api/v1/projects/${empty.projectSlug}/readiness?env=prod`,
+      );
+      expect(readiness.status).toBe(200);
+      const tracking = readiness.body.groups.find((item: { key: string }) => item.key === 'tracking_plan');
+      expect(tracking.gaps).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: 'metric_missing',
+          definition_ref: 'web_page_views',
+          affected_answer_ids: expect.arrayContaining(['home', 'web']),
+          repair_action: expect.objectContaining({ action_code: 'register_metric' }),
+        }),
+        expect.objectContaining({
+          code: 'answer_not_queryable',
+          definition_ref: 'home',
+          affected_answer_ids: ['home'],
+          repair_action: expect.objectContaining({ action_code: 'configure_answer' }),
+        }),
+      ]));
+      expect(readiness.body.fix_next).toMatchObject({
+        gap_code: 'metric_missing',
+        action_code: 'register_metric',
+      });
+    } finally {
+      await empty.close();
+    }
   });
 });

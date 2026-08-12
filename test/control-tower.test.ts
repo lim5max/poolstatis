@@ -76,7 +76,7 @@ describe('project control tower', () => {
     expect(serialized).not.toContain('private@example.com');
     expect(() => controlTowerResultSchema.parse(result.body)).not.toThrow();
     expect(Object.keys(result.body).sort()).toEqual([
-      'answer', 'attention', 'evidence', 'generated_at', 'home_funnel_key', 'primary_action', 'request_id',
+      'answer', 'attention', 'evidence', 'generated_at', 'home_answer_surface', 'home_funnel_key', 'home_metric_key', 'primary_action', 'request_id',
       'schema_version', 'scope', 'secondary_actions',
     ]);
   });
@@ -320,6 +320,8 @@ describe('project control tower', () => {
       );
 
       expect(result.status).toBe(200);
+      expect(result.body.home_answer_surface).toBe('product');
+      expect(result.body.home_metric_key).toBe('activation_completed');
       expect(result.body.home_funnel_key).toBe('z_activation_path');
       expect(result.body.attention).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -327,6 +329,17 @@ describe('project control tower', () => {
           affected: [{ kind: 'funnel', ref: 'z_activation_path' }],
         }),
       ]));
+      const readiness = await api(
+        funnelEnv,
+        funnelEnv.secretToken,
+        'GET',
+        `/api/v1/projects/${funnelEnv.projectSlug}/readiness?env=prod`,
+      );
+      const homeDependency = readiness.body.answer_dependencies.find((answer: { answer_id: string }) => answer.answer_id === 'home');
+      expect(homeDependency).toMatchObject({
+        funnel_key: result.body.home_funnel_key,
+        metric_keys: expect.arrayContaining([result.body.home_metric_key]),
+      });
     } finally {
       await funnelEnv.close();
     }
