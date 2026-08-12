@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { Metric } from '../api/types';
 import { useStore } from '../store';
-import { WebAnalytics, hasAcceptedCanonicalPageViews, hasWebOutcome } from './WebAnalytics';
+import { WebAnalytics, hasAcceptedCanonicalPageViews, hasWebOutcome, webOutcomeMetric } from './WebAnalytics';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -277,6 +277,27 @@ describe('Web analytics partial availability', () => {
   });
 
   it('leads a ready Web workspace with a trusted answer and previous-period delta before the chart', async () => {
+    const query = vi.fn().mockImplementation((_project, input) => {
+      if (input.metric !== webOutcome.key) {
+        return Promise.resolve({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } });
+      }
+      const value = input.date_to === '-30d' ? 8 : 12;
+      return Promise.resolve({
+        kind: 'trend',
+        series: [{ bucket: input.date_to ?? '2026-07-31', value }],
+        answer: {
+          state: 'ready', headline: `${webOutcome.name}: ${value}`, takeaway: `${value} matched.`,
+          primary_value: { value, unit: 'count', formatted: String(value) },
+          why_it_matters: webOutcome.purpose,
+        },
+        evidence: {
+          state: 'trusted', as_of: '2026-07-31T00:00:00.000Z', freshness: 'fresh',
+          source_refs: [{ kind: 'metric', key: webOutcome.key, purpose: webOutcome.purpose }],
+          aggregation: 'count of accepted events', warnings: [], unavailable_reasons: [],
+        },
+        meta: { computed_at: input.date_to ? '2026-07-31T00:00:01.000Z' : '2026-07-31T00:00:00.000Z', sampling: null },
+      });
+    });
     mockedStore.mockReturnValue({
       project: 'y1blin-com',
       env: 'prod',
@@ -284,7 +305,7 @@ describe('Web analytics partial availability', () => {
         metrics: vi.fn().mockResolvedValue([metric, webOutcome]),
         properties,
         operationalQuery,
-        query: vi.fn().mockResolvedValue({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } }),
+        query,
         measurementTrust: vi.fn().mockResolvedValue({ status: 'trusted', primary_metric: { observed_events: 20 }, blockers: [], warnings: [] }),
       },
     } as never);
@@ -295,6 +316,13 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
     expect(await screen.findByText('No change versus the previous 30 days.')).toBeInTheDocument();
     expect(await screen.findByText(/Trusted measurement/)).toBeInTheDocument();
+    expect(await screen.findByText('Signup completed: 12')).toBeInTheDocument();
+    expect(await screen.findByText('Up 50.0% versus the previous 30 days.')).toBeInTheDocument();
+    expect(screen.getByText('count of accepted events')).toBeInTheDocument();
+    expect(query.mock.calls.filter(([, input]) => input.metric === webOutcome.key)).toEqual([
+      expect.arrayContaining([expect.objectContaining({ date_from: '-30d', date_to: null, env: 'prod' })]),
+      expect.arrayContaining([expect.objectContaining({ date_from: '-60d', date_to: '-30d', env: 'prod' })]),
+    ]);
     const chart = await screen.findByTestId('web-trend');
     expect(answer.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_analytics')).toEqual(
@@ -303,6 +331,26 @@ describe('Web analytics partial availability', () => {
         expect.arrayContaining([expect.objectContaining({ date_from: '-60d', date_to: '-30d' })]),
       ]),
     );
+  });
+
+  it('keeps traffic readable and never turns an unavailable outcome query into zero', async () => {
+    const query = vi.fn((_project, input) => input.metric === webOutcome.key
+      ? Promise.reject(new Error('outcome source unavailable'))
+      : Promise.resolve({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } }));
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webOutcome]), properties, operationalQuery, query,
+        measurementTrust: vi.fn().mockResolvedValue({ status: 'trusted', primary_metric: { observed_events: 20 }, blockers: [], warnings: [] }),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
+    expect(await screen.findByText(/could not be measured for this exact period/)).toBeInTheDocument();
+    expect(screen.getByText('outcome source unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Signup completed: 0')).not.toBeInTheDocument();
   });
 
   it('keeps the current Web health answer when the previous-period comparison is unavailable', async () => {
@@ -550,5 +598,6 @@ describe('Web setup readiness', () => {
     expect(hasWebOutcome([canonical, unrelated])).toBe(false);
     expect(hasWebOutcome([canonical, webOutcome])).toBe(true);
     expect(hasWebOutcome([canonical, webConversion])).toBe(true);
+    expect(webOutcomeMetric([canonical, webConversion, webOutcome])?.key).toBe(webOutcome.key);
   });
 });

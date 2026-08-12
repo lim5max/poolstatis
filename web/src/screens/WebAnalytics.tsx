@@ -25,7 +25,7 @@ import {
   type WebSessionsResult,
   type WebWorkspaceResult,
 } from '../analysis/operations';
-import type { VisualizationSpec } from '../analysis/visualization';
+import type { TrendQueryResult, VisualizationSpec } from '../analysis/visualization';
 import type { MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 import { useAsync, useStore } from '../store';
 import { AcquisitionPanel } from './Measurement';
@@ -75,6 +75,17 @@ interface WebComparisonRead {
 interface WebTrendRead {
   scope: string;
   result: WebWorkspaceResult['trend'];
+}
+
+interface WebOutcomeRead {
+  scope: string;
+  metric: Metric;
+  result: TrendQueryResult;
+}
+
+interface WebOutcomeComparisonRead {
+  scope: string;
+  result: TrendQueryResult;
 }
 
 interface WebTrustScopedRead {
@@ -165,7 +176,9 @@ export function WebAnalytics() {
   }), [project, env]);
   const readinessData = readiness.data?.scope === registryScope ? readiness.data.result : null;
   const metric = registryData?.metric ?? null;
+  const outcomeMetric = registryData ? webOutcomeMetric(registryData.metrics) : null;
   const primaryScope = `${registryScope}\u0000${range}\u0000${metric?.key ?? ''}`;
+  const outcomeScope = `${registryScope}\u0000${range}\u0000${outcomeMetric?.key ?? ''}`;
   const primary = useAsync<WebPrimaryRead | null>(async () => {
     if (!metric) return null;
     const base = {
@@ -207,6 +220,29 @@ export function WebAnalytics() {
     return { scope: primaryScope, result: await readWebTrust(client!, project!, env, metric.key) };
   }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at]);
   const trustData = trustRead.data?.scope === primaryScope ? trustRead.data.result : null;
+  const outcomeRead = useAsync<WebOutcomeRead | null>(async () => {
+    if (!outcomeMetric || outcomeMetric.type === 'conversion') return null;
+    const result = await client!.query(project!, {
+      kind: 'trend', metric: outcomeMetric.key, date_from: rangeDateFrom(range), date_to: null,
+      interval: 'day', filters: [], env,
+    });
+    if (result.kind !== 'trend') throw new Error('Outcome query returned an unexpected result kind');
+    return { scope: outcomeScope, metric: outcomeMetric, result };
+  }, [project, env, range, outcomeMetric?.key, outcomeMetric?.type]);
+  const outcomeData = outcomeRead.data?.scope === outcomeScope ? outcomeRead.data : null;
+  const outcomeComparison = useAsync<WebOutcomeComparisonRead | null>(async () => {
+    if (!outcomeMetric || !outcomeData) return null;
+    const days = Number.parseInt(range, 10);
+    const result = await client!.query(project!, {
+      kind: 'trend', metric: outcomeMetric.key, date_from: `-${days * 2}d`, date_to: `-${days}d`,
+      interval: 'day', filters: [], env,
+    });
+    if (result.kind !== 'trend') throw new Error('Outcome comparison returned an unexpected result kind');
+    return { scope: outcomeScope, result };
+  }, [project, env, range, outcomeMetric?.key, outcomeData?.result.meta.computed_at]);
+  const outcomeComparisonData = outcomeComparison.data?.scope === outcomeScope
+    ? outcomeComparison.data.result
+    : null;
   const operationalDimension = dimension !== 'conversion' ? dimension : null;
   const secondary = useAsync<WebSecondaryRead | null>(async () => {
     if (!metric || !primaryData || !breakdownRequested || !operationalDimension) return null;
@@ -297,6 +333,32 @@ export function WebAnalytics() {
         />
       )}
 
+      {outcomeMetric && (
+        <WebOutcomeAnswer
+          metric={outcomeMetric}
+          current={outcomeData?.result ?? null}
+          currentState={outcomeMetric.type === 'conversion'
+            ? 'unsupported'
+            : outcomeRead.error
+              ? 'unavailable'
+              : outcomeData
+                ? 'ready'
+                : 'loading'}
+          currentError={outcomeRead.error}
+          previous={outcomeComparisonData}
+          comparisonState={outcomeComparisonData
+            ? 'ready'
+            : outcomeComparison.error
+              ? 'unavailable'
+              : outcomeData
+                ? 'loading'
+                : 'unavailable'}
+          range={range}
+          env={env}
+          onRetry={outcomeRead.reload}
+        />
+      )}
+
       <KpiStrip items={[
         { label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved actors' },
         { label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'actor + session ID' },
@@ -348,9 +410,13 @@ export function WebAnalytics() {
         </div>
         {dimension === 'conversion' ? (
           <div className="border-y border-dashed px-4 py-7 text-center">
-            <div className="text-lg font-semibold">Choose a conversion to measure</div>
-            <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">The current canonical web response does not include a conversion outcome, so Poolstatis will not display a zero.</p>
-            <Button asChild variant="outline" className="mt-4 h-11"><Link to="/registry">Review outcomes</Link></Button>
+            <div className="text-lg font-semibold">{outcomeMetric ? outcomeMetric.name : 'Choose a conversion to measure'}</div>
+            <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
+              {outcomeMetric
+                ? `The registered ${outcomeMetric.key} outcome is measured above for this exact period; this tab does not reinterpret traffic as conversion.`
+                : 'No active non-page-view metric is mapped to surface:web, so Poolstatis will not display a zero.'}
+            </p>
+            <Button asChild variant="outline" className="mt-4 h-11"><Link to={outcomeMetric ? '/analyze' : '/registry'}>{outcomeMetric ? 'Analyze outcome' : 'Review outcomes'}</Link></Button>
           </div>
         ) : !breakdownRequested ? (
           <div className="flex flex-col items-start gap-3 border-y border-dashed px-4 py-7">
@@ -530,15 +596,123 @@ function WebHealthAnswer({ current, previous, comparisonState, range, trust, tru
   );
 }
 
+function WebOutcomeAnswer({ metric, current, currentState, currentError, previous, comparisonState, range, env, onRetry }: {
+  metric: Metric;
+  current: TrendQueryResult | null;
+  currentState: 'loading' | 'ready' | 'unavailable' | 'unsupported';
+  currentError: string | null;
+  previous: TrendQueryResult | null;
+  comparisonState: 'loading' | 'ready' | 'unavailable';
+  range: AnalyticsRange;
+  env: string;
+  onRetry: () => void;
+}) {
+  if (currentState === 'loading') {
+    return <AnswerCanvas><div className="p-4 sm:p-5"><Loading what={`Measuring ${metric.name}…`} /></div></AnswerCanvas>;
+  }
+  if (currentState === 'unsupported') {
+    return (
+      <AnswerCanvas>
+        <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:p-5">
+          <div>
+            <h2 className="text-lg font-semibold">Web outcome</h2>
+            <p className="mt-2 text-lg font-semibold">{metric.name} is registered, but not reproduced here</p>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              <code>{metric.key}</code> is a conversion definition. The typed trend query intentionally rejects conversion metrics, so this screen will not manufacture a rate or zero; query the registered funnel endpoints in Analyze.
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">{metric.purpose} · {env}</p>
+          </div>
+          <Button asChild variant="outline"><Link to="/analyze">Open Analyze</Link></Button>
+        </div>
+      </AnswerCanvas>
+    );
+  }
+  if (currentState === 'unavailable' || !current) {
+    return (
+      <AnswerCanvas>
+        <div className="p-4 sm:p-5">
+          <h2 className="text-lg font-semibold">Web outcome</h2>
+          <p className="mt-2 text-sm text-muted-foreground">{metric.name} could not be measured for this exact period. Traffic remains available and no zero is inferred.</p>
+          {currentError && <div className="mt-3"><ErrorNote>{currentError}</ErrorNote></div>}
+          <Button variant="outline" className="mt-3" onClick={onRetry}>Retry outcome</Button>
+        </div>
+      </AnswerCanvas>
+    );
+  }
+  const hasObservations = current.series.length > 0 && current.answer?.state !== 'empty';
+  const currentValue = webOutcomeValue(metric, current);
+  const previousValue = previous ? webOutcomeValue(metric, previous) : null;
+  const delta = currentValue !== null && previousValue !== null ? currentValue - previousValue : null;
+  const deltaRate = delta !== null && previousValue !== null && previousValue !== 0
+    ? delta / Math.abs(previousValue)
+    : null;
+  const days = Number.parseInt(range, 10);
+  const comparison = comparisonState === 'loading'
+    ? 'Previous exact-period comparison is loading.'
+    : comparisonState === 'unavailable' || delta === null
+      ? 'Previous exact-period comparison is unavailable.'
+      : delta === 0
+        ? `No change versus the previous ${days} days.`
+        : deltaRate === null
+          ? `${delta > 0 ? '+' : ''}${formatOutcomeNumber(delta)}; the previous period was zero, so percentage change is unavailable.`
+          : `${delta > 0 ? 'Up' : 'Down'} ${Math.abs(deltaRate * 100).toFixed(1)}% versus the previous ${days} days.`;
+  const trust = current.evidence?.state ?? 'unavailable';
+  const aggregation = current.evidence?.aggregation ?? 'Registered metric query; aggregation details unavailable.';
+  return (
+    <AnswerCanvas>
+      <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-5">
+        <div>
+          <h2 className="text-lg font-semibold">Web outcome</h2>
+          <p className="mt-2 text-xl font-semibold">
+            {hasObservations && currentValue !== null
+              ? `${metric.name}: ${current.answer?.primary_value?.formatted ?? formatOutcomeNumber(currentValue)}`
+              : `No ${metric.name} observations in this period`}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">{hasObservations ? comparison : 'The query returned no observations; this is not presented as a measured zero conversion.'}</p>
+          <p className="mt-2 text-xs text-muted-foreground"><code>{metric.key}</code> · {metric.purpose} · {env}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{aggregation}</p>
+        </div>
+        <Badge variant={trust === 'trusted' ? 'outline' : 'secondary'}>
+          {trust === 'trusted' ? 'Trusted query evidence' : `${trust} evidence`}
+        </Badge>
+      </div>
+    </AnswerCanvas>
+  );
+}
+
+function webOutcomeValue(metric: Metric, result: TrendQueryResult): number | null {
+  const primary = result.answer?.primary_value?.value;
+  if (typeof primary === 'number' && Number.isFinite(primary)) return primary;
+  if (metric.type === 'count') return result.series.reduce((sum, point) => sum + point.value, 0);
+  const source = metric.source as { agg?: string };
+  if (metric.type === 'value' && (source.agg ?? 'sum') === 'sum') {
+    return result.series.reduce((sum, point) => sum + point.value, 0);
+  }
+  return null;
+}
+
+function formatOutcomeNumber(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+}
+
 export function hasAcceptedCanonicalPageViews(pageViews: number) {
   return pageViews > 0;
 }
 
 export function hasWebOutcome(metrics: Metric[]) {
-  return metrics.some((metric) => metric.status === 'active'
+  return webOutcomeMetric(metrics) !== null;
+}
+
+export function webOutcomeMetric(metrics: Metric[]): Metric | null {
+  return metrics.filter((metric) => metric.status === 'active'
     && metric.key !== WEB_PAGE_VIEW_METRIC
     && metric.type !== 'state'
-    && metric.tags.includes('surface:web'));
+    && metric.tags.includes('surface:web'))
+    .sort((left, right) => {
+      const leftQueryable = left.type === 'conversion' ? 1 : 0;
+      const rightQueryable = right.type === 'conversion' ? 1 : 0;
+      return leftQueryable - rightQueryable || left.key.localeCompare(right.key);
+    })[0] ?? null;
 }
 
 function routeDefinitionsReady(properties: PropertyDefinition[]) {
