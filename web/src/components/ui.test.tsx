@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { ErrorNote, Meter, WarningNote } from './ui';
+import { ErrorNote, Meter, PageHeading, WarningNote } from './ui';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Table, TableBody, TableRow } from './ui/table';
@@ -24,6 +24,18 @@ describe('status notes', () => {
     expect(note).toHaveClass('text-warning');
     expect(note).not.toHaveTextContent('⚠');
     expect(container.querySelector('svg')).not.toBeNull();
+  });
+});
+
+describe('page headings', () => {
+  it('keeps methodology behind contextual help', () => {
+    render(<PageHeading title="Web" lead="Traffic and outcomes." help="Only registered, purpose-backed outcomes are shown." />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Web' })).toBeInTheDocument();
+    expect(screen.getByText('Traffic and outcomes.')).toBeInTheDocument();
+    const methodology = screen.getByText('Only registered, purpose-backed outcomes are shown.');
+    expect(methodology).not.toBeVisible();
+    fireEvent.click(screen.getByText('?'));
+    expect(methodology).toBeVisible();
   });
 });
 

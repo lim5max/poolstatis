@@ -359,7 +359,10 @@ describe('Web analytics partial availability', () => {
     expect(await screen.findByText(/Trusted measurement/)).toBeInTheDocument();
     expect(await screen.findByText('Signup completed: 12')).toBeInTheDocument();
     expect(await screen.findByText('Up 50.0% versus the previous 30 days.')).toBeInTheDocument();
-    expect(screen.getByText('count of accepted events')).toBeInTheDocument();
+    const outcomeEvidence = screen.getByText(/count of accepted events/);
+    expect(outcomeEvidence).not.toBeVisible();
+    fireEvent.click(screen.getByLabelText('About web outcome evidence'));
+    expect(outcomeEvidence).toBeVisible();
     expect(query.mock.calls.filter(([, input]) => input.metric === webOutcome.key)).toEqual([
       expect.arrayContaining([expect.objectContaining({ date_from: '-30d', date_to: null, env: 'prod' })]),
       expect.arrayContaining([expect.objectContaining({
@@ -461,7 +464,10 @@ describe('Web analytics partial availability', () => {
     expect(screen.getAllByText('37.5%')).toHaveLength(2);
     expect(screen.getByText('+12.5 pp versus previous exact period')).toBeInTheDocument();
     expect(screen.getByText('3 of 8 actors converted')).toBeInTheDocument();
-    expect(screen.getByText(/Exact UTC window · \[2026-07-01T00:00:00.000Z, 2026-07-31T00:00:00.000Z\)/)).toBeInTheDocument();
+    const conversionEvidence = screen.getByText(/Exact UTC window: \[2026-07-01T00:00:00.000Z, 2026-07-31T00:00:00.000Z\)/);
+    expect(conversionEvidence).not.toBeVisible();
+    fireEvent.click(screen.getByLabelText('About conversion evidence'));
+    expect(conversionEvidence).toBeVisible();
     expect(query).toHaveBeenCalledWith('y1blin-com', {
       kind: 'funnel',
       conversion_metric: 'web_signup_conversion',
@@ -753,10 +759,10 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('Visitors')).toBeInTheDocument();
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('Sources & UTM')).toBeInTheDocument();
-    expect(screen.getAllByText('Waiting for setup')).toHaveLength(4);
-    expect(screen.getAllByText('Requires an accepted canonical page view')).toHaveLength(2);
-    expect(screen.getByText('Requires trusted acquisition definitions')).toBeInTheDocument();
-    expect(screen.queryByText('—')).not.toBeInTheDocument();
+    expect(screen.getAllByText('—')).toHaveLength(4);
+    expect(screen.queryByText('Waiting for setup')).not.toBeInTheDocument();
+    const routeHelp = screen.getByText(/Use stable names such as/);
+    expect(routeHelp).not.toBeVisible();
     expect(screen.queryByText('Period')).not.toBeInTheDocument();
     const create = screen.getByRole('button', { name: 'Create web tracking plan' });
     expect(create).toBeDisabled();
@@ -796,7 +802,8 @@ describe('Web analytics partial availability', () => {
     render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('Add website analytics')).toBeInTheDocument();
-    expect(screen.getByText('Web setup order')).toBeInTheDocument();
+    const setupOrder = screen.getByText('Setup order');
+    expect(setupOrder.closest('details')).not.toHaveAttribute('open');
     expect(screen.getByText('1. Canonical page views')).toBeInTheDocument();
     expect(screen.queryByText('Acquisition / UTM')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run UTM report' })).not.toBeInTheDocument();

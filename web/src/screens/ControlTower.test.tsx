@@ -24,9 +24,10 @@ describe('route-ready control tower automation screen', () => {
     }} busy={false} error={null} reviewAccess="allowed" onReload={vi.fn()} onReview={onReview} onSetMonitorStatus={vi.fn()}
       onSetScheduleStatus={vi.fn()} onCreateDestination={vi.fn()} onCreateMonitor={vi.fn()} onCreateSchedule={vi.fn()} />);
     expect(screen.getByRole('heading', { name: 'Control tower' })).toBeInTheDocument();
-    expect(screen.getByText(/External providers are not configured/i)).toBeInTheDocument();
+    expect(screen.getByText(/External delivery is not configured/i)).toBeInTheDocument();
     expect(screen.getByText('Activation drop')).toBeInTheDocument();
-    expect(screen.getByText(/Automation froze a proposal/i)).toBeInTheDocument();
+    expect(screen.getByText('Proposal ready for review')).toBeInTheDocument();
+    expect(screen.getByText(/Frozen fingerprint/)).not.toBeVisible();
     fireEvent.change(screen.getByLabelText('Review rationale'), { target: { value: 'Reviewed frozen evidence and approved the existing mutation handoff.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Approve proposal' }));
     expect(onReview).toHaveBeenCalledWith('p1', 'approve', 'a'.repeat(64), 'Reviewed frozen evidence and approved the existing mutation handoff.');

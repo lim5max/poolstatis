@@ -139,8 +139,11 @@ describe('People list', () => {
   it('consolidates missing identity, property and outcome capabilities into one data-health block', async () => {
     render(<MemoryRouter><Users /></MemoryRouter>);
 
-    expect(await screen.findByRole('heading', { name: 'People data health' })).toBeInTheDocument();
-    expect(screen.getAllByRole('heading', { name: 'People data health' })).toHaveLength(1);
+    const limits = await screen.findByText('Data limits');
+    const details = limits.closest('details');
+    expect(details).not.toHaveAttribute('open');
+    fireEvent.click(limits.closest('summary')!);
+    expect(details).toHaveAttribute('open');
     expect(screen.getByText(/Identity enrichment is unavailable/)).toBeInTheDocument();
     expect(screen.getByText(/Canonical actor properties are unavailable/)).toBeInTheDocument();
     expect(screen.getByText(/Activation, stall, risk and segment-change ranking are unavailable/)).toBeInTheDocument();

@@ -336,7 +336,10 @@ describe('Usage month range', () => {
     render(<MemoryRouter><Usage /></MemoryRouter>);
 
     expect(await screen.findByText('Entitlement unavailable')).toBeInTheDocument();
-    expect(screen.getByText('Usage entitlement evidence is unavailable; enforcement state is unknown.')).toBeInTheDocument();
+    const enforcementHelp = screen.getByText('Usage entitlement evidence is unavailable, so enforcement state is unknown.');
+    expect(enforcementHelp).not.toBeVisible();
+    fireEvent.click(screen.getByLabelText('About usage enforcement'));
+    expect(enforcementHelp).toBeVisible();
     expect(screen.getByText('Usage response could not be verified.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry usage' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
@@ -365,7 +368,10 @@ describe('Usage month range', () => {
 
     render(<MemoryRouter><Usage /></MemoryRouter>);
 
-    expect(await screen.findByText('Plan changes and delivered usage alerts are unavailable in Core.')).toBeInTheDocument();
+    const usageHelp = await screen.findByText('Usage counts accepted events from the immutable UTC ledger. Forecasts are estimates; plan changes and delivered alerts remain outside Core.');
+    expect(usageHelp).not.toBeVisible();
+    fireEvent.click(screen.getByLabelText('About Usage'));
+    expect(usageHelp).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Review plan' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Set alert' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Configure cap' })).not.toBeInTheDocument();

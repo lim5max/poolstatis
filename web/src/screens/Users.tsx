@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { EmptyState, ErrorNote, Loading, fmtNum } from '@/components/ui';
+import { EmptyState, ErrorNote, Loading, PageHeading, fmtNum } from '@/components/ui';
 import { AnswerCanvas } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
 import {
@@ -118,10 +118,11 @@ export function Users() {
 
   return (
     <div className="space-y-5">
-      <header>
-        <h1 className="serif text-3xl sm:text-4xl">People</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Bounded actor aggregates resolved from immutable events and explicit identity links.</p>
-      </header>
+      <PageHeading
+        title="People"
+        lead="Find observed people and activity."
+        help="Rows are bounded actor aggregates from immutable events and explicit identity links. Poolstatis does not infer profiles or risk scores without supporting data."
+      />
 
       <AnswerCanvas>
         <div className="border-b px-4 py-3 sm:px-5"><h2 className="text-sm font-semibold">Find people</h2></div>
@@ -335,15 +336,12 @@ function OrderEvidence({ reason, rankReason, window }: {
 }
 
 function PeopleDataHealth({ capabilities }: { capabilities: ActorsResult['meta']['capabilities'] }) {
-  return <AnswerCanvas>
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3 sm:px-5">
-      <div>
-        <h2 className="text-sm font-semibold">People data health</h2>
-        <p className="mt-1 text-xs text-muted-foreground">One place for capability limits; rows stay focused on observed evidence.</p>
-      </div>
+  return <details className="rounded-panel border bg-card">
+    <DisclosureSummary className="flex min-h-14 cursor-pointer items-center justify-between gap-3 px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
+      <span className="font-semibold">Data limits</span>
       <Badge variant="secondary">Observed activity only</Badge>
-    </div>
-    <ul className="grid gap-3 p-4 text-sm sm:p-5 lg:grid-cols-3">
+    </DisclosureSummary>
+    <ul className="grid gap-3 border-t p-4 text-sm sm:p-5 lg:grid-cols-3">
       <li className="rounded-control border p-3">
         <span className="font-medium">Identity enrichment is unavailable.</span>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{capabilities.identity_profile.reason}</p>
@@ -369,7 +367,7 @@ function PeopleDataHealth({ capabilities }: { capabilities: ActorsResult['meta']
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Canonical Browser session evidence is not available for this project.</p>
       </li>}
     </ul>
-  </AnswerCanvas>;
+  </details>;
 }
 
 export function IdentityBadge({ status }: { status: ActorIdentityStatus }) {

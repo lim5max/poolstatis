@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Confirm, EmptyState, ErrorNote, Loading, Panel, fmtRelative } from '@/components/ui';
+import { Confirm, EmptyState, ErrorNote, Loading, PageHeading, Panel, fmtRelative } from '@/components/ui';
 import { DisclosureSummary } from '@/components/disclosure';
 import type { SavedAnswer } from '../api/types';
 import { useAsync, useStore } from '../store';
@@ -71,12 +71,11 @@ export function SavedAnswers() {
 
   return (
     <div className="space-y-5">
-      <header className="max-w-3xl">
-        <h1 className="serif text-3xl sm:text-4xl">Saved answers</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Reopen validated answers and distinguish workspace-approved evidence from personal working views.
-        </p>
-      </header>
+      <PageHeading
+        title="Saved answers"
+        lead="Validated answers, ready to reopen."
+        help="Official answers are workspace-approved. Other saved answers remain personal working views with their original evidence snapshot."
+      />
 
       <div className="flex flex-wrap gap-2" aria-label="Saved answer filters">
         {([

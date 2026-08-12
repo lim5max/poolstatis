@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, TableScroll, WarningNote } from '../components/ui';
+import { EmptyState, ErrorNote, HelpDisclosure, Loading, PageHeading, Panel, RecoverableError, TableScroll, WarningNote } from '../components/ui';
 import { useAsync, useStore } from '../store';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -288,7 +288,10 @@ function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure, o
     ? Math.round((usage.reconciliation.attributed_quantity / usage.reconciliation.metered_quantity) * 1_000) / 10
     : null;
   return (
-    <Panel title={<h2>Current cycle</h2>} right={<span className="font-mono text-sm text-muted-foreground">{usage.cycle.from.slice(0, 7)} UTC</span>}>
+    <Panel title={<div className="flex items-center gap-2"><h2>Current cycle</h2><HelpDisclosure ariaLabel="About usage enforcement" label={capUnavailable
+      ? 'Usage entitlement evidence is unavailable, so enforcement state is unknown.'
+      : usage.cap.consequence_at_100_percent ?? 'Enforcement is off; accepted events continue to be metered.'}
+    /></div>} right={<span className="font-mono text-sm text-muted-foreground">{usage.cycle.from.slice(0, 7)} UTC</span>}>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="text-sm text-muted-foreground">{planName ? `${planName} plan` : 'Workspace entitlement'} · {usage.meter}</div>
@@ -318,13 +321,7 @@ function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure, o
           note={capUnavailable ? 'No trustworthy reconciliation' : attributedPercent === null ? 'Nothing to reconcile' : `${whole(usage.reconciliation.attributed_quantity)} of ${whole(usage.reconciliation.metered_quantity)}`}
         />
       </dl>
-      <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
-        <p className="max-w-xl text-sm text-muted-foreground">
-          {capUnavailable
-            ? 'Usage entitlement evidence is unavailable; enforcement state is unknown.'
-            : usage.cap.consequence_at_100_percent ?? 'Enforcement is off; accepted events continue to be metered.'}
-        </p>
-        <div className="flex flex-wrap gap-2">
+      <div className="mt-5 flex flex-wrap gap-2 border-t pt-4">
           {capUnavailable ? (
             <Button className="h-11" onClick={onRetry}>Retry usage</Button>
           ) : mode?.capabilities.configure_usage_entitlement === 'available' && !capped && (
@@ -338,7 +335,6 @@ function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure, o
           {!capUnavailable && mode?.capabilities.configure_usage_entitlement === 'available' && capped && (
             <Button variant="outline" className="h-11" onClick={onConfigure}>Configure cap</Button>
           )}
-        </div>
       </div>
       <details className="mt-4 border-t pt-1">
         <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Forecast evidence</DisclosureSummary>
@@ -626,10 +622,11 @@ export function Usage() {
     || usage?.cap.state === 'unavailable';
   return (
     <div className="space-y-4">
-      <header>
-        <h1 className="serif text-3xl outline-none sm:text-4xl">Usage</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Accepted events, forecast, and limits.</p>
-      </header>
+      <PageHeading
+        title="Usage"
+        lead="Usage, forecast, and limits."
+        help="Usage counts accepted events from the immutable UTC ledger. Forecasts are estimates; plan changes and delivered alerts remain outside Core."
+      />
       {result.loading || (!usage && !result.error) ? <Loading what="Loading usage ledger…" /> : result.error ? <RecoverableError onRetry={result.reload}>{result.error}</RecoverableError> : usage && (
         <>
           <UsageHero
@@ -646,9 +643,6 @@ export function Usage() {
           {usageUnavailable
             ? <RecoverableError onRetry={result.reload}>Usage response could not be verified.</RecoverableError>
             : <>
-              {mode.data?.deployment.mode === 'hosted' && (
-                <p className="text-sm text-muted-foreground">Plan changes and delivered usage alerts are unavailable in Core.</p>
-              )}
               {entitlementAvailable && entitlement.error && <RecoverableError onRetry={entitlement.reload}>{entitlement.error}</RecoverableError>}
               {usage.attention.map((item) => <WarningNote key={item.id}>{item.title}: {item.impact}</WarningNote>)}
               <div aria-labelledby="usage-contributors-title"><CurrentContributors usage={usage} /></div>
