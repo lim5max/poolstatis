@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
@@ -15,6 +15,27 @@ Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
   configurable: true,
   value: vi.fn(),
 });
+
+const activationMetric = {
+  id: 'metric-activation',
+  key: 'activation_completed',
+  name: 'Activation completed',
+  purpose: 'Identifies the first meaningful product outcome completed by an actor.',
+  category: 'activation',
+  tags: [],
+  type: 'unique_actors',
+  source: { event: 'activation.completed' },
+  status: 'active',
+  owner: null,
+  deprecation_reason: null,
+  deprecated_at: null,
+} as const;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 describe('People list', () => {
   beforeEach(() => {
@@ -145,20 +166,7 @@ describe('People list', () => {
   });
 
   it('requests and explains a recently activated queue from an active native activation metric', async () => {
-    const metrics = vi.fn().mockResolvedValue([{
-      id: 'metric-activation',
-      key: 'activation_completed',
-      name: 'Activation completed',
-      purpose: 'Identifies the first meaningful product outcome completed by an actor.',
-      category: 'activation',
-      tags: [],
-      type: 'unique_actors',
-      source: { event: 'activation.completed' },
-      status: 'active',
-      owner: null,
-      deprecation_reason: null,
-      deprecated_at: null,
-    }]);
+    const metrics = vi.fn().mockResolvedValue([activationMetric]);
     mockedStore.mockReturnValue({
       project: 'alpha', env: 'prod',
       client: { metrics, operationalQuery },
@@ -245,6 +253,83 @@ describe('People list', () => {
     expect(await screen.findByText('Recently activated in this window')).toBeInTheDocument();
     expect(screen.getByText('Identifies the first meaningful product outcome completed by an actor.')).toBeInTheDocument();
     expect(screen.getByText(/Stall, risk and segment-change ranking are unavailable/)).toBeInTheDocument();
+  });
+
+  it('drops a selected queue before querying a new project or environment', async () => {
+    const alphaClient = {
+      metrics: vi.fn().mockResolvedValue([activationMetric]),
+      operationalQuery,
+    };
+    mockedStore.mockReturnValue({ project: 'alpha', env: 'prod', client: alphaClient } as never);
+    const view = render(<MemoryRouter><Users /></MemoryRouter>);
+    await screen.findByText('anon_7');
+    fireEvent.click(screen.getAllByRole('combobox')[1]!);
+    fireEvent.click(await screen.findByRole('option', { name: 'Recently activated · Activation completed' }));
+    await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      order: 'interesting_desc',
+      interesting: { reason: 'recently_activated', metric: 'activation_completed' },
+    })));
+
+    operationalQuery.mockClear();
+    const betaRegistry = deferred<never[]>();
+    const betaClient = {
+      metrics: vi.fn(() => betaRegistry.promise),
+      operationalQuery,
+    };
+    mockedStore.mockReturnValue({ project: 'beta', env: 'dev', client: betaClient } as never);
+    view.rerender(<MemoryRouter><Users /></MemoryRouter>);
+
+    await waitFor(() => expect(operationalQuery).toHaveBeenCalledWith('beta', expect.objectContaining({
+      env: 'dev',
+      order: 'last_seen_desc',
+    })));
+    expect(operationalQuery.mock.calls.filter(([project]) => project === 'beta'))
+      .not.toEqual(expect.arrayContaining([
+        expect.arrayContaining([
+          'beta',
+          expect.objectContaining({ interesting: expect.anything() }),
+        ]),
+      ]));
+    expect(screen.getByRole('combobox', { name: 'Queue' })).toHaveTextContent('All observed people');
+    await act(async () => { betaRegistry.resolve([]); });
+  });
+
+  it('reconciles registry replacement and ignores a stale async metric response', async () => {
+    const initialClient = {
+      metrics: vi.fn().mockResolvedValue([activationMetric]),
+      operationalQuery,
+    };
+    mockedStore.mockReturnValue({ project: 'alpha', env: 'prod', client: initialClient } as never);
+    const view = render(<MemoryRouter><Users /></MemoryRouter>);
+    await screen.findByText('anon_7');
+    fireEvent.click(screen.getAllByRole('combobox')[1]!);
+    fireEvent.click(await screen.findByRole('option', { name: 'Recently activated · Activation completed' }));
+    await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      order: 'interesting_desc',
+    })));
+
+    const staleRegistry = deferred<Array<typeof activationMetric>>();
+    const staleClient = {
+      metrics: vi.fn(() => staleRegistry.promise),
+      operationalQuery,
+    };
+    mockedStore.mockReturnValue({ project: 'alpha', env: 'prod', client: staleClient } as never);
+    view.rerender(<MemoryRouter><Users /></MemoryRouter>);
+
+    const currentClient = {
+      metrics: vi.fn().mockResolvedValue([]),
+      operationalQuery,
+    };
+    mockedStore.mockReturnValue({ project: 'alpha', env: 'prod', client: currentClient } as never);
+    view.rerender(<MemoryRouter><Users /></MemoryRouter>);
+    await waitFor(() => expect(currentClient.metrics).toHaveBeenCalled());
+    await act(async () => { staleRegistry.resolve([activationMetric]); });
+
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Queue' }))
+      .toHaveTextContent('All observed people'));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Queue' }));
+    expect(screen.queryByRole('option', { name: 'Recently activated · Activation completed' }))
+      .not.toBeInTheDocument();
   });
 
   it('never renders rows from the previous project while the next scope is pending or errors', async () => {

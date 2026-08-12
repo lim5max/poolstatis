@@ -23,6 +23,13 @@ import { useAsync, useStore } from '../store';
 
 const PAGE_LIMIT = 50;
 
+interface InterestingMetricSelection {
+  client: ReturnType<typeof useStore>['client'];
+  project: string | null;
+  env: string;
+  metric: string;
+}
+
 export function Users() {
   const { client, project, env } = useStore();
   const [range, setRange] = useState<AnalyticsRange>('30d');
@@ -30,14 +37,21 @@ export function Users() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [activityMetric, setActivityMetric] = useState('');
-  const [interestingMetric, setInterestingMetric] = useState('');
+  const [interestingSelection, setInterestingSelection] = useState<InterestingMetricSelection | null>(null);
   const [cursorStack, setCursorStack] = useState<Array<string | null>>([null]);
   const page = cursorStack.length - 1;
   const cursor = cursorStack[page] ?? undefined;
-  const metrics = useAsync(
-    () => client!.metrics(project!, { status: 'active' }),
-    [project, env],
-  );
+  const registryScope = useMemo(() => ({ client, project, env }), [client, project, env]);
+  const metrics = useAsync<{ scope: typeof registryScope; result: Metric[] }>(async () => ({
+    scope: registryScope,
+    result: await client!.metrics(project!, { status: 'active' }),
+  }), [registryScope]);
+  const interestingMetric = interestingSelection
+    && interestingSelection.client === client
+    && interestingSelection.project === project
+    && interestingSelection.env === env
+    ? interestingSelection.metric
+    : '';
   const queryOrder: ActorOrder = interestingMetric ? 'interesting_desc' : order;
   const actorScopeKey = JSON.stringify([
     project, env, range, queryOrder, search, activityMetric, interestingMetric, cursor ?? null,
@@ -65,14 +79,34 @@ export function Users() {
     setCursorStack([null]);
   }, [project, env, range, queryOrder, search, activityMetric, interestingMetric]);
 
+  const registryMetrics = !metrics.loading
+    && !metrics.error
+    && metrics.data?.scope === registryScope
+    ? metrics.data.result
+    : null;
   const eventMetrics = useMemo(
-    () => (metrics.data ?? []).filter(isNativeEventMetric),
-    [metrics.data],
+    () => (registryMetrics ?? []).filter(isNativeEventMetric),
+    [registryMetrics],
   );
   const activationMetrics = useMemo(
     () => eventMetrics.filter((metric) => metric.category === 'activation'),
     [eventMetrics],
   );
+
+  useEffect(() => {
+    if (!interestingSelection) return;
+    const selectionMatchesScope = interestingSelection.client === client
+      && interestingSelection.project === project
+      && interestingSelection.env === env;
+    if (!selectionMatchesScope) {
+      setInterestingSelection(null);
+      return;
+    }
+    if (registryMetrics
+      && !activationMetrics.some((metric) => metric.key === interestingSelection.metric)) {
+      setInterestingSelection(null);
+    }
+  }, [activationMetrics, client, env, interestingSelection, project, registryMetrics]);
   const actorData = !actors.loading && !actors.error && actors.data?.scope === actorScope
     ? actors.data.result
     : null;
@@ -123,7 +157,7 @@ export function Users() {
               value={interestingMetric || '__all'}
               onValueChange={(value) => {
                 const metric = value === '__all' ? '' : value;
-                setInterestingMetric(metric);
+                setInterestingSelection(metric ? { client, project, env, metric } : null);
                 if (metric) setActivityMetric('');
               }}
             >
