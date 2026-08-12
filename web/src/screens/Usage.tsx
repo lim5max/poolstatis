@@ -273,47 +273,48 @@ function UsageHero({ usage, planName, mode, onReviewContributors }: {
       : capped
         ? 'No in-cycle breach projected'
         : 'Volume forecast, not exhaustion';
+  const attributedPercent = usage.reconciliation.metered_quantity > 0
+    ? Math.round((usage.reconciliation.attributed_quantity / usage.reconciliation.metered_quantity) * 1_000) / 10
+    : null;
   return (
     <Panel title={<h2>Current cycle</h2>} right={<span className="font-mono text-sm text-muted-foreground">{usage.cycle.from.slice(0, 7)} UTC</span>}>
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="text-sm text-muted-foreground">{planName ? `${planName} plan` : 'Workspace entitlement'} · {usage.meter}</div>
-          <h2 className="mt-2 text-xl font-semibold">{usage.answer.headline}</h2>
-          <div className="mt-2 flex flex-wrap items-end gap-x-3 gap-y-1">
-            <div className="font-mono text-4xl font-semibold tabular-nums">{usage.answer.primary_value?.formatted ?? 'Unavailable'}</div>
-            <div className="pb-1 text-sm text-muted-foreground">of {capped ? whole(usage.cap.value!) : 'no enforced maximum'}</div>
-          </div>
-          <div className="mt-4" {...(capped ? { role: 'img', 'aria-label': `${Math.round(progress! * 100)} percent of the configured hard limit used` } : {})}>
-            {progress !== null && <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all motion-reduce:transition-none" style={{ width: `${progress * 100}%` }} /></div>}
-            <div className="mt-2 text-sm font-medium">{status}</div>
-            {!capped && <p className="mt-1 text-sm text-muted-foreground">This is not shown as unlimited and no full progress state is implied.</p>}
+          <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <div className="font-mono text-4xl font-semibold tabular-nums" data-testid="usage-current-quantity">{usage.answer.primary_value?.formatted ?? 'Unavailable'}</div>
+            <div className="text-sm text-muted-foreground">accepted events</div>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-1">
-          <UsageFact label="Current pace" value={usage.pace.events_per_day_7d === null ? 'Unavailable' : `${whole(Math.round(usage.pace.events_per_day_7d))} / day`} note="7-day moving average" />
-          <UsageFact label="Projected cycle end" value={usage.pace.projected_cycle_end === null ? 'Unavailable' : whole(Math.round(usage.pace.projected_cycle_end))} note={forecastNote} />
+        <div className="sm:text-right">
+          <div className="text-sm font-medium">{status}</div>
+          <div className="mt-1 text-sm text-muted-foreground">
+            {capped ? `${whole(usage.cap.value!)} event limit` : 'Metered only · no maximum implied'}
+          </div>
         </div>
       </div>
-      <details className="mt-4 rounded-control border bg-muted/20">
-        <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Forecast evidence</DisclosureSummary>
-        <div className="space-y-1 border-t px-3 py-3 text-sm text-muted-foreground">
-          <p>As of {formatForecastDate(usage.evidence.as_of) ?? 'Unavailable'} · {usage.pace.observed_days} of {usage.evidence.sample?.eligible ?? 7} calendar days with accepted events</p>
-          <p>{usage.evidence.aggregation ?? 'Accepted events are measured from the immutable usage ledger in UTC.'}</p>
-          {usage.evidence.warnings.map((warning) => <p key={warning.code}>{warning.message}</p>)}
-          {usage.evidence.unavailable_reasons.map((reason) => <p key={reason.code}>{reason.message}</p>)}
-        </div>
-      </details>
+      <div className="mt-4" {...(capped ? { role: 'img', 'aria-label': `${Math.round(progress! * 100)} percent of the configured hard limit used` } : {})}>
+        {progress !== null && <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all motion-reduce:transition-none" style={{ width: `${progress * 100}%` }} /></div>}
+      </div>
+      <dl className="mt-5 grid divide-y rounded-control border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <UsageFact label="Current pace" value={usage.pace.events_per_day_7d === null ? 'Unavailable' : `${whole(Math.round(usage.pace.events_per_day_7d))} / day`} note="7-day moving average" />
+        <UsageFact label="Cycle forecast" value={usage.pace.projected_cycle_end === null ? 'Unavailable' : whole(Math.round(usage.pace.projected_cycle_end))} note={forecastNote} />
+        <UsageFact
+          label="Attributed"
+          value={attributedPercent === null ? 'No events' : `${attributedPercent}%`}
+          note={attributedPercent === null ? 'Nothing to reconcile' : `${whole(usage.reconciliation.attributed_quantity)} of ${whole(usage.reconciliation.metered_quantity)}`}
+        />
+      </dl>
       <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
-        <p className="max-w-2xl text-sm text-muted-foreground">{usage.cap.consequence_at_100_percent ?? 'Accepted events continue to be metered; configure an entitlement server-side if enforcement is required.'}</p>
+        <p className="max-w-xl text-sm text-muted-foreground">
+          {usage.cap.consequence_at_100_percent ?? 'Enforcement is off; accepted events continue to be metered.'}
+        </p>
         <div className="flex flex-wrap gap-2">
           {mode?.deployment.mode === 'self_host' && !capped && (
             <Button asChild className="h-11"><Link to={mode.primary_action.href}>Configure cap</Link></Button>
           )}
           {mode?.deployment.mode === 'hosted' && (
-            <>
-              <Button asChild className="h-11"><Link to="/profile">Review plan</Link></Button>
-              <Button asChild variant="outline" className="h-11"><Link to="/automation">Set alert</Link></Button>
-            </>
+            <Button asChild className="h-11"><Link to="/profile">Review plan</Link></Button>
           )}
           <Button
             className="h-11 shrink-0"
@@ -325,12 +326,21 @@ function UsageHero({ usage, planName, mode, onReviewContributors }: {
           )}
         </div>
       </div>
+      <details className="mt-4 border-t pt-1">
+        <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Forecast evidence</DisclosureSummary>
+        <div className="space-y-1 px-3 pb-3 text-sm text-muted-foreground">
+          <p>As of {formatForecastDate(usage.evidence.as_of) ?? 'Unavailable'} · {usage.pace.observed_days} of {usage.evidence.sample?.eligible ?? 7} calendar days with accepted events</p>
+          <p>{usage.evidence.aggregation ?? 'Accepted events are measured from the immutable usage ledger in UTC.'}</p>
+          {usage.evidence.warnings.map((warning) => <p key={warning.code}>{warning.message}</p>)}
+          {usage.evidence.unavailable_reasons.map((reason) => <p key={reason.code}>{reason.message}</p>)}
+        </div>
+      </details>
     </Panel>
   );
 }
 
 function UsageFact({ label, value, note }: { label: string; value: string; note: string }) {
-  return <div className="rounded-control border bg-muted/20 p-3"><div className="text-sm text-muted-foreground">{label}</div><div className="mt-1 font-mono text-xl tabular-nums">{value}</div><div className="mt-1 text-sm text-muted-foreground">{note}</div></div>;
+  return <div className="min-w-0 p-3.5"><dt className="text-sm text-muted-foreground">{label}</dt><dd className="mt-1 font-mono text-xl tabular-nums">{value}</dd><div className="mt-1 truncate text-xs text-muted-foreground" title={note}>{note}</div></div>;
 }
 
 function CurrentContributors({ usage }: { usage: UsageControlResult }) {
@@ -346,15 +356,25 @@ function CurrentContributors({ usage }: { usage: UsageControlResult }) {
       {reconciliationMessage && <div className="mb-3"><WarningNote>{reconciliationMessage}</WarningNote></div>}
       {usage.contributors.length === 0 ? <EmptyState headline={`No stored events in ${usage.cycle.from.slice(0, 7)}`} lead="Accepted events will appear here after durable ingest." /> : (
         <TableScroll testId="usage-breakdown-scroll"><Table>
-          <TableHeader><TableRow><TableHead>Project</TableHead><TableHead>Environment</TableHead><TableHead className="text-right">Accepted</TableHead><TableHead className="text-right">Share</TableHead><TableHead className="text-right">7-day change</TableHead><TableHead>Last ingest</TableHead></TableRow></TableHeader>
+          <TableHeader><TableRow><TableHead>Project</TableHead><TableHead className="hidden md:table-cell">Environment</TableHead><TableHead className="text-right">Accepted</TableHead><TableHead className="text-right">Share</TableHead><TableHead className="hidden text-right md:table-cell">7-day change</TableHead><TableHead className="hidden md:table-cell">Last ingest</TableHead></TableRow></TableHeader>
           <TableBody>{usage.contributors.map((project) => (
             <TableRow key={`${project.project_slug}:${project.environment}`}>
-              <TableCell><div className="font-medium">{project.project_name}</div><code className="text-sm text-muted-foreground">{project.project_slug}</code></TableCell>
-              <TableCell><code className="text-sm">{project.environment}</code></TableCell>
-              <TableCell className="text-right font-mono tabular-nums">{whole(project.accepted_events)}</TableCell>
+              <TableCell>
+                <div className="font-medium">{project.project_name}</div>
+                <code className="block text-sm text-muted-foreground">{project.project_slug}</code>
+                <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground md:hidden">
+                  <code>{project.environment}</code>
+                  <span>{project.last_ingest_at ? fmtUsageRelative(project.last_ingest_at) : 'Unavailable'}</span>
+                </div>
+              </TableCell>
+              <TableCell className="hidden md:table-cell"><code className="text-sm">{project.environment}</code></TableCell>
+              <TableCell className="text-right font-mono tabular-nums">
+                <div>{whole(project.accepted_events)}</div>
+                <div className="mt-1 text-xs text-muted-foreground md:hidden">{project.change_7d === null ? '7d unavailable' : `${project.change_7d >= 0 ? '+' : ''}${Math.round(project.change_7d * 1_000) / 10}% 7d`}</div>
+              </TableCell>
               <TableCell className="text-right font-mono tabular-nums">{project.share === null ? 'Unavailable' : `${Math.round(project.share * 1_000) / 10}%`}</TableCell>
-              <TableCell className="text-right font-mono tabular-nums">{project.change_7d === null ? 'Unavailable' : `${project.change_7d >= 0 ? '+' : ''}${Math.round(project.change_7d * 1_000) / 10}%`}</TableCell>
-              <TableCell>{project.last_ingest_at ? fmtUsageRelative(project.last_ingest_at) : 'Unavailable'}</TableCell>
+              <TableCell className="hidden text-right font-mono tabular-nums md:table-cell">{project.change_7d === null ? 'Unavailable' : `${project.change_7d >= 0 ? '+' : ''}${Math.round(project.change_7d * 1_000) / 10}%`}</TableCell>
+              <TableCell className="hidden md:table-cell">{project.last_ingest_at ? fmtUsageRelative(project.last_ingest_at) : 'Unavailable'}</TableCell>
             </TableRow>
           ))}</TableBody>
         </Table></TableScroll>
@@ -381,9 +401,22 @@ const THRESHOLD_MEANING = {
 } as const;
 
 function UsageThresholds({ usage }: { usage: UsageControlResult }) {
+  const capped = usage.cap.state === 'finite' && usage.cap.value !== null;
+  const reached = usage.threshold_forecasts.filter((threshold) => threshold.state === 'reached').length;
+  const projected = usage.threshold_forecasts.filter((threshold) => threshold.state === 'projected').length;
+  const summary = !capped
+    ? 'No cap · inactive'
+    : reached > 0 || projected > 0
+      ? `${reached} reached · ${projected} projected`
+      : 'No threshold projected';
   return (
-    <Panel title={<h2>Thresholds and consequence</h2>}>
-      <div className="divide-y rounded-panel border">
+    <details className="rounded-panel border bg-card">
+      <DisclosureSummary className="flex min-h-14 cursor-pointer items-center justify-between gap-4 px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
+        <span className="mr-auto font-semibold">Threshold rules</span>
+        <span className="text-right text-muted-foreground">{summary}</span>
+      </DisclosureSummary>
+      <div className="border-t p-4 sm:p-5">
+        <div className="divide-y rounded-panel border">
         {usage.threshold_forecasts.map((threshold) => (
           <div key={threshold.percent} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
             <div>
@@ -402,9 +435,10 @@ function UsageThresholds({ usage }: { usage: UsageControlResult }) {
             </span>
           </div>
         ))}
+        </div>
+        <p className="mt-4 text-sm text-muted-foreground">{usage.cap.consequence_at_100_percent ?? 'Hard-limit consequence is not configured.'}</p>
       </div>
-      <p className="mt-4 text-sm text-muted-foreground">{usage.cap.consequence_at_100_percent ?? 'Hard-limit consequence is not configured.'}</p>
-    </Panel>
+    </details>
   );
 }
 
@@ -443,8 +477,8 @@ export function Usage() {
   return (
     <div className="space-y-4">
       <header>
-        <h1 className="serif text-3xl sm:text-4xl">Usage</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Plan, current pace, forecast, contributors, and enforced consequences.</p>
+        <h1 className="serif text-3xl outline-none sm:text-4xl">Usage</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Accepted events, forecast, and limits.</p>
       </header>
       {result.loading || (!usage && !result.error) ? <Loading what="Loading usage ledger…" /> : result.error ? <RecoverableError onRetry={result.reload}>{result.error}</RecoverableError> : usage && (
         <>

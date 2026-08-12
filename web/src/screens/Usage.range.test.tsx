@@ -109,7 +109,8 @@ describe('Usage month range', () => {
   it('renders pace, forecast and contributors from the server-owned usage contract', async () => {
     render(<Usage />);
 
-    expect(await screen.findByText('620 accepted events this UTC cycle')).toBeInTheDocument();
+    expect(await screen.findByTestId('usage-current-quantity')).toHaveTextContent('620');
+    expect(screen.getByText('accepted events')).toBeInTheDocument();
     expect(screen.getByText('62 / day')).toBeInTheDocument();
     expect(screen.getByText('7-day moving average')).toBeInTheDocument();
     expect(screen.getByText(/As of Aug 10, 2026/)).toBeInTheDocument();
@@ -185,7 +186,7 @@ describe('Usage month range', () => {
 
     expect(await screen.findByText('No hard cap configured')).toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
-    expect(screen.getByText(/not shown as unlimited/)).toBeInTheDocument();
+    expect(screen.getByText('Metered only · no maximum implied')).toBeInTheDocument();
   });
 
   it('uses self-hosted usage actions without implying a hosted plan mutation', async () => {

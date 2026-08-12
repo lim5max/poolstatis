@@ -159,6 +159,11 @@ describe('control tower automation workers', () => {
 
     const delivery = new NotificationWorker(env.pool, workerOptions());
     const deliveryNow = new Date('2026-08-12T00:00:00.000Z');
+    await env.pool.query(
+      `UPDATE notification_deliveries SET next_attempt_at = $2
+       WHERE project_id = $1 AND status IN ('pending', 'failed')`,
+      [env.projectId, deliveryNow],
+    );
     await Promise.all([delivery.runOnce(deliveryNow), delivery.runOnce(deliveryNow)]);
     const inbox = await env.pool.query<{ payload: Record<string, unknown> }>(
       'SELECT payload FROM notification_inbox WHERE project_id = $1', [env.projectId],
@@ -251,6 +256,11 @@ describe('control tower automation workers', () => {
     const notificationOptions = { ...workerOptions(), baseRetryMs: 1, maxRetryMs: 1 };
     const notifications = new NotificationWorker(env.pool, notificationOptions, [adapter]);
     const deliveryDue = new Date('2026-08-12T00:00:00.000Z');
+    await env.pool.query(
+      `UPDATE notification_deliveries SET next_attempt_at = $2
+       WHERE project_id = $1 AND status IN ('pending', 'failed')`,
+      [env.projectId, deliveryDue],
+    );
     const notificationFailed = await notifications.runOnce(deliveryDue);
     expect(notificationFailed.failed).toBe(1);
     const delivered = await notifications.runOnce(new Date(deliveryDue.getTime() + 2));
