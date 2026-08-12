@@ -385,7 +385,9 @@ describe('organization usage ledger', () => {
     render(<Usage />);
     await waitFor(() => expect(usageControl).toHaveBeenCalledWith(expectedMonth));
     expect(screen.getByText(`${expectedMonth} UTC`)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '1,200 accepted events this cycle' })).toBeInTheDocument();
+    expect(screen.getByTestId('usage-current-quantity')).toHaveTextContent('1,200');
+    expect(screen.getByText('accepted events')).toBeInTheDocument();
+    expect(screen.getByText('Threshold rules').closest('details')).not.toHaveAttribute('open');
     expect(screen.getByText(/^Reached /)).toBeInTheDocument();
     expect(screen.getAllByText(/^Projected /)).not.toHaveLength(0);
     expect(screen.getByTestId('usage-breakdown-scroll')).toHaveClass('overflow-x-auto');
@@ -406,12 +408,18 @@ describe('organization usage ledger', () => {
       },
       cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
       contributors: [],
+      reconciliation: {
+        metered_quantity: 0, attributed_quantity: 0, difference: 0,
+        unattributed_quantity: 0, overattributed_quantity: 0, state: 'reconciled',
+      },
       threshold_forecasts: [50, 75, 90, 100].map((percent) => ({
         percent: percent as 50 | 75 | 90 | 100, state: 'not_applicable' as const, reached_or_projected_at: null,
         notification_state: 'not_configured' as const, audit_source: 'usage_ledger' as const,
       })),
     }));
     await screen.findByText(/No stored events in/);
+    expect(screen.getByText('No events')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to reconcile')).toBeInTheDocument();
     view.unmount();
 
     usageControl.mockRejectedValue(new Error('usage read failed'));
