@@ -236,7 +236,7 @@ get_web_overview(project, {metric, key_metric?, date_from, date_to?, dimensions?
 list_web_sessions(project, {metric, key_metric?, date_from, date_to?, filters?, limit?, env?})
 get_web_session(project, {metric, key_metric?, actor_id?, session_id, date_from, date_to?, filters?, page_limit?, env?})
 get_page_engagement(project, {metric, actor_id?, page_view_id, date_from, date_to?, filters?, env?})
-query_funnel(project, {funnel | steps, date_from, date_to?, env?})
+query_funnel(project, {funnel | steps | conversion_metric, date_from, date_to?, env?})
   // каждый step возвращает metric_key, purpose, category, actors и conversion_*
 query_retention(project, {start_metric, return_metric?, interval, periods, date_from, env?})
 query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning/resurrecting/dormant

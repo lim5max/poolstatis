@@ -25,6 +25,7 @@ export interface FunnelQueryInput extends QueryBase {
   kind: 'funnel';
   funnel?: string;
   steps?: Array<{ metric: string }>;
+  conversion_metric?: string;
 }
 
 export interface RetentionQueryInput extends QueryBase {
@@ -240,8 +241,10 @@ function validRegistryQuery(value: unknown): value is AnalysisQueryInput {
   if (query.kind === 'funnel') {
     const hasFunnel = query.funnel !== undefined;
     const hasSteps = query.steps !== undefined;
-    if (hasFunnel === hasSteps) return false;
+    const hasConversionMetric = query.conversion_metric !== undefined;
+    if ([hasFunnel, hasSteps, hasConversionMetric].filter(Boolean).length !== 1) return false;
     if (hasFunnel) return validRegistryKey(query.funnel);
+    if (hasConversionMetric) return validRegistryKey(query.conversion_metric);
     return Array.isArray(query.steps)
       && query.steps.length >= 2
       && query.steps.every((step) => Boolean(step) && typeof step === 'object'
@@ -289,7 +292,7 @@ function validPropertyFilter(value: unknown): value is PropertyFilter {
 }
 
 function querySourceKey(query: AnalysisQueryInput): string {
-  if (query.kind === 'funnel') return query.funnel ?? 'inline';
+  if (query.kind === 'funnel') return query.funnel ?? query.conversion_metric ?? 'inline';
   if (query.kind === 'retention') return query.start_metric;
   return query.metric;
 }

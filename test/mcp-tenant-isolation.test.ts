@@ -100,6 +100,16 @@ beforeAll(async () => {
       })).status).toBe(201);
       expect((await request(token, 'PATCH', `/api/v1/projects/${slug}/metrics/${key}`, { status: 'active' })).status).toBe(200);
     }
+    expect((await request(token, 'POST', `/api/v1/projects/${slug}/metrics`, {
+      key: 'shared_conversion', name: 'Shared conversion', type: 'conversion',
+      purpose: 'Measures isolated completion after the shared start event through one registry metric.',
+      source: {
+        from: { event: 'shared.started', filters: [] },
+        to: { event: 'shared.completed', filters: [] },
+        window_seconds: 600,
+      },
+    })).status).toBe(201);
+    expect((await request(token, 'PATCH', `/api/v1/projects/${slug}/metrics/shared_conversion`, { status: 'active' })).status).toBe(200);
     expect((await request(token, 'POST', `/api/v1/projects/${slug}/funnels`, {
       key: 'shared_activation', name: 'Shared activation', goal: 'Measures isolated completion after the shared start event.',
       steps: [{ metric_key: 'shared_started', label: 'Started' }, { metric_key: 'shared_completed', label: 'Completed' }],
@@ -171,12 +181,17 @@ describe('MCP tenant isolation over stdio transport', () => {
       .toEqual(expect.arrayContaining(['shared_started', 'shared_completed']));
     const trend = await personalClient.callTool({ name: 'query_trend', arguments: { project: sharedSlug, query: { metric: 'shared_started', date_from: '-7d', env: 'prod' } } });
     const funnel = await personalClient.callTool({ name: 'query_funnel', arguments: { project: sharedSlug, query: { funnel: 'shared_activation', date_from: '-7d', env: 'prod' } } });
+    const conversionMetric = await personalClient.callTool({
+      name: 'query_funnel',
+      arguments: { project: sharedSlug, query: { conversion_metric: 'shared_conversion', date_from: '-7d', env: 'prod' } },
+    });
     const controlTower = await secretClient.callTool({ name: 'get_control_tower', arguments: { project: sharedSlug, env: 'prod', range: '30d' } });
     const deniedControlTower = await secretClient.callTool({ name: 'get_control_tower', arguments: { project: projects.b, env: 'prod' } });
     const usageControl = await personalClient.callTool({ name: 'get_usage_control', arguments: { period: new Date().toISOString().slice(0, 7) } });
     const deniedUsageControl = await secretClient.callTool({ name: 'get_usage_control', arguments: { period: new Date().toISOString().slice(0, 7) } });
     expect(trend.isError).not.toBe(true);
     expect(funnel.isError).not.toBe(true);
+    expect(conversionMetric.isError).not.toBe(true);
     expect(controlTower.isError).not.toBe(true);
     expect(controlTower.structuredContent).toMatchObject({ schema_version: 1, scope: { project_slug: sharedSlug } });
     expect(() => controlTowerResultSchema.parse(controlTower.structuredContent)).not.toThrow();
@@ -201,8 +216,13 @@ describe('MCP tenant isolation over stdio transport', () => {
       },
       answer: { state: 'ready' },
     });
-    expect(JSON.stringify({ schema, trend, funnel, controlTower, usageControl })).not.toContain('beta-only');
-    expect(JSON.stringify({ schema, trend, funnel, controlTower, usageControl })).not.toContain('MCP Beta same slug');
+    expect(conversionMetric.structuredContent).toMatchObject({
+      steps: [{ actors: 2 }, { actors: 1 }],
+      summary: { overall_conversion: 0.5 },
+      evidence: { source_refs: [{ kind: 'metric', key: 'shared_conversion' }] },
+    });
+    expect(JSON.stringify({ schema, trend, funnel, conversionMetric, controlTower, usageControl })).not.toContain('beta-only');
+    expect(JSON.stringify({ schema, trend, funnel, conversionMetric, controlTower, usageControl })).not.toContain('MCP Beta same slug');
     const usageAfter = await pool.query("SELECT COALESCE(sum(quantity), 0)::int AS quantity, count(*)::int AS rows FROM usage_ledger WHERE meter_key = 'events_stored'");
     expect(usageAfter.rows[0]).toEqual(usageBefore.rows[0]);
     expect((await pool.query("SELECT DISTINCT meter_key FROM usage_ledger WHERE meter_key <> 'events_stored'")).rows).toEqual([]);

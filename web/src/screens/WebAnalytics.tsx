@@ -25,7 +25,7 @@ import {
   type WebSessionsResult,
   type WebWorkspaceResult,
 } from '../analysis/operations';
-import type { TrendQueryResult, VisualizationSpec } from '../analysis/visualization';
+import type { FunnelQueryResult, TrendQueryResult, VisualizationSpec } from '../analysis/visualization';
 import type { MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 import { useAsync, useStore } from '../store';
 import { AcquisitionPanel } from './Measurement';
@@ -97,6 +97,12 @@ interface WebSecondaryRead {
   scope: string;
   dimension: WebDimension;
   result: WebAnalyticsResult;
+}
+
+interface WebConversionRead {
+  scope: string;
+  metric: Metric;
+  result: FunnelQueryResult;
 }
 
 interface WebSessionsRead {
@@ -177,6 +183,7 @@ export function WebAnalytics() {
   const readinessData = readiness.data?.scope === registryScope ? readiness.data.result : null;
   const metric = registryData?.metric ?? null;
   const outcomeMetric = registryData ? webOutcomeMetric(registryData.metrics) : null;
+  const conversionMetric = webConversionMetric(registryData?.metrics ?? []);
   const primaryScope = `${registryScope}\u0000${range}\u0000${metric?.key ?? ''}`;
   const outcomeScope = `${registryScope}\u0000${range}\u0000${outcomeMetric?.key ?? ''}`;
   const primary = useAsync<WebPrimaryRead | null>(async () => {
@@ -263,6 +270,20 @@ export function WebAnalytics() {
   }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension, breakdownRequested]);
   const secondaryData = secondary.data?.scope === primaryScope
     && secondary.data.dimension === operationalDimension ? secondary.data.result : null;
+  const conversionScope = `${primaryScope}\u0000${conversionMetric?.key ?? ''}`;
+  const conversion = useAsync<WebConversionRead | null>(async () => {
+    if (!primaryData || dimension !== 'conversion' || !conversionMetric) return null;
+    const result = await client!.query(project!, {
+      kind: 'funnel',
+      conversion_metric: conversionMetric.key,
+      date_from: primaryData.overview.meta.date_range.from,
+      date_to: primaryData.overview.meta.date_range.to,
+      env,
+    });
+    if (result.kind !== 'funnel') throw new Error('Conversion query returned an unexpected result kind');
+    return { scope: conversionScope, metric: conversionMetric, result };
+  }, [project, env, dimension, conversionMetric?.key, primaryData?.overview.meta.computed_at]);
+  const conversionData = conversion.data?.scope === conversionScope ? conversion.data : null;
   const sessions = useAsync<WebSessionsRead | null>(async () => {
     if (!metric || !primaryData || !sessionsRequested) return null;
     const result = await client!.operationalQuery<WebSessionsResult>(project!, {
@@ -413,7 +434,15 @@ export function WebAnalytics() {
             </TabsList>
           </Tabs>
         </div>
-        {dimension === 'conversion' ? (
+        {dimension === 'conversion' && conversionMetric ? (
+          <WebConversionAnswer
+            metric={conversionMetric}
+            result={conversionData?.result ?? null}
+            loading={conversion.loading || (!conversionData && !conversion.error)}
+            error={conversion.error}
+            onRetry={conversion.reload}
+          />
+        ) : dimension === 'conversion' ? (
           <div className="border-y border-dashed px-4 py-7 text-center">
             <div className="text-lg font-semibold">{outcomeMetric ? outcomeMetric.name : 'Choose a conversion to measure'}</div>
             <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
@@ -731,6 +760,80 @@ export function previousExactRange(range?: { from: string; to: string }): { from
   };
 }
 
+export function webConversionMetric(metrics: Metric[]): Metric | null {
+  return [...metrics]
+    .filter((metric) => metric.status === 'active'
+      && metric.type === 'conversion'
+      && metric.tags.includes('surface:web'))
+    .sort((left, right) => left.key.localeCompare(right.key))[0] ?? null;
+}
+
+function WebConversionAnswer({ metric, result, loading, error, onRetry }: {
+  metric: Metric;
+  result: FunnelQueryResult | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  if (loading) return <Loading what={`Loading ${metric.name} conversion…`} />;
+  if (error) {
+    return (
+      <div className="border-y border-dashed px-4 py-5">
+        <ErrorNote>{error}</ErrorNote>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button variant="outline" className="h-11" onClick={onRetry}>Retry conversion</Button>
+          <Button asChild variant="outline" className="h-11"><Link to="/registry">Review definition</Link></Button>
+        </div>
+      </div>
+    );
+  }
+  if (!result?.summary) {
+    return <EmptyState headline="Conversion unavailable" lead="The typed funnel response did not include a conversion summary." />;
+  }
+  const first = result.steps[0]?.actors ?? 0;
+  const last = result.steps.at(-1)?.actors ?? 0;
+  const current = result.summary.overall_conversion;
+  const previous = result.summary.previous_overall_conversion;
+  const delta = result.summary.delta_percentage_points;
+  const deltaLabel = delta === null
+    ? 'Previous exact-period comparison unavailable'
+    : `${delta > 0 ? '+' : ''}${Math.round(delta * 10) / 10} pp versus previous exact period`;
+  return (
+    <section className="border-y" aria-labelledby="web-conversion-title">
+      <div className="grid gap-4 px-4 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+        <div className="min-w-0">
+          <h3 id="web-conversion-title" className="text-lg font-semibold">{metric.name}</h3>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{metric.purpose}</p>
+          {current === null ? (
+            <>
+              <p className="mt-4 text-xl font-semibold">No measured denominator</p>
+              <p className="mt-1 text-sm text-muted-foreground">Conversion rate is unavailable; no actor reached the registered start source in this period.</p>
+            </>
+          ) : (
+            <>
+              <p className="mt-4 text-3xl font-semibold tabular-nums">{formatPercent(current)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{fmtNum(last)} of {fmtNum(first)} actors converted</p>
+            </>
+          )}
+        </div>
+        <Badge variant={result.evidence?.state === 'trusted' ? 'outline' : 'secondary'}>{deltaLabel}</Badge>
+      </div>
+      <div className="grid gap-3 border-t bg-muted/20 px-4 py-3 text-sm sm:grid-cols-3">
+        <ConversionFact label="Current conversion" value={current === null ? 'Unavailable' : formatPercent(current)} />
+        <ConversionFact label="Previous conversion" value={previous === null ? 'Unavailable' : formatPercent(previous)} />
+        <ConversionFact label="Converted actors" value={current === null ? 'Unavailable' : `${fmtNum(last)} of ${fmtNum(first)}`} />
+      </div>
+      <div className="border-t px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+        Exact UTC window · [{result.meta.date_range.from}, {result.meta.date_range.to}) · {result.evidence?.aggregation ?? 'registered conversion definition'} · {result.meta.source}
+      </div>
+    </section>
+  );
+}
+
+function ConversionFact({ label, value }: { label: string; value: string }) {
+  return <div><span className="text-muted-foreground">{label}</span><div className="mt-1 font-medium tabular-nums">{value}</div></div>;
+}
+
 function routeDefinitionsReady(properties: PropertyDefinition[]) {
   const route = properties.find((property) => property.scope === 'event' && property.key === '$route_key');
   return route?.status === 'trusted' && (route.enum_values?.length ?? 0) > 0;
@@ -948,7 +1051,7 @@ function ScreenHeader({ range, onRange, showRange = true }: {
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="serif text-3xl sm:text-4xl">Web</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Traffic, pages, sources and supported conversions from canonical browser events.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Canonical browser traffic with purpose-backed registered web outcomes.</p>
       </div>
       {showRange && <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
         Period

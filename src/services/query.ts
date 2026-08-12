@@ -1097,19 +1097,27 @@ export class QueryService {
   }
 
   private async funnel(projectId: string, q: FunnelQueryInput, now: Date): Promise<QueryResult> {
-    if (Boolean(q.funnel) === Boolean(q.steps)) {
+    const modes = [q.funnel, q.steps, q.conversion_metric].filter((value) => value !== undefined);
+    if (modes.length !== 1) {
       throw badRequest(
         'invalid_funnel_query',
-        'pass either a saved funnel key or inline steps, not both and not neither',
-        'use {funnel: "<key>"} for a saved funnel, or {steps: [{metric: "..."}, ...]} for ad-hoc',
+        'pass exactly one of a saved funnel key, inline steps, or a conversion metric key',
+        'use {funnel: "<key>"}, {steps: [{metric: "..."}, ...]}, or {conversion_metric: "<key>"}',
       );
     }
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
 
-    let stepDefs: Array<{ label: string; metric: Metric }>;
+    type EventSource = {
+      event: string;
+      filters?: PropertyFilter[];
+      data_source?: 'native' | 'posthog';
+      source_connection_id?: string;
+    };
+    let stepDefs: Array<{ label: string; metric: Metric; source?: EventSource }>;
     let windowSeconds: number;
     let funnelGoal: string | undefined;
+    let conversionMetric: Metric | undefined;
 
     if (q.funnel) {
       const funnel = await getFunnel(this.pool, projectId, q.funnel);
@@ -1121,18 +1129,45 @@ export class QueryService {
           metric: await getMetric(this.pool, projectId, s.metric_key),
         })),
       );
-    } else {
+    } else if (q.steps) {
       windowSeconds = 604800;
       stepDefs = await Promise.all(
-        q.steps!.map(async (s) => {
+        q.steps.map(async (s) => {
           const metric = await getMetric(this.pool, projectId, s.metric);
           return { label: metric.name, metric };
         }),
       );
+    } else {
+      conversionMetric = await getMetric(this.pool, projectId, q.conversion_metric!);
+      if (conversionMetric.type !== 'conversion') {
+        throw badRequest(
+          'metric_not_conversion',
+          `metric "${conversionMetric.key}" has type=${conversionMetric.type}`,
+          'choose an active metric with type=conversion',
+        );
+      }
+      if (conversionMetric.status !== 'active') {
+        throw badRequest(
+          'metric_not_active',
+          `conversion metric "${conversionMetric.key}" has status=${conversionMetric.status}`,
+          'activate the reviewed conversion metric before querying it',
+        );
+      }
+      const source = conversionMetric.source as {
+        from: EventSource;
+        to: EventSource;
+        window_seconds: number;
+      };
+      windowSeconds = source.window_seconds;
+      funnelGoal = conversionMetric.purpose;
+      stepDefs = [
+        { label: `Entered ${conversionMetric.name}`, metric: conversionMetric, source: source.from },
+        { label: `Reached ${conversionMetric.name}`, metric: conversionMetric, source: source.to },
+      ];
     }
 
     for (const { metric } of stepDefs) {
-      if (metric.type === 'conversion' || metric.type === 'state') {
+      if (metric.type === 'state' || (metric.type === 'conversion' && !conversionMetric)) {
         throw badRequest(
           'invalid_step_metric',
           `funnel step "${metric.key}" has type=${metric.type}; steps must be event-based`,
@@ -1140,13 +1175,8 @@ export class QueryService {
       }
     }
 
-    const sources = stepDefs.map(({ metric }) => {
-      const source = metric.source as {
-        event: string;
-        filters?: PropertyFilter[];
-        data_source?: 'native' | 'posthog';
-        source_connection_id?: string;
-      };
+    const sources = stepDefs.map(({ metric, source: registeredConversionSource }) => {
+      const source = registeredConversionSource ?? metric.source as EventSource;
       return {
         event: source.event,
         filters: source.filters ?? [],
@@ -1169,6 +1199,13 @@ export class QueryService {
     const previousTo = from;
     const previousFrom = new Date(from.getTime() - durationMs);
     if (sources[0]?.dataSource === 'posthog') {
+      if (conversionMetric) {
+        throw badRequest(
+          'posthog_conversion_unsupported',
+          'registered conversion metrics cannot query PostHog from/to sources directly',
+          'define event metrics on one PostHog connection and use inline funnel steps',
+        );
+      }
       const connectionIds = new Set(sources.map((source) => source.connectionId));
       const connectionId = sources[0].connectionId;
       if (!this.posthog || !connectionId || connectionIds.size !== 1) {
@@ -1238,7 +1275,7 @@ export class QueryService {
     return {
       kind: 'funnel',
       steps,
-      ...funnelControlBlocks(q, steps, now, resultSource, funnelGoal, previousSteps),
+      ...funnelControlBlocks(q, steps, now, resultSource, funnelGoal, previousSteps, conversionMetric),
       meta: {
         computed_at: now.toISOString(),
         date_range: { from: from.toISOString(), to: to.toISOString() },

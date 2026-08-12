@@ -581,7 +581,7 @@ filter/breakdown вызови `POST .../properties/acquisition-attribution`: о�
 `meta.note` такого trend явно говорит **Session landing attribution**: это связь
 с tagged landing в этой browser session, не causal credit кампании.
 
-Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки.
+Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки. `kind=funnel` принимает ровно один режим: сохранённый `funnel`, inline `steps` или `conversion_metric`. Последний разворачивает сервером зарегистрированные `source.from`, `source.to` и `window_seconds`; клиент не передаёт сырые события.
 
 `actors` также принимает только registry key в `activityMetric`. Search —
 только exact ID; substring scan отсутствует. Пока нет детерминированного

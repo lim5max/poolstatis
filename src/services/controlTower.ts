@@ -608,6 +608,7 @@ export function funnelControlBlocks(
   source: 'native' | 'posthog',
   goal?: string,
   previousSteps?: Array<{ label: string; metric_key: string; purpose: string; actors: number }>,
+  conversionMetric?: Metric,
 ): { summary: FunnelSummary; answer: AnswerBlock; evidence: EvidenceBlock } {
   const first = steps[0]?.actors ?? 0;
   const last = steps.at(-1)?.actors ?? 0;
@@ -684,7 +685,7 @@ export function funnelControlBlocks(
           comparison_label: 'previous exact period',
         },
       }),
-      why_it_matters: goal ?? (query.funnel
+      why_it_matters: conversionMetric?.purpose ?? goal ?? (query.funnel
         ? `Conversion through the registered ${query.funnel} funnel.`
         : 'Conversion through the selected registered metric steps.'),
     },
@@ -692,11 +693,20 @@ export function funnelControlBlocks(
       state: first === 0 ? 'partial' : 'trusted',
       as_of: now.toISOString(),
       freshness: 'fresh',
-      source_refs: query.funnel
+      source_refs: conversionMetric
+        ? [{ kind: 'metric', key: conversionMetric.key, purpose: conversionMetric.purpose }]
+        : query.funnel
         ? [{ kind: 'funnel', key: query.funnel, goal: goal ?? `Conversion through ${query.funnel}.` }]
         : steps.map((step) => ({ kind: 'metric' as const, key: step.metric_key, purpose: step.purpose })),
-      aggregation: 'ordered unique actors within the configured funnel window',
-      denominator: { label: `actors who reached ${steps[0]?.metric_key ?? 'the first step'}`, value: first > 0 ? first : null },
+      aggregation: conversionMetric
+        ? 'ordered unique actors within the registered conversion window'
+        : 'ordered unique actors within the configured funnel window',
+      denominator: {
+        label: conversionMetric
+          ? `actors who entered ${conversionMetric.key}`
+          : `actors who reached ${steps[0]?.metric_key ?? 'the first step'}`,
+        value: first > 0 ? first : null,
+      },
       sample: { eligible: first > 0 ? first : null, observed: first > 0 ? last : null, coverage: overall },
       warnings: [
         ...(source === 'posthog'

@@ -181,6 +181,76 @@ describe('trend queries', () => {
 });
 
 describe('funnel queries', () => {
+  it('runs an active conversion metric over its registered from/to sources and exact previous period', async () => {
+    await activeMetric(env, {
+      key: 'web_signup_conversion',
+      name: 'Web signup conversion',
+      type: 'conversion',
+      purpose: 'Measures whether a website visit reaches a completed signup within one hour.',
+      source: {
+        from: { event: 'web.conversion_started', filters: [{ property: 'surface', op: 'eq', value: 'web' }] },
+        to: { event: 'web.conversion_completed', filters: [{ property: 'surface', op: 'eq', value: 'web' }] },
+        window_seconds: 3600,
+      },
+    });
+    const now = Date.now();
+    const currentFrom = new Date(now - 20 * 3_600_000);
+    const currentTo = new Date(now + 60_000);
+    const timestamp = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
+    const events = [
+      { event: 'web.conversion_started', distinct_id: 'previous-1', timestamp: timestamp(30), properties: { surface: 'web' } },
+      { event: 'web.conversion_completed', distinct_id: 'previous-1', timestamp: timestamp(29), properties: { surface: 'web' } },
+      { event: 'web.conversion_started', distinct_id: 'previous-2', timestamp: timestamp(30), properties: { surface: 'web' } },
+      ...['current-1', 'current-2', 'current-3', 'current-4'].map((distinct_id) => ({
+        event: 'web.conversion_started', distinct_id, timestamp: timestamp(12), properties: { surface: 'web' },
+      })),
+      ...['current-1', 'current-2', 'current-3'].map((distinct_id) => ({
+        event: 'web.conversion_completed', distinct_id, timestamp: timestamp(11), properties: { surface: 'web' },
+      })),
+      { event: 'web.conversion_started', distinct_id: 'wrong-surface', timestamp: timestamp(12), properties: { surface: 'bot' } },
+      { event: 'web.conversion_completed', distinct_id: 'wrong-surface', timestamp: timestamp(11), properties: { surface: 'bot' } },
+    ];
+    const ingested = await api(env, env.ingestToken, 'POST', '/i/v1/events', { events });
+    expect(ingested.body.accepted).toBe(events.length);
+
+    const res = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'funnel',
+      conversion_metric: 'web_signup_conversion',
+      date_from: currentFrom.toISOString(),
+      date_to: currentTo.toISOString(),
+      env: 'prod',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.steps.map((step: { actors: number }) => step.actors)).toEqual([4, 3]);
+    expect(res.body.summary).toMatchObject({
+      overall_conversion: 0.75,
+      previous_overall_conversion: 0.5,
+      delta_percentage_points: 25,
+    });
+    expect(res.body.answer).toMatchObject({
+      state: 'ready',
+      why_it_matters: 'Measures whether a website visit reaches a completed signup within one hour.',
+      delta: { value: 25, unit: 'percentage_point', comparison_label: 'previous exact period' },
+    });
+    expect(res.body.evidence).toMatchObject({
+      source_refs: [{
+        kind: 'metric',
+        key: 'web_signup_conversion',
+        purpose: 'Measures whether a website visit reaches a completed signup within one hour.',
+      }],
+      aggregation: 'ordered unique actors within the registered conversion window',
+      reproducible_query: {
+        kind: 'funnel',
+        conversion_metric: 'web_signup_conversion',
+        date_from: currentFrom.toISOString(),
+        date_to: currentTo.toISOString(),
+        env: 'prod',
+      },
+    });
+    expect(res.body.meta.date_range).toEqual({ from: currentFrom.toISOString(), to: currentTo.toISOString() });
+  });
+
   it('computes one adjacent-period comparison with the same project, environment and steps', async () => {
     await activeMetric(env, { key: 'comparison_started', source: { event: 'comparison.started' } });
     await activeMetric(env, { key: 'comparison_completed', source: { event: 'comparison.completed' } });
@@ -302,6 +372,40 @@ describe('funnel queries', () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('invalid_funnel_query');
+  });
+
+  it('rejects a non-conversion metric in conversion_metric mode', async () => {
+    const res = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'funnel', conversion_metric: 'signup', date_from: '-7d', env: 'prod',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatchObject({
+      code: 'metric_not_conversion',
+      hint: 'choose an active metric with type=conversion',
+    });
+  });
+
+  it('keeps PostHog conversion metric registration fail-closed', async () => {
+    const res = await api(env, env.secretToken, 'POST', `${P()}/metrics`, {
+      key: 'posthog_web_conversion',
+      name: 'PostHog web conversion',
+      purpose: 'Measures a website conversion through an unsupported external direct source.',
+      type: 'conversion',
+      source: {
+        from: {
+          event: 'page.viewed', data_source: 'posthog',
+          source_connection_id: '00000000-0000-4000-8000-000000000001',
+        },
+        to: {
+          event: 'signup.completed', data_source: 'posthog',
+          source_connection_id: '00000000-0000-4000-8000-000000000001',
+        },
+        window_seconds: 3600,
+      },
+    });
+
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toContain('PostHog conversion metrics are unsupported');
   });
 });
 

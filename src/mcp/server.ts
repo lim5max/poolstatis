@@ -1129,7 +1129,7 @@ jsonTool(
 
 jsonTool(
   'query_funnel',
-  'Step-by-step conversion for a saved funnel (by key) or inline steps (registry metric keys).',
+  'Step-by-step conversion for a saved funnel, inline registry metric steps, or one registered conversion metric.',
   { project, query: funnelQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'funnel', ...query })),
 );

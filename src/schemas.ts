@@ -1132,12 +1132,13 @@ export const pageEngagementQuerySchema = z.object({
   env: z.string().trim().min(1).max(100).default('prod'),
 }).strict();
 
-// funnel XOR steps is enforced in QueryService (zod .refine would break the
-// discriminated union below).
+// funnel XOR steps XOR conversion_metric is enforced in QueryService (zod
+// .refine would break the discriminated union below).
 export const funnelQuerySchema = z.object({
   kind: z.literal('funnel'),
   funnel: keySchema.optional(),
   steps: z.array(z.object({ metric: keySchema })).min(2).optional(),
+  conversion_metric: keySchema.optional(),
   date_from: dateStr,
   date_to: dateStr.nullable().optional(),
   env: z.string().default('prod'),
