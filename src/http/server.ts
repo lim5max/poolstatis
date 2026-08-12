@@ -21,7 +21,8 @@ import type { SetupTaskProvider } from '../services/setupTaskProvider.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
   createApiKey, createProject, deleteProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
-  evaluateProjectHealth, getProjectPortfolio, listProjectsWithStats, revokeApiKey, revokePersonalApiKey, type Project,
+  evaluateProjectHealth, getProjectPortfolio, listProjectsWithStats, revokeApiKey, revokePersonalApiKey,
+  unscopedKeyOutcomeReadiness, type Project,
 } from '../services/projects.js';
 import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
 import {
@@ -911,6 +912,7 @@ function registerPlatformRoutes(
     return getProjectPortfolio(
       ctx.pool,
       ctx.eventStore,
+      ctx.query,
       req.auth.orgId,
       env,
       projectScoped ? 'project' : 'organization',
@@ -960,6 +962,7 @@ function registerPlatformRoutes(
         events_24h: 0, events_7d: 0, events_30d: 0,
         last_event_at: null, registered_coverage_30d: null,
         key_outcome_available: false,
+        key_outcome_readiness: unscopedKeyOutcomeReadiness(),
         ...evaluatedHealth,
       });
     } catch (err) {

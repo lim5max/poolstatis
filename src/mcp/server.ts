@@ -147,7 +147,7 @@ jsonTool(
 
 jsonTool(
   'get_project_portfolio',
-  'Read environment-scoped project health and current UTC-cycle accepted usage from the immutable ingest-time usage ledger.',
+  'Read environment-scoped project health, current UTC-cycle accepted usage, and fail-closed key-outcome availability proven by a typed 30-day query guardrail.',
   { env: z.string().min(1).max(50).default('prod') },
   wrap(({ env }) => api('GET', `/api/v1/projects/portfolio?env=${encodeURIComponent(env)}`)),
 );

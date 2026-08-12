@@ -106,7 +106,7 @@ export function Projects() {
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{scoped?.last_event_at ? fmtRelative(scoped.last_event_at) : scoped ? `Never in ${env}` : 'Unavailable'}</TableCell>
                   <TableCell>{scoped ? <><div className="tabular-nums">{fmtNum(scoped.current_usage.accepted_events)} <span className="text-xs text-muted-foreground">accepted · {scoped.current_usage.period}</span></div><div className="text-xs text-muted-foreground">{scoped.current_usage.last_ingest_at ? `Last ingest ${fmtRelative(scoped.current_usage.last_ingest_at)}` : `No accepted ${env} events this cycle`}</div></> : <span className="text-xs text-muted-foreground">Unavailable</span>}</TableCell>
-                  <TableCell><Badge variant={p.key_outcome_available ? 'outline' : 'secondary'}>{p.key_outcome_available ? `${p.active_outcome_contracts} active contract${p.active_outcome_contracts === 1 ? '' : 's'}` : 'Unavailable'}</Badge><div className="mt-1 text-xs text-muted-foreground">{p.active_metrics} metrics · {p.funnels} funnels</div></TableCell>
+                  <TableCell>{scoped ? <KeyOutcomeCell project={scoped} /> : <span className="text-xs text-muted-foreground">Unavailable for {env}</span>}</TableCell>
                   <TableCell>{!scoped ? <span className="text-xs text-muted-foreground">Unavailable</span> : scoped.attention.length === 0 ? <span className="text-xs text-muted-foreground">None</span> : <div className="max-w-64"><div className="mb-1 text-xs text-muted-foreground">{scoped.attention.length} attention item{scoped.attention.length === 1 ? '' : 's'}</div><div className="flex flex-wrap gap-1">{scoped.attention.slice(0, 2).map((reason) => <Badge key={reason} variant="outline" className="font-normal">{reason}</Badge>)}</div></div>}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -175,6 +175,31 @@ function ProjectHealthDetails({ evaluation }: { evaluation: ProjectWithStats['he
         ))}
       </ul>
     </details>
+  );
+}
+
+function KeyOutcomeCell({ project }: { project: ProjectPortfolioRow }) {
+  const readiness = project.key_outcome_readiness;
+  const ready = readiness.state === 'ready' && readiness.guardrail.state === 'pass';
+  return (
+    <div className="max-w-64">
+      <Badge variant={ready ? 'outline' : 'secondary'}>{ready ? 'Queryable' : 'Unavailable'}</Badge>
+      <div className="mt-1 text-xs text-muted-foreground">
+        {ready && readiness.metric_key ? <code>{readiness.metric_key}</code> : readiness.guardrail.reason}
+      </div>
+      <details className="mt-1 text-xs text-muted-foreground">
+        <DisclosureSummary className="cursor-pointer underline decoration-muted-foreground/60 underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          Outcome guardrail
+        </DisclosureSummary>
+        <div className="mt-2 space-y-1 rounded-md border p-2">
+          <div className="font-medium text-foreground">{readiness.guardrail.state === 'pass' ? 'Pass' : 'Needs attention'} · typed 30-day query</div>
+          <div>{readiness.guardrail.reason}</div>
+          <div>{readiness.guardrail.observed_events === null ? 'Observed events unavailable' : `${fmtNum(readiness.guardrail.observed_events)} observed events`}</div>
+          <div>Evaluated {fmtRelative(readiness.evaluated_at)} for <code>{project.environment}</code></div>
+        </div>
+      </details>
+      <div className="mt-1 text-xs text-muted-foreground">{project.active_outcome_contracts} active contract{project.active_outcome_contracts === 1 ? '' : 's'} · {project.active_metrics} metrics · {project.funnels} funnels</div>
+    </div>
   );
 }
 

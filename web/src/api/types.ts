@@ -104,6 +104,15 @@ export interface MeasurementReadinessGroup {
   repair_action: MeasurementReadinessRepairAction | null;
   evidence: Record<string, number>;
 }
+export interface MeasurementAnswerDependency {
+  answer_id: string;
+  surface: 'home' | 'web' | 'product' | 'funnel' | 'saved';
+  label: string;
+  href: string;
+  metric_keys: string[];
+  property_keys: string[];
+  funnel_key: string | null;
+}
 export interface MeasurementReadiness {
   schema_version: 1;
   generated_at: string;
@@ -114,6 +123,7 @@ export interface MeasurementReadiness {
     incomplete_count: number;
     highest_severity: MeasurementReadinessSeverity;
   };
+  answer_dependencies: MeasurementAnswerDependency[];
   groups: MeasurementReadinessGroup[];
   fix_next: (MeasurementReadinessRepairAction & {
     group: MeasurementReadinessGroupKey;
@@ -807,13 +817,27 @@ export interface ProjectWithStats {
   last_event_at: string | null;
   registered_coverage_30d: number | null;
   key_outcome_available: boolean;
+  key_outcome_readiness: {
+    state: 'ready' | 'unavailable';
+    contract_key: string | null;
+    metric_key: string | null;
+    evaluated_at: string;
+    guardrail: {
+      id: 'key_outcome_queryable';
+      state: 'pass' | 'fail';
+      reason_code: 'query_succeeded' | 'no_active_contract' | 'no_queryable_outcome'
+        | 'outcome_query_failed' | 'environment_scope_required';
+      reason: string;
+      observed_events: number | null;
+    };
+  };
   health: 'healthy' | 'needs_attention' | 'no_data';
   attention: string[];
   health_evaluation: {
     source: 'server';
     evaluated_at: string;
     guardrails: Array<{
-      id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'metric_review_queue';
+      id: 'recent_data' | 'registered_coverage' | 'active_outcome' | 'key_outcome_queryable' | 'metric_review_queue';
       state: 'pass' | 'fail' | 'not_applicable';
       observed: number | null;
       expectation: string;

@@ -4,6 +4,9 @@ import type { EventStore } from '../stores/eventStore.js';
 import {
   analysisViewMetricKeys, analysisViewPropertyKeys, listAnalysisViews, type AnalysisView,
 } from './analysisViews.js';
+import { ACQUISITION_UTM_PROPERTIES } from './acquisitionAttribution.js';
+import { BROWSER_ANALYTICS_PROPERTIES } from './browserAnalytics.js';
+import { getProjectIntent, type StoredProjectIntent } from './projectIntents.js';
 import { listPropertyDefinitions } from './properties.js';
 import { listSourceConnections } from './posthog.js';
 import { listFunnels, listMetrics, type Funnel, type Metric } from './registry.js';
@@ -54,6 +57,7 @@ export interface MeasurementReadinessResult {
     incomplete_count: number;
     highest_severity: ReadinessSeverity;
   };
+  answer_dependencies: MeasurementAnswerDependency[];
   groups: MeasurementReadinessGroup[];
   fix_next: (ReadinessRepairAction & {
     group: ReadinessGroupKey;
@@ -61,6 +65,16 @@ export interface MeasurementReadinessResult {
     severity: Exclude<ReadinessSeverity, 'none'>;
     affected_answer_ids: string[];
   }) | null;
+}
+
+export interface MeasurementAnswerDependency {
+  answer_id: string;
+  surface: 'home' | 'web' | 'product' | 'funnel' | 'saved';
+  label: string;
+  href: string;
+  metric_keys: string[];
+  property_keys: string[];
+  funnel_key: string | null;
 }
 
 interface ProjectScope { id: string; slug: string }
@@ -74,6 +88,15 @@ const SEVERITY_RANK: Record<ReadinessSeverity, number> = {
   info: 1,
   none: 0,
 };
+const GAP_CODE_ORDER: Record<MeasurementReadinessGap['code'], number> = {
+  data_source_missing: 0,
+  metric_inactive: 1,
+  funnel_definition_incomplete: 2,
+  property_untrusted: 3,
+  identity_coverage_incomplete: 4,
+  data_source_unverified: 5,
+  identity_evidence_unavailable: 6,
+};
 
 export async function getMeasurementReadiness(
   pool: pg.Pool,
@@ -81,12 +104,13 @@ export async function getMeasurementReadiness(
   project: ProjectScope,
   env: string,
 ): Promise<MeasurementReadinessResult> {
-  const [metrics, funnels, properties, sources, views, nativeSources, identityCounts] = await Promise.all([
+  const [metrics, funnels, properties, sources, views, intent, nativeSources, identityCounts] = await Promise.all([
     listMetrics(pool, project.id),
     listFunnels(pool, project.id),
     listPropertyDefinitions(pool, project.id),
     listSourceConnections(pool, project.id),
     listAnalysisViews(pool, project, { env, status: 'active' }),
+    getProjectIntent(pool, project.id),
     pool.query<{ count: number }>(
       `SELECT count(*)::int AS count FROM api_keys
        WHERE project_id = $1 AND kind = 'ingest' AND env = $2 AND revoked_at IS NULL`,
@@ -102,7 +126,8 @@ export async function getMeasurementReadiness(
     ),
   ]);
 
-  const affected = answerDependencies(views, funnels);
+  const answerDependencies = buildAnswerDependencies(metrics, funnels, views, intent);
+  const affected = dependencyIndexes(answerDependencies);
   const tracking = trackingPlanGroup(metrics, funnels, affected.metrics);
   const propertyGroup = propertiesGroup(properties, affected.properties);
   const identity = await identityGroup(
@@ -117,7 +142,7 @@ export async function getMeasurementReadiness(
     env,
     Number(nativeSources.rows[0]?.count ?? 0),
     sources.map((source) => source.status),
-    views.map((view) => view.id),
+    answerDependencies.map((answer) => answer.answer_id),
   );
   const groups = [tracking, propertyGroup, identity, dataSources];
   const ranked = groups.flatMap((group) => group.gaps.map((gap) => ({ group: group.key, gap })))
@@ -140,6 +165,7 @@ export async function getMeasurementReadiness(
       incomplete_count: groups.reduce((sum, group) => sum + group.incomplete_count, 0),
       highest_severity: highestSeverity,
     },
+    answer_dependencies: answerDependencies,
     groups,
     fix_next: first ? {
       group: first.group,
@@ -384,34 +410,220 @@ function identityEventSources(metric: Metric): Array<{ event: string; filters: P
     : [];
 }
 
-function answerDependencies(views: AnalysisView[], funnels: Funnel[]): {
+export function buildAnswerDependencies(
+  metrics: Metric[],
+  funnels: Funnel[],
+  views: AnalysisView[],
+  intent: StoredProjectIntent | null,
+): MeasurementAnswerDependency[] {
+  const activeMetrics = metrics.filter((metric) => metric.status === 'active');
+  const metricByKey = new Map(metrics.map((metric) => [metric.key, metric]));
+  const activePageMetric = activeMetrics.find((metric) => metric.key === 'web_page_views' && metric.type === 'count') ?? null;
+  const primaryMetric = pickPrimaryMetric(activeMetrics, intent?.primary_goal_id ?? null);
+  const revenueMetric = activeMetrics.find((metric) => metric.category === 'revenue') ?? null;
+  const webOutcomeMetrics = activeMetrics.filter((metric) => metric.key !== 'web_page_views'
+    && metric.type !== 'state'
+    && metric.tags.includes('surface:web'));
+  const funnelAnchor = intent?.project_mode === 'website'
+    || (intent?.project_mode === 'both' && prefersWebsite(intent.primary_goal_id))
+    ? activePageMetric
+    : primaryMetric;
+  const homeFunnel = pickHomeFunnel(funnels, intent?.primary_goal_id ?? null, funnelAnchor?.key ?? null);
+  const homeMetrics = new Set<string>();
+  const homeMode = intent?.project_mode ?? null;
+  if (homeMode === 'website') {
+    if (activePageMetric) homeMetrics.add(activePageMetric.key);
+  } else if (homeMode === 'product') {
+    if (primaryMetric) homeMetrics.add(primaryMetric.key);
+    if (revenueMetric) homeMetrics.add(revenueMetric.key);
+  } else if (homeMode === 'both' && intent) {
+    const preferred = prefersWebsite(intent.primary_goal_id) ? activePageMetric : primaryMetric;
+    if (preferred) homeMetrics.add(preferred.key);
+    if (!prefersWebsite(intent.primary_goal_id) && revenueMetric) homeMetrics.add(revenueMetric.key);
+  } else {
+    // Legacy Home chooses the first successful current answer at runtime. Both
+    // candidates are real active semantics, so the dependency graph keeps the
+    // fail-closed superset without inferring a project mode from old data.
+    if (activePageMetric) homeMetrics.add(activePageMetric.key);
+    if (primaryMetric) homeMetrics.add(primaryMetric.key);
+    if (revenueMetric) homeMetrics.add(revenueMetric.key);
+  }
+  homeFunnel?.steps.forEach((step) => homeMetrics.add(step.metric_key));
+
+  const answers: MeasurementAnswerDependency[] = [answerDependency({
+    answerId: 'home',
+    surface: 'home',
+    label: 'Home current answer',
+    href: '/',
+    metricKeys: [...homeMetrics],
+    funnelKey: homeFunnel?.key ?? null,
+    metricByKey,
+  })];
+
+  const webConfigured = metricByKey.has('web_page_views')
+    || webOutcomeMetrics.length > 0
+    || intent?.project_mode === 'website'
+    || intent?.project_mode === 'both';
+  if (webConfigured) {
+    const webMetricKeys = new Set<string>(['web_page_views']);
+    webOutcomeMetrics.forEach((metric) => webMetricKeys.add(metric.key));
+    answers.push(answerDependency({
+      answerId: 'web',
+      surface: 'web',
+      label: 'Web health answer',
+      href: '/analyze/web',
+      metricKeys: [...webMetricKeys],
+      explicitPropertyKeys: [
+        ...Object.keys(BROWSER_ANALYTICS_PROPERTIES),
+        ...ACQUISITION_UTM_PROPERTIES,
+      ],
+      funnelKey: null,
+      metricByKey,
+    }));
+  }
+
+  for (const metric of activeMetrics.filter((candidate) => candidate.type !== 'conversion' && candidate.type !== 'state')) {
+    answers.push(answerDependency({
+      answerId: `product:${metric.key}`,
+      surface: 'product',
+      label: `Product · ${metric.name}`,
+      href: '/analyze/product',
+      metricKeys: [metric.key],
+      funnelKey: null,
+      metricByKey,
+    }));
+  }
+  for (const funnel of funnels) {
+    answers.push(answerDependency({
+      answerId: `funnel:${funnel.key}`,
+      surface: 'funnel',
+      label: `Funnel · ${funnel.name}`,
+      href: `/analyze/funnels?funnel=${encodeURIComponent(funnel.key)}`,
+      metricKeys: funnel.steps.map((step) => step.metric_key),
+      funnelKey: funnel.key,
+      metricByKey,
+    }));
+  }
+  for (const view of views) {
+    const metricKeys = new Set(analysisViewMetricKeys(view));
+    const source = view.visualization_spec.source;
+    const funnelKeys = new Set<string>();
+    if (source.kind === 'funnel') funnelKeys.add(source.key);
+    for (const action of view.visualization_spec.actions) {
+      if (action.kind === 'open_funnel') funnelKeys.add(action.key);
+      if (action.kind === 'open_query' && action.query.kind === 'funnel' && action.query.funnel) {
+        funnelKeys.add(action.query.funnel);
+      }
+    }
+    for (const funnelKey of funnelKeys) {
+      funnels.find((funnel) => funnel.key === funnelKey)?.steps.forEach((step) => metricKeys.add(step.metric_key));
+    }
+    answers.push(answerDependency({
+      answerId: view.id,
+      surface: 'saved',
+      label: view.title,
+      href: `/analyze/saved?answer=${encodeURIComponent(view.id)}`,
+      metricKeys: [...metricKeys],
+      explicitPropertyKeys: analysisViewPropertyKeys(view),
+      funnelKey: [...funnelKeys].sort()[0] ?? null,
+      metricByKey,
+    }));
+  }
+  const surfaceOrder: Record<MeasurementAnswerDependency['surface'], number> = {
+    home: 0, web: 1, product: 2, funnel: 3, saved: 4,
+  };
+  return answers.sort((left, right) => surfaceOrder[left.surface] - surfaceOrder[right.surface]
+    || left.answer_id.localeCompare(right.answer_id));
+}
+
+function dependencyIndexes(answers: MeasurementAnswerDependency[]): {
   metrics: Map<string, string[]>;
   properties: Map<string, string[]>;
 } {
   const metricAnswers = new Map<string, Set<string>>();
   const propertyAnswers = new Map<string, Set<string>>();
-  const funnelByKey = new Map(funnels.map((funnel) => [funnel.key, funnel]));
-  for (const view of views) {
-    const metricKeys = new Set(analysisViewMetricKeys(view));
-    const source = view.visualization_spec.source;
-    if (source.kind === 'funnel') {
-      funnelByKey.get(source.key)?.steps.forEach((step) => metricKeys.add(step.metric_key));
-    }
-    for (const action of view.visualization_spec.actions) {
-      const funnelKey = action.kind === 'open_funnel'
-        ? action.key
-        : action.kind === 'open_query' && action.query.kind === 'funnel'
-          ? action.query.funnel
-          : undefined;
-      if (funnelKey) funnelByKey.get(funnelKey)?.steps.forEach((step) => metricKeys.add(step.metric_key));
-    }
-    for (const key of metricKeys) addDependency(metricAnswers, key, view.id);
-    for (const key of analysisViewPropertyKeys(view)) addDependency(propertyAnswers, key, view.id);
+  for (const answer of answers) {
+    for (const key of answer.metric_keys) addDependency(metricAnswers, key, answer.answer_id);
+    for (const key of answer.property_keys) addDependency(propertyAnswers, key, answer.answer_id);
   }
   return {
     metrics: mapSets(metricAnswers),
     properties: mapSets(propertyAnswers),
   };
+}
+
+function answerDependency(input: {
+  answerId: string;
+  surface: MeasurementAnswerDependency['surface'];
+  label: string;
+  href: string;
+  metricKeys: string[];
+  explicitPropertyKeys?: string[];
+  funnelKey: string | null;
+  metricByKey: Map<string, Metric>;
+}): MeasurementAnswerDependency {
+  const metricKeys = uniqueSorted(input.metricKeys);
+  const properties = new Set(input.explicitPropertyKeys ?? []);
+  metricKeys.forEach((key) => {
+    const metric = input.metricByKey.get(key);
+    if (metric) metricPropertyKeys(metric).forEach((property) => properties.add(property));
+  });
+  return {
+    answer_id: input.answerId,
+    surface: input.surface,
+    label: input.label,
+    href: input.href,
+    metric_keys: metricKeys,
+    property_keys: [...properties].sort(),
+    funnel_key: input.funnelKey,
+  };
+}
+
+function metricPropertyKeys(metric: Metric): string[] {
+  const properties = new Set<string>();
+  const addSource = (source: Record<string, unknown> | undefined) => {
+    if (!source) return;
+    if (typeof source.value_property === 'string') properties.add(source.value_property);
+    if (Array.isArray(source.filters)) {
+      source.filters.forEach((filter) => {
+        const property = (filter as { property?: unknown }).property;
+        if (typeof property === 'string') properties.add(property);
+      });
+    }
+  };
+  if (metric.type === 'conversion') {
+    addSource(metric.source.from as Record<string, unknown> | undefined);
+    addSource(metric.source.to as Record<string, unknown> | undefined);
+  } else {
+    addSource(metric.source);
+  }
+  return [...properties].sort();
+}
+
+function pickPrimaryMetric(metrics: Metric[], primaryGoal: string | null): Metric | null {
+  if (!primaryGoal) return metrics.find((metric) => metric.type === 'unique_actors') ?? metrics[0] ?? null;
+  const tokens = primaryGoal.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 3);
+  return metrics.find((metric) => {
+    const haystack = `${metric.key} ${metric.name} ${metric.purpose} ${metric.category ?? ''}`.toLowerCase();
+    return tokens.some((token) => haystack.includes(token));
+  }) ?? metrics.find((metric) => metric.type === 'unique_actors') ?? metrics[0] ?? null;
+}
+
+function pickHomeFunnel(funnels: Funnel[], primaryGoal: string | null, anchorMetricKey: string | null): Funnel | null {
+  const ordered = [...funnels].sort((left, right) => left.key.localeCompare(right.key));
+  if (primaryGoal) {
+    const exactGoalFunnel = ordered.find((funnel) => funnel.key === primaryGoal);
+    if (exactGoalFunnel) return exactGoalFunnel;
+  }
+  if (anchorMetricKey) {
+    const anchoredFunnel = ordered.find((funnel) => funnel.steps.some((step) => step.metric_key === anchorMetricKey));
+    if (anchoredFunnel) return anchoredFunnel;
+  }
+  return ordered[0] ?? null;
+}
+
+function prefersWebsite(primaryGoal: string): boolean {
+  return /(website|traffic|page|campaign|referral|content|conversion)/i.test(primaryGoal);
 }
 
 function addDependency(map: Map<string, Set<string>>, key: string, answerId: string): void {
@@ -448,7 +660,7 @@ function group(
 function compareGaps(left: MeasurementReadinessGap, right: MeasurementReadinessGap): number {
   return SEVERITY_RANK[right.severity] - SEVERITY_RANK[left.severity]
     || right.affected_answer_ids.length - left.affected_answer_ids.length
-    || left.code.localeCompare(right.code)
+    || GAP_CODE_ORDER[left.code] - GAP_CODE_ORDER[right.code]
     || (left.definition_ref ?? '').localeCompare(right.definition_ref ?? '');
 }
 

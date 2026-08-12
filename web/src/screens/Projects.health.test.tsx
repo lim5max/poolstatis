@@ -27,7 +27,16 @@ describe('project portfolio health', () => {
           meter: 'events_stored', period: '2026-08', accepted_events: 42,
           last_ingest_at: '2026-08-11T11:00:00Z', source: 'usage_ledger', basis: 'ingest_time',
         },
-        key_outcome_available: true, health: 'needs_attention',
+        key_outcome_available: true,
+        key_outcome_readiness: {
+          state: 'ready', contract_key: 'activation', metric_key: 'activated_users',
+          evaluated_at: '2026-08-11T12:00:00Z',
+          guardrail: {
+            id: 'key_outcome_queryable', state: 'pass', reason_code: 'query_succeeded',
+            reason: 'The typed 30-day outcome query completed.', observed_events: 48,
+          },
+        },
+        health: 'needs_attention',
         attention: ['Off-standard event volume', '2 metrics awaiting review'],
         health_evaluation: {
           source: 'server', evaluated_at: '2026-08-11T12:00:00Z',
@@ -69,7 +78,11 @@ describe('project portfolio health', () => {
     expect(screen.getAllByText('Needs attention').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('310 events · 30d')).not.toBeInTheDocument();
     expect(screen.getByText(/Last ingest/)).toBeInTheDocument();
-    expect(screen.getByText('1 active contract')).toBeInTheDocument();
+    expect(screen.getByText('Queryable')).toBeInTheDocument();
+    expect(screen.getByText('activated_users')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Outcome guardrail'));
+    expect(screen.getByText('The typed 30-day outcome query completed.')).toBeInTheDocument();
+    expect(screen.getByText('48 observed events')).toBeInTheDocument();
     expect(screen.getByText('2 attention items')).toBeInTheDocument();
     expect(screen.getByText('Off-standard event volume')).toBeInTheDocument();
     fireEvent.click(screen.getByText('4 server guardrails'));

@@ -26,7 +26,7 @@ import {
   type WebWorkspaceResult,
 } from '../analysis/operations';
 import type { FunnelQueryResult, TrendQueryResult, VisualizationSpec } from '../analysis/visualization';
-import type { MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
+import type { MeasurementAnswerDependency, MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 import { useAsync, useStore } from '../store';
 import { AcquisitionPanel } from './Measurement';
 
@@ -315,7 +315,7 @@ export function WebAnalytics() {
     return (
       <div className="space-y-5">
         <ScreenHeader range={range} onRange={setRange} showRange={false} />
-        <WebSetupOrder canonicalReady={false} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} />
+        <WebSetupOrder canonicalReady={false} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} answerDependencies={readinessData?.answer_dependencies ?? []} />
         <WebSetup metric={setupData.proposedMetric} onReady={registry.reload} />
       </div>
     );
@@ -346,7 +346,7 @@ export function WebAnalytics() {
       <ScreenHeader range={range} onRange={(value) => { setRange(value); setSelectedSession(null); }} />
 
       {(!canonicalReady || !acquisitionTrusted || !outcomeReady) && (
-        <WebSetupOrder canonicalReady={canonicalReady} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} />
+        <WebSetupOrder canonicalReady={canonicalReady} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} answerDependencies={readinessData?.answer_dependencies ?? []} />
       )}
 
       {canonicalReady && acquisitionTrusted && outcomeReady && (
@@ -841,11 +841,12 @@ function routeDefinitionsReady(properties: PropertyDefinition[]) {
   return route?.status === 'trusted' && (route.enum_values?.length ?? 0) > 0;
 }
 
-function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affectedAnswerIds = [] }: {
+function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affectedAnswerIds = [], answerDependencies = [] }: {
   canonicalReady: boolean;
   acquisitionReady: boolean;
   outcomeReady: boolean;
   affectedAnswerIds?: string[];
+  answerDependencies?: MeasurementAnswerDependency[];
 }) {
   const steps = [
     { title: 'Canonical page views', ready: canonicalReady, description: 'Active web_page_views metric and accepted browser events in this period.' },
@@ -871,11 +872,14 @@ function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affecte
         <div className="mt-4 border-t pt-3 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">Affected saved answers:</span>{' '}
           <span className="inline-flex flex-wrap gap-x-2 gap-y-1">
-            {affectedAnswerIds.map((answerId) => (
-              <Link key={answerId} className="font-mono text-foreground underline decoration-muted-foreground/60 underline-offset-4" to={`/analyze/saved?answer=${encodeURIComponent(answerId)}`}>
-                {answerId}
-              </Link>
-            ))}
+            {affectedAnswerIds.map((answerId) => {
+              const dependency = answerDependencies.find((candidate) => candidate.answer_id === answerId);
+              return (
+                <Link key={answerId} className="font-mono text-foreground underline decoration-muted-foreground/60 underline-offset-4" to={dependency?.href ?? `/analyze/saved?answer=${encodeURIComponent(answerId)}`}>
+                  {dependency?.label ?? answerId}
+                </Link>
+              );
+            })}
           </span>
         </div>
       )}
