@@ -209,10 +209,35 @@ describe('Ship lifecycle', () => {
     const experimentRow = screen.getByRole('article', { name: 'Activation experiment' });
     expect(experimentRow).toHaveTextContent('Running');
     expect(experimentRow).toHaveTextContent('The experiment is collecting exposure evidence.');
-    expect(experimentRow).toHaveTextContent('OwnerNot recorded');
+    expect(experimentRow).toHaveTextContent('OwnerNot in experiment contract');
     expect(experimentRow).toHaveTextContent('Expected decisionNot scheduled');
     expect(screen.getAllByText('Outcome not available yet')).toHaveLength(2);
     screen.getAllByText('Technical details').forEach((summary) => expect(summary.closest('details')).not.toHaveAttribute('open'));
+  });
+
+  it('uses the exact linked release contract for experiment owner and decision timing', async () => {
+    const linked = {
+      ...release('observing'),
+      experiment_key: 'activation_running',
+    };
+    mockedStore.mockReturnValue({
+      client: {
+        releases: vi.fn().mockResolvedValue([linked]),
+        decisions: vi.fn().mockResolvedValue([]),
+        experiments: vi.fn().mockResolvedValue([experiment('running')]),
+        contracts: vi.fn().mockResolvedValue([]),
+      },
+      project: 'alpha',
+      env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Changes /></MemoryRouter>);
+
+    const row = await screen.findByRole('article', { name: 'Activation experiment' });
+    expect(row).toHaveTextContent('Ownergrowth-team');
+    expect(row).toHaveTextContent(/Expected decision.*Aug 11, 2026/);
+    fireEvent.click(within(row).getByText('Technical details'));
+    expect(row).toHaveTextContent(`Linked release ${linked.id}`);
   });
 
   it('marks the exact release requested by a Decisions handoff', async () => {
