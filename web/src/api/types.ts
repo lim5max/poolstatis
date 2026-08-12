@@ -889,6 +889,9 @@ export interface AccountMode {
     manage_personal_tokens: boolean;
     review_decisions: boolean;
     set_official_answers: boolean;
+    configure_usage_entitlement: 'available' | 'unavailable_hosted' | 'unavailable_scope';
+    review_plan: 'unavailable';
+    set_usage_alert: 'unavailable';
   };
   primary_action: {
     id: 'manage_hosted_account' | 'sign_in_to_manage_account' | 'open_local_setup';
@@ -1680,8 +1683,9 @@ export interface UsageControlResult extends ControlTowerResult {
     percent: 50 | 75 | 90 | 100;
     state: 'reached' | 'projected' | 'not_projected' | 'not_applicable';
     reached_or_projected_at: string | null;
-    notification_state: 'not_configured';
-    audit_source: 'usage_ledger';
+    configured_threshold: number | null;
+    notification_state: 'not_configured' | 'armed' | 'recorded';
+    audit_source: 'usage_ledger' | 'organization_entitlement' | 'usage_warning';
   }>;
   contributors: Array<{
     project_slug: string;
@@ -1699,6 +1703,32 @@ export interface UsageControlResult extends ControlTowerResult {
     unattributed_quantity: number;
     overattributed_quantity: number;
     state: 'reconciled' | 'partial';
+  };
+}
+
+export interface UsageEntitlementControl {
+  schema_version: 1;
+  meter: 'events_stored';
+  revision: number;
+  hard_limit: number | null;
+  warning_thresholds: number[];
+  current_usage: number;
+  remaining: number | null;
+  changed: boolean;
+  consequences: {
+    scope: 'organization_all_projects_and_environments';
+    cap_enforcement: 'accepted_batches_exceeding_cap_are_rejected' | 'accepted_events_continue_without_core_cap';
+    threshold_recording: 'crossings_recorded_in_core_without_external_delivery' | 'not_configured';
+    effective_cycle: string;
+  };
+  audit: {
+    source: 'usage_entitlement_revisions';
+    latest: null | {
+      revision: number;
+      actor_kind: 'personal_token' | 'hosted_user' | 'unknown';
+      reason: string;
+      created_at: string;
+    };
   };
 }
 

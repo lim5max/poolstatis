@@ -16,6 +16,7 @@ export function accountModeForAuth(auth: AuthContext, hosted: boolean) {
     && (auth.kind === 'personal' || auth.kind === 'user')
     && roleAllowsOrganization;
   const hostedUser = hosted && auth.kind === 'user';
+  const selfHostUsageManagement = !hosted && auth.kind === 'personal' && organizationWide;
   const hostedAccountAction = {
     id: hostedUser ? 'manage_hosted_account' as const : 'sign_in_to_manage_account' as const,
     kind: 'navigate' as const,
@@ -44,6 +45,13 @@ export function accountModeForAuth(auth: AuthContext, hosted: boolean) {
       manage_personal_tokens: hostedUser && (role === 'owner' || role === 'admin'),
       review_decisions: signedInReviewer || legacySelfHostReviewer,
       set_official_answers: organizationManager,
+      configure_usage_entitlement: selfHostUsageManagement
+        ? 'available' as const
+        : hosted
+          ? 'unavailable_hosted' as const
+          : 'unavailable_scope' as const,
+      review_plan: 'unavailable' as const,
+      set_usage_alert: 'unavailable' as const,
     },
     primary_action: hosted
       ? hostedAccountAction

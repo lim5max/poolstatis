@@ -1,6 +1,6 @@
 import type {
   AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataHealthResult, DataHealthVerifyInput, DataHealthVerifyResult, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, FunnelInvestigation, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
-  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectPortfolioResult, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
+  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectPortfolioResult, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, UsageEntitlementControl, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
 import type { OperationalQueryInput, OperationalQueryResult, PersonResult } from '../analysis/operations';
@@ -156,6 +156,19 @@ export class PoolstatisClient {
   usageActivity(dateFrom: string, dateTo: string) {
     const query = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
     return this.req<OrganizationUsageActivity>('GET', `/api/v1/me/usage/activity?${query}`);
+  }
+
+  usageEntitlement() {
+    return this.req<UsageEntitlementControl>('GET', '/api/v1/me/usage/entitlement');
+  }
+
+  configureUsageEntitlement(body: {
+    expected_revision: number;
+    hard_limit: number | null;
+    warning_thresholds: number[];
+    reason: string;
+  }) {
+    return this.req<UsageEntitlementControl>('PUT', '/api/v1/me/usage/entitlement', body);
   }
 
   completeOnboarding(body: {

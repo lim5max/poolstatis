@@ -305,10 +305,10 @@ describe('organization usage ledger', () => {
       cap: { state: 'finite', value: 2000, remaining: 800, consequence_at_100_percent: 'A batch that would exceed the limit is rejected.' },
       pace: { observed_days: 7, events_per_day_7d: 40, projected_cycle_end: 1800, confidence: 'sufficient' },
       threshold_forecasts: [
-        { percent: 50, state: 'reached', reached_or_projected_at: `${period}-12T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-        { percent: 75, state: 'projected', reached_or_projected_at: `${period}-20T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-        { percent: 90, state: 'projected', reached_or_projected_at: `${period}-26T00:00:00.000Z`, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-        { percent: 100, state: 'not_projected', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 50, state: 'reached', reached_or_projected_at: `${period}-12T00:00:00.000Z`, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 75, state: 'projected', reached_or_projected_at: `${period}-20T00:00:00.000Z`, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 90, state: 'projected', reached_or_projected_at: `${period}-26T00:00:00.000Z`, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+        { percent: 100, state: 'not_projected', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
       ],
       contributors: [{
         project_slug: 'alpha', project_name: 'Alpha', environment: 'prod',
@@ -418,7 +418,7 @@ describe('organization usage ledger', () => {
       },
       threshold_forecasts: [50, 75, 90, 100].map((percent) => ({
         percent: percent as 50 | 75 | 90 | 100, state: 'not_applicable' as const, reached_or_projected_at: null,
-        notification_state: 'not_configured' as const, audit_source: 'usage_ledger' as const,
+        configured_threshold: null, notification_state: 'not_configured' as const, audit_source: 'usage_ledger' as const,
       })),
     }));
     await screen.findByText(/No stored events in/);

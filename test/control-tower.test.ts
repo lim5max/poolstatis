@@ -374,6 +374,11 @@ describe('organization usage control', () => {
          ($1, $3, 'dev', 'events_stored', $4::date, 10, 'tower-other-now', 'tower-other-now', now())`,
       [orgId, env.projectId, other.id, `${period}-01`],
     );
+    await env.pool.query(
+      `INSERT INTO usage_warnings (org_id, meter_key, period_start, threshold, quantity)
+       VALUES ($1, 'events_stored', $2::date, 50, 60)`,
+      [orgId, `${period}-01`],
+    );
 
     const result = await api(env, env.personalToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
 
@@ -386,10 +391,10 @@ describe('organization usage control', () => {
       cap: { state: 'finite', value: 100, remaining: 30, consequence_at_100_percent: expect.any(String) },
       pace: { observed_days: 2, events_per_day_7d: 10, projected_cycle_end: expect.any(Number), confidence: 'sufficient' },
       threshold_forecasts: [
-        expect.objectContaining({ percent: 50, state: 'reached', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
-        expect.objectContaining({ percent: 75, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
-        expect.objectContaining({ percent: 90, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
-        expect.objectContaining({ percent: 100, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
+        expect.objectContaining({ percent: 50, configured_threshold: 50, state: 'reached', reached_or_projected_at: expect.any(String), notification_state: 'recorded', audit_source: 'usage_warning' }),
+        expect.objectContaining({ percent: 75, configured_threshold: 75, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'armed', audit_source: 'organization_entitlement' }),
+        expect.objectContaining({ percent: 90, configured_threshold: 90, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'armed', audit_source: 'organization_entitlement' }),
+        expect.objectContaining({ percent: 100, configured_threshold: null, state: 'projected', reached_or_projected_at: expect.any(String), notification_state: 'not_configured', audit_source: 'usage_ledger' }),
       ],
       contributors: expect.arrayContaining([
         expect.objectContaining({
@@ -455,10 +460,10 @@ describe('organization usage control', () => {
         cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
         pace: { observed_days: 0, events_per_day_7d: null, projected_cycle_end: null, confidence: 'insufficient' },
         threshold_forecasts: [
-          { percent: 50, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-          { percent: 75, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-          { percent: 90, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
-          { percent: 100, state: 'not_applicable', reached_or_projected_at: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 50, state: 'not_applicable', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 75, state: 'not_applicable', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 90, state: 'not_applicable', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
+          { percent: 100, state: 'not_applicable', reached_or_projected_at: null, configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' },
         ],
         contributors: [],
         reconciliation: {

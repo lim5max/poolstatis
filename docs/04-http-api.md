@@ -135,8 +135,11 @@ Browser Analytics добавляет atomic setup endpoint
 
 ```
 GET    /api/v1/me/usage?period=YYYY-MM
+GET    /api/v1/me/usage/control?period=YYYY-MM
 GET    /api/v1/me/usage/range?from=YYYY-MM&to=YYYY-MM
 GET    /api/v1/me/usage/activity?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+GET    /api/v1/me/usage/entitlement
+PUT    /api/v1/me/usage/entitlement
 GET    /api/v1/account-mode
 GET    /api/v1/projects
 GET    /api/v1/projects/portfolio?env=prod
@@ -310,6 +313,19 @@ credential scope, role и capabilities выводятся сервером из 
 аутентифицированного контекста. Self-host возвращает
 `hosted_account: "not_configured"` и локальное setup-действие, не фиктивные
 hosted profile/billing controls.
+
+Self-hosted Core exposes `GET/PUT /api/v1/me/usage/entitlement` only to an
+organization-wide legacy `pt_` token. A project `sk_` is always rejected, and
+hosted sessions cannot use this endpoint as a billing backdoor. `PUT` requires
+`expected_revision`, a nullable safe-integer `hard_limit`, up to 16 ascending
+absolute `warning_thresholds`, and a human-readable `reason`. The transaction
+uses the same organization/meter advisory lock as ingest, rejects a cap below
+current UTC-cycle usage, and appends immutable audit before returning read-back.
+The response states the consequences directly: a batch exceeding a finite cap
+is rejected; threshold crossings are recorded in Core `usage_warnings`, but no
+email or webhook delivery is implied. Hosted plan, credit, operator-limit, and
+delivered-alert actions remain unavailable in Core and belong to the private
+hosted control plane.
 
 `/api/v1/me/usage` remains the monthly quota/projection contract. The additive
 `/api/v1/me/usage/range` endpoint returns an inclusive range of 1–12 UTC ingest

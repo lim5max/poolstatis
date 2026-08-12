@@ -202,8 +202,16 @@ function isContributor(value: unknown): boolean {
 
 function isThreshold(value: unknown): boolean {
   if (!isRecord(value) || !isFiniteNumber(value.percent) || ![50, 75, 90, 100].includes(value.percent)
-    || !inEnum(value.state, THRESHOLD_STATES) || value.notification_state !== 'not_configured'
-    || value.audit_source !== 'usage_ledger' || !isNullableString(value.reached_or_projected_at)) return false;
+    || !inEnum(value.state, THRESHOLD_STATES)
+    || !inEnum(value.notification_state, ['not_configured', 'armed', 'recorded'] as const)
+    || !inEnum(value.audit_source, ['usage_ledger', 'organization_entitlement', 'usage_warning'] as const)
+    || !isNullableNonNegativeNumber(value.configured_threshold)
+    || !isNullableString(value.reached_or_projected_at)) return false;
+  if (value.notification_state === 'not_configured') {
+    if (value.configured_threshold !== null || value.audit_source !== 'usage_ledger') return false;
+  } else if (value.configured_threshold === null) return false;
+  else if (value.notification_state === 'armed' && value.audit_source !== 'organization_entitlement') return false;
+  else if (value.notification_state === 'recorded' && value.audit_source !== 'usage_warning') return false;
   return value.reached_or_projected_at === null || isIsoDate(value.reached_or_projected_at);
 }
 
@@ -244,7 +252,7 @@ function unavailableUsage(): UsageControlResult {
     pace: { observed_days: 0, events_per_day_7d: null, projected_cycle_end: null, confidence: 'insufficient' },
     threshold_forecasts: ([50, 75, 90, 100] as const).map((percent) => ({
       percent, state: 'not_applicable', reached_or_projected_at: null,
-      notification_state: 'not_configured', audit_source: 'usage_ledger',
+      configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger',
     })),
     contributors: [],
     reconciliation: {

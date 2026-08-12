@@ -92,8 +92,9 @@ export const usageControlResultSchema = controlTowerResultSchema.extend({
     percent: z.union([z.literal(50), z.literal(75), z.literal(90), z.literal(100)]),
     state: z.enum(['reached', 'projected', 'not_projected', 'not_applicable']),
     reached_or_projected_at: z.string().datetime().nullable(),
-    notification_state: z.literal('not_configured'),
-    audit_source: z.literal('usage_ledger'),
+    configured_threshold: z.number().int().nonnegative().nullable(),
+    notification_state: z.enum(['not_configured', 'armed', 'recorded']),
+    audit_source: z.enum(['usage_ledger', 'organization_entitlement', 'usage_warning']),
   }).strict()),
   contributors: z.array(z.object({
     project_slug: z.string(),
@@ -189,11 +190,17 @@ export async function getOrganizationUsageControl(
          WHERE org_id = $1 AND meter_key = 'events_stored' AND period_start = $2::date`,
         [orgId, `${period}-01`],
       );
-    const entitlement = await client.query<{ hard_limit: string | null }>(
-        `SELECT hard_limit::text FROM organization_entitlements
+    const entitlement = await client.query<{ hard_limit: string | null; warning_thresholds: string[] }>(
+        `SELECT hard_limit::text, warning_thresholds FROM organization_entitlements
          WHERE org_id = $1 AND meter_key = 'events_stored'`,
         [orgId],
       );
+    const recordedWarnings = await client.query<{ threshold: string }>(
+      `SELECT threshold::text
+       FROM usage_warnings
+       WHERE org_id = $1 AND meter_key = 'events_stored' AND period_start = $2::date`,
+      [orgId, `${period}-01`],
+    );
     const daily = await client.query<{ day: string; quantity: string }>(
         `SELECT to_char(date_trunc('day', ingested_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
                 sum(quantity)::bigint::text AS quantity
@@ -245,6 +252,8 @@ export async function getOrganizationUsageControl(
     const hardLimit = hardLimitRaw === null || hardLimitRaw === undefined
       ? null
       : safeUsageNumber(hardLimitRaw);
+    const configuredWarnings = new Set((entitlement.rows[0]?.warning_thresholds ?? []).map(safeUsageNumber));
+    const recordedWarningSet = new Set(recordedWarnings.rows.map((row) => safeUsageNumber(row.threshold)));
     const dailyFacts = daily.rows.map((row) => ({
       day: row.day,
       at: Date.parse(`${row.day}T00:00:00.000Z`),
@@ -284,7 +293,26 @@ export async function getOrganizationUsageControl(
       return { ...row, cumulative };
     });
     const thresholdForecasts: UsageControlResult['threshold_forecasts'] = percents.map((percent) => {
-      const notification = { notification_state: 'not_configured' as const, audit_source: 'usage_ledger' as const };
+      const configuredThreshold = hardLimit === null ? null : Math.ceil(hardLimit * percent / 100);
+      const configured = configuredThreshold !== null && configuredWarnings.has(configuredThreshold);
+      const recorded = configuredThreshold !== null && recordedWarningSet.has(configuredThreshold);
+      const notification = configured
+        ? recorded
+          ? {
+              configured_threshold: configuredThreshold,
+              notification_state: 'recorded' as const,
+              audit_source: 'usage_warning' as const,
+            }
+          : {
+              configured_threshold: configuredThreshold,
+              notification_state: 'armed' as const,
+              audit_source: 'organization_entitlement' as const,
+            }
+        : {
+            configured_threshold: null,
+            notification_state: 'not_configured' as const,
+            audit_source: 'usage_ledger' as const,
+          };
       if (hardLimit === null) {
         return { percent, state: 'not_applicable', reached_or_projected_at: null, ...notification };
       }

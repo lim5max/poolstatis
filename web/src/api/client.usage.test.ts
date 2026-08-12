@@ -89,7 +89,7 @@ describe('PoolstatisClient usage', () => {
       cycle: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', timezone: 'UTC' },
       cap: { state: 'future_cap', value: 100, remaining: 50, consequence_at_100_percent: 'Pause ingest.' },
       pace: { observed_days: 7, events_per_day_7d: 10, projected_cycle_end: 300, confidence: 'future_confidence' },
-      threshold_forecasts: [{ percent: 75, state: 'future_threshold', reached_or_projected_at: null, notification_state: 'future_notification', audit_source: 'usage_ledger' }],
+      threshold_forecasts: [{ percent: 75, state: 'future_threshold', reached_or_projected_at: null, configured_threshold: null, notification_state: 'future_notification', audit_source: 'usage_ledger' }],
       contributors: [],
       reconciliation: { metered_quantity: 50, attributed_quantity: 50, difference: 0, unattributed_quantity: 0, overattributed_quantity: 0, state: 'future_reconciliation' },
     };
@@ -190,7 +190,7 @@ describe('PoolstatisClient usage', () => {
       meter: 'events_stored',
       cap: { state: 'finite', value: 100, remaining: 99, consequence_at_100_percent: 'Pause ingest.' },
       pace: { observed_days: 7, events_per_day_7d: 1, projected_cycle_end: 31, confidence: 'sufficient' },
-      threshold_forecasts: [{ percent: 75, state: 'projected', reached_or_projected_at: 'invalid-date', notification_state: 'not_configured', audit_source: 'usage_ledger' }],
+      threshold_forecasts: [{ percent: 75, state: 'projected', reached_or_projected_at: 'invalid-date', configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger' }],
       contributors: [],
       reconciliation: { metered_quantity: 1, attributed_quantity: 1, difference: 0, unattributed_quantity: 0, overattributed_quantity: 0, state: 'reconciled' },
     }), { status: 200 }));
@@ -227,7 +227,7 @@ describe('PoolstatisClient usage', () => {
       pace: { observed_days: 7, events_per_day_7d: 10, projected_cycle_end: 310, confidence: 'sufficient' },
       threshold_forecasts: [50, 75, 90, 100].map((percent) => ({
         percent, state: 'not_projected', reached_or_projected_at: null,
-        notification_state: 'not_configured', audit_source: 'usage_ledger',
+        configured_threshold: null, notification_state: 'not_configured', audit_source: 'usage_ledger',
       })),
       contributors: [{
         project_slug: 'alpha', project_name: 'Alpha', environment: 'prod',

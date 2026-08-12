@@ -1016,6 +1016,39 @@ export type EventRevisionPatch = z.infer<typeof eventRevisionPatchSchema>;
 /** UTC calendar month used by the server-side accepted-event meter. */
 export const usagePeriodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 
+const usageSafeIntegerSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const usagePositiveThresholdSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+
+export const usageEntitlementUpdateSchema = z.object({
+  expected_revision: z.number().int().min(0),
+  hard_limit: usageSafeIntegerSchema.nullable(),
+  warning_thresholds: z.array(usagePositiveThresholdSchema).max(16),
+  reason: z.string().trim().min(10).max(500),
+}).strict().superRefine((input, ctx) => {
+  let previous = -1;
+  for (const [index, threshold] of input.warning_thresholds.entries()) {
+    if (threshold <= previous) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['warning_thresholds', index],
+        message: 'thresholds must be unique and strictly ascending',
+      });
+      return;
+    }
+    previous = threshold;
+  }
+  if (input.hard_limit !== null) {
+    const beyondCap = input.warning_thresholds.findIndex((threshold) => threshold > input.hard_limit!);
+    if (beyondCap >= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['warning_thresholds', beyondCap],
+        message: 'a recorded threshold cannot be above the hard limit',
+      });
+    }
+  }
+});
+
 /** Bounded range months must also map to PostgreSQL calendar years. */
 export const usageRangePeriodSchema = usagePeriodSchema.refine((value) => !value.startsWith('0000-'));
 export const usageMonthRangeSchema = z.object({

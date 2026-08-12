@@ -86,6 +86,7 @@ import type { OutboundPolicyOptions } from '../security/outbound.js';
 import {
   getOrganizationUsage, getOrganizationUsageActivity, getOrganizationUsageControl, getOrganizationUsageRange,
 } from '../services/usage.js';
+import { configureUsageEntitlement, getUsageEntitlementControl } from '../services/usageEntitlements.js';
 import { getProjectControlTower } from '../services/controlTower.js';
 import { searchDecisionHistory, similarPastChanges } from '../services/decisionMemory.js';
 import {
@@ -102,6 +103,7 @@ import {
   metricDefinitionApplySchema, metricDefinitionPreviewSchema, semanticProjectComparisonSchema,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
   browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usageDateSchema, usageMonthRangeSchema, usagePeriodSchema,
+  usageEntitlementUpdateSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -272,6 +274,25 @@ function requireUsageReadAccess(auth: AuthContext): void {
     'insufficient_scope',
     'organization usage requires a hosted user or organization-wide personal token',
     'use a hosted user session or a personal token with no project scope',
+  );
+}
+
+/** Core entitlement writes are local self-host controls, never hosted billing mutations. */
+function requireSelfHostUsageEntitlementAccess(auth: AuthContext, hosted: boolean): void {
+  if (hosted) {
+    throw new ApiError(
+      403,
+      'usage_entitlement_unavailable_hosted',
+      'hosted usage entitlements are not managed by the Core customer API',
+      'review usage here; plan, credit and operator limit changes remain in the private hosted control plane',
+    );
+  }
+  if (auth.kind === 'personal' && auth.projectId === null && hasOrganizationManagementRole(auth)) return;
+  throw new ApiError(
+    403,
+    'insufficient_scope',
+    'self-host usage entitlement changes require an organization-wide personal token',
+    'use a legacy self-host pt_ token; project secret keys cannot change organization limits',
   );
 }
 
@@ -551,6 +572,8 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
           || route === '/api/v1/me/usage/activity'
           || route === '/api/v1/me/usage/range') {
           requireUsageReadAccess(req.auth);
+        } else if (route === '/api/v1/me/usage/entitlement') {
+          requireSelfHostUsageEntitlementAccess(req.auth, Boolean(options.auth));
         } else if (route === '/api/v1/me/tokens' && req.method === 'POST') {
           requireTokenIssuanceAccess(req.auth);
         } else if (route === '/api/v1/me/tokens' || route === '/api/v1/me/tokens/:id') {
@@ -884,6 +907,21 @@ function registerPlatformRoutes(
       throw badRequest('invalid_query_param', 'usage activity range must include between 1 and 93 UTC days');
     }
     return getOrganizationUsageActivity(ctx.pool, req.auth.orgId, from.data, to.data);
+  });
+
+  app.get('/api/v1/me/usage/entitlement', async (req) => {
+    requireSelfHostUsageEntitlementAccess(req.auth, hosted);
+    return getUsageEntitlementControl(ctx.pool, req.auth.orgId);
+  });
+
+  app.put('/api/v1/me/usage/entitlement', async (req) => {
+    requireSelfHostUsageEntitlementAccess(req.auth, hosted);
+    return configureUsageEntitlement(
+      ctx.pool,
+      req.auth.orgId,
+      usageEntitlementUpdateSchema.parse(req.body),
+      authOwner(req.auth),
+    );
   });
 
   app.get('/api/v1/projects', async (req) => {
