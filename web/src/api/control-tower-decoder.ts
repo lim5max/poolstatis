@@ -221,7 +221,7 @@ function isUsageControl(value: unknown): value is UsageControlResult {
   const pace = value.pace;
   const reconciliation = value.reconciliation;
   return value.meter === 'events_stored' && isWindow(value.cycle)
-    && isRecord(cap) && inEnum(cap.state, ['finite', 'not_configured'] as const)
+    && isRecord(cap) && inEnum(cap.state, ['finite', 'not_configured', 'unavailable'] as const)
     && isNullableNonNegativeNumber(cap.value) && isNullableNonNegativeNumber(cap.remaining) && isNullableString(cap.consequence_at_100_percent)
     && (cap.state === 'finite'
       ? isNonNegativeNumber(cap.value) && isNonNegativeNumber(cap.remaining) && isString(cap.consequence_at_100_percent)
@@ -248,7 +248,7 @@ function unavailableUsage(): UsageControlResult {
     ...base,
     meter: 'events_stored',
     cycle: base.scope.window,
-    cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
+    cap: { state: 'unavailable', value: null, remaining: null, consequence_at_100_percent: null },
     pace: { observed_days: 0, events_per_day_7d: null, projected_cycle_end: null, confidence: 'insufficient' },
     threshold_forecasts: ([50, 75, 90, 100] as const).map((percent) => ({
       percent, state: 'not_applicable', reached_or_projected_at: null,

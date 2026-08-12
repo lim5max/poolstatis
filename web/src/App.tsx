@@ -421,6 +421,9 @@ function attentionNavigationSignal(control: Pick<ControlTowerResult, 'attention'
 }
 
 export function usageNavigationSignal(usage: Pick<UsageControlResult, 'cap' | 'answer'>): ShellSignal {
+  if (usage.cap.state === 'unavailable' || usage.answer.state === 'unavailable' || usage.answer.state === 'error') {
+    return { label: 'Unavailable', tone: 'warning' };
+  }
   if (usage.cap.state !== 'finite' || usage.cap.value === null) {
     return { label: `${formatCycleQuantity(usage.answer.primary_value?.value)} this cycle`, tone: 'neutral' };
   }

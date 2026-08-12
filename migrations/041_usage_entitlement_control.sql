@@ -72,6 +72,23 @@ CREATE TRIGGER usage_entitlement_revisions_immutable
   BEFORE UPDATE OR DELETE ON usage_entitlement_revisions
   FOR EACH ROW EXECUTE FUNCTION poolstatis_reject_usage_entitlement_revision_mutation();
 
+CREATE OR REPLACE FUNCTION poolstatis_reject_usage_entitlement_delete()
+RETURNS trigger AS $usage_entitlement_delete_guard$
+BEGIN
+  -- A parent-organization cascade is the only valid physical deletion. Direct
+  -- deletes would erase the current configuration without advancing revision.
+  IF pg_trigger_depth() > 1 THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'organization_entitlements rows cannot be deleted directly' USING ERRCODE = '55000';
+END
+$usage_entitlement_delete_guard$
+LANGUAGE plpgsql;
+
+CREATE TRIGGER organization_entitlements_reject_direct_delete
+  BEFORE DELETE ON organization_entitlements
+  FOR EACH ROW EXECUTE FUNCTION poolstatis_reject_usage_entitlement_delete();
+
 -- The hosted Core runtime never receives INSERT/UPDATE on the audit table: its
 -- customer endpoint is fail-closed. SELECT is still required by the entitlement
 -- revision trigger when the hosted control plane creates a previously absent row.

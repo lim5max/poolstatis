@@ -401,9 +401,13 @@ export async function getOrganizationUsageControl(
         window: { from: start.toISOString(), to: new Date(endExclusive.getTime() - 1).toISOString(), timezone: 'UTC' },
       },
       answer: {
-        state: quantity === 0 ? 'empty' : attention.length > 0 || evidence.state === 'partial' ? 'partial' : 'ready',
-        headline: `${formattedQuantity} accepted events this UTC cycle`,
-        takeaway: hardLimit === null
+        state: attention.length > 0 || evidence.state === 'partial' ? 'partial' : quantity === 0 ? 'empty' : 'ready',
+        headline: hardLimit === 0
+          ? 'No events can be accepted'
+          : `${formattedQuantity} accepted events this UTC cycle`,
+        takeaway: hardLimit === 0
+          ? 'The configured hard limit is zero; every non-empty billable batch is rejected.'
+          : hardLimit === null
           ? 'No Core hard limit is configured for this organization.'
           : `${new Intl.NumberFormat('en-US').format(remaining ?? 0)} events remain before the configured hard limit.`,
         primary_value: { value: quantity, unit: 'count', formatted: formattedQuantity },

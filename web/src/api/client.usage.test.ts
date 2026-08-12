@@ -101,7 +101,7 @@ describe('PoolstatisClient usage', () => {
     const result = await new PoolstatisClient('https://core.example', 'pt_test').usageControl('2026-08');
 
     expect(result.answer.state).toBe('unavailable');
-    expect(result.cap).toMatchObject({ state: 'not_configured', value: null, remaining: null });
+    expect(result.cap).toMatchObject({ state: 'unavailable', value: null, remaining: null });
     expect(result.pace.confidence).toBe('insufficient');
     expect(result.threshold_forecasts[0]).toMatchObject({ state: 'not_applicable', notification_state: 'not_configured' });
     expect(result.reconciliation.state).toBe('partial');
@@ -199,7 +199,7 @@ describe('PoolstatisClient usage', () => {
 
     expect(result.answer).toMatchObject({ state: 'unavailable', headline: 'Usage unavailable' });
     expect(result.cycle).toEqual(result.scope.window);
-    expect(result.cap).toMatchObject({ state: 'not_configured', value: null, remaining: null });
+    expect(result.cap).toMatchObject({ state: 'unavailable', value: null, remaining: null });
     expect(result.threshold_forecasts).toHaveLength(4);
     expect(result.threshold_forecasts.every((threshold) => threshold.state === 'not_applicable')).toBe(true);
   });

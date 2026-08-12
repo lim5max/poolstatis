@@ -115,10 +115,16 @@ describe('self-host usage entitlement control', () => {
     const valid = await api(env, env.personalToken, 'PUT', '/api/v1/me/usage/entitlement', {
       expected_revision: 0,
       hard_limit: 10,
-      warning_thresholds: [8],
+      warning_thresholds: [4, 8],
       reason: 'Set a safe cap above the accepted current usage.',
     });
     expect(valid.status).toBe(200);
+    expect((await env.pool.query<{ threshold: string; quantity: string }>(
+      `SELECT threshold::text, quantity::text FROM usage_warnings
+       WHERE org_id = $1 AND meter_key = 'events_stored'
+       ORDER BY threshold`,
+      [organizationId],
+    )).rows).toEqual([{ threshold: '4', quantity: '5' }]);
     await expect(env.pool.query(
       'UPDATE usage_entitlement_revisions SET reason = $1 WHERE org_id = $2',
       ['Rewrite immutable history for a test.', organizationId],
@@ -173,6 +179,46 @@ describe('self-host usage entitlement control', () => {
       status: 409,
       body: { error: { code: 'usage_entitlement_revision_conflict', details: { current_revision: 2 } } },
     });
+  });
+
+  it('rejects direct entitlement deletion but permits parent organization cascade', async () => {
+    const env = await fresh();
+    const organizationId = await orgId(env);
+    const configured = await api(env, env.personalToken, 'PUT', '/api/v1/me/usage/entitlement', {
+      expected_revision: 0,
+      hard_limit: 100,
+      warning_thresholds: [50],
+      reason: 'Create a guarded entitlement before deletion checks.',
+    });
+    expect(configured.status).toBe(200);
+
+    await expect(env.pool.query(
+      `DELETE FROM organization_entitlements
+       WHERE org_id = $1 AND meter_key = 'events_stored'`,
+      [organizationId],
+    )).rejects.toThrow('organization_entitlements rows cannot be deleted directly');
+    expect((await env.pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM organization_entitlements
+       WHERE org_id = $1 AND meter_key = 'events_stored'`,
+      [organizationId],
+    )).rows[0]?.count).toBe(1);
+
+    const cascadeOrganizationId = (await env.pool.query<{ id: string }>(
+      `INSERT INTO organizations (name) VALUES ('Usage cascade guard test') RETURNING id::text`,
+    )).rows[0]!.id;
+    await env.pool.query(
+      `INSERT INTO organization_entitlements (org_id, meter_key, hard_limit, warning_thresholds)
+       VALUES ($1, 'events_stored', 10, ARRAY[5]::bigint[])`,
+      [cascadeOrganizationId],
+    );
+    await expect(env.pool.query(
+      'DELETE FROM organizations WHERE id = $1',
+      [cascadeOrganizationId],
+    )).resolves.toBeDefined();
+    expect((await env.pool.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM organization_entitlements WHERE org_id = $1',
+      [cascadeOrganizationId],
+    )).rows[0]?.count).toBe(0);
   });
 
   it('reports hosted plan and alert actions as unavailable in Core', () => {

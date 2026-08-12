@@ -210,6 +210,17 @@ export async function configureUsageEntitlement(
         previousThresholds, input.warning_thresholds, currentUsage,
       ],
     );
+    const reachedThresholds = input.warning_thresholds.filter((threshold) => threshold <= currentUsage);
+    if (reachedThresholds.length > 0) {
+      await client.query(
+        `INSERT INTO usage_warnings (org_id, meter_key, period_start, threshold, quantity)
+         SELECT $1, $2, date_trunc('month', transaction_timestamp() AT TIME ZONE 'UTC')::date,
+                threshold, $3
+         FROM unnest($4::bigint[]) AS threshold
+         ON CONFLICT (org_id, meter_key, period_start, threshold) DO NOTHING`,
+        [orgId, METER, currentUsage, reachedThresholds],
+      );
+    }
     const current = await readSnapshot(client, orgId);
     await client.query('COMMIT');
     return present(current, true);

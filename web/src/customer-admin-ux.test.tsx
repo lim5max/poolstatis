@@ -222,6 +222,13 @@ describe('customer admin shell', () => {
     } as never)).toEqual({ label: '1.2k this cycle', tone: 'neutral' });
   });
 
+  it('keeps unavailable entitlement evidence out of the neutral no-cap state', () => {
+    expect(usageNavigationSignal({
+      cap: { state: 'unavailable', value: null, remaining: null },
+      answer: { state: 'unavailable', primary_value: null },
+    } as never)).toEqual({ label: 'Unavailable', tone: 'warning' });
+  });
+
   it('treats a zero hard cap as reached instead of showing zero percent', () => {
     expect(usageNavigationSignal({
       cap: { state: 'finite', value: 0, remaining: 0 },

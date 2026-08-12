@@ -1668,7 +1668,7 @@ export interface UsageControlResult extends ControlTowerResult {
   meter: 'events_stored';
   cycle: { from: string; to: string; timezone: 'UTC' };
   cap: {
-    state: 'finite' | 'not_configured';
+    state: 'finite' | 'not_configured' | 'unavailable';
     value: number | null;
     remaining: number | null;
     consequence_at_100_percent: string | null;

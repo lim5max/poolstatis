@@ -130,8 +130,8 @@ export class PostgresEventStore implements EventStore {
         inserted += result.inserted;
         warnings.push(...result.warnings);
       }
+      await recordUsageWarnings(client, warnings);
       await client.query('COMMIT');
-      await recordUsageWarnings(this.pool, warnings).catch(() => {});
       return { inserted, ...(warnings.length > 0 ? { warnings: warnings.map(toUsageWarning) } : {}) };
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -232,8 +232,8 @@ export class PostgresEventStore implements EventStore {
           orgId: group.orgId, periodStart,
         } : undefined)
         : { inserted: 0, warnings: [] };
+      await recordUsageWarnings(client, metered.warnings);
       await client.query('COMMIT');
-      await recordUsageWarnings(this.pool, metered.warnings).catch(() => {});
       return {
         inserted: metered.inserted,
         ...(metered.warnings.length > 0 ? { warnings: metered.warnings.map(toUsageWarning) } : {}),
@@ -328,8 +328,8 @@ export class PostgresEventStore implements EventStore {
           new Date(Math.max(...timestamps)),
         ],
       );
+      await recordUsageWarnings(client, warnings);
       await client.query('COMMIT');
-      await recordUsageWarnings(this.pool, warnings).catch(() => {});
       return {
         batch: toBackfillRecord(recorded.rows[0]),
         inserted: metered.inserted,

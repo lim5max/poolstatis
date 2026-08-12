@@ -482,6 +482,42 @@ describe('organization usage control', () => {
     }
   });
 
+  it('treats a zero cap as an active blocking state even with zero accepted events', async () => {
+    const zero = await createTestEnv({ ingestBuffer: false });
+    try {
+      const organizationId = (await zero.pool.query<{ org_id: string }>(
+        'SELECT org_id::text FROM projects WHERE id = $1',
+        [zero.projectId],
+      )).rows[0]!.org_id;
+      await zero.pool.query(
+        `INSERT INTO organization_entitlements (org_id, meter_key, hard_limit, warning_thresholds)
+         VALUES ($1, 'events_stored', 0, ARRAY[0]::bigint[])`,
+        [organizationId],
+      );
+
+      const period = new Date().toISOString().slice(0, 7);
+      const result = await api(zero, zero.personalToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        answer: {
+          state: 'partial',
+          headline: 'No events can be accepted',
+          takeaway: expect.stringContaining('hard limit is zero'),
+        },
+        cap: { state: 'finite', value: 0, remaining: 0 },
+        attention: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'usage.threshold.100',
+            severity: 'critical',
+            priority: { blocking_now: true, forecasted_at: null },
+          }),
+        ]),
+      });
+    } finally {
+      await zero.close();
+    }
+  });
+
   it('keeps the previous seven-day contributor window across a UTC month boundary', async () => {
     const boundary = await createTestEnv({ ingestBuffer: false });
     try {

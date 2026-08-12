@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
 import { parseUsageEntitlementForm, Usage, usageMonthPresetRange } from './Usage';
+import { ApiError } from '../api/client';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -246,6 +247,83 @@ describe('Usage month range', () => {
     }));
     expect(await screen.findByRole('button', { name: 'Review contributors' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Review plan' })).not.toBeInTheDocument();
+  });
+
+  it('reloads and rebases the form after an entitlement revision conflict', async () => {
+    const revisionOne = {
+      schema_version: 1 as const,
+      meter: 'events_stored' as const,
+      revision: 1,
+      hard_limit: 1_000,
+      warning_thresholds: [500, 750, 900, 1_000],
+      current_usage: 620,
+      remaining: 380,
+      changed: false,
+      consequences: {
+        scope: 'organization_all_projects_and_environments' as const,
+        cap_enforcement: 'accepted_batches_exceeding_cap_are_rejected' as const,
+        threshold_recording: 'crossings_recorded_in_core_without_external_delivery' as const,
+        effective_cycle: monthOffset(0),
+      },
+      audit: { source: 'usage_entitlement_revisions' as const, latest: null },
+    };
+    const revisionTwo = { ...revisionOne, revision: 2, hard_limit: 1_400, remaining: 780 };
+    usageEntitlement.mockResolvedValueOnce(revisionOne).mockResolvedValue(revisionTwo);
+    configureUsageEntitlement
+      .mockRejectedValueOnce(new ApiError(
+        'usage_entitlement_revision_conflict',
+        'the usage entitlement changed after it was read',
+        undefined,
+        409,
+      ))
+      .mockResolvedValueOnce(revisionTwo);
+    mockedStore.mockReturnValue({
+      tokenKind: 'personal', account: null,
+      client: {
+        usageControl, usageActivity, usageRange, usageEntitlement, configureUsageEntitlement,
+        accountMode: vi.fn().mockResolvedValue({
+          deployment: { mode: 'self_host', hosted_account: 'not_configured' },
+          capabilities: {
+            configure_usage_entitlement: 'available', review_plan: 'unavailable', set_usage_alert: 'unavailable',
+          },
+          primary_action: { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
+        }),
+      },
+    } as never);
+
+    render(<MemoryRouter><Usage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure cap' }));
+    fireEvent.change(screen.getByLabelText('Hard limit'), { target: { value: '1200' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply configuration' }));
+
+    expect(await screen.findByText('Configuration changed elsewhere. Current values were reloaded; review and apply again.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Hard limit')).toHaveValue('1400');
+    fireEvent.change(screen.getByLabelText('Hard limit'), { target: { value: '1500' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply configuration' }));
+    await waitFor(() => expect(configureUsageEntitlement).toHaveBeenLastCalledWith(expect.objectContaining({
+      expected_revision: 2,
+      hard_limit: 1500,
+    })));
+  });
+
+  it('renders unavailable entitlement evidence without claiming enforcement is off', async () => {
+    const base = await usageControl();
+    usageControl.mockResolvedValue({
+      ...base,
+      answer: {
+        state: 'unavailable', headline: 'Usage unavailable', takeaway: 'No trustworthy usage result is available.',
+        primary_value: null, why_it_matters: 'Usage evidence must be reloaded.',
+      },
+      evidence: { ...base.evidence, state: 'unavailable', freshness: 'unknown' },
+      cap: { state: 'unavailable', value: null, remaining: null, consequence_at_100_percent: null },
+    });
+
+    render(<MemoryRouter><Usage /></MemoryRouter>);
+
+    expect(await screen.findByText('Entitlement unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Usage entitlement evidence is unavailable; enforcement state is unknown.')).toBeInTheDocument();
+    expect(screen.queryByText('No hard cap configured')).not.toBeInTheDocument();
+    expect(screen.queryByText('Enforcement is off; accepted events continue to be metered.')).not.toBeInTheDocument();
   });
 
   it('shows hosted plan and delivered alerts as unavailable without fake actions', async () => {
