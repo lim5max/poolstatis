@@ -28,6 +28,7 @@ const hostedOwnerMode: AccountMode = {
   capabilities: {
     portfolio: 'available', compare_projects: true, manage_profile: true,
     manage_personal_tokens: true, review_decisions: true, set_official_answers: true,
+    configure_usage_entitlement: 'unavailable_hosted', review_plan: 'unavailable', set_usage_alert: 'unavailable',
   },
   primary_action: { id: 'manage_hosted_account', kind: 'navigate', label: 'Manage account', href: '/profile' },
 };

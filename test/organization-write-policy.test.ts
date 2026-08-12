@@ -42,8 +42,8 @@ describe('organization write policy inventory', () => {
         return requiresOrganizationWriteReadiness(method, path);
       });
     const allowed = allRoutes.filter((route) => !blocked.includes(route));
-    expect(blocked).toHaveLength(73);
-    expect(allowed).toHaveLength(78);
+    expect(blocked).toHaveLength(74);
+    expect(allowed).toHaveLength(77);
 
     const exemptions = routes
       .filter((route) => {

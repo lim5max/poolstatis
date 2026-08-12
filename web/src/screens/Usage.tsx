@@ -258,8 +258,10 @@ function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure }:
 }) {
   const capped = usage.cap.state === 'finite' && usage.cap.value !== null;
   const quantity = typeof usage.answer.primary_value?.value === 'number' ? usage.answer.primary_value.value : null;
-  const progress = capped && quantity !== null && usage.cap.value! > 0
-    ? Math.max(0, Math.min(1, quantity / usage.cap.value!))
+  const progress = capped && quantity !== null
+    ? usage.cap.value === 0
+      ? 1
+      : Math.max(0, Math.min(1, quantity / usage.cap.value!))
     : null;
   const status = capped
     ? usage.cap.remaining === 0 ? 'Hard limit reached' : `${whole(usage.cap.remaining ?? 0)} events remaining`

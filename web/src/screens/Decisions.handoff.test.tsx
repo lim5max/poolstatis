@@ -34,6 +34,9 @@ function accountMode({
       manage_personal_tokens: false,
       review_decisions: review,
       set_official_answers: false,
+      configure_usage_entitlement: deployment === 'self_host' && kind === 'personal' ? 'available' : deployment === 'hosted' ? 'unavailable_hosted' : 'unavailable_scope',
+      review_plan: 'unavailable',
+      set_usage_alert: 'unavailable',
     },
     primary_action: deployment === 'hosted'
       ? { id: kind === 'user' ? 'manage_hosted_account' : 'sign_in_to_manage_account', kind: 'navigate', label: 'Manage account', href: '/profile' }

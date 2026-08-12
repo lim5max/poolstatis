@@ -30,6 +30,9 @@ function selfHostMode(kind: 'secret' | 'personal'): AccountMode {
       manage_personal_tokens: false,
       review_decisions: personal,
       set_official_answers: personal,
+      configure_usage_entitlement: personal ? 'available' : 'unavailable_scope',
+      review_plan: 'unavailable',
+      set_usage_alert: 'unavailable',
     },
     primary_action: { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
   };
