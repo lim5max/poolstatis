@@ -401,7 +401,11 @@ export async function getOrganizationUsageControl(
         window: { from: start.toISOString(), to: new Date(endExclusive.getTime() - 1).toISOString(), timezone: 'UTC' },
       },
       answer: {
-        state: attention.length > 0 || evidence.state === 'partial' ? 'partial' : quantity === 0 ? 'empty' : 'ready',
+        state: hardLimit === 0 || attention.length > 0
+          ? 'partial'
+          : quantity === 0
+            ? 'empty'
+            : evidence.state === 'partial' ? 'partial' : 'ready',
         headline: hardLimit === 0
           ? 'No events can be accepted'
           : `${formattedQuantity} accepted events this UTC cycle`,

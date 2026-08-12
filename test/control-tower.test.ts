@@ -457,6 +457,7 @@ describe('organization usage control', () => {
       const result = await api(foreign, foreign.personalToken, 'GET', `/api/v1/me/usage/control?period=${period}&org_id=ignored`);
       expect(result.status).toBe(200);
       expect(result.body).toMatchObject({
+        answer: { state: 'empty' },
         cap: { state: 'not_configured', value: null, remaining: null, consequence_at_100_percent: null },
         pace: { observed_days: 0, events_per_day_7d: null, projected_cycle_end: null, confidence: 'insufficient' },
         threshold_forecasts: [
@@ -474,6 +475,16 @@ describe('organization usage control', () => {
           overattributed_quantity: 0,
           state: 'reconciled',
         },
+      });
+      await foreign.pool.query(
+        `INSERT INTO organization_entitlements (org_id, meter_key, hard_limit, warning_thresholds)
+         SELECT org_id, 'events_stored', 100, ARRAY[]::bigint[] FROM projects WHERE id = $1`,
+        [foreign.projectId],
+      );
+      const cappedEmpty = await api(foreign, foreign.personalToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
+      expect(cappedEmpty.body).toMatchObject({
+        answer: { state: 'empty' },
+        cap: { state: 'finite', value: 100, remaining: 100 },
       });
       const secret = await api(foreign, foreign.secretToken, 'GET', `/api/v1/me/usage/control?period=${period}`);
       expect(secret.status).toBe(403);

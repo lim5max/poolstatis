@@ -250,12 +250,13 @@ function formatForecastDate(value: string | null): string | null {
     .format(new Date(value));
 }
 
-function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure }: {
+function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure, onRetry }: {
   usage: UsageControlResult;
   planName: string | null;
   mode: AccountMode | null;
   onReviewContributors: () => void;
   onConfigure: () => void;
+  onRetry: () => void;
 }) {
   const capped = usage.cap.state === 'finite' && usage.cap.value !== null;
   const capUnavailable = usage.cap.state === 'unavailable'
@@ -313,8 +314,8 @@ function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure }:
         <UsageFact label="Cycle forecast" value={usage.pace.projected_cycle_end === null ? 'Unavailable' : whole(Math.round(usage.pace.projected_cycle_end))} note={forecastNote} />
         <UsageFact
           label="Attributed"
-          value={attributedPercent === null ? 'No events' : `${attributedPercent}%`}
-          note={attributedPercent === null ? 'Nothing to reconcile' : `${whole(usage.reconciliation.attributed_quantity)} of ${whole(usage.reconciliation.metered_quantity)}`}
+          value={capUnavailable ? 'Unavailable' : attributedPercent === null ? 'No events' : `${attributedPercent}%`}
+          note={capUnavailable ? 'No trustworthy reconciliation' : attributedPercent === null ? 'Nothing to reconcile' : `${whole(usage.reconciliation.attributed_quantity)} of ${whole(usage.reconciliation.metered_quantity)}`}
         />
       </dl>
       <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
@@ -324,14 +325,16 @@ function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure }:
             : usage.cap.consequence_at_100_percent ?? 'Enforcement is off; accepted events continue to be metered.'}
         </p>
         <div className="flex flex-wrap gap-2">
-          {!capUnavailable && mode?.capabilities.configure_usage_entitlement === 'available' && !capped && (
+          {capUnavailable ? (
+            <Button className="h-11" onClick={onRetry}>Retry usage</Button>
+          ) : mode?.capabilities.configure_usage_entitlement === 'available' && !capped && (
             <Button className="h-11" onClick={onConfigure}>Configure cap</Button>
           )}
-          <Button
+          {!capUnavailable && <Button
             className="h-11 shrink-0"
-            variant={!capUnavailable && mode?.capabilities.configure_usage_entitlement === 'available' && !capped ? 'outline' : 'default'}
+            variant={mode?.capabilities.configure_usage_entitlement === 'available' && !capped ? 'outline' : 'default'}
             onClick={onReviewContributors}
-          >Review contributors</Button>
+          >Review contributors</Button>}
           {!capUnavailable && mode?.capabilities.configure_usage_entitlement === 'available' && capped && (
             <Button variant="outline" className="h-11" onClick={onConfigure}>Configure cap</Button>
           )}
@@ -566,7 +569,7 @@ function UsageEntitlementDialog({ entitlement, onCancel, onSaved, onConflict }: 
           <div className="rounded-control border bg-muted/30 p-3 text-sm text-muted-foreground">
             A batch exceeding the cap is rejected. Threshold crossings are recorded in Core; no email or webhook is delivered.
           </div>
-          {entitlement.audit.latest && <p className="text-xs text-muted-foreground">Last change · revision {entitlement.audit.latest.revision} · {entitlement.audit.latest.reason}</p>}
+          {currentEntitlement.audit.latest && <p className="text-xs text-muted-foreground">Last change · revision {currentEntitlement.audit.latest.revision} · {currentEntitlement.audit.latest.reason}</p>}
           {error && <ErrorNote>{error}</ErrorNote>}
         </div>
         <DialogFooter>
@@ -618,6 +621,9 @@ export function Usage() {
   }
 
   const usage = result.data;
+  const usageUnavailable = usage?.answer.state === 'unavailable'
+    || usage?.evidence.state === 'unavailable'
+    || usage?.cap.state === 'unavailable';
   return (
     <div className="space-y-4">
       <header>
@@ -631,18 +637,23 @@ export function Usage() {
             planName={account?.billing?.plan?.name ?? null}
             mode={mode.data}
             onConfigure={() => setConfigureOpen(true)}
+            onRetry={result.reload}
             onReviewContributors={() => document.getElementById('usage-contributors-title')?.scrollIntoView({
               behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
               block: 'start',
             })}
           />
-          {mode.data?.deployment.mode === 'hosted' && (
-            <p className="text-sm text-muted-foreground">Plan changes and delivered usage alerts are unavailable in Core.</p>
-          )}
-          {entitlementAvailable && entitlement.error && <RecoverableError onRetry={entitlement.reload}>{entitlement.error}</RecoverableError>}
-          {usage.attention.map((item) => <WarningNote key={item.id}>{item.title}: {item.impact}</WarningNote>)}
-          <div aria-labelledby="usage-contributors-title"><CurrentContributors usage={usage} /></div>
-          <UsageThresholds usage={usage} />
+          {usageUnavailable
+            ? <RecoverableError onRetry={result.reload}>Usage response could not be verified.</RecoverableError>
+            : <>
+              {mode.data?.deployment.mode === 'hosted' && (
+                <p className="text-sm text-muted-foreground">Plan changes and delivered usage alerts are unavailable in Core.</p>
+              )}
+              {entitlementAvailable && entitlement.error && <RecoverableError onRetry={entitlement.reload}>{entitlement.error}</RecoverableError>}
+              {usage.attention.map((item) => <WarningNote key={item.id}>{item.title}: {item.impact}</WarningNote>)}
+              <div aria-labelledby="usage-contributors-title"><CurrentContributors usage={usage} /></div>
+              <UsageThresholds usage={usage} />
+            </>}
         </>
       )}
       <details className="rounded-panel border bg-card" onToggle={(event) => setHistoryOpen(event.currentTarget.open)}>

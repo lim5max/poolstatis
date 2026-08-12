@@ -267,7 +267,21 @@ describe('Usage month range', () => {
       },
       audit: { source: 'usage_entitlement_revisions' as const, latest: null },
     };
-    const revisionTwo = { ...revisionOne, revision: 2, hard_limit: 1_400, remaining: 780 };
+    const revisionTwo = {
+      ...revisionOne,
+      revision: 2,
+      hard_limit: 1_400,
+      remaining: 780,
+      audit: {
+        source: 'usage_entitlement_revisions' as const,
+        latest: {
+          revision: 2,
+          actor_kind: 'personal_token' as const,
+          reason: 'Concurrent owner adjustment.',
+          created_at: '2026-08-12T00:00:00.000Z',
+        },
+      },
+    };
     usageEntitlement.mockResolvedValueOnce(revisionOne).mockResolvedValue(revisionTwo);
     configureUsageEntitlement
       .mockRejectedValueOnce(new ApiError(
@@ -298,6 +312,7 @@ describe('Usage month range', () => {
 
     expect(await screen.findByText('Configuration changed elsewhere. Current values were reloaded; review and apply again.')).toBeInTheDocument();
     expect(screen.getByLabelText('Hard limit')).toHaveValue('1400');
+    expect(screen.getByText('Last change · revision 2 · Concurrent owner adjustment.')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Hard limit'), { target: { value: '1500' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply configuration' }));
     await waitFor(() => expect(configureUsageEntitlement).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -322,8 +337,15 @@ describe('Usage month range', () => {
 
     expect(await screen.findByText('Entitlement unavailable')).toBeInTheDocument();
     expect(screen.getByText('Usage entitlement evidence is unavailable; enforcement state is unknown.')).toBeInTheDocument();
+    expect(screen.getByText('Usage response could not be verified.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry usage' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(screen.queryByText('No hard cap configured')).not.toBeInTheDocument();
     expect(screen.queryByText('Enforcement is off; accepted events continue to be metered.')).not.toBeInTheDocument();
+    expect(screen.queryByText('No events')).not.toBeInTheDocument();
+    expect(screen.queryByText('0 of 0 events attributed')).not.toBeInTheDocument();
+    expect(screen.queryByText('No cap · inactive')).not.toBeInTheDocument();
+    expect(screen.queryByText('Hard-limit consequence is not configured.')).not.toBeInTheDocument();
   });
 
   it('shows hosted plan and delivered alerts as unavailable without fake actions', async () => {

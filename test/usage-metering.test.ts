@@ -264,7 +264,7 @@ describe('accepted-event metering', () => {
     expect(retry.body.accepted).toBe(1);
   });
 
-  it('records threshold evidence atomically with accepted events', async () => {
+  it('keeps accepted ingest available when best-effort threshold evidence fails', async () => {
     const isolated = await createTestEnv({ ingestBuffer: false });
     try {
       const organizationId = (await isolated.pool.query<{ org_id: string }>(
@@ -283,36 +283,35 @@ describe('accepted-event metering', () => {
         FOR EACH ROW EXECUTE FUNCTION fail_usage_warning_insert();
       `);
 
-      const failed = await api(isolated, isolated.ingestToken, 'POST', '/i/v1/events', {
-        batch_id: 'warning-rolls-back-events',
+      const accepted = await api(isolated, isolated.ingestToken, 'POST', '/i/v1/events', {
+        batch_id: 'warning-best-effort-events',
         events: [{ event: 'warning.crossing', distinct_id: 'warning-user' }],
       });
-      expect(failed.status).toBe(500);
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.accepted).toBe(1);
+      expect(accepted.body.warnings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ meter: 'events_stored', threshold: 1, quantity: 1 }),
+      ]));
       expect((await isolated.pool.query<{ count: number }>(
         `SELECT count(*)::int AS count FROM events
          WHERE project_id = $1 AND distinct_id = 'warning-user'`,
         [isolated.projectId],
-      )).rows[0]?.count).toBe(0);
+      )).rows[0]?.count).toBe(1);
       expect((await isolated.pool.query<{ quantity: string }>(
         `SELECT quantity::text FROM organization_usage
          WHERE org_id = $1 AND meter_key = 'events_stored'
            AND period_start = date_trunc('month', now() AT TIME ZONE 'UTC')::date`,
         [organizationId],
-      )).rows[0]?.quantity ?? '0').toBe('0');
+      )).rows[0]?.quantity ?? '0').toBe('1');
+      expect((await isolated.pool.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM usage_warnings
+         WHERE org_id = $1 AND meter_key = 'events_stored'`,
+        [organizationId],
+      )).rows[0]?.count).toBe(0);
 
       await isolated.pool.query(
         'DROP TRIGGER usage_warning_failure ON usage_warnings; DROP FUNCTION fail_usage_warning_insert();',
       );
-      const retry = await api(isolated, isolated.ingestToken, 'POST', '/i/v1/events', {
-        batch_id: 'warning-rolls-back-events',
-        events: [{ event: 'warning.crossing', distinct_id: 'warning-user' }],
-      });
-      expect(retry.status).toBe(200);
-      expect((await isolated.pool.query<{ threshold: string; quantity: string }>(
-        `SELECT threshold::text, quantity::text FROM usage_warnings
-         WHERE org_id = $1 AND meter_key = 'events_stored'`,
-        [organizationId],
-      )).rows).toEqual([{ threshold: '1', quantity: '1' }]);
     } finally {
       await isolated.pool.query('DROP TRIGGER IF EXISTS usage_warning_failure ON usage_warnings; DROP FUNCTION IF EXISTS fail_usage_warning_insert();').catch(() => {});
       await isolated.close();
