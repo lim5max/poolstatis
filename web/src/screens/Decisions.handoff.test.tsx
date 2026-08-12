@@ -52,7 +52,7 @@ describe('Decisions handoff', () => {
 
     const target = await screen.findByRole('button', { name: /Review: rollback/ });
     await waitFor(() => expect(target).toHaveAttribute('aria-pressed', 'true'));
-    expect(client.decision).toHaveBeenCalledWith('alpha', 'decision-target');
+    await waitFor(() => expect(client.decision).toHaveBeenCalledWith('alpha', 'decision-target'));
 
     const newer = screen.getByRole('button', { name: /Review: keep/ });
     fireEvent.click(newer);

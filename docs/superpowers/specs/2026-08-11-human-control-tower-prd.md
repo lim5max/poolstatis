@@ -1,11 +1,29 @@
 # Poolstatis Human Control Tower — Master PRD
 
 - **Date:** 2026-08-11
-- **Status:** implementation-ready product contract
+- **Status:** approved design contract with implementation read-back
 - **Product owner:** Poolstatis product owner
 - **Scope:** Core customer admin plus a separately released private Cloud operator surface
 - **Source audit:** `/Users/maksimstil/.codex/visualizations/2026/08/11/019ff13d-7eb1-7f01-b83e-ca9f8a80120d/poolstatis-system-audit/index.html`
 **Supersedes for this program:** the navigation and human-control recommendations in `2026-07-30-analyze-navigation-visual-system-prd.md`; existing data, Query DSL, safety and release contracts remain in force
+
+## 0. Approved design direction and read-back policy
+
+The product owner approved the audit direction in full: the restrained visual language,
+decision-first hierarchy, proposed screen anatomy and the P0-P2 solution set are the product
+baseline. This document is therefore both the PRD and the acceptance ledger for the program.
+
+Implementation status is never inferred from a screenshot, a merged branch name or an item
+being listed in this PRD. Every requirement keeps one of four explicit states:
+
+- `verified` — current source, focused tests and the relevant rendered/runtime surface prove it;
+- `partial` — useful behavior exists but a named part of the requirement is still missing;
+- `planned` — accepted design, not yet implemented;
+- `excluded` — explicitly removed by the product owner with a recorded reason.
+
+The authoritative implementation read-back is appended in section 25. Until a row is
+`verified`, the corresponding target text in sections 7-19 remains a requirement rather than
+a claim about the current product.
 
 ## 1. Product decision
 
@@ -279,6 +297,71 @@ Customer detail consolidates seven current tabs into:
 
 Projects remain inside Data. Raw keys/ledger rows are progressive audit detail, not the first
 screen.
+
+### 7.4 Approved visual system and screen anatomy
+
+The audit's visual direction is approved as a system, not as a collection of screenshots.
+All customer and operator work surfaces use the same reading order:
+
+```text
+Page context -> primary signal -> one action -> visual evidence -> detail/provenance
+```
+
+The first viewport should normally contain:
+
+1. a compact header with one `h1`, a one-sentence job description and only the scope chips
+   needed to interpret the answer;
+2. one primary Answer or Attention block with takeaway, comparison, trust/freshness and one
+   visually dominant action;
+3. a chart, funnel, lifecycle rail or compact table only when it materially proves that
+   answer;
+4. secondary breakdowns, definitions, audit records and raw identifiers behind progressive
+   disclosure.
+
+Layout rules:
+
+- Keep the existing light neutral shell, STIX Two Text headings, Geist body, Geist Mono
+  identifiers and the Poolstatis green as the single product accent.
+- Use green for trusted/confirmed product state, amber from a real attention threshold and
+  red only for blocking, rejected, revoked or unsafe state. Type, account kind and
+  `not_configured` are neutral.
+- Prefer one composed panel or aligned table over several equal decorative cards. A border or
+  surface exists only when it communicates grouping, selection or elevation.
+- Use tabular numerals for measured values. Purpose, goal and takeaway are prose; keys,
+  source names and fingerprints are monospace.
+- Body copy stays concise and readable; full provenance never competes with the takeaway.
+- Desktop content uses a constrained working canvas. At mobile widths, answer and primary
+  action precede charts/tables, tables collapse to essential columns or become labelled rows,
+  and no primary workflow requires horizontal page scrolling.
+
+State anatomy:
+
+- Loading uses shape-matched skeletons and preserves the shell.
+- Empty explains future value, live prerequisites and the shortest route to one real
+  artifact; it never renders fake zero KPIs.
+- Partial preserves the valid answer and names only the missing evidence.
+- Unavailable and error retain the exact affected scope, reason, request/evidence ID and
+  repair/retry path.
+- Every disclosure and modal restores focus, every interactive target has a visible focus
+  ring, and reduced motion removes nonessential chart, rail and shimmer animation.
+
+Surface-specific block order:
+
+| Surface | Approved first-level blocks |
+| --- | --- |
+| Home | 1-3 Attention items -> key outcomes -> funnel snapshot -> recent activity -> evidence/system context |
+| Web | readiness or Web-health answer -> KPI/trend -> one selected breakdown -> secondary dimension tabs -> evidence |
+| Product | template/question -> current answer -> chart -> follow-up/save action -> Evidence disclosure |
+| Funnels | biggest loss answer -> funnel visualization -> named investigate action -> compatible release/experiment context -> Evidence |
+| People | data-health limitation or interesting-entity queue -> bounded reasons/windows -> exact lookup -> privacy/provenance |
+| Ship | current lifecycle/blocker -> one next action -> release/experiment/decision rail -> technical audit |
+| Setup | next server gate -> proof/freshness -> one action -> completed gates -> advanced connection/settings |
+| Usage | plan/cap and accepted total -> pace/projection -> contributors -> thresholds/action -> history/evidence |
+| Data/Registry | health summary -> improvements or review queue -> affected answers/consumers -> definitions/raw audit |
+| Operator | owner queue -> customer/platform facts -> selected customer decision -> Data/Commercial/Activity audit |
+
+Mobbin and competitor references in section 22 constrain interaction hierarchy only. They do
+not authorize copying their branding, decorative card density or dashboard-builder model.
 
 ## 8. Common Answer/Attention/Evidence/Action contract
 
@@ -1329,3 +1412,55 @@ The program is done only when:
 - no approved branch retains unique required commits;
 - the current product behavior, target behavior and any unresolved product risk remain
   truthfully distinguished in the release record.
+
+## 25. Implementation read-back
+
+### 25.1 Read-back snapshot — 2026-08-12
+
+This snapshot was produced from Core `origin/main` at `4fbfdf8` and private Cloud
+`origin/main` at `d20d628`. It is a requirement-by-requirement source/test audit, not a
+replacement for final browser, release and production evidence. The HTML audit's status
+summary must not be treated as independent proof because it is the source specification.
+
+| Requirement area | Status | Proven now | Residual required work |
+| --- | --- | --- | --- |
+| HC-HOME-01..06 | partial | Server-ranked top-three Attention, impact/freshness/action, outcomes, funnel and activity | Add per-item change/delta and complete moderated ten-second proof |
+| HC-WEB-01..05 | partial | Ordered readiness, traffic health/delta, lazy independent breakdowns and partial headline | Compute the selected outcome/conversion answer instead of only declaring outcome readiness; expose complete answer evidence |
+| HC-ANSWER-01..05 | partial | Canonical takeaway/trust/purpose, chart, follow-up task and validated saved/official answer backend | Remove duplicate always-open provenance, avoid blocking the first answer on comparison/trust, and offer an authorized direct Save as official path |
+| HC-FUNNEL-01..05 | partial | Overall/comparison/biggest losses/lost actors/goal and release/experiment handoff | Persist investigation evidence before proposal, name the exact transition in the action and keep causality explicitly unclaimed |
+| HC-PEOPLE-01..04 | partial | Privacy-safe factual order, bounded reason/window, exact lookup and one data-health block | Implement purpose-backed recently activated/stalled/at-risk/changed-segment ranking; do not substitute a heuristic |
+| HC-SHIP-01..04 | partial | Guided empty state, real prerequisites/action and release blocker/owner/decision date | Add real experiment owner/expected-decision facts or keep them explicitly unavailable |
+| HC-SETUP-01..05 | partial | Server next gate, collapsed completed connection, proof timestamps and read-back | Record per-gate latency/freshness and distinguish a saved decision from a generic saved insight |
+| HC-DEF-01..04 | partial | Four group counts/severity, server-ranked fix and affected saved answers | Extend the dependency graph to built-in Home/Web/Product/Funnel answers |
+| HC-EVENTS-01..04 | partial | 24h/7d trends, improvements vs doing-well, affected answers and watermark verification | Add bounded novelty semantics so a signature can truthfully be called new |
+| HC-REG-01..04 | partial | Health counts, purpose/review, used-by impact and immutable revision API | Render revision history and define `unused` consistently with built-in answer consumers |
+| HC-EXP-01..04 | verified | Guided privacy-first setup, illustrative preview, aggregate friction answer/readiness and prohibited raw-capture boundary | Re-check in the final browser matrix |
+| HC-EXPERIMENT-01..04 | partial | Readiness, atomic prepare, lifecycle links, versioned monitors and immutable pause proposal | Expose proposal target/thresholds contextually in Experiment UI; human identity must remain the only mutation reviewer |
+| HC-DECISION-01..04 | partial | Eligible-release empty flow, server queue order, assumptions/gaps/reversibility and truthful action status | Enforce human owner/admin on classic decision and follow-up approvals; current MCP mutation path contradicts the human-control promise |
+| HC-KEYS-01..04 | verified | Masked scope/env/age/last use, server rotation policy, exact revoke impact and neutral type color | Re-check focus and mobile table presentation in final browser matrix |
+| HC-USAGE-01..07 | partial | Compact plan/pace/forecast/contributors/no-cap narrative, threshold evidence and responsive layout | Link contributors to project health, wire real notification ownership/audit and make Configure cap/Set alert actions reach real capabilities |
+| HC-PROJECTS-01..04 | partial | Env-scoped portfolio, last event, health, usage, attention, create dialog and semantic comparison fail-closed behavior | Replace configured-contract proxy with current queryable outcome availability |
+| HC-PROFILE-01..03 | verified | Profile is account-only and truthfully separates hosted/self-host mode and action | Re-check hosted authenticated route in final release smoke |
+| HC-OP-01..08 | partial | Canonical server queue, bounded warning signatures, affected projects, four detail tabs, immutable actions, privacy/economics separation | Put forecast/last action in queue and Customers, fail closed on incomplete list contracts, prove positive cap-breach path and full-list filtering |
+| Shared state / shell | partial | Home/Usage signals, truthful finite/no-cap color, mobile drawer, focus/reduced-motion primitives | Make uncapped usage compact and accessible instead of `aria-hidden`; finish full state/browser matrix |
+| P2 program | partial | Scheduled semantic feed, semantic comparison, versioned metric impact, monitors/notifications and human-reviewed pause proposals exist | Complete contextual UI, notification routing ownership and role-aware presentation without relaxing approval gates |
+
+### 25.2 Current verification notes
+
+- Core typecheck passes on this snapshot.
+- A fresh full web run exposed one asynchronous assertion in the Decision handoff test: the
+  row became selected before the detail request assertion was awaited. The product code
+  already issued the request; the test now waits for the observable request and passes in
+  repeated focused runs. The full suite must be rerun after integration.
+- Independent focused Core UI audit passed 58 relevant tests. Independent Cloud audit passed
+  38 API/control-tower tests, 71 operator-web tests and five browser checks on `d20d628`.
+- The compact Usage release has already passed local desktop/mobile rendering and production
+  lineage/health checks, but the broader program remains incomplete while any row above is
+  `partial`.
+
+### 25.3 Integration rule for subsequent slices
+
+Each implementation slice must update the corresponding row from `partial` to `verified`
+only after its exact contract, authorization, focused tests and rendered state pass. A visual
+polish commit cannot close a backend semantic gap; an API field cannot close a presentation
+requirement until the user can read it in the intended hierarchy.
