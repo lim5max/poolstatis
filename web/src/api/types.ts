@@ -183,7 +183,7 @@ export interface FunnelInvestigation {
   query_spec: Record<string, unknown>;
   query_result: Record<string, unknown>;
   evidence: Record<string, unknown>;
-  lineage: { query_fingerprint: string; result_fingerprint: string };
+  lineage: { query_fingerprint: string; result_fingerprint: string; artifact_fingerprint: string };
   idempotency_key: string;
   created_by: string;
   created_at: string;

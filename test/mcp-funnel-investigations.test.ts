@@ -56,6 +56,7 @@ afterAll(async () => {
 
 describe('funnel investigation MCP parity', () => {
   it('creates, lists and reads the same immutable REST artifact', async () => {
+    expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.6.0-source' });
     const names = (await client.listTools()).tools.map((tool) => tool.name);
     expect(names).toEqual(expect.arrayContaining([
       'create_funnel_investigation', 'list_funnel_investigations', 'get_funnel_investigation',
@@ -93,6 +94,7 @@ describe('funnel investigation MCP parity', () => {
     expect(read.structuredContent).toMatchObject({ investigation: { id, lineage: {
       query_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
       result_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      artifact_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
     } } });
   });
 });

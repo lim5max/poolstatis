@@ -32,6 +32,7 @@ export interface FunnelInvestigation {
   lineage: {
     query_fingerprint: string;
     result_fingerprint: string;
+    artifact_fingerprint: string;
   };
   idempotency_key: string;
   created_by: string;
@@ -123,13 +124,28 @@ export async function createFunnelInvestigation(
   const evidence = result.evidence as unknown as Record<string, unknown>;
   const queryFingerprint = stableHash(exactQuery);
   const resultFingerprint = stableHash({ query_result: queryResult, evidence });
+  const transition = {
+    from_step: input.from_step,
+    to_step: input.to_step,
+    from_metric: from.metric_key,
+    to_metric: to.metric_key,
+    from_label: from.label,
+    to_label: to.label,
+  };
+  const artifactFingerprint = funnelInvestigationArtifactFingerprint({
+    saved_funnel: funnelSnapshot,
+    transition,
+    query_spec: exactQuery,
+    query_result: queryResult,
+    evidence,
+  });
 
   const inserted = await pool.query(
     `INSERT INTO funnel_investigations (
        project_id, env, funnel_id, funnel_key, from_step, to_step,
        funnel_snapshot, query_spec, query_result, evidence,
-       query_fingerprint, result_fingerprint, idempotency_key, created_by
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       query_fingerprint, result_fingerprint, artifact_fingerprint, idempotency_key, created_by
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      ON CONFLICT (project_id, idempotency_key) DO NOTHING
      RETURNING *`,
     [
@@ -145,6 +161,7 @@ export async function createFunnelInvestigation(
       JSON.stringify(evidence),
       queryFingerprint,
       resultFingerprint,
+      artifactFingerprint,
       input.idempotency_key,
       actor,
     ],
@@ -232,7 +249,7 @@ function rowToInvestigation(row: Record<string, any>): FunnelInvestigation {
   const snapshot = row.funnel_snapshot as FunnelInvestigation['saved_funnel'];
   const from = snapshot.steps[row.from_step];
   const to = snapshot.steps[row.to_step];
-  return {
+  const investigation: FunnelInvestigation = {
     id: row.id,
     env: row.env,
     saved_funnel: snapshot,
@@ -250,9 +267,42 @@ function rowToInvestigation(row: Record<string, any>): FunnelInvestigation {
     lineage: {
       query_fingerprint: row.query_fingerprint,
       result_fingerprint: row.result_fingerprint,
+      artifact_fingerprint: row.artifact_fingerprint,
     },
     idempotency_key: row.idempotency_key,
     created_by: row.created_by,
     created_at: new Date(row.created_at).toISOString(),
   };
+  assertFunnelInvestigationIntegrity(investigation);
+  return investigation;
+}
+
+export function funnelInvestigationArtifactFingerprint(
+  artifact: Pick<FunnelInvestigation, 'saved_funnel' | 'transition' | 'query_spec' | 'query_result' | 'evidence'>,
+): string {
+  return stableHash({
+    saved_funnel: artifact.saved_funnel,
+    transition: artifact.transition,
+    query_spec: artifact.query_spec,
+    query_result: artifact.query_result,
+    evidence: artifact.evidence,
+  });
+}
+
+export function assertFunnelInvestigationIntegrity(investigation: FunnelInvestigation): void {
+  const queryFingerprint = stableHash(investigation.query_spec);
+  const resultFingerprint = stableHash({
+    query_result: investigation.query_result,
+    evidence: investigation.evidence,
+  });
+  const artifactFingerprint = funnelInvestigationArtifactFingerprint(investigation);
+  if (queryFingerprint === investigation.lineage.query_fingerprint
+    && resultFingerprint === investigation.lineage.result_fingerprint
+    && artifactFingerprint === investigation.lineage.artifact_fingerprint) return;
+  throw new ApiError(
+    500,
+    'funnel_investigation_integrity_failed',
+    'the persisted funnel investigation does not match its immutable lineage fingerprints',
+    'do not use this artifact for analysis or release work; preserve it for operator investigation',
+  );
 }

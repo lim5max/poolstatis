@@ -35,7 +35,17 @@ import {
   reviseMonitorPolicySchema,
 } from '../automationSchemas.js';
 
-export interface McpConfig { baseUrl: string; token: string; }
+export interface McpConfig {
+  baseUrl: string;
+  token: string;
+  distribution?: 'source' | 'published-0.6.0';
+}
+
+const SOURCE_ONLY_TOOLS_PENDING_PUBLICATION = new Set([
+  'create_funnel_investigation',
+  'list_funnel_investigations',
+  'get_funnel_investigation',
+]);
 
 /** Configuration is checked before stdio opens so a broken launcher cannot leak a token to protocol output. */
 export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOKEN?: string }): McpConfig {
@@ -55,6 +65,7 @@ export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOK
 }
 
 export function createMcpServer(config: Readonly<McpConfig>): McpServer {
+const distribution = config.distribution ?? 'published-0.6.0';
 async function api(method: string, path: string, body?: unknown): Promise<unknown> {
   const res = await fetch(`${config.baseUrl}${path}`, {
     method,
@@ -98,7 +109,10 @@ function wrap<A>(fn: (args: A) => Promise<unknown>): (args: A) => Promise<ToolRe
   };
 }
 
-const server = new McpServer({ name: 'poolstatis', version: '0.6.0' });
+const server = new McpServer({
+  name: 'poolstatis',
+  version: distribution === 'published-0.6.0' ? '0.6.0' : '0.6.0-source',
+});
 const project = z.string().describe('project slug, see list_projects');
 
 function asStructuredContent(data: unknown): Record<string, unknown> {
@@ -114,6 +128,7 @@ function jsonTool(
   inputSchema: z.ZodRawShape,
   handler: (args: any) => Promise<ToolResult>,
 ): void {
+  if (distribution === 'published-0.6.0' && SOURCE_ONLY_TOOLS_PENDING_PUBLICATION.has(name)) return;
   server.registerTool(
     name,
     { description, inputSchema, outputSchema: jsonOutputSchema },

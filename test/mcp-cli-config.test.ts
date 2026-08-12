@@ -23,4 +23,15 @@ describe('MCP CLI configuration', () => {
     const second = createMcpServer({ baseUrl: 'https://two.example.test', token: 'sk_2222222222222222' });
     expect(first).not.toBe(second);
   });
+
+  it('keeps pending source tools out of the pinned 0.6.0 distribution', () => {
+    const source = createMcpServer({
+      baseUrl: 'https://source.example.test', token: 'pt_1111111111111111', distribution: 'source',
+    });
+    const published = createMcpServer({
+      baseUrl: 'https://published.example.test', token: 'pt_2222222222222222', distribution: 'published-0.6.0',
+    });
+    expect((source as any)._registeredTools).toHaveProperty('create_funnel_investigation');
+    expect((published as any)._registeredTools).not.toHaveProperty('create_funnel_investigation');
+  });
 });

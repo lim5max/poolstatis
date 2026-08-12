@@ -4,10 +4,19 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MCP_PACKAGE_SPEC } from '../src/config.js';
-import { PUBLISHED_MCP_TOOL_GROUPS } from '../web/src/mcpPublishedContract.js';
+import {
+  PUBLISHED_MCP_TOOL_GROUPS, SOURCE_ONLY_MCP_TOOLS_PENDING_PUBLICATION,
+} from '../web/src/mcpPublishedContract.js';
 
 const verifyPublishedPackage = process.env.POOLSTATIS_VERIFY_PUBLISHED_MCP === 'true';
 const suite = verifyPublishedPackage ? describe : describe.skip;
+
+describe('declared MCP distribution boundary', () => {
+  it('keeps source-only tools outside the current published package contract', () => {
+    const published = new Set(PUBLISHED_MCP_TOOL_GROUPS.flatMap(([, tools]) => tools));
+    expect(SOURCE_ONLY_MCP_TOOLS_PENDING_PUBLICATION.every((tool) => !published.has(tool))).toBe(true);
+  });
+});
 
 suite('published MCP registry contract', () => {
   let client: Client;

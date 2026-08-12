@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { activeMetric, api, createTestEnv, hoursAgo, type TestEnv } from './helpers.js';
+import { assertFunnelInvestigationIntegrity } from '../src/services/funnelInvestigations.js';
 
 let env: TestEnv;
 let foreign: TestEnv;
@@ -86,6 +87,7 @@ describe('immutable funnel investigation evidence', () => {
         lineage: {
           query_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
           result_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+          artifact_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
         },
         created_by: expect.stringMatching(/^key:/),
         created_at: expect.any(String),
@@ -111,6 +113,31 @@ describe('immutable funnel investigation evidence', () => {
       'UPDATE funnel_investigations SET created_by = $1 WHERE id = $2',
       ['tampered', created.body.investigation.id],
     )).rejects.toMatchObject({ code: '55000' });
+
+    expect(() => assertFunnelInvestigationIntegrity(created.body.investigation)).not.toThrow();
+    expect(() => assertFunnelInvestigationIntegrity({
+      ...created.body.investigation,
+      transition: { ...created.body.investigation.transition, to_label: 'Tampered' },
+    })).toThrowError(expect.objectContaining({ code: 'funnel_investigation_integrity_failed' }));
+    expect(() => assertFunnelInvestigationIntegrity({
+      ...created.body.investigation,
+      evidence: { ...created.body.investigation.evidence, state: 'trusted_after_tamper' },
+    })).toThrowError(expect.objectContaining({ code: 'funnel_investigation_integrity_failed' }));
+
+    await env.pool.query('ALTER TABLE funnel_investigations DISABLE TRIGGER funnel_investigations_append_only');
+    try {
+      await env.pool.query(
+        `UPDATE funnel_investigations
+         SET funnel_snapshot = jsonb_set(funnel_snapshot, '{steps,1,label}', '"Tampered"'::jsonb)
+         WHERE id = $1`,
+        [created.body.investigation.id],
+      );
+    } finally {
+      await env.pool.query('ALTER TABLE funnel_investigations ENABLE TRIGGER funnel_investigations_append_only');
+    }
+    const tamperedRead = await api(env, env.secretToken, 'GET', `${P(env)}/funnel-investigations/${created.body.investigation.id}`);
+    expect(tamperedRead.status).toBe(500);
+    expect(tamperedRead.body.error.code).toBe('funnel_investigation_integrity_failed');
 
     const retained = await api(env, env.secretToken, 'DELETE', `${P(env)}/funnels/activation_journey`);
     expect(retained.status).toBe(409);

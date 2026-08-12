@@ -19,6 +19,7 @@ CREATE TABLE funnel_investigations (
   evidence             jsonb NOT NULL,
   query_fingerprint    text NOT NULL CHECK (query_fingerprint ~ '^[a-f0-9]{64}$'),
   result_fingerprint   text NOT NULL CHECK (result_fingerprint ~ '^[a-f0-9]{64}$'),
+  artifact_fingerprint text NOT NULL CHECK (artifact_fingerprint ~ '^[a-f0-9]{64}$'),
   idempotency_key      text NOT NULL CHECK (length(btrim(idempotency_key)) BETWEEN 8 AND 200),
   created_by           text NOT NULL CHECK (length(btrim(created_by)) > 0),
   created_at           timestamptz NOT NULL DEFAULT now(),

@@ -330,7 +330,7 @@ describe('@poolstatis/mcp release artifact', () => {
     try {
       expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.6.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
-      expect(tools.tools).toHaveLength(143);
+      expect(tools.tools).toHaveLength(140);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'get_project_portfolio',
@@ -356,9 +356,6 @@ describe('@poolstatis/mcp release artifact', () => {
         'get_web_session',
         'get_session_engagement',
         'get_page_engagement',
-        'create_funnel_investigation',
-        'list_funnel_investigations',
-        'get_funnel_investigation',
         'list_visual_experience_versions',
         'get_visual_experience_map',
         'compare_visual_experience',

@@ -300,16 +300,6 @@ describe('Product answer-first surface', () => {
       },
     ]) as any;
     current.client.query.mockResolvedValueOnce(funnelResult([100, 60, 30]));
-    current.client.releases.mockResolvedValueOnce([{
-      id: 'release-1', env: 'prod', status: 'observing', commit_sha: 'abcdef1234567890',
-      deployed_at: '2026-07-20T00:00:00Z',
-      contract_snapshot: { primary_metric_key: 'signup_completed', guardrail_metric_keys: [] },
-    }]);
-    current.client.experiments.mockResolvedValueOnce([{
-      id: 'experiment-1', key: 'signup_copy', name: 'Signup copy', env: 'prod', status: 'running',
-      primary_metric_key: 'signup_completed', secondary_metric_keys: [],
-      started_at: '2026-07-18T00:00:00Z', concluded_at: null,
-    }]);
     current.client.createFunnelInvestigation.mockResolvedValueOnce({
       investigation: {
         id: '11111111-1111-4111-8111-111111111111',
@@ -317,7 +307,7 @@ describe('Product answer-first surface', () => {
         saved_funnel: { id: 'f1', key: 'checkout', name: 'Checkout', goal: 'Complete signup', steps: [], window_seconds: 604800 },
         transition: { from_step: 1, to_step: 2, from_metric: 'signup_started', to_metric: 'signup_completed', from_label: 'Started', to_label: 'Completed' },
         query_spec: {}, query_result: {}, evidence: {},
-        lineage: { query_fingerprint: 'a'.repeat(64), result_fingerprint: 'b'.repeat(64) },
+        lineage: { query_fingerprint: 'a'.repeat(64), result_fingerprint: 'b'.repeat(64), artifact_fingerprint: 'c'.repeat(64) },
         idempotency_key: 'test-idempotency', created_by: 'key:test', created_at: '2026-08-06T00:00:00Z',
       },
       idempotent: false,
@@ -340,8 +330,10 @@ describe('Product answer-first surface', () => {
     expect(screen.getByText('Biggest absolute')).toHaveTextContent('Visited → Started');
     expect(screen.getByText('Biggest percentage')).toHaveTextContent('Started → Completed');
     expect(screen.getByText(/Stable step order resolved an equal loss/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Temporally compatible release abcdef1234/ })).toHaveAttribute('href', '/changes');
-    expect(screen.getByRole('link', { name: /Experiment Signup copy/ })).toHaveAttribute('href', '/experiments');
+    expect(current.client.releases).not.toHaveBeenCalled();
+    expect(current.client.experiments).not.toHaveBeenCalled();
+    expect(screen.queryByText('Related change evidence')).not.toBeInTheDocument();
+    expect(screen.getByText(/does not infer a release or experiment/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Investigate Started → Completed' })).toHaveAttribute('data-variant', 'default');
     expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
     fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));

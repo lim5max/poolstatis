@@ -352,7 +352,7 @@ Surface-specific block order:
 | Home | 1-3 Attention items -> key outcomes -> funnel snapshot -> recent activity -> evidence/system context |
 | Web | readiness or Web-health answer -> KPI/trend -> one selected breakdown -> secondary dimension tabs -> evidence |
 | Product | template/question -> current answer -> chart -> follow-up/save action -> Evidence disclosure |
-| Funnels | biggest loss answer -> funnel visualization -> named investigate action -> compatible release/experiment context -> Evidence |
+| Funnels | biggest loss answer -> funnel visualization -> named investigate action -> immutable investigation artifact -> explicit Ship handoff -> Evidence |
 | People | data-health limitation or interesting-entity queue -> bounded reasons/windows -> exact lookup -> privacy/provenance |
 | Ship | current lifecycle/blocker -> one next action -> release/experiment/decision rail -> technical audit |
 | Setup | next server gate -> proof/freshness -> one action -> completed gates -> advanced connection/settings |
@@ -582,8 +582,10 @@ the strongest current surface.
 - `HC-FUNNEL-02` The answer names the affected step and funnel goal.
 - `HC-FUNNEL-03` Primary action `Investigate <step A> -> <step B>` opens a bounded typed
   breakdown/agent task; it does not modify the funnel.
-- `HC-FUNNEL-04` P1 links evidence to a release/experiment when an explicit compatible
-  reference exists and can save a proposal to Decisions.
+- `HC-FUNNEL-04` P1 persists an immutable project/environment-scoped investigation with
+  saved-funnel snapshot, exact query/result/evidence lineage, creator and timestamp. A later
+  Ship flow must cite that artifact and explicitly select the relevant change; time/metric
+  overlap never creates a compatibility claim or Decisions proposal.
 - `HC-FUNNEL-05` Ties use stable step order and explain both equal losses in Evidence.
 
 ### 10.5 People — P1
@@ -1427,7 +1429,7 @@ summary must not be treated as independent proof because it is the source specif
 | HC-HOME-01..06 | partial | Server-ranked top-three Attention, impact/freshness/action, outcomes, funnel and activity | Add per-item change/delta and complete moderated ten-second proof |
 | HC-WEB-01..05 | partial | Ordered readiness, traffic health/delta, lazy independent breakdowns and partial headline | Compute the selected outcome/conversion answer instead of only declaring outcome readiness; expose complete answer evidence |
 | HC-ANSWER-01..05 | partial | Canonical takeaway/trust/purpose, chart, follow-up task and validated saved/official answer backend | Remove duplicate always-open provenance, avoid blocking the first answer on comparison/trust, and offer an authorized direct Save as official path |
-| HC-FUNNEL-01..05 | partial | Overall/comparison/biggest losses/lost actors/goal and release/experiment handoff | Persist investigation evidence before proposal, name the exact transition in the action and keep causality explicitly unclaimed |
+| HC-FUNNEL-01..05 | verified | Overall/comparison/biggest losses/lost actors/goal, exact named transition, immutable investigation lineage and environment-safe explicit Ship handoff | Do not infer releases/experiments or causality; publish the pending MCP tools only in a separately versioned package after registry read-back |
 | HC-PEOPLE-01..04 | partial | Privacy-safe factual order, bounded reason/window, exact lookup and one data-health block | Implement purpose-backed recently activated/stalled/at-risk/changed-segment ranking; do not substitute a heuristic |
 | HC-SHIP-01..04 | partial | Guided empty state, real prerequisites/action and release blocker/owner/decision date | Add real experiment owner/expected-decision facts or keep them explicitly unavailable |
 | HC-SETUP-01..05 | partial | Server next gate, collapsed completed connection, proof timestamps and read-back | Record per-gate latency/freshness and distinguish a saved decision from a generic saved insight |

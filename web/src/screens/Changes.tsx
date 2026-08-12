@@ -117,6 +117,11 @@ export function Changes() {
       {requestedInvestigationId ? (
         investigation.loading ? <Loading what="reading funnel investigation…" />
           : investigation.error ? <ErrorNote>{investigation.error}</ErrorNote>
+            : investigation.data && investigation.data.env !== env ? (
+              <ErrorNote>
+                Investigation environment <code>{investigation.data.env}</code> does not match the current Ship environment <code>{env}</code>. Switch to the exact artifact environment before using this evidence; it has not been carried into the current context.
+              </ErrorNote>
+            )
             : investigation.data ? (
               <Panel title="Investigation carried into Ship" right={<Badge variant="outline">Evidence only</Badge>}>
                 <div className="space-y-2 text-sm">
@@ -124,7 +129,7 @@ export function Changes() {
                   <p className="text-muted-foreground">{investigation.data.saved_funnel.goal}</p>
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     <code className="break-all">{investigation.data.id}</code>
-                    <span>{investigation.data.env}</span>
+                    <span>Exact environment <code>{investigation.data.env}</code></span>
                     <span>{new Date(investigation.data.created_at).toLocaleString()}</span>
                   </div>
                   <p className="text-muted-foreground">This immutable artifact is descriptive context. It does not attach itself to a release, claim causality, or start an evaluation.</p>

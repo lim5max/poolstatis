@@ -4,6 +4,12 @@
 MCP server. A release is complete only after the registry artifact, not merely a
 workspace build, passes the protocol smoke.
 
+Source-only tools may be implemented before a package release. Keep them out of
+the pinned distribution profile and out of `PUBLISHED_MCP_TOOL_GROUPS` until a
+new version passes every gate below. In particular, `@poolstatis/mcp@0.6.0` does
+not include the funnel-investigation tools; a local pack that contains source
+code is not proof that npm `0.6.0` changed.
+
 ## Required gates
 
 1. Run `pnpm typecheck`, `pnpm test`, `pnpm --dir sdk test`,

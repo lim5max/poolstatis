@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ErrorNote, Loading } from '@/components/ui';
 import { AnswerCanvas, CanonicalAnswer, type EvidenceTrust } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { CreateSavedAnswerInput, Experiment, Funnel, FunnelInvestigation, MeasurementTrust, Metric, Release } from '../api/types';
+import type { CreateSavedAnswerInput, Funnel, FunnelInvestigation, MeasurementTrust, Metric } from '../api/types';
 import { useAsync, useStore } from '../store';
 import {
   ANALYSIS_TEMPLATES,
@@ -50,11 +50,6 @@ interface RequestedFunnelTransition {
   toStep: number;
 }
 
-export interface RelatedFunnelEvidence {
-  releases: Release[];
-  experiments: Experiment[];
-}
-
 const OPTION_TARGET = 'min-h-11 md:min-h-8';
 
 export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' | 'funnels' } = {}) {
@@ -85,14 +80,6 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       properties: properties.filter((property) => property.scope === 'event' && property.status === 'trusted'),
     };
   }, [project, env]);
-  const relatedEvidence = useAsync(async (): Promise<RelatedFunnelEvidence> => {
-    if (!funnelSurface || !client || !project) return { releases: [], experiments: [] };
-    const [releases, experiments] = await Promise.all([
-      client.releases(project, { env }),
-      client.experiments(project),
-    ]);
-    return { releases, experiments };
-  }, [client, project, env, funnelSurface]);
   const accountMode = useAsync(() => client!.accountMode(), [client]);
   const [resourceKey, setResourceKey] = useState(requestedFunnel);
   const [range, setRange] = useState<TimeRangePreset>(template.defaultRange);
@@ -365,8 +352,6 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           funnel={registry.data?.funnels.find((item) => item.key === (currentRun.spec.source.kind === 'funnel' ? currentRun.spec.source.key : '')) ?? null}
           result={currentRun.result}
           requestedTransition={requestedTransition}
-          relatedEvidence={relatedEvidence.data ?? { releases: [], experiments: [] }}
-          relatedEvidenceUnavailable={Boolean(relatedEvidence.error)}
           env={env}
         />
       )}
@@ -719,15 +704,11 @@ function FunnelBiggestLoss({
   funnel,
   result,
   requestedTransition,
-  relatedEvidence,
-  relatedEvidenceUnavailable,
   env,
 }: {
   funnel: Funnel | null;
   result: FunnelQueryResult;
   requestedTransition: RequestedFunnelTransition | null;
-  relatedEvidence: RelatedFunnelEvidence;
-  relatedEvidenceUnavailable: boolean;
   env: string;
 }) {
   const { client, project } = useStore();
@@ -765,11 +746,10 @@ function FunnelBiggestLoss({
   if (summary.lostActors === 0) {
     return <AnswerCanvas><div className="p-4 sm:p-5"><div className="text-sm font-medium text-muted-foreground">Biggest loss</div><h2 className="mt-1 text-xl font-semibold">No measured loss in this period</h2><p className="mt-2 text-sm text-muted-foreground">Every measured actor reached each saved funnel step. No loss or investigate action is implied.</p></div></AnswerCanvas>;
   }
-  const compatible = selectCompatibleFunnelEvidence(result, summary.toMetric, relatedEvidence, env);
   const absoluteLabel = funnelLossLabel(result, result.summary?.biggest_absolute_loss ?? null);
   const percentageLabel = funnelLossLabel(result, result.summary?.biggest_percentage_loss ?? null);
   const task = investigationId
-    ? `Investigate one measured transition without changing its definition.\n\nPoolstatis investigation: ${investigationId}\nProject: ${project}\nSaved funnel: ${funnel.key}\nGoal: ${funnel.goal}\nEnvironment: ${env}\nExact UTC range: ${result.meta.date_range.from} to ${result.meta.date_range.to}\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nObserved loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nRead the immutable artifact with get_funnel_investigation. Use registered metrics and trusted properties only. Report sample and data-quality limits. Treat every result as descriptive, not causal, and cite the investigation id in any later release work.`
+    ? `Investigate one measured transition without changing its definition.\n\nPoolstatis investigation: ${investigationId}\nProject: ${project}\nSaved funnel: ${funnel.key}\nGoal: ${funnel.goal}\nEnvironment: ${env}\nExact UTC range: ${result.meta.date_range.from} to ${result.meta.date_range.to}\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nObserved loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nRead the immutable artifact from GET /api/v1/projects/${project}/funnel-investigations/${investigationId}. The equivalent MCP tool is source/local only until the next package release; @poolstatis/mcp@0.6.0 does not include it. Use registered metrics and trusted properties only. Report sample and data-quality limits. Treat every result as descriptive, not causal, and cite the investigation id in any later release work.`
     : '';
   const copyTask = async () => {
     try {
@@ -852,29 +832,9 @@ function FunnelBiggestLoss({
         ) : <p className="mt-2 text-muted-foreground">No persisted investigation exists for this saved funnel and environment yet.</p>}
       </div>
       <div className="border-t px-4 py-4 text-sm sm:px-5">
-        <div className="font-medium">Related change evidence</div>
-        {compatible.releases.length === 0 && compatible.experiments.length === 0 ? (
-          <p className="mt-1 text-muted-foreground">
-            {relatedEvidenceUnavailable
-              ? 'Release and experiment evidence could not be read.'
-              : 'No release or experiment with the same environment and metric overlaps this exact period.'}
-          </p>
-        ) : (
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
-            {compatible.releases.map((release) => (
-              <Link key={release.id} className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">
-                Temporally compatible release {release.commit_sha.slice(0, 10)}
-              </Link>
-            ))}
-            {compatible.experiments.map((experiment) => (
-              <Link key={experiment.id} className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/experiments">
-                Experiment {experiment.name}
-              </Link>
-            ))}
-          </div>
-        )}
+        <div className="font-medium">Explicit Ship handoff</div>
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <p className="text-muted-foreground">A compatible release is context only. Persist and cite an investigation before carrying this finding into Ship.</p>
+          <p className="text-muted-foreground">Poolstatis does not infer a release or experiment from metric and time overlap. Persist this investigation, then explicitly choose the relevant change in Ship.</p>
           {investigationId ? <Link className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to={`/changes?investigation=${encodeURIComponent(investigationId)}`}>Continue through Ship with artifact {investigationId.slice(0, 8)}</Link> : null}
         </div>
       </div>
@@ -927,36 +887,6 @@ function funnelLossLabel(result: FunnelQueryResult, loss: NonNullable<FunnelQuer
   const from = result.steps[loss.from_step];
   const to = result.steps[loss.to_step];
   return from && to ? `${from.label} → ${to.label}` : 'Unavailable';
-}
-
-export function selectCompatibleFunnelEvidence(
-  result: FunnelQueryResult,
-  metricKey: string,
-  evidence: RelatedFunnelEvidence,
-  env: string,
-): RelatedFunnelEvidence {
-  const from = Date.parse(result.meta.date_range.from);
-  const to = Date.parse(result.meta.date_range.to);
-  const releases = evidence.releases.filter((release) => {
-    const deployedAt = Date.parse(release.deployed_at ?? '');
-    return release.env === env
-      && ['deployed', 'observing', 'decided'].includes(release.status)
-      && release.contract_snapshot.primary_metric_key === metricKey
-      && Number.isFinite(deployedAt)
-      && deployedAt >= from
-      && deployedAt <= to;
-  });
-  const experiments = evidence.experiments.filter((experiment) => {
-    const startedAt = Date.parse(experiment.started_at ?? '');
-    const concludedAt = experiment.concluded_at ? Date.parse(experiment.concluded_at) : Number.POSITIVE_INFINITY;
-    return experiment.env === env
-      && ['running', 'concluded'].includes(experiment.status)
-      && experiment.primary_metric_key === metricKey
-      && Number.isFinite(startedAt)
-      && startedAt <= to
-      && concludedAt >= from;
-  });
-  return { releases, experiments };
 }
 
 function Control({ label, children }: { label: string; children: React.ReactNode }) {

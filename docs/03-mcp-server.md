@@ -260,6 +260,12 @@ list_data_quality_issues(project, {env?, limit?, since_days?})
   // semantic conflicts: e.g. brief.completed exists, but entity status is still "new"
 ```
 
+Три `*_funnel_investigation` tools доступны в Core source/local runner и
+зарезервированы для следующего MCP package release. Опубликованный
+`@poolstatis/mcp@0.6.0` их ещё не содержит; до отдельного publish gate используйте
+REST endpoints. Номер в `packages/mcp/package.json` сам по себе не является
+свидетельством публикации.
+
 MCP tools expose structured JSON output (`structuredContent`) with a text JSON fallback for older clients.
 Web tools используют только typed Query DSL и registry metric keys: raw SQL и
 raw event-name escape hatch отсутствуют. Полный контракт:
