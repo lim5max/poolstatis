@@ -18,6 +18,16 @@ vi.mock('../analysis/charts', () => ({
 const mockedStore = vi.mocked(useStore);
 const routerFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 const metric = {
   id: 'web',
   key: 'web_page_views',
@@ -461,6 +471,93 @@ describe('Web analytics partial availability', () => {
     });
   });
 
+  it('reruns conversion for an exact range change with the same computed_at and ignores the stale response', async () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const sameComputedAt = '2026-08-01T00:00:00.000Z';
+    const thirtyDayRange = {
+      from: '2026-07-01T00:00:00.000Z',
+      to: '2026-07-31T00:00:00.000Z',
+    };
+    const sevenDayRange = {
+      from: '2026-07-24T00:00:00.000Z',
+      to: '2026-07-31T00:00:00.000Z',
+    };
+    const thirtyDayConversion = deferred<ReturnType<typeof conversionResult>>();
+    const sevenDayConversion = deferred<ReturnType<typeof conversionResult>>();
+    const scopedOperationalQuery = vi.fn(async (project, input) => {
+      const result = await operationalQuery(project, input);
+      if (input.kind !== 'web_analytics') return result;
+      const exactRange = input.date_from === '-7d' ? sevenDayRange : thirtyDayRange;
+      return {
+        ...result,
+        meta: { ...result.meta, computed_at: sameComputedAt, date_range: exactRange },
+      };
+    });
+    const query = vi.fn((_project, input) => {
+      if (input.kind === 'trend') {
+        return Promise.resolve({
+          kind: 'trend', series: [],
+          meta: {
+            computed_at: sameComputedAt,
+            date_range: thirtyDayRange,
+            sampling: null,
+            source: 'native',
+          },
+        });
+      }
+      if (input.kind === 'funnel') {
+        return input.date_from === sevenDayRange.from
+          ? sevenDayConversion.promise
+          : thirtyDayConversion.promise;
+      }
+      throw new Error(`Unexpected query kind: ${input.kind}`);
+    });
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric, webConversion]),
+        properties,
+        operationalQuery: scopedOperationalQuery,
+        query,
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Conversions' }), { button: 0, ctrlKey: false });
+    await waitFor(() => expect(query).toHaveBeenCalledWith('y1blin-com', expect.objectContaining({
+      kind: 'funnel',
+      date_from: thirtyDayRange.from,
+      date_to: thirtyDayRange.to,
+    })));
+
+    const period = screen.getByRole('combobox', { name: 'Period' });
+    fireEvent.keyDown(period, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'Last 7 days' }));
+    await waitFor(() => expect(query).toHaveBeenCalledWith('y1blin-com', expect.objectContaining({
+      kind: 'funnel',
+      date_from: sevenDayRange.from,
+      date_to: sevenDayRange.to,
+    })));
+
+    await act(async () => {
+      sevenDayConversion.resolve(conversionResult(sevenDayRange, 8, 4));
+    });
+    expect(await screen.findAllByText('50.0%')).toHaveLength(2);
+
+    await act(async () => {
+      thirtyDayConversion.resolve(conversionResult(thirtyDayRange, 10, 1));
+    });
+    expect(screen.getAllByText('50.0%')).toHaveLength(2);
+    expect(screen.queryByText('10.0%')).not.toBeInTheDocument();
+    expect(query.mock.calls.filter(([, input]) => input.kind === 'funnel').map(([, input]) => ({
+      from: input.date_from,
+      to: input.date_to,
+    }))).toEqual(expect.arrayContaining([thirtyDayRange, sevenDayRange]));
+  });
+
   it('does not turn a missing conversion denominator into zero percent', async () => {
     const query = vi.fn((_project, input) => input.kind === 'trend'
       ? Promise.resolve({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null, source: 'native' } })
@@ -729,6 +826,46 @@ describe('Web analytics partial availability', () => {
     );
   });
 });
+
+function conversionResult(
+  range: { from: string; to: string },
+  entered: number,
+  converted: number,
+) {
+  const conversion = converted / entered;
+  return {
+    kind: 'funnel' as const,
+    steps: [
+      {
+        label: 'Entered Visit to signup', metric_key: webConversion.key,
+        purpose: webConversion.purpose, category: null, actors: entered,
+        conversion_from_prev: 1, conversion_from_start: 1,
+      },
+      {
+        label: 'Reached Visit to signup', metric_key: webConversion.key,
+        purpose: webConversion.purpose, category: null, actors: converted,
+        conversion_from_prev: conversion, conversion_from_start: conversion,
+      },
+    ],
+    summary: {
+      overall_conversion: conversion,
+      previous_overall_conversion: null,
+      delta_percentage_points: null,
+      biggest_absolute_loss: null,
+      biggest_percentage_loss: null,
+    },
+    evidence: {
+      state: 'trusted' as const,
+      aggregation: 'ordered unique actors within the registered conversion window',
+    },
+    meta: {
+      computed_at: '2026-08-01T00:00:00.000Z',
+      date_range: range,
+      sampling: null,
+      source: 'native' as const,
+    },
+  };
+}
 
 describe('Web setup readiness', () => {
   it('requires accepted page views in the selected period for canonical readiness', () => {

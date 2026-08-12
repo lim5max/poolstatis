@@ -779,6 +779,15 @@ export const metricSourceSchemas = {
     from: eventSourceBase,
     to: eventSourceBase,
     window_seconds: z.number().int().positive().default(3600),
+  }).superRefine((source, ctx) => {
+    for (const key of ['from', 'to'] as const) {
+      if (source[key].data_source !== 'posthog') continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key, 'data_source'],
+        message: 'PostHog conversion metrics are unsupported; define event metrics and query a funnel',
+      });
+    }
   }),
   state: z.object({
     entity_type: z.string().min(1),
@@ -839,13 +848,6 @@ export const registerMetricSchema = z
           code: z.ZodIssueCode.custom,
           path: ['source', ...(m.type === 'conversion' ? [index === 0 ? 'from' : 'to'] : []), 'source_connection_id'],
           message: 'native metric sources cannot reference an external connection',
-        });
-      }
-      if (m.type === 'conversion' && source.data_source === 'posthog') {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['source'],
-          message: 'PostHog conversion metrics are unsupported; define event metrics and query a funnel',
         });
       }
     }

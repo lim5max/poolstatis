@@ -270,7 +270,9 @@ export function WebAnalytics() {
   }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension, breakdownRequested]);
   const secondaryData = secondary.data?.scope === primaryScope
     && secondary.data.dimension === operationalDimension ? secondary.data.result : null;
-  const conversionScope = `${primaryScope}\u0000${conversionMetric?.key ?? ''}`;
+  const conversionFrom = primaryData?.overview.meta.date_range.from ?? '';
+  const conversionTo = primaryData?.overview.meta.date_range.to ?? '';
+  const conversionScope = `${primaryScope}\u0000${conversionMetric?.key ?? ''}\u0000${conversionFrom}\u0000${conversionTo}`;
   const conversion = useAsync<WebConversionRead | null>(async () => {
     if (!primaryData || dimension !== 'conversion' || !conversionMetric) return null;
     const result = await client!.query(project!, {
@@ -282,7 +284,7 @@ export function WebAnalytics() {
     });
     if (result.kind !== 'funnel') throw new Error('Conversion query returned an unexpected result kind');
     return { scope: conversionScope, metric: conversionMetric, result };
-  }, [project, env, dimension, conversionMetric?.key, primaryData?.overview.meta.computed_at]);
+  }, [project, env, dimension, conversionMetric?.key, conversionScope, conversionFrom, conversionTo]);
   const conversionData = conversion.data?.scope === conversionScope ? conversion.data : null;
   const sessions = useAsync<WebSessionsRead | null>(async () => {
     if (!metric || !primaryData || !sessionsRequested) return null;

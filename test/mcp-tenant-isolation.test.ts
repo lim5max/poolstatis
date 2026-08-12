@@ -185,6 +185,30 @@ describe('MCP tenant isolation over stdio transport', () => {
       name: 'query_funnel',
       arguments: { project: sharedSlug, query: { conversion_metric: 'shared_conversion', date_from: '-7d', env: 'prod' } },
     });
+    const invalidConversionRange = await personalClient.callTool({
+      name: 'query_funnel',
+      arguments: {
+        project: sharedSlug,
+        query: {
+          conversion_metric: 'shared_conversion',
+          date_from: '2026-08-02T00:00:00.000Z',
+          date_to: '2026-08-01T00:00:00.000Z',
+          env: 'prod',
+        },
+      },
+    });
+    const emptyConversionMetric = await personalClient.callTool({
+      name: 'query_funnel',
+      arguments: {
+        project: sharedSlug,
+        query: {
+          conversion_metric: 'shared_conversion',
+          date_from: new Date(Date.now() + 24 * 3_600_000).toISOString(),
+          date_to: new Date(Date.now() + 48 * 3_600_000).toISOString(),
+          env: 'prod',
+        },
+      },
+    });
     const controlTower = await secretClient.callTool({ name: 'get_control_tower', arguments: { project: sharedSlug, env: 'prod', range: '30d' } });
     const deniedControlTower = await secretClient.callTool({ name: 'get_control_tower', arguments: { project: projects.b, env: 'prod' } });
     const usageControl = await personalClient.callTool({ name: 'get_usage_control', arguments: { period: new Date().toISOString().slice(0, 7) } });
@@ -192,6 +216,9 @@ describe('MCP tenant isolation over stdio transport', () => {
     expect(trend.isError).not.toBe(true);
     expect(funnel.isError).not.toBe(true);
     expect(conversionMetric.isError).not.toBe(true);
+    expect(invalidConversionRange.isError).toBe(true);
+    expect(invalidConversionRange.content[0]?.text).toContain('funnel_range_invalid');
+    expect(emptyConversionMetric.isError).not.toBe(true);
     expect(controlTower.isError).not.toBe(true);
     expect(controlTower.structuredContent).toMatchObject({ schema_version: 1, scope: { project_slug: sharedSlug } });
     expect(() => controlTowerResultSchema.parse(controlTower.structuredContent)).not.toThrow();
@@ -220,6 +247,23 @@ describe('MCP tenant isolation over stdio transport', () => {
       steps: [{ actors: 2 }, { actors: 1 }],
       summary: { overall_conversion: 0.5 },
       evidence: { source_refs: [{ kind: 'metric', key: 'shared_conversion' }] },
+    });
+    expect(emptyConversionMetric.structuredContent).toMatchObject({
+      steps: [
+        { actors: 0, conversion_from_prev: null, conversion_from_start: null },
+        { actors: 0, conversion_from_prev: null, conversion_from_start: null },
+      ],
+      summary: {
+        overall_conversion: null,
+        previous_overall_conversion: null,
+        delta_percentage_points: null,
+      },
+      answer: { state: 'empty' },
+      evidence: {
+        state: 'partial',
+        denominator: { value: null },
+        unavailable_reasons: [{ code: 'missing_denominator' }],
+      },
     });
     expect(JSON.stringify({ schema, trend, funnel, conversionMetric, controlTower, usageControl })).not.toContain('beta-only');
     expect(JSON.stringify({ schema, trend, funnel, conversionMetric, controlTower, usageControl })).not.toContain('MCP Beta same slug');

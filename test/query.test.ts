@@ -201,6 +201,7 @@ describe('funnel queries', () => {
       { event: 'web.conversion_started', distinct_id: 'previous-1', timestamp: timestamp(30), properties: { surface: 'web' } },
       { event: 'web.conversion_completed', distinct_id: 'previous-1', timestamp: timestamp(29), properties: { surface: 'web' } },
       { event: 'web.conversion_started', distinct_id: 'previous-2', timestamp: timestamp(30), properties: { surface: 'web' } },
+      { event: 'web.conversion_completed', distinct_id: 'previous-2', timestamp: currentFrom.toISOString(), properties: { surface: 'web' } },
       ...['current-1', 'current-2', 'current-3', 'current-4'].map((distinct_id) => ({
         event: 'web.conversion_started', distinct_id, timestamp: timestamp(12), properties: { surface: 'web' },
       })),
@@ -249,6 +250,71 @@ describe('funnel queries', () => {
       },
     });
     expect(res.body.meta.date_range).toEqual({ from: currentFrom.toISOString(), to: currentTo.toISOString() });
+  });
+
+  it('rejects an empty or reversed conversion period instead of returning false emptiness', async () => {
+    const boundary = new Date().toISOString();
+    const empty = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'funnel', conversion_metric: 'web_signup_conversion',
+      date_from: boundary, date_to: boundary, env: 'prod',
+    });
+    expect(empty.status).toBe(400);
+    expect(empty.body.error.code).toBe('funnel_range_invalid');
+
+    const reversed = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'funnel', conversion_metric: 'web_signup_conversion',
+      date_from: '2026-08-02T00:00:00.000Z',
+      date_to: '2026-08-01T00:00:00.000Z', env: 'prod',
+    });
+    expect(reversed.status).toBe(400);
+    expect(reversed.body.error.code).toBe('funnel_range_invalid');
+  });
+
+  it('keeps every conversion rate unavailable when no actor enters the funnel', async () => {
+    await activeMetric(env, {
+      key: 'empty_web_conversion',
+      name: 'Empty web conversion',
+      type: 'conversion',
+      purpose: 'Measures an intentionally empty conversion period without inventing a rate.',
+      source: {
+        from: { event: 'empty.conversion_started' },
+        to: { event: 'empty.conversion_completed' },
+        window_seconds: 3600,
+      },
+    });
+    const dateFrom = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const dateTo = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    const res = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'funnel', conversion_metric: 'empty_web_conversion',
+      date_from: dateFrom, date_to: dateTo, env: 'prod',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.steps).toEqual([
+      expect.objectContaining({
+        actors: 0,
+        conversion_from_prev: null,
+        conversion_from_start: null,
+      }),
+      expect.objectContaining({
+        actors: 0,
+        conversion_from_prev: null,
+        conversion_from_start: null,
+      }),
+    ]);
+    expect(res.body.summary).toMatchObject({
+      overall_conversion: null,
+      previous_overall_conversion: null,
+      delta_percentage_points: null,
+    });
+    expect(res.body.answer).toMatchObject({ state: 'empty' });
+    expect(res.body.answer.primary_value).toBeUndefined();
+    expect(res.body.evidence).toMatchObject({
+      state: 'partial',
+      denominator: { value: null },
+      sample: { eligible: null, observed: null, coverage: null },
+      unavailable_reasons: [{ code: 'missing_denominator' }],
+    });
   });
 
   it('computes one adjacent-period comparison with the same project, environment and steps', async () => {
@@ -406,6 +472,52 @@ describe('funnel queries', () => {
 
     expect(res.status).toBe(400);
     expect(JSON.stringify(res.body)).toContain('PostHog conversion metrics are unsupported');
+  });
+
+  it('keeps PostHog conversion metric updates fail-closed and preserves the native source', async () => {
+    await activeMetric(env, {
+      key: 'patch_native_conversion',
+      name: 'Patch native conversion',
+      type: 'conversion',
+      purpose: 'Measures a native conversion whose source must remain supported after updates.',
+      source: {
+        from: { event: 'patch.native_started' },
+        to: { event: 'patch.native_completed' },
+        window_seconds: 3600,
+      },
+    });
+    const patched = await api(
+      env,
+      env.secretToken,
+      'PATCH',
+      `${P()}/metrics/patch_native_conversion`,
+      {
+        source: {
+          from: {
+            event: 'patch.external_started',
+            data_source: 'posthog',
+            source_connection_id: '00000000-0000-4000-8000-000000000001',
+          },
+          to: {
+            event: 'patch.external_completed',
+            data_source: 'posthog',
+            source_connection_id: '00000000-0000-4000-8000-000000000001',
+          },
+          window_seconds: 3600,
+        },
+      },
+    );
+    expect(patched.status).toBe(400);
+    expect(JSON.stringify(patched.body)).toContain(
+      'PostHog conversion metrics are unsupported',
+    );
+
+    const nativeRead = await api(env, env.secretToken, 'POST', `${P()}/query`, {
+      kind: 'funnel', conversion_metric: 'patch_native_conversion',
+      date_from: '-1d', env: 'prod',
+    });
+    expect(nativeRead.status).toBe(200);
+    expect(nativeRead.body.meta.source).toBe('native');
   });
 });
 

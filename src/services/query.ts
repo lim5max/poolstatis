@@ -258,8 +258,8 @@ export type QueryResult =
         purpose: string;
         category: string | null;
         actors: number;
-        conversion_from_prev: number;
-        conversion_from_start: number;
+        conversion_from_prev: number | null;
+        conversion_from_start: number | null;
       }>;
       summary: FunnelSummary;
       answer: AnswerBlock;
@@ -1107,6 +1107,13 @@ export class QueryService {
     }
     const from = parseDateInput(q.date_from, now);
     const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    if (to.getTime() <= from.getTime()) {
+      throw badRequest(
+        'funnel_range_invalid',
+        'date_to must be later than date_from',
+        'use one non-empty half-open UTC interval: [date_from, date_to)',
+      );
+    }
 
     type EventSource = {
       event: string;
@@ -1195,7 +1202,7 @@ export class QueryService {
     let counts: number[];
     let previousCounts: number[];
     let resultSource: 'native' | 'posthog' = 'native';
-    const durationMs = Math.max(0, to.getTime() - from.getTime());
+    const durationMs = to.getTime() - from.getTime();
     const previousTo = from;
     const previousFrom = new Date(from.getTime() - durationMs);
     if (sources[0]?.dataSource === 'posthog') {
@@ -1263,8 +1270,12 @@ export class QueryService {
       purpose: stepDefs[i]!.metric.purpose,
       category: stepDefs[i]!.metric.category,
       actors,
-      conversion_from_prev: i === 0 ? 1 : ratio(actors, counts[i - 1]!),
-      conversion_from_start: i === 0 ? 1 : ratio(actors, first),
+      conversion_from_prev: i === 0
+        ? (first > 0 ? 1 : null)
+        : counts[i - 1]! > 0 ? ratio(actors, counts[i - 1]!) : null,
+      conversion_from_start: i === 0
+        ? (first > 0 ? 1 : null)
+        : first > 0 ? ratio(actors, first) : null,
     }));
     const previousSteps = previousCounts.map((actors, i) => ({
       label: stepDefs[i]!.label,

@@ -1161,6 +1161,7 @@ export class PostgresEventStore implements EventStore {
             ON s${i - 1}.distinct_id = poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id)
           WHERE e.project_id = $1 AND e.env = $2 AND e.event = $${eventParam}
             AND e."timestamp" > s${i - 1}.t
+            AND e."timestamp" < $4
             AND e."timestamp" <= s${i - 1}.t0 + make_interval(secs => $5)${filterClauses}
           GROUP BY poolstatis_resolve_actor(e.project_id, e.env, e.distinct_id), s${i - 1}.t0
         )`);
