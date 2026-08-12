@@ -12,12 +12,13 @@ describe('route-ready control tower automation screen', () => {
       policies: [{
         id: 'm1', policy_key: 'activation_drop', name: 'Activation drop', current_version: 2,
         status: 'active', next_evaluation_at: '2026-08-11T12:00:00Z',
-        revision: { metric_key: 'activation', env: 'prod', comparison_rule: 'change_down_percent', threshold: 20,
+        revision: { metric_key: 'activation', env: 'prod', target_kind: 'project', target_id: null,
+          comparison_rule: 'change_down_percent', threshold: 20,
           minimum_sample: 10, window_minutes: 1440, cadence_minutes: 60, cooldown_seconds: 3600,
-          owner: 'growth', destination_ids: ['d1'], proposal_kind: 'pause', version: 2 },
+          owner: 'growth', destination_ids: ['d1'], proposal_kind: 'pause', proposal_target: { flag_key: 'activation_rollout' }, version: 2 },
       }],
       schedules: [], findings: [], snapshots: [], inbox: [], deliveries: [],
-      proposals: [{ id: 'p1', kind: 'pause', status: 'proposed', target: { flag_key: 'activation_rollout' },
+      proposals: [{ id: 'p1', policy_id: 'm1', finding_id: 'f1', kind: 'pause', status: 'proposed', target: { flag_key: 'activation_rollout' },
         payload: { variants: [] }, undo: { variants: [] }, confirmation_fingerprint: 'a'.repeat(64),
         review_rationale: null, created_at: '2026-08-11T12:00:00Z' }],
     }} busy={false} error={null} reviewAccess="allowed" onReload={vi.fn()} onReview={onReview} onSetMonitorStatus={vi.fn()}
@@ -35,7 +36,7 @@ describe('route-ready control tower automation screen', () => {
     render(<ControlTowerView data={{
       capabilities: { in_product: 'configured', outbox: 'configured', external: 'not_configured' },
       destinations: [], policies: [], schedules: [], findings: [], snapshots: [], inbox: [], deliveries: [],
-      proposals: [{ id: 'p1', kind: 'rollback', status: 'proposed', target: { flag_key: 'activation_rollout' },
+      proposals: [{ id: 'p1', policy_id: 'm1', finding_id: 'f1', kind: 'rollback', status: 'proposed', target: { flag_key: 'activation_rollout' },
         payload: { variants: [] }, undo: { variants: [] }, confirmation_fingerprint: 'b'.repeat(64),
         review_rationale: null, created_at: '2026-08-11T12:00:00Z' }],
     }} busy={false} error={null} reviewAccess="sign_in_required" onReload={vi.fn()} onReview={vi.fn()}

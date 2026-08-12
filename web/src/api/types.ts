@@ -198,10 +198,12 @@ export interface MonitorPolicy {
   id: string; policy_key: string; name: string; current_version: number;
   status: 'active' | 'paused' | 'archived'; next_evaluation_at: string;
   revision: {
-    metric_key: string; env: string; comparison_rule: string; threshold: number;
+    metric_key: string; env: string; target_kind: 'project' | 'release' | 'experiment';
+    target_id: string | null; comparison_rule: string; threshold: number;
     minimum_sample: number; window_minutes: number; cadence_minutes: number;
     cooldown_seconds: number; owner: string; destination_ids: string[];
-    proposal_kind: 'pause' | 'rollback' | null; version: number;
+    proposal_kind: 'pause' | 'rollback' | null; proposal_target: Record<string, unknown> | null;
+    version: number;
   };
 }
 
@@ -216,7 +218,8 @@ export interface InsightFeedSchedule {
 }
 
 export interface AutomationProposal {
-  id: string; kind: 'pause' | 'rollback'; status: 'proposed' | 'approved' | 'rejected';
+  id: string; policy_id: string; finding_id: string;
+  kind: 'pause' | 'rollback'; status: 'proposed' | 'approved' | 'rejected';
   target: Record<string, unknown>; payload: Record<string, unknown>; undo: Record<string, unknown>;
   confirmation_fingerprint: string; proposed_by?: string; reviewed_by?: string | null;
   reviewed_at?: string | null; review_rationale: string | null; created_at: string;
