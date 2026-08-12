@@ -562,21 +562,21 @@ jsonTool(
 
 jsonTool(
   'approve_decision',
-  'Compatibility surface for decision review. API-key and MCP sessions are intentionally denied with human_user_required; a signed-in workspace owner or admin must approve in the admin.',
+  'Compatibility surface for decision review. Hosted MCP/API-key sessions are denied; a signed-in owner/admin must approve. Legacy ownerless self-host personal tokens remain compatible, and Core cannot distinguish admin UI from MCP when both use that token, so the human-only boundary is partial.',
   { project, id: z.string().uuid(), rationale: reviewDecisionSchema.shape.rationale },
   wrap(({ project: slug, id, rationale }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/approve`, { rationale })),
 );
 
 jsonTool(
   'reject_decision',
-  'Compatibility surface for decision review. API-key and MCP sessions are intentionally denied with human_user_required; a signed-in workspace owner or admin must reject in the admin.',
+  'Compatibility surface for decision review. Hosted MCP/API-key sessions are denied; a signed-in owner/admin must reject. Legacy ownerless self-host personal tokens remain compatible, and Core cannot distinguish admin UI from MCP when both use that token, so the human-only boundary is partial.',
   { project, id: z.string().uuid(), rationale: reviewDecisionSchema.shape.rationale },
   wrap(({ project: slug, id, rationale }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/reject`, { rationale })),
 );
 
 jsonTool(
   'edit_decision',
-  'Compatibility surface for decision review. API-key and MCP sessions are intentionally denied with human_user_required; a signed-in workspace owner or admin must save a correction in the admin.',
+  'Compatibility surface for decision review. Hosted MCP/API-key sessions are denied; a signed-in owner/admin must save corrections. Legacy ownerless self-host personal tokens remain compatible, and Core cannot distinguish admin UI from MCP when both use that token, so the human-only boundary is partial.',
   {
     project,
     id: z.string().uuid(),
@@ -602,7 +602,7 @@ jsonTool(
 
 jsonTool(
   'approve_action',
-  'Compatibility surface for approval-gated execution. API-key and MCP sessions are intentionally denied with human_user_required; a signed-in workspace owner or admin must approve the frozen payload in the admin.',
+  'Compatibility surface for approval-gated execution. Hosted MCP/API-key sessions are denied; a signed-in owner/admin must approve the frozen payload. Legacy ownerless self-host personal tokens remain compatible, and Core cannot distinguish admin UI from MCP when both use that token, so the human-only boundary is partial.',
   { project, id: z.string().uuid(), confirmation_fingerprint: approveDecisionActionSchema.shape.confirmation_fingerprint },
   wrap(({ project: slug, id, confirmation_fingerprint }) => api('POST', `/api/v1/projects/${slug}/actions/${id}/approve`, { confirmation_fingerprint })),
 );

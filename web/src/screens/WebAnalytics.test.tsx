@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { Metric } from '../api/types';
 import { useStore } from '../store';
-import { WebAnalytics, hasAcceptedCanonicalPageViews, hasWebOutcome, webOutcomeMetric } from './WebAnalytics';
+import { WebAnalytics, hasAcceptedCanonicalPageViews, hasWebOutcome, previousExactRange, webOutcomeMetric } from './WebAnalytics';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -226,6 +226,17 @@ describe('Web analytics partial availability', () => {
     } as never);
   });
 
+  it('anchors the previous exact period to the returned current date range', () => {
+    expect(previousExactRange({
+      from: '2026-07-01T00:00:00.000Z',
+      to: '2026-07-31T00:00:00.000Z',
+    })).toEqual({
+      from: '2026-06-01T00:00:00.000Z',
+      to: '2026-07-01T00:00:00.000Z',
+    });
+    expect(previousExactRange({ from: 'invalid', to: '2026-07-31T00:00:00.000Z' })).toBeNull();
+  });
+
   it('keeps traffic, UTM source and sessions visible when routes are unavailable', async () => {
     render(
       <TooltipProvider>
@@ -281,7 +292,7 @@ describe('Web analytics partial availability', () => {
       if (input.metric !== webOutcome.key) {
         return Promise.resolve({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } });
       }
-      const value = input.date_to === '-30d' ? 8 : 12;
+      const value = input.date_to === '2026-07-01T00:00:00.000Z' ? 8 : 12;
       return Promise.resolve({
         kind: 'trend',
         series: [{ bucket: input.date_to ?? '2026-07-31', value }],
@@ -295,7 +306,13 @@ describe('Web analytics partial availability', () => {
           source_refs: [{ kind: 'metric', key: webOutcome.key, purpose: webOutcome.purpose }],
           aggregation: 'count of accepted events', warnings: [], unavailable_reasons: [],
         },
-        meta: { computed_at: input.date_to ? '2026-07-31T00:00:01.000Z' : '2026-07-31T00:00:00.000Z', sampling: null },
+        meta: {
+          computed_at: input.date_to ? '2026-07-31T00:00:01.000Z' : '2026-07-31T00:00:00.000Z',
+          date_range: input.date_to
+            ? { from: '2026-06-01T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' }
+            : { from: '2026-07-01T00:00:00.000Z', to: '2026-07-31T00:00:00.000Z' },
+          sampling: null,
+        },
       });
     });
     mockedStore.mockReturnValue({
@@ -321,7 +338,9 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('count of accepted events')).toBeInTheDocument();
     expect(query.mock.calls.filter(([, input]) => input.metric === webOutcome.key)).toEqual([
       expect.arrayContaining([expect.objectContaining({ date_from: '-30d', date_to: null, env: 'prod' })]),
-      expect.arrayContaining([expect.objectContaining({ date_from: '-60d', date_to: '-30d', env: 'prod' })]),
+      expect.arrayContaining([expect.objectContaining({
+        date_from: '2026-06-01T00:00:00.000Z', date_to: '2026-07-01T00:00:00.000Z', env: 'prod',
+      })]),
     ]);
     const chart = await screen.findByTestId('web-trend');
     expect(answer.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

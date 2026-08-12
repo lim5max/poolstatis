@@ -393,8 +393,8 @@ function ExperimentLifecycleRow({ experiment, linkedRelease, requested }: { expe
       <div className="flex items-start lg:justify-end"><Button asChild size="sm" variant="outline"><Link to="/experiments">Open experiment</Link></Button></div>
       <dl className="grid min-w-0 gap-3 rounded-control border bg-muted/20 p-3 text-xs sm:grid-cols-3 lg:col-span-3">
         <div className="min-w-0"><dt className="text-muted-foreground">Blocker</dt><dd className="mt-1 break-words font-medium">{experiment.status === 'running' ? 'Collecting exposure evidence.' : experiment.status === 'draft' ? 'Experiment has not started.' : 'No recorded blocker.'}</dd></div>
-        <div className="min-w-0"><dt className="text-muted-foreground">Owner</dt><dd className="mt-1 break-words font-medium">{linkedRelease?.contract_snapshot.decision_owner ?? 'Not in experiment contract'}</dd></div>
-        <div className="min-w-0"><dt className="text-muted-foreground">Expected decision</dt><dd className="mt-1 break-words font-medium">{expectedDecisionAt ? formatDate(expectedDecisionAt) : 'Not scheduled'}</dd></div>
+        <div className="min-w-0"><dt className="text-muted-foreground">Linked release decision owner</dt><dd className="mt-1 break-words font-medium">{linkedRelease?.contract_snapshot.decision_owner ?? 'Unavailable'}</dd></div>
+        <div className="min-w-0"><dt className="text-muted-foreground">Linked release decision date</dt><dd className="mt-1 break-words font-medium">{expectedDecisionAt ? formatDate(expectedDecisionAt) : 'Unavailable'}</dd></div>
       </dl>
       <details className="group/disclosure min-w-0 lg:col-span-3">
         <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8">Technical details</DisclosureSummary>

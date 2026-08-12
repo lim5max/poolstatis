@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Decision, DecisionAction, Experiment, Release } from '../api/types';
+import type { AccountMode, Decision, DecisionAction, Experiment, Release } from '../api/types';
 import { useStore } from '../store';
 import { Changes } from '../screens/Changes';
 import { Decisions } from '../screens/Decisions';
@@ -20,6 +20,17 @@ vi.mock('../store', async (importOriginal) => ({
 }));
 
 const mockedStore = vi.mocked(useStore);
+
+const hostedOwnerMode: AccountMode = {
+  schema_version: 1,
+  deployment: { mode: 'hosted', hosted_account: 'available' },
+  session: { kind: 'user', scope: 'organization', role: 'owner' },
+  capabilities: {
+    portfolio: 'available', compare_projects: true, manage_profile: true,
+    manage_personal_tokens: true, review_decisions: true, set_official_answers: true,
+  },
+  primary_action: { id: 'manage_hosted_account', kind: 'navigate', label: 'Manage account', href: '/profile' },
+};
 
 const release = (status: Release['status']): Release => ({
   id: `release-${status}`,
@@ -209,13 +220,13 @@ describe('Ship lifecycle', () => {
     const experimentRow = screen.getByRole('article', { name: 'Activation experiment' });
     expect(experimentRow).toHaveTextContent('Running');
     expect(experimentRow).toHaveTextContent('The experiment is collecting exposure evidence.');
-    expect(experimentRow).toHaveTextContent('OwnerNot in experiment contract');
-    expect(experimentRow).toHaveTextContent('Expected decisionNot scheduled');
+    expect(experimentRow).toHaveTextContent('Linked release decision ownerUnavailable');
+    expect(experimentRow).toHaveTextContent('Linked release decision dateUnavailable');
     expect(screen.getAllByText('Outcome not available yet')).toHaveLength(2);
     screen.getAllByText('Technical details').forEach((summary) => expect(summary.closest('details')).not.toHaveAttribute('open'));
   });
 
-  it('uses the exact linked release contract for experiment owner and decision timing', async () => {
+  it('labels owner and timing as linked-release decision metadata', async () => {
     const linked = {
       ...release('observing'),
       experiment_key: 'activation_running',
@@ -234,8 +245,8 @@ describe('Ship lifecycle', () => {
     render(<MemoryRouter><Changes /></MemoryRouter>);
 
     const row = await screen.findByRole('article', { name: 'Activation experiment' });
-    expect(row).toHaveTextContent('Ownergrowth-team');
-    expect(row).toHaveTextContent(/Expected decision.*Aug 11, 2026/);
+    expect(row).toHaveTextContent('Linked release decision ownergrowth-team');
+    expect(row).toHaveTextContent(/Linked release decision date.*Aug 11, 2026/);
     fireEvent.click(within(row).getByText('Technical details'));
     expect(row).toHaveTextContent(`Linked release ${linked.id}`);
   });
@@ -325,6 +336,7 @@ describe('Ship lifecycle', () => {
         webhookDeliveries: vi.fn().mockResolvedValue([]),
         decisionExplanations: vi.fn().mockResolvedValue([]),
         decisionActions: vi.fn().mockResolvedValue([preparedAction]),
+        accountMode: vi.fn().mockResolvedValue(hostedOwnerMode),
       },
       project: 'alpha',
       env: 'prod',
@@ -367,6 +379,7 @@ describe('Ship lifecycle', () => {
       webhookDeliveries: vi.fn().mockResolvedValue([]),
       decisionExplanations: vi.fn().mockResolvedValue([]),
       decisionActions: vi.fn().mockResolvedValue([]),
+      accountMode: vi.fn().mockResolvedValue(hostedOwnerMode),
     };
     mockedStore.mockImplementation(() => ({
       client, project: 'alpha', env: currentEnv,
@@ -510,6 +523,7 @@ describe('Ship lifecycle', () => {
         decisionInbox: vi.fn().mockResolvedValue([]),
         decisionHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
         webhookDeliveries: vi.fn().mockResolvedValue([]),
+        accountMode: vi.fn().mockResolvedValue(hostedOwnerMode),
       },
       project: 'alpha',
       env: 'prod',

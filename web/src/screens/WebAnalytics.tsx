@@ -232,14 +232,19 @@ export function WebAnalytics() {
   const outcomeData = outcomeRead.data?.scope === outcomeScope ? outcomeRead.data : null;
   const outcomeComparison = useAsync<WebOutcomeComparisonRead | null>(async () => {
     if (!outcomeMetric || !outcomeData) return null;
-    const days = Number.parseInt(range, 10);
+    const previousRange = previousExactRange(outcomeData.result.meta.date_range);
+    if (!previousRange) throw new Error('Outcome comparison range is unavailable');
     const result = await client!.query(project!, {
-      kind: 'trend', metric: outcomeMetric.key, date_from: `-${days * 2}d`, date_to: `-${days}d`,
+      kind: 'trend', metric: outcomeMetric.key,
+      date_from: previousRange.from, date_to: previousRange.to,
       interval: 'day', filters: [], env,
     });
     if (result.kind !== 'trend') throw new Error('Outcome comparison returned an unexpected result kind');
     return { scope: outcomeScope, result };
-  }, [project, env, range, outcomeMetric?.key, outcomeData?.result.meta.computed_at]);
+  }, [
+    project, env, range, outcomeMetric?.key, outcomeData?.result.meta.computed_at,
+    outcomeData?.result.meta.date_range?.from, outcomeData?.result.meta.date_range?.to,
+  ]);
   const outcomeComparisonData = outcomeComparison.data?.scope === outcomeScope
     ? outcomeComparison.data.result
     : null;
@@ -713,6 +718,17 @@ export function webOutcomeMetric(metrics: Metric[]): Metric | null {
       const rightQueryable = right.type === 'conversion' ? 1 : 0;
       return leftQueryable - rightQueryable || left.key.localeCompare(right.key);
     })[0] ?? null;
+}
+
+export function previousExactRange(range?: { from: string; to: string }): { from: string; to: string } | null {
+  if (!range) return null;
+  const from = Date.parse(range.from);
+  const to = Date.parse(range.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return null;
+  return {
+    from: new Date(from - (to - from)).toISOString(),
+    to: new Date(from).toISOString(),
+  };
 }
 
 function routeDefinitionsReady(properties: PropertyDefinition[]) {

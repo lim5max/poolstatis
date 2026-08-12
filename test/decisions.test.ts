@@ -47,6 +47,27 @@ describe('release evidence and immutable decision revisions', () => {
     expect(applied.status).toBe(200);
     await ingestWindowEvidence(env, anchor, env.ingestToken, 'decision-evidence-prod');
     await ingestWindowEvidence(env, anchor, env.ingestDevToken, 'decision-evidence-dev');
+
+    await activeMetric(other, {
+      key: 'activation_completed', type: 'unique_actors',
+      purpose: 'Measures whether signed-up actors reach the first product value moment.',
+      source: { event: 'activation.completed', filters: [] },
+    });
+    await activeMetric(other, {
+      key: 'invite_completed', type: 'unique_actors',
+      purpose: 'Protects the invite outcome while an onboarding change is observed.',
+      source: { event: 'invite.completed', filters: [] },
+    });
+    await api(other, other.secretToken, 'POST', path(other, '/properties'), {
+      key: 'plan', scope: 'event', value_type: 'string', status: 'trusted',
+      purpose: 'Segments decision evidence by the commercial plan selected by an actor.',
+    });
+    const otherDiff = await api(other, other.secretToken, 'POST', path(other, '/contracts/diff'), declaration);
+    const otherApplied = await api(other, other.secretToken, 'POST', path(other, '/contracts/apply'), {
+      declaration, expected_revision: otherDiff.body.expected_revision,
+    });
+    expect(otherApplied.status).toBe(200);
+    await ingestWindowEvidence(other, anchor, other.ingestToken, 'decision-evidence-selfhost');
   });
 
   afterAll(async () => {
@@ -143,6 +164,19 @@ describe('release evidence and immutable decision revisions', () => {
       'UPDATE decision_revisions SET rationale = $2 WHERE decision_id = $1',
       [evaluated.body.decision.id, 'tampered'],
     )).rejects.toMatchObject({ code: '55000' });
+  });
+
+  test('keeps ownerless personal-token review compatible in legacy self-host mode', async () => {
+    const release = await register(other, 'selfhost-review', 'shorter_onboarding', anchor);
+    const evaluated = await api(other, other.secretToken, 'POST', path(other, `/releases/${release.id}/evaluate`), {});
+    expect(evaluated.status).toBe(201);
+
+    const approved = await api(other, other.personalToken, 'POST', path(other, `/decisions/${evaluated.body.decision.id}/approve`), {
+      rationale: 'The local owner reviewed the trusted evidence and accepted the bounded proposal.',
+    });
+    expect(approved.status).toBe(200);
+    expect(approved.body.decision).toMatchObject({ status: 'approved', accepted_outcome: 'keep' });
+    expect(approved.body.revisions[1].actor).toMatch(/^key:/);
   });
 
   test('preserves a rejected agent proposal and appends the human correction', async () => {

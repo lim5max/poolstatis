@@ -203,6 +203,7 @@ describe('goal-aware Attention', () => {
         title: 'Biggest loss: Visited → Started signup',
         reason: '5 actors were lost at this step (62.5%).',
         impact: 'See whether qualified visitors begin signup.',
+        delta: { value: -12.5, unit: 'percentage_point', direction: 'down', comparison_label: 'previous exact period' },
         affected: [{ kind: 'funnel', ref: 'website_signup' }],
         evidence: {
           ...server.evidence,
@@ -260,6 +261,7 @@ describe('goal-aware Attention', () => {
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Customize dashboard' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Biggest loss: Visited → Started signup' })).toBeInTheDocument();
+    expect(screen.getByText('Overall funnel conversion:')).toBeInTheDocument();
     const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
     expect(outcomes).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
     expect(outcomes.children).toHaveLength(4);

@@ -10,10 +10,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { DisclosureSummary } from '@/components/disclosure';
 import { ShipStageBadge, deriveDecisionStage } from '../components/ship-lifecycle';
 import { GuidedFirstValue } from '../components/guided-first-value';
-import type { Decision, DecisionAction, DecisionActionType, DecisionDetail, DecisionOutcome, Release } from '../api/types';
+import { accountMutationAccess, mutationAllowed, type AccountMutationAccess } from '../account-capabilities';
+import type { AccountMode, Decision, DecisionAction, DecisionActionType, DecisionDetail, DecisionOutcome, Release } from '../api/types';
 
 export function Decisions() {
-  const { client, project, env, tokenKind, account } = useStore();
+  const { client, project, env } = useStore();
   const [params] = useSearchParams();
   const requestedDecisionId = params.get('decision');
   const requestedExperimentKey = params.get('experiment');
@@ -41,7 +42,8 @@ export function Decisions() {
   const appliedRequestedDecision = useRef<string | null | undefined>(undefined);
   const [emptyBusy, setEmptyBusy] = useState(false);
   const [emptyError, setEmptyError] = useState<string | null>(null);
-  const reviewAccess = decisionReviewAccess(tokenKind, account?.membership.role);
+  const accountMode = useAsync(() => client!.accountMode(), [client]);
+  const reviewAccess = decisionReviewAccess(accountMode.data, accountMode.loading, accountMode.error);
   useEffect(() => {
     if (!list.data) return;
     const requested = requestedDecisionId && list.data.decisions.some((decision) => decision.id === requestedDecisionId)
@@ -130,14 +132,14 @@ export function Decisions() {
   </div>;
 }
 
-type HumanReviewAccess = 'allowed' | 'sign_in_required' | 'insufficient_role';
+type HumanReviewAccess = AccountMutationAccess;
 
 export function decisionReviewAccess(
-  tokenKind: string | null | undefined,
-  role: 'owner' | 'admin' | 'member' | undefined,
+  mode: AccountMode | null,
+  loading = false,
+  error: string | null = null,
 ): HumanReviewAccess {
-  if (tokenKind !== 'user') return 'sign_in_required';
-  return role === 'owner' || role === 'admin' ? 'allowed' : 'insufficient_role';
+  return accountMutationAccess(mode, 'review_decisions', loading, error);
 }
 
 function DecisionReview({ detail, env, reviewAccess, onChanged }: {
@@ -165,6 +167,7 @@ function DecisionReview({ detail, env, reviewAccess, onChanged }: {
   const evidence = detail.evidence;
   const primary = evidence.primary_evidence;
   const environmentMatches = detail.release.env === env;
+  const canReview = mutationAllowed(reviewAccess);
   return <div className="space-y-4">
     <Panel title={detail.contract.name} right={<ShipStageBadge stage={deriveDecisionStage(detail.decision)} />}>
       <div className="flex flex-wrap items-center gap-2">{detail.decision.status === 'rejected' ? <Badge variant="destructive">proposal rejected</Badge> : <OutcomeBadge outcome={detail.decision.accepted_outcome ?? detail.decision.proposed_outcome} />}<span className="text-sm font-medium">{decisionQueueTitle(detail.decision)}</span></div>
@@ -201,15 +204,12 @@ function DecisionReview({ detail, env, reviewAccess, onChanged }: {
     </Panel>
     <Panel title="Agent proposal"><div className="flex flex-wrap items-center gap-2"><OutcomeBadge outcome={detail.decision.proposed_outcome} /><span className="text-sm">{detail.decision.proposed_rationale}</span></div></Panel>
     <Panel title="Human decision" right={<span className="text-xs text-muted-foreground">Environment <code>{env}</code> · no delivery action is executed here</span>}>
-      {reviewAccess === 'allowed' ? <>
+      {canReview ? <>
+        {reviewAccess === 'legacy_self_host' && <LegacySelfHostReviewBoundary />}
         <div className="grid gap-3 sm:grid-cols-[12rem_1fr]"><Select value={outcome} onValueChange={(value) => setOutcome(value as DecisionOutcome)}><SelectTrigger aria-label="Accepted decision outcome"><SelectValue /></SelectTrigger><SelectContent>{(['keep', 'fix', 'rollback', 'inconclusive'] as const).map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select><Textarea aria-label="Decision rationale" value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="Explain why this evidence supports the accepted decision." className="min-h-24" /></div>
         {!environmentMatches && <div className="mt-3"><ErrorNote>This decision belongs to <code>{detail.release.env}</code>. Switch back to that environment before reviewing it.</ErrorNote></div>}
         <div className="mt-3 flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={() => decide('reject')} disabled={!environmentMatches || detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'reject' && <Loader2 className="size-4 animate-spin" />}Reject</Button><Button variant="outline" onClick={() => decide('edit')} disabled={!environmentMatches || detail.decision.status === 'approved' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'edit' && <Loader2 className="size-4 animate-spin" />}Save correction</Button><Button onClick={() => decide('approve')} disabled={!environmentMatches || detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'approve' && <Loader2 className="size-4 animate-spin" />}Approve proposal</Button></div>
-      </> : <p className="rounded-panel border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
-        {reviewAccess === 'sign_in_required'
-          ? 'API keys and MCP can read evidence and prepare a follow-up, but cannot record a human decision. Sign in as a workspace owner or admin to review.'
-          : 'Your workspace role can read this evidence, but only an owner or admin can approve, correct, or reject the proposal.'}
-      </p>}
+      </> : <p className="rounded-panel border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">{reviewAccessMessage(reviewAccess)}</p>}
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     </Panel>
     <DecisionAutomation detail={detail} mutationsEnabled={environmentMatches} reviewAccess={reviewAccess} onChanged={onChanged} />
@@ -280,6 +280,7 @@ function DecisionAutomation({ detail, mutationsEnabled, reviewAccess, onChanged 
   const [actionText, setActionText] = useState('Draft the smallest measurable implementation follow-up from this accepted evidence.');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const canReview = mutationAllowed(reviewAccess);
   const explain = async () => { setBusy('explain'); setError(null); try { await client!.explainDecision(project!, detail.decision.id); automation.reload(); } catch (caught) { setError(caught instanceof Error ? caught.message : 'could not explain outcome'); } finally { setBusy(null); } };
   const prepare = async () => {
     setBusy('prepare'); setError(null);
@@ -316,9 +317,8 @@ function DecisionAutomation({ detail, mutationsEnabled, reviewAccess, onChanged 
     </Panel>
     <Panel title="Approval-gated actions" right={<span className="text-xs text-muted-foreground">prepare → fingerprint → approve → execute</span>}>
       <div className="grid gap-3 sm:grid-cols-[14rem_1fr_auto]"><Select value={actionType} onValueChange={(value) => setActionType(value as DecisionActionType)}><SelectTrigger aria-label="Prepared action type"><SelectValue /></SelectTrigger><SelectContent>{(['draft_implementation_prompt', 'schedule_observation', 'request_more_data', 'generic_webhook'] as const).map((type) => <SelectItem key={type} value={type}>{type.replaceAll('_', ' ')}</SelectItem>)}</SelectContent></Select><Textarea aria-label="Expected action effect" value={actionText} onChange={(event) => setActionText(event.target.value)} /><Button onClick={prepare} disabled={!mutationsEnabled || Boolean(busy) || actionText.trim().length < 10}>{busy === 'prepare' && <Loader2 className="size-4 animate-spin" />}Prepare</Button></div>
-      {reviewAccess !== 'allowed' && <p className="mt-3 rounded-panel border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
-        Prepared payloads stay inert until a signed-in workspace owner or admin reviews the exact fingerprint in this admin.
-      </p>}
+      {!canReview && <p className="mt-3 rounded-panel border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">{reviewAccessMessage(reviewAccess)}</p>}
+      {reviewAccess === 'legacy_self_host' && <div className="mt-3"><LegacySelfHostReviewBoundary /></div>}
       <div className="mt-4 space-y-2">{data.actions.map((action) => (
         <article key={action.id} className="rounded-panel border p-3" aria-label={`Prepared action ${action.action_type}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -337,14 +337,30 @@ function DecisionAutomation({ detail, mutationsEnabled, reviewAccess, onChanged 
           </div>
           {action.error_message && <div className="mt-2 text-xs text-destructive">{action.error_message}</div>}
           <div className="mt-3 flex flex-wrap justify-end gap-2">
-            {reviewAccess === 'allowed' && action.status === 'prepared' && <><Button size="sm" variant="outline" onClick={() => reviewAction(action, 'reject')} disabled={!mutationsEnabled || busy === action.id}>Reject</Button><Button size="sm" onClick={() => reviewAction(action, 'approve')} disabled={!mutationsEnabled || busy === action.id}>Approve shown payload</Button></>}
-            {reviewAccess === 'allowed' && action.status === 'failed' && <Button size="sm" variant="outline" onClick={() => reviewAction(action, 'retry')} disabled={!mutationsEnabled || busy === action.id}>Retry</Button>}
+            {canReview && action.status === 'prepared' && <><Button size="sm" variant="outline" onClick={() => reviewAction(action, 'reject')} disabled={!mutationsEnabled || busy === action.id}>Reject</Button><Button size="sm" onClick={() => reviewAction(action, 'approve')} disabled={!mutationsEnabled || busy === action.id}>Approve shown payload</Button></>}
+            {canReview && action.status === 'failed' && <Button size="sm" variant="outline" onClick={() => reviewAction(action, 'retry')} disabled={!mutationsEnabled || busy === action.id}>Retry</Button>}
           </div>
         </article>
       ))}</div>
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     </Panel>
   </>;
+}
+
+function LegacySelfHostReviewBoundary() {
+  return (
+    <p className="rounded-panel border border-warning/35 bg-warning/5 p-3 text-sm text-muted-foreground" role="status">
+      Legacy self-host compatibility: this ownerless personal token is treated as the local owner. The same token can be used by the admin or MCP, so reviewer identity cannot be cryptographically distinguished; keep it local and tightly controlled.
+    </p>
+  );
+}
+
+function reviewAccessMessage(access: HumanReviewAccess): string {
+  if (access === 'loading') return 'Checking this session’s server-backed review capability…';
+  if (access === 'unavailable') return 'Review capability could not be verified. Actions stay disabled until account mode can be read.';
+  if (access === 'insufficient_role') return 'Your workspace role can read this evidence, but only an owner or admin can approve, correct, or reject the proposal.';
+  if (access === 'self_host_credential_required') return 'Project keys remain read-only. Connect the local admin with its ownerless self-host personal token to record a review.';
+  return 'Hosted API keys and MCP can read evidence and prepare a follow-up, but cannot record a human decision. Sign in as a workspace owner or admin to review.';
 }
 
 function Fact({ label, value, sub }: { label: string; value: string | number; sub: string }) { return <div className="rounded-panel border bg-muted/20 p-3"><div className="text-xs font-medium text-muted-foreground">{label}</div><div className="mt-1 text-xl font-medium tabular-nums">{value}</div><div className="mt-1 text-xs text-muted-foreground">{sub}</div></div>; }

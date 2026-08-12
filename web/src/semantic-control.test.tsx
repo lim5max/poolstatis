@@ -67,6 +67,7 @@ describe('semantic control surfaces', () => {
       capabilities: {
         portfolio: 'project_only', compare_projects: false,
         manage_profile: false, manage_personal_tokens: false,
+        review_decisions: false, set_official_answers: false,
       },
       primary_action: { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
     });

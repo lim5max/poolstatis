@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AccountMode } from '../api/types';
 import { useStore } from '../store';
 import { ProductAnalytics } from './ProductAnalytics';
 
@@ -22,6 +23,32 @@ const metric = {
   category: 'activation', tags: [], type: 'unique_actors', source: { event: 'product.used' }, status: 'active',
   owner: null, deprecation_reason: null, deprecated_at: null,
 } as const;
+
+function accountMode({
+  deployment = 'self_host', kind = 'secret', role = null, official = false,
+}: {
+  deployment?: 'hosted' | 'self_host';
+  kind?: 'secret' | 'personal' | 'user';
+  role?: 'owner' | 'admin' | 'member' | null;
+  official?: boolean;
+} = {}): AccountMode {
+  return {
+    schema_version: 1,
+    deployment: { mode: deployment, hosted_account: deployment === 'hosted' ? 'available' : 'not_configured' },
+    session: { kind, scope: kind === 'secret' ? 'project' : 'organization', role },
+    capabilities: {
+      portfolio: kind === 'secret' ? 'project_only' : 'available',
+      compare_projects: kind !== 'secret',
+      manage_profile: deployment === 'hosted' && kind === 'user',
+      manage_personal_tokens: false,
+      review_decisions: false,
+      set_official_answers: official,
+    },
+    primary_action: deployment === 'hosted'
+      ? { id: kind === 'user' ? 'manage_hosted_account' : 'sign_in_to_manage_account', kind: 'navigate', label: 'Manage account', href: '/profile' }
+      : { id: 'open_local_setup', kind: 'navigate', label: 'Open local setup', href: '/setup' },
+  };
+}
 
 function productStore(funnels: unknown[] = []) {
   return {
@@ -51,6 +78,7 @@ function productStore(funnels: unknown[] = []) {
       createAnalysisView: vi.fn().mockResolvedValue({ id: 'view-1' }),
       setAnalysisViewOfficial: vi.fn(),
       evaluateRelease: vi.fn(),
+      accountMode: vi.fn().mockResolvedValue(accountMode()),
     },
   } as never;
 }
@@ -151,8 +179,7 @@ describe('Product answer-first surface', () => {
 
   it('lets an owner save the current answer directly as official', async () => {
     const current = productStore() as any;
-    current.tokenKind = 'user';
-    current.account = { membership: { role: 'owner' } };
+    current.client.accountMode.mockResolvedValueOnce(accountMode({ deployment: 'hosted', kind: 'user', role: 'owner', official: true }));
     current.client.setAnalysisViewOfficial.mockResolvedValueOnce({ id: 'view-1', official: true });
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
@@ -169,13 +196,45 @@ describe('Product answer-first surface', () => {
 
   it('does not offer official status to a project secret', async () => {
     const current = productStore() as any;
-    current.tokenKind = 'secret';
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
     expect(await screen.findByRole('button', { name: 'Save answer' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save as official' })).not.toBeInTheDocument();
+  });
+
+  it('fails closed while the server-backed official capability is unavailable', async () => {
+    const current = productStore() as any;
+    current.client.accountMode.mockReturnValueOnce(new Promise(() => undefined));
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
+    expect(await screen.findByRole('button', { name: 'Save answer' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save as official' })).not.toBeInTheDocument();
+    expect(current.client.setAnalysisViewOfficial).not.toHaveBeenCalled();
+  });
+
+  it('keeps the saved answer and retries only the official mutation after a partial failure', async () => {
+    const current = productStore() as any;
+    current.client.accountMode.mockResolvedValueOnce(accountMode({ deployment: 'hosted', kind: 'user', role: 'admin', official: true }));
+    current.client.setAnalysisViewOfficial
+      .mockRejectedValueOnce(new Error('official write unavailable'))
+      .mockResolvedValueOnce({ id: 'view-1', official: true });
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save as official' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The answer was saved, but official status was not applied.');
+    expect(current.client.createAnalysisView).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry official status' }));
+
+    await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledTimes(2));
+    expect(current.client.createAnalysisView).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Official answer saved' })).toBeDisabled();
   });
 
   it('downgrades a saved answer when the query evidence is partial even if registry trust passed', async () => {
@@ -268,13 +327,13 @@ describe('Product answer-first surface', () => {
     expect(screen.getByText('Biggest absolute')).toHaveTextContent('Visited → Started');
     expect(screen.getByText('Biggest percentage')).toHaveTextContent('Started → Completed');
     expect(screen.getByText(/Stable step order resolved an equal loss/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Release abcdef1234/ })).toHaveAttribute('href', '/changes');
+    expect(screen.getByRole('link', { name: /Temporally compatible release abcdef1234/ })).toHaveAttribute('href', '/changes');
     expect(screen.getByRole('link', { name: /Experiment Signup copy/ })).toHaveAttribute('href', '/experiments');
     expect(screen.getByRole('button', { name: 'Investigate Started → Completed' })).toHaveAttribute('data-variant', 'default');
     expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
-    const saveProposal = screen.getByRole('button', { name: 'Evaluate linked release for proposal' });
+    const saveProposal = screen.getByRole('button', { name: 'Evaluate temporally compatible release' });
     expect(saveProposal).toHaveAttribute('data-variant', 'outline');
-    expect(screen.getByText(/Copying the investigation task is not treated as evidence or causal proof/)).toBeInTheDocument();
+    expect(screen.getByText(/does not persist this funnel investigation, establish an explicit funnel-release link, or prove causality/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
     await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
     expect(current.client.createAnalysisView.mock.calls[0][1].answer).toMatchObject({
@@ -284,7 +343,7 @@ describe('Product answer-first surface', () => {
     });
     fireEvent.click(saveProposal);
     await waitFor(() => expect(current.client.evaluateRelease).toHaveBeenCalledWith('alpha', 'release-1'));
-    const openProposal = screen.getByRole('link', { name: 'Open proposal in Decisions' });
+    const openProposal = screen.getByRole('link', { name: 'Open release proposal in Decisions' });
     expect(openProposal).toHaveAttribute('href', '/decisions?decision=decision-1');
     expect(openProposal).toHaveAttribute('data-variant', 'outline');
     expect(screen.queryByText(/cannot be saved directly to Decisions/i)).not.toBeInTheDocument();

@@ -204,7 +204,7 @@ function AttentionCard({ item, primary, telemetryUserId, onRetry }: {
       <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
       {item.delta && (
         <p className="mt-3 text-sm">
-          <span className="font-medium">Change:</span>{' '}
+          <span className="font-medium">{item.rule_id === 'funnel.biggest_loss' ? 'Overall funnel conversion:' : 'Change:'}</span>{' '}
           <span className="text-muted-foreground">{attentionDeltaLabel(item.delta)}</span>
         </p>
       )}

@@ -35,6 +35,7 @@ import {
   type MetricView,
 } from '../analysis/product';
 import { previousPeriodQuery as previousAnalysisPeriodQuery, summarizeAnswer, type StandardAnswerSummary } from '../analysis/semanticHealth';
+import { accountMutationAccess, mutationAllowed } from '../account-capabilities';
 
 interface AnalysisRun {
   spec: VisualizationSpec;
@@ -57,7 +58,7 @@ export interface RelatedFunnelEvidence {
 const OPTION_TARGET = 'min-h-11 md:min-h-8';
 
 export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' | 'funnels' } = {}) {
-  const { client, project, env, tokenKind, account } = useStore();
+  const { client, project, env } = useStore();
   const [params] = useSearchParams();
   const funnelSurface = surface === 'funnels';
   const requestedFunnel = funnelSurface ? params.get('funnel') ?? '' : '';
@@ -92,6 +93,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     ]);
     return { releases, experiments };
   }, [client, project, env, funnelSurface]);
+  const accountMode = useAsync(() => client!.accountMode(), [client]);
   const [resourceKey, setResourceKey] = useState(requestedFunnel);
   const [range, setRange] = useState<TimeRangePreset>(template.defaultRange);
   const [interval, setInterval] = useState<QueryInterval>('day');
@@ -103,9 +105,13 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [officialSaveState, setOfficialSaveState] = useState<'idle' | 'saving' | 'saved' | 'saved_unofficial' | 'error'>('idle');
   const [savedAnswerId, setSavedAnswerId] = useState<string | null>(null);
-  const officialSaveAllowed = tokenKind === 'personal'
-    || (tokenKind === 'user'
-      && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
+  const officialSaveAccess = accountMutationAccess(
+    accountMode.data,
+    'set_official_answers',
+    accountMode.loading,
+    accountMode.error,
+  );
+  const officialSaveAllowed = mutationAllowed(officialSaveAccess);
   const runGeneration = useRef(0);
   const currentScope = `${project ?? 'none'}:${env}`;
   const scopeRef = useRef(currentScope);
@@ -748,10 +754,10 @@ function FunnelBiggestLoss({
     return <AnswerCanvas><div className="p-4 sm:p-5"><div className="text-sm font-medium text-muted-foreground">Biggest loss</div><h2 className="mt-1 text-xl font-semibold">No measured loss in this period</h2><p className="mt-2 text-sm text-muted-foreground">Every measured actor reached each saved funnel step. No loss or investigate action is implied.</p></div></AnswerCanvas>;
   }
   const compatible = selectCompatibleFunnelEvidence(result, summary.toMetric, relatedEvidence, env);
-  const proposalRelease = compatible.releases.find((release) => release.status === 'deployed' || release.status === 'observing') ?? null;
+  const temporallyCompatibleRelease = compatible.releases.find((release) => release.status === 'deployed' || release.status === 'observing') ?? null;
   const absoluteLabel = funnelLossLabel(result, result.summary?.biggest_absolute_loss ?? null);
   const percentageLabel = funnelLossLabel(result, result.summary?.biggest_percentage_loss ?? null);
-  const task = `Investigate the biggest measured loss in funnel ${funnel.key} without changing its definition.\n\nGoal: ${funnel.goal}\nEnvironment and exact period are in the attached Poolstatis query.\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nCurrent loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nUse registered metrics and trusted properties only. Compare safe breakdowns, report sample and data-quality limits, and prepare an evidence-backed proposal for human review.`;
+  const task = `Investigate the biggest measured loss in funnel ${funnel.key} without changing its definition.\n\nGoal: ${funnel.goal}\nEnvironment and exact period are in the attached Poolstatis query.\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nCurrent loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nUse registered metrics and trusted properties only. Compare safe breakdowns and report sample and data-quality limits. Do not claim causality or that this investigation has been persisted to a release or decision.`;
   const copyTask = async () => {
     try {
       await navigator.clipboard.writeText(task);
@@ -761,10 +767,10 @@ function FunnelBiggestLoss({
     }
   };
   const saveProposal = async () => {
-    if (!proposalRelease || !client || !project || proposalState === 'saving' || proposalState === 'saved') return;
+    if (!temporallyCompatibleRelease || !client || !project || proposalState === 'saving' || proposalState === 'saved') return;
     setProposalState('saving');
     try {
-      const saved = await client.evaluateRelease(project, proposalRelease.id);
+      const saved = await client.evaluateRelease(project, temporallyCompatibleRelease.id);
       setProposalDecisionId(saved.decision.id);
       setProposalState('saved');
     } catch {
@@ -798,18 +804,18 @@ function FunnelBiggestLoss({
         </div>
       ) : null}
       <div className="border-t px-4 py-4 text-sm sm:px-5">
-        <div className="font-medium">Related change evidence</div>
+        <div className="font-medium">Temporally compatible change context</div>
         {compatible.releases.length === 0 && compatible.experiments.length === 0 ? (
           <p className="mt-1 text-muted-foreground">
             {relatedEvidenceUnavailable
               ? 'Release and experiment evidence could not be read.'
-              : 'No compatible release or experiment overlaps this environment, metric and exact period.'}
+              : 'No release or experiment with the same environment and metric overlaps this exact period.'}
           </p>
         ) : (
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
             {compatible.releases.map((release) => (
               <Link key={release.id} className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">
-                Release {release.commit_sha.slice(0, 10)}
+                Temporally compatible release {release.commit_sha.slice(0, 10)}
               </Link>
             ))}
             {compatible.experiments.map((experiment) => (
@@ -821,20 +827,20 @@ function FunnelBiggestLoss({
         )}
         <div className="mt-3 flex flex-wrap items-center gap-3">
           {proposalDecisionId ? (
-            <Button asChild variant="outline"><Link to={`/decisions?decision=${encodeURIComponent(proposalDecisionId)}`}>Open proposal in Decisions</Link></Button>
-          ) : proposalRelease ? (
+            <Button asChild variant="outline"><Link to={`/decisions?decision=${encodeURIComponent(proposalDecisionId)}`}>Open release proposal in Decisions</Link></Button>
+          ) : temporallyCompatibleRelease ? (
             <Button type="button" variant="outline" onClick={() => void saveProposal()} disabled={proposalState === 'saving'}>
               {proposalState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
-              {proposalState === 'saving' ? 'Evaluating release…' : 'Evaluate linked release for proposal'}
+              {proposalState === 'saving' ? 'Evaluating release…' : 'Evaluate temporally compatible release'}
             </Button>
           ) : (
-            <p className="text-muted-foreground">Link a compatible registered release before creating a Decisions proposal.</p>
+            <p className="text-muted-foreground">No temporally compatible release is available to evaluate on its own frozen contract.</p>
           )}
           <Link className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">Continue through Ship</Link>
         </div>
-        {proposalRelease && !proposalDecisionId ? (
+        {temporallyCompatibleRelease && !proposalDecisionId ? (
           <p className="mt-2 text-muted-foreground">
-            The proposal comes only from the linked release&apos;s frozen contract and server evaluation. Copying the investigation task is not treated as evidence or causal proof.
+            This action evaluates only the release&apos;s frozen contract. It does not persist this funnel investigation, establish an explicit funnel-release link, or prove causality.
           </p>
         ) : null}
         {proposalState === 'error' && <p role="alert" className="mt-2 text-destructive">The release evidence could not be evaluated. Review its frozen contract and try again.</p>}

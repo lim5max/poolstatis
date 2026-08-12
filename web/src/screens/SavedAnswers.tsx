@@ -6,19 +6,28 @@ import { Confirm, EmptyState, ErrorNote, Loading, Panel, fmtRelative } from '@/c
 import { DisclosureSummary } from '@/components/disclosure';
 import type { SavedAnswer } from '../api/types';
 import { useAsync, useStore } from '../store';
+import { accountMutationAccess, mutationAllowed } from '../account-capabilities';
 
 type SavedAnswerFilter = 'active' | 'archived' | 'official';
 
 export function SavedAnswers() {
-  const { client, project, env, tokenKind, account } = useStore();
+  const { client, project, env } = useStore();
   const [searchParams] = useSearchParams();
   const focusedAnswer = searchParams.get('answer');
   const [filter, setFilter] = useState<SavedAnswerFilter>('active');
   const [archiveTarget, setArchiveTarget] = useState<SavedAnswer | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
-  const officialAllowed = tokenKind === 'personal'
-    || (tokenKind === 'user'
-      && (account?.membership.role === 'owner' || account?.membership.role === 'admin'));
+  const accountMode = useAsync(
+    () => client!.accountMode(),
+    [client],
+  );
+  const officialAccess = accountMutationAccess(
+    accountMode.data,
+    'set_official_answers',
+    accountMode.loading,
+    accountMode.error,
+  );
+  const officialAllowed = mutationAllowed(officialAccess);
   const saved = useAsync(
     () => client!.analysisViews(project!, {
       env,

@@ -836,6 +836,8 @@ export interface AccountMode {
     compare_projects: boolean;
     manage_profile: boolean;
     manage_personal_tokens: boolean;
+    review_decisions: boolean;
+    set_official_answers: boolean;
   };
   primary_action: {
     id: 'manage_hosted_account' | 'sign_in_to_manage_account' | 'open_local_setup';

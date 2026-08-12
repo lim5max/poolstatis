@@ -188,32 +188,41 @@ export interface HumanReviewer {
   role: 'owner' | 'admin';
 }
 
-/** Decisions and approval-gated execution are human controls, never API-key capabilities. */
-export function requireHumanReviewer(auth: AuthContext): HumanReviewer {
-  if (auth.kind !== 'user' || !auth.userId) {
-    throw new ApiError(
-      403,
-      'human_user_required',
-      'this review can only be recorded by an authenticated human user',
-      'open the admin with a signed-in workspace owner or admin; API keys and MCP remain read-only for review and execution',
-    );
+/**
+ * Hosted review requires a signed-in owner/admin. Ownerless self-host personal
+ * tokens predate hosted identity and retain local-admin compatibility; Core
+ * cannot distinguish admin UI from MCP when both use that same token.
+ */
+export function requireHumanReviewer(auth: AuthContext, hosted = false): HumanReviewer {
+  if (auth.kind === 'user' && auth.userId) {
+    if (auth.userRole !== 'owner' && auth.userRole !== 'admin') {
+      throw new ApiError(
+        403,
+        'insufficient_role',
+        'this workspace role cannot record the review',
+        'ask a workspace owner or admin to review the frozen evidence and payload',
+      );
+    }
+    return { actor: authOwner(auth), role: auth.userRole };
   }
-  if (auth.userRole !== 'owner' && auth.userRole !== 'admin') {
-    throw new ApiError(
-      403,
-      'insufficient_role',
-      'this workspace role cannot record the review',
-      'ask a workspace owner or admin to review the frozen evidence and payload',
-    );
+  if (!hosted && auth.kind === 'personal' && auth.userId === undefined && auth.userRole === undefined) {
+    return { actor: authOwner(auth), role: 'owner' };
   }
-  return { actor: authOwner(auth), role: auth.userRole };
+  throw new ApiError(
+    403,
+    'human_user_required',
+    'this review can only be recorded by an authenticated human user',
+    hosted
+      ? 'open the admin with a signed-in workspace owner or admin; hosted API keys and MCP remain read-only for review and execution'
+      : 'use the local admin with its ownerless self-host personal token; project keys remain read-only for review and execution',
+  );
 }
 
 export type HumanAutomationReviewer = HumanReviewer;
 
 /** Kept as the automation route contract while sharing the same human-only boundary. */
-export function requireHumanAutomationReviewer(auth: AuthContext): HumanAutomationReviewer {
-  return requireHumanReviewer(auth);
+export function requireHumanAutomationReviewer(auth: AuthContext, hosted = false): HumanAutomationReviewer {
+  return requireHumanReviewer(auth, hosted);
 }
 
 /** Hosted identities fail closed without a current owner/admin role. */
@@ -800,7 +809,7 @@ function registerPlatformRoutes(
     platform,
     resolveProject,
     actor: (req) => authOwner(req.auth),
-    humanReviewer: (req) => requireHumanAutomationReviewer(req.auth),
+    humanReviewer: (req) => requireHumanAutomationReviewer(req.auth, hosted),
   });
 
   app.get('/api/v1/account-mode', async (req) => {
@@ -1996,7 +2005,7 @@ function registerPlatformRoutes(
 
   app.post('/api/v1/projects/:slug/decisions/:id/approve', async (req) => {
     platform(req);
-    const reviewer = requireHumanReviewer(req.auth);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const { rationale } = reviewDecisionSchema.parse(req.body);
@@ -2005,7 +2014,7 @@ function registerPlatformRoutes(
 
   app.post('/api/v1/projects/:slug/decisions/:id/reject', async (req) => {
     platform(req);
-    const reviewer = requireHumanReviewer(req.auth);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const { rationale } = reviewDecisionSchema.parse(req.body);
@@ -2014,7 +2023,7 @@ function registerPlatformRoutes(
 
   app.post('/api/v1/projects/:slug/decisions/:id/edit', async (req) => {
     platform(req);
-    const reviewer = requireHumanReviewer(req.auth);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const { outcome, rationale } = editDecisionSchema.parse(req.body);
@@ -2068,7 +2077,7 @@ function registerPlatformRoutes(
 
   app.post('/api/v1/projects/:slug/actions/:id/approve', async (req) => {
     platform(req);
-    const reviewer = requireHumanReviewer(req.auth);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const body = approveDecisionActionSchema.parse(req.body);
@@ -2079,7 +2088,7 @@ function registerPlatformRoutes(
 
   app.post('/api/v1/projects/:slug/actions/:id/reject', async (req) => {
     platform(req);
-    const reviewer = requireHumanReviewer(req.auth);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const body = rejectDecisionActionSchema.parse(req.body);
@@ -2088,7 +2097,7 @@ function registerPlatformRoutes(
 
   app.post('/api/v1/projects/:slug/actions/:id/retry', async (req) => {
     platform(req);
-    const reviewer = requireHumanReviewer(req.auth);
+    const reviewer = requireHumanReviewer(req.auth, hosted);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     return retryAction(ctx.pool, project.id, id, reviewer.actor, {

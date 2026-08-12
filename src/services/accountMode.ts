@@ -3,6 +3,15 @@ import type { AuthContext } from '../http/auth.js';
 export function accountModeForAuth(auth: AuthContext, hosted: boolean) {
   const role = auth.userRole ?? null;
   const roleAllowsOrganization = role === null || role === 'owner' || role === 'admin';
+  const signedInReviewer = auth.kind === 'user'
+    && Boolean(auth.userId)
+    && (role === 'owner' || role === 'admin');
+  const legacySelfHostReviewer = !hosted
+    && auth.kind === 'personal'
+    && auth.userId === undefined
+    && auth.userRole === undefined;
+  const organizationManager = signedInReviewer
+    || (auth.kind === 'personal' && (legacySelfHostReviewer || role === 'owner' || role === 'admin'));
   const organizationWide = auth.projectId === null
     && (auth.kind === 'personal' || auth.kind === 'user')
     && roleAllowsOrganization;
@@ -33,6 +42,8 @@ export function accountModeForAuth(auth: AuthContext, hosted: boolean) {
       compare_projects: organizationWide,
       manage_profile: hostedUser,
       manage_personal_tokens: hostedUser && (role === 'owner' || role === 'admin'),
+      review_decisions: signedInReviewer || legacySelfHostReviewer,
+      set_official_answers: organizationManager,
     },
     primary_action: hosted
       ? hostedAccountAction

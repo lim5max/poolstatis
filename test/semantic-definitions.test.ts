@@ -409,7 +409,10 @@ describe('server-backed account mode', () => {
       schema_version: 1,
       deployment: { mode: 'self_host', hosted_account: 'not_configured' },
       session: { kind: 'secret', scope: 'project', role: null },
-      capabilities: { portfolio: 'project_only', compare_projects: false, manage_profile: false },
+      capabilities: {
+        portfolio: 'project_only', compare_projects: false, manage_profile: false,
+        review_decisions: false, set_official_answers: false,
+      },
       primary_action: { kind: 'navigate', href: '/setup' },
     });
 
@@ -418,7 +421,10 @@ describe('server-backed account mode', () => {
     expect(organizationMode.body).toMatchObject({
       deployment: { mode: 'self_host', hosted_account: 'not_configured' },
       session: { kind: 'personal', scope: 'organization' },
-      capabilities: { portfolio: 'available', compare_projects: true, manage_profile: false },
+      capabilities: {
+        portfolio: 'available', compare_projects: true, manage_profile: false,
+        review_decisions: true, set_official_answers: true,
+      },
     });
   });
 
@@ -430,7 +436,10 @@ describe('server-backed account mode', () => {
     expect(accountModeForAuth(memberAuth, true)).toMatchObject({
       deployment: { mode: 'hosted', hosted_account: 'available' },
       session: { role: 'member' },
-      capabilities: { portfolio: 'unavailable', compare_projects: false, manage_profile: true },
+      capabilities: {
+        portfolio: 'unavailable', compare_projects: false, manage_profile: true,
+        review_decisions: false, set_official_answers: false,
+      },
       primary_action: { id: 'manage_hosted_account', href: 'https://auth.poolstatis.xyz/profile' },
     });
     expect(() => requireOrganizationComparisonAccess(memberAuth)).toThrowError(expect.objectContaining({
@@ -438,7 +447,16 @@ describe('server-backed account mode', () => {
       code: 'insufficient_role',
     }));
     expect(accountModeForAuth({ ...memberAuth, kind: 'personal', userRole: undefined }, true)).toMatchObject({
+      capabilities: { review_decisions: false, set_official_answers: false },
       primary_action: { id: 'sign_in_to_manage_account', href: 'https://auth.poolstatis.xyz/profile' },
+    });
+    expect(accountModeForAuth({
+      ...memberAuth, kind: 'personal', userId: 'owner-user', userRole: 'owner',
+    }, true)).toMatchObject({
+      capabilities: { review_decisions: false, set_official_answers: true },
+    });
+    expect(accountModeForAuth({ ...memberAuth, kind: 'user', userRole: 'owner', userId: 'owner-user' }, true)).toMatchObject({
+      capabilities: { review_decisions: true, set_official_answers: true },
     });
   });
 
