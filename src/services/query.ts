@@ -21,7 +21,7 @@ import type {
 } from '../schemas.js';
 import { parseDateInput } from '../dates.js';
 import { ApiError, badRequest } from '../errors.js';
-import { getFunnel, getMetric, type Metric } from './registry.js';
+import { getFunnel, getMetric, listMetrics, type Metric } from './registry.js';
 import { countEntities, queryEntities } from './entities.js';
 import { getExactExperienceSnapshot, getExperienceSurface } from './experience.js';
 import { canonicalQueryKey, type QueryCache } from './queryCache.js';
@@ -279,6 +279,16 @@ export type QueryResult =
           source: 'native';
           population_filter: true;
         } | null;
+        interesting: {
+          reason: 'recently_activated';
+          metric: {
+            key: string;
+            name: string;
+            purpose: string;
+            category: 'activation';
+            source: 'native';
+          };
+        } | null;
         capabilities: {
           property_filters: { available: false; reason: string };
           pinned_properties: { available: false; reason: string };
@@ -288,9 +298,13 @@ export type QueryResult =
             project_capability: boolean;
           };
           identity_profile: { available: false; reason: string };
-          outcome_rank: { available: false; reason: string };
+          outcome_rank:
+            | { available: true; reason: 'recently_activated' }
+            | { available: false; reason: string };
           interesting_categories: {
-            recently_activated: { available: false; requires: 'purpose_backed_activation_metric_or_funnel' };
+            recently_activated:
+              | { available: true; requires: 'active_native_activation_metric'; metric_count: number }
+              | { available: false; requires: 'active_native_activation_metric'; metric_count: 0 };
             stalled: { available: false; requires: 'purpose_backed_stall_definition' };
             at_risk: { available: false; requires: 'purpose_backed_risk_definition' };
             changed_segment: { available: false; requires: 'trusted_canonical_actor_property_source' };
@@ -302,7 +316,7 @@ export type QueryResult =
           pinned_properties: { source: null; fail_closed: true };
           ordering: {
             selected: import('../stores/eventStore.js').ActorOrder;
-            input: 'last_seen' | 'first_seen' | 'total_events';
+            input: 'last_seen' | 'first_seen' | 'total_events' | 'activation_event_timestamp';
             relative_to: string;
           };
         };
@@ -1319,10 +1333,41 @@ export class QueryService {
         { retryable: false },
       );
     }
-    const [activity, trustedBrowserSessions, cursorSecurity] = await Promise.all([
+    if (q.order === 'interesting_desc' && !q.interesting) {
+      throw new ApiError(
+        400,
+        'actors_interesting_selection_required',
+        'interesting_desc requires one explicit purpose-backed interesting reason',
+        'select recently_activated with an active native activation metric',
+        { retryable: false },
+      );
+    }
+    if (q.interesting && q.order !== 'interesting_desc') {
+      throw new ApiError(
+        400,
+        'actors_interesting_order_required',
+        'an interesting reason can only be used with order=interesting_desc',
+        'set order to interesting_desc or remove interesting',
+        { retryable: false },
+      );
+    }
+    if (q.interesting && q.activityMetric) {
+      throw new ApiError(
+        400,
+        'actors_interesting_activity_conflict',
+        'interesting queues cannot be combined with a separate activity population filter',
+        'remove activityMetric; the selected interesting definition already bounds the population',
+        { retryable: false },
+      );
+    }
+    const [activity, interesting, activationMetrics, trustedBrowserSessions, cursorSecurity] = await Promise.all([
       q.activityMetric
         ? this.actorActivityMetric(projectId, q.activityMetric)
         : Promise.resolve(undefined),
+      q.interesting
+        ? this.actorInterestingSelection(projectId, q.interesting)
+        : Promise.resolve(undefined),
+      this.actorActivationMetrics(projectId),
       hasTrustedBrowserSessionSource(this.pool, projectId),
       actorCursorSecurity(this.pool, projectId, q.env, this.cursorSigningSecret),
     ]);
@@ -1336,6 +1381,18 @@ export class QueryService {
       search: q.search ?? null,
       activityMetric: q.activityMetric
         ? { key: q.activityMetric, source: activity }
+        : null,
+      interesting: interesting
+        ? {
+            reason: interesting.reason,
+            metric: {
+              key: interesting.metric.key,
+              name: interesting.metric.name,
+              purpose: interesting.metric.purpose,
+              category: interesting.metric.category,
+            },
+            source: interesting.source,
+          }
         : null,
       trustedBrowserSessions,
     });
@@ -1381,14 +1438,28 @@ export class QueryService {
       ...(decodedCursor ? { cursor: decodedCursor.key } : {}),
       ...(q.search ? { searchExactId: q.search.value } : {}),
       ...(activity ? { activity: { event: activity.event, filters: activity.filters } } : {}),
+      ...(interesting ? { interesting: interesting.source } : {}),
       trustedBrowserSessions,
     });
     const last = result.actors.at(-1);
     const publicActors = result.actors.map(({
       distinct_events: _distinctEvents,
       registered_share: _registeredShare,
+      interesting_at: interestingAt,
+      rank_reason: _rankReason,
       ...actor
-    }) => actor);
+    }) => ({
+      ...actor,
+      rank_reason: interesting && interestingAt
+        ? {
+            kind: 'recently_activated' as const,
+            metric_key: interesting.metric.key,
+            metric_name: interesting.metric.name,
+            metric_purpose: interesting.metric.purpose,
+            observed_at: interestingAt,
+          }
+        : null,
+    }));
     const nextCursor = result.hasMore && last
       ? encodeActorsCursor(
         q.order,
@@ -1397,7 +1468,9 @@ export class QueryService {
             ? last.total_events
             : q.order === 'first_seen_desc'
               ? last.first_seen
-              : last.last_seen,
+              : q.order === 'interesting_desc'
+                ? (last.interesting_at ?? last.last_seen)
+                : last.last_seen,
           distinctId: last.distinct_id,
         },
         fingerprint,
@@ -1424,6 +1497,18 @@ export class QueryService {
         activity_metric: q.activityMetric
           ? { key: q.activityMetric, source: 'native', population_filter: true }
           : null,
+        interesting: interesting
+          ? {
+              reason: interesting.reason,
+              metric: {
+                key: interesting.metric.key,
+                name: interesting.metric.name,
+                purpose: interesting.metric.purpose,
+                category: 'activation',
+                source: 'native',
+              },
+            }
+          : null,
         capabilities: {
           property_filters: {
             available: false,
@@ -1442,15 +1527,24 @@ export class QueryService {
             available: false,
             reason: 'Only explicit server-owned identity links are available; no canonical actor profile source is configured.',
           },
-          outcome_rank: {
-            available: false,
-            reason: 'No purpose-backed activation, stall or risk definition is selected for this actors query.',
-          },
+          outcome_rank: interesting
+            ? { available: true, reason: 'recently_activated' }
+            : {
+                available: false,
+                reason: 'No purpose-backed activation definition is selected for this actors query.',
+              },
           interesting_categories: {
-            recently_activated: {
-              available: false,
-              requires: 'purpose_backed_activation_metric_or_funnel',
-            },
+            recently_activated: activationMetrics.length > 0
+              ? {
+                  available: true,
+                  requires: 'active_native_activation_metric',
+                  metric_count: activationMetrics.length,
+                }
+              : {
+                  available: false,
+                  requires: 'active_native_activation_metric',
+                  metric_count: 0,
+                },
             stalled: {
               available: false,
               requires: 'purpose_backed_stall_definition',
@@ -1475,7 +1569,9 @@ export class QueryService {
               ? 'total_events'
               : q.order === 'first_seen_desc'
                 ? 'first_seen'
-                : 'last_seen',
+                : q.order === 'interesting_desc'
+                  ? 'activation_event_timestamp'
+                  : 'last_seen',
             relative_to: 'the exact query window',
           },
         },
@@ -1512,6 +1608,67 @@ export class QueryService {
         `activity metric "${metricKey}" must use native stored events`,
       );
     }
+    return { event: source.event, filters: source.filters ?? [] };
+  }
+
+  private async actorActivationMetrics(projectId: string): Promise<Metric[]> {
+    const metrics = await listMetrics(this.pool, projectId, {
+      status: 'active',
+      category: 'activation',
+    });
+    return metrics.filter((metric) => this.actorNativeEventSource(metric) !== null);
+  }
+
+  private async actorInterestingSelection(
+    projectId: string,
+    selection: NonNullable<ActorsQueryInput['interesting']>,
+  ): Promise<{
+    reason: 'recently_activated';
+    metric: Metric & { category: 'activation' };
+    source: { event: string; filters: PropertyFilter[] };
+  }> {
+    if (selection.reason !== 'recently_activated') {
+      const requires = selection.reason === 'stalled'
+        ? 'purpose_backed_stall_definition'
+        : selection.reason === 'at_risk'
+          ? 'purpose_backed_risk_definition'
+          : 'trusted_canonical_actor_property_source';
+      throw new ApiError(
+        400,
+        'actors_interesting_category_unavailable',
+        `interesting reason "${selection.reason}" is unavailable because its required typed semantic source is not implemented`,
+        `provide ${requires} before this category can rank actors`,
+        { retryable: false, reason: selection.reason, requires },
+      );
+    }
+    const metric = await getMetric(this.pool, projectId, selection.metric);
+    const source = this.actorNativeEventSource(metric);
+    if (metric.status !== 'active' || metric.category !== 'activation' || !source) {
+      throw new ApiError(
+        400,
+        'actors_interesting_metric_invalid',
+        `metric "${selection.metric}" is not an active native event metric in the activation category`,
+        'select an active native event metric whose registry category is activation',
+        { retryable: false },
+      );
+    }
+    return {
+      reason: 'recently_activated',
+      metric: metric as Metric & { category: 'activation' },
+      source,
+    };
+  }
+
+  private actorNativeEventSource(
+    metric: Metric,
+  ): { event: string; filters: PropertyFilter[] } | null {
+    if (metric.type === 'conversion' || metric.type === 'state') return null;
+    const source = metric.source as {
+      event?: unknown;
+      filters?: PropertyFilter[];
+      data_source?: 'native' | 'posthog';
+    };
+    if (typeof source.event !== 'string' || (source.data_source ?? 'native') !== 'native') return null;
     return { event: source.event, filters: source.filters ?? [] };
   }
 

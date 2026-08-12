@@ -1860,6 +1860,7 @@ export class PostgresEventStore implements EventStore {
       'e.ingested_at <= $5',
     ];
     let populationSql = 'SELECT DISTINCT actor_id FROM window_events';
+    let interestingCondition: string | null = null;
     if (q.activity) {
       params.push(q.activity.event);
       const activityWhere = [
@@ -1868,6 +1869,15 @@ export class PostgresEventStore implements EventStore {
       ].join(' AND ');
       populationSql = `SELECT DISTINCT w.actor_id
         FROM window_events w WHERE ${activityWhere}`;
+    }
+    if (q.interesting) {
+      params.push(q.interesting.event);
+      interestingCondition = [
+        `w.event = $${params.length}`,
+        ...compileFilters(q.interesting.filters, 'w.properties', params),
+      ].join(' AND ');
+      populationSql = `SELECT DISTINCT w.actor_id
+        FROM window_events w WHERE ${interestingCondition}`;
     }
     let searchParam: number | undefined;
     if (q.searchExactId) {
@@ -1902,7 +1912,7 @@ export class PostgresEventStore implements EventStore {
       : `SELECT DISTINCT e.distinct_id
          FROM events e
          WHERE ${windowWhere.join(' AND ')}`;
-    const restrictPopulation = Boolean(q.activity || q.searchExactId);
+    const restrictPopulation = Boolean(q.activity || q.interesting || q.searchExactId);
     const selectedEventsSql = restrictPopulation
       ? `SELECT e.*, selected_raw.actor_id
          FROM selected_raw
@@ -1925,7 +1935,9 @@ export class PostgresEventStore implements EventStore {
       ? 'first_seen'
       : q.order === 'events_desc'
         ? 'total_events'
-        : 'last_seen';
+        : q.order === 'interesting_desc'
+          ? 'interesting_at'
+          : 'last_seen';
     let keysetSql = '';
     if (q.cursor) {
       params.push(q.cursor.value, q.cursor.distinctId);
@@ -1950,6 +1962,7 @@ export class PostgresEventStore implements EventStore {
       distinct_events: number;
       active_days: number;
       registered_share: number;
+      interesting_at: Date | null;
       session_count: number | null;
       top_events: Array<{ event: string; count: number }>;
       identity_status: ActorListItem['identity_status'];
@@ -2003,7 +2016,10 @@ export class PostgresEventStore implements EventStore {
                 count(*)::int AS total_events,
                 count(DISTINCT w.event)::int AS distinct_events,
                 count(DISTINCT date_trunc('day', w."timestamp"))::int AS active_days,
-                COALESCE(avg(w.registered::int), 0)::float AS registered_share
+                COALESCE(avg(w.registered::int), 0)::float AS registered_share,
+                ${interestingCondition
+                  ? `max(w."timestamp") FILTER (WHERE ${interestingCondition})`
+                  : 'NULL::timestamptz'} AS interesting_at
          FROM selected_events w
          GROUP BY w.actor_id
        ), page AS MATERIALIZED (
@@ -2074,6 +2090,7 @@ export class PostgresEventStore implements EventStore {
         distinct_events: Number(row.distinct_events),
         active_days: Number(row.active_days),
         registered_share: Number(row.registered_share),
+        interesting_at: row.interesting_at ? toIso(row.interesting_at) : null,
         session_count: row.session_count === null ? null : Number(row.session_count),
         top_events: row.top_events.map((entry) => ({
           event: entry.event,
@@ -2085,7 +2102,10 @@ export class PostgresEventStore implements EventStore {
           ? 'first_seen_in_window'
           : q.order === 'events_desc'
             ? 'event_volume_in_window'
-            : 'last_seen_in_window',
+            : q.order === 'interesting_desc'
+              ? 'recent_activation_in_window'
+              : 'last_seen_in_window',
+        rank_reason: null,
         rank_evidence_window: { from: q.from.toISOString(), to: q.to.toISOString() },
       })),
       hasMore,

@@ -568,6 +568,19 @@ stored-event usage.
   "activityMetric": "activation_started", // registry key, never raw event
   "propertyFilters": []
 }
+
+// Purpose-backed interesting queue (only supported category)
+{
+  "kind": "actors",
+  "env": "prod",
+  "from": "-30d",
+  "order": "interesting_desc",
+  "interesting": {
+    "reason": "recently_activated",
+    "metric": "activation_completed"     // active native metric, category=activation
+  },
+  "propertyFilters": []
+}
 ```
 
 Операторы фильтров: `eq, ne, gt, gte, lt, lte, in, contains, is_set, is_not_set`.
@@ -592,8 +605,15 @@ capability/provenance metadata. `linked` требует active server-owned link
 равен `unknown`. `top_events` bounded и включает только event names,
 помеченные `registered` при ingest. `session_count` равен `null`, если strict
 canonical Browser session evidence для actor/window не доказан.
+`interesting_desc` требует явный объект `interesting`. Сейчас сервер
+поддерживает только `recently_activated` с выбранной active native event metric
+категории `activation`; в каждой строке возвращаются её key/name/purpose,
+точный timestamp срабатывания и evidence window. `stalled`, `at_risk` и
+`changed_segment` fail closed с typed
+`actors_interesting_category_unavailable`, пока нет соответствующего typed
+semantic source. `activityMetric` и `interesting` нельзя комбинировать.
 Cursor v2 подписан HMAC по всему envelope, привязан к
-project/env/window/order/search/resolved activity source/session capability и
+project/env/window/order/search/resolved activity/interesting source/session capability и
 frozen `ingested_at` cutoff. Новые и late-ingested events не меняют следующие
 страницы; изменение actor-link graph инвалидирует cursor typed-ошибкой.
 Ключ выводится per project из server-only

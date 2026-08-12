@@ -30,6 +30,7 @@ export function Users() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [activityMetric, setActivityMetric] = useState('');
+  const [interestingMetric, setInterestingMetric] = useState('');
   const [cursorStack, setCursorStack] = useState<Array<string | null>>([null]);
   const page = cursorStack.length - 1;
   const cursor = cursorStack[page] ?? undefined;
@@ -37,7 +38,10 @@ export function Users() {
     () => client!.metrics(project!, { status: 'active' }),
     [project, env],
   );
-  const actorScopeKey = JSON.stringify([project, env, range, order, search, activityMetric, cursor ?? null]);
+  const queryOrder: ActorOrder = interestingMetric ? 'interesting_desc' : order;
+  const actorScopeKey = JSON.stringify([
+    project, env, range, queryOrder, search, activityMetric, interestingMetric, cursor ?? null,
+  ]);
   const actorScope = useMemo(() => ({ client, key: actorScopeKey }), [client, actorScopeKey]);
   const actors = useAsync<{ scope: typeof actorScope; result: ActorsResult }>(async () => ({
     scope: actorScope,
@@ -46,21 +50,28 @@ export function Users() {
       env,
       from: rangeDateFrom(range),
       limit: PAGE_LIMIT,
-      order,
+      order: queryOrder,
       ...(cursor ? { cursor } : {}),
       ...(search ? { search: { kind: 'exact_id', value: search } } : {}),
       propertyFilters: [],
       ...(activityMetric ? { activityMetric } : {}),
+      ...(interestingMetric
+        ? { interesting: { reason: 'recently_activated' as const, metric: interestingMetric } }
+        : {}),
     }),
   }), [actorScope]);
 
   useEffect(() => {
     setCursorStack([null]);
-  }, [project, env, range, order, search, activityMetric]);
+  }, [project, env, range, queryOrder, search, activityMetric, interestingMetric]);
 
   const eventMetrics = useMemo(
     () => (metrics.data ?? []).filter(isNativeEventMetric),
     [metrics.data],
+  );
+  const activationMetrics = useMemo(
+    () => eventMetrics.filter((metric) => metric.category === 'activation'),
+    [eventMetrics],
   );
   const actorData = !actors.loading && !actors.error && actors.data?.scope === actorScope
     ? actors.data.result
@@ -80,7 +91,7 @@ export function Users() {
 
       <AnswerCanvas>
         <div className="border-b px-4 py-3 sm:px-5"><h2 className="text-sm font-semibold">Find people</h2></div>
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4 sm:p-5">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5 sm:p-5">
           <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
             Exact actor ID
             <form className="flex gap-2" onSubmit={applySearch}>
@@ -107,9 +118,29 @@ export function Users() {
               </SelectContent>
             </Select>
           </Control>
+          <Control label="Queue">
+            <Select
+              value={interestingMetric || '__all'}
+              onValueChange={(value) => {
+                const metric = value === '__all' ? '' : value;
+                setInterestingMetric(metric);
+                if (metric) setActivityMetric('');
+              }}
+            >
+              <SelectTrigger className="!h-11"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem className="min-h-11" value="__all">All observed people</SelectItem>
+                {activationMetrics.map((metric) => (
+                  <SelectItem className="min-h-11" key={metric.key} value={metric.key}>
+                    Recently activated · {metric.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Control>
           <Control label="Order">
             <Select value={order} onValueChange={(value) => setOrder(value as ActorOrder)}>
-              <SelectTrigger className="!h-11"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="!h-11" disabled={Boolean(interestingMetric)}><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem className="min-h-11" value="last_seen_desc">Last seen</SelectItem>
                 <SelectItem className="min-h-11" value="first_seen_desc">First seen</SelectItem>
@@ -119,7 +150,7 @@ export function Users() {
           </Control>
           <Control label="Registered activity">
             <Select value={activityMetric || '__all'} onValueChange={(value) => setActivityMetric(value === '__all' ? '' : value)}>
-              <SelectTrigger className="!h-11"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="!h-11" disabled={Boolean(interestingMetric)}><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem className="min-h-11" value="__all">Any registered event</SelectItem>
                 {eventMetrics.map((metric) => <SelectItem className="min-h-11" key={metric.key} value={metric.key}>{metric.name}</SelectItem>)}
@@ -180,6 +211,7 @@ export function Users() {
                         <TableCell>
                           <OrderEvidence
                             reason={actor.order_reason}
+                            rankReason={actor.rank_reason}
                             window={actor.rank_evidence_window ?? actorData.meta.date_range}
                           />
                         </TableCell>
@@ -235,7 +267,7 @@ export function Users() {
           <details className="group/disclosure border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
             <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center py-3 font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">How people are resolved</DisclosureSummary>
             Activity properties remain redacted. Exact-ID lookup accepts a canonical or raw actor ID and returns only its canonical bounded aggregate.
-            Rows use only the explicit Last seen, First seen, or Event volume order selected above. Activation, stall, risk and segment changes are not ranked until a purpose-backed definition exists.
+            Rows use factual ordering or the explicitly selected activation metric and its registry purpose. Stall, risk and segment changes remain unavailable until a typed semantic source exists.
           </details>
           </AnswerCanvas>
         </>
@@ -248,14 +280,20 @@ const ORDER_REASON_LABELS: Record<ActorOrderReason, string> = {
   last_seen_in_window: 'Ordered by last seen in this window',
   first_seen_in_window: 'Ordered by first seen in this window',
   event_volume_in_window: 'Ordered by event volume in this window',
+  recent_activation_in_window: 'Recently activated in this window',
 };
 
-function OrderEvidence({ reason, window }: {
+function OrderEvidence({ reason, rankReason, window }: {
   reason: ActorOrderReason;
+  rankReason: ActorsResult['actors'][number]['rank_reason'];
   window: { from: string; to: string };
 }) {
   return <div className="max-w-sm">
     <Badge variant="outline" className="whitespace-normal text-left font-normal">{ORDER_REASON_LABELS[reason]}</Badge>
+    {rankReason && <>
+      <div className="mt-1.5 text-xs font-medium">{rankReason.metric_name} · {formatDateTime(rankReason.observed_at)}</div>
+      <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{rankReason.metric_purpose}</div>
+    </>}
     <div className="mt-1.5 whitespace-nowrap text-xs text-muted-foreground">
       Evidence window: {formatDate(window.from)}–{formatDate(window.to)}
     </div>
@@ -281,8 +319,16 @@ function PeopleDataHealth({ capabilities }: { capabilities: ActorsResult['meta']
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{capabilities.property_filters.reason}</p>
       </li>
       <li className="rounded-control border p-3">
-        <span className="font-medium">Activation, stall, risk and segment-change ranking are unavailable.</span>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{capabilities.outcome_rank.reason}</p>
+        <span className="font-medium">
+          {capabilities.interesting_categories.recently_activated.available
+            ? 'Stall, risk and segment-change ranking are unavailable.'
+            : 'Activation, stall, risk and segment-change ranking are unavailable.'}
+        </span>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          {capabilities.interesting_categories.recently_activated.available
+            ? 'Recently activated is available from active native metrics in the activation category.'
+            : capabilities.outcome_rank.reason}
+        </p>
       </li>
       {!capabilities.session_count.project_capability && <li className="rounded-control border p-3 lg:col-span-3">
         <span className="font-medium">Session counts are hidden.</span>

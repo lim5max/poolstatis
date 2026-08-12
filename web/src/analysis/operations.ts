@@ -15,11 +15,12 @@ export type WebDimension =
   | 'language'
   | 'timezone'
   | 'country';
-export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc';
+export type ActorOrder = 'last_seen_desc' | 'first_seen_desc' | 'events_desc' | 'interesting_desc';
 export type ActorOrderReason =
   | 'last_seen_in_window'
   | 'first_seen_in_window'
-  | 'event_volume_in_window';
+  | 'event_volume_in_window'
+  | 'recent_activation_in_window';
 export type ActorIdentityStatus = 'stable' | 'linked' | 'anonymous' | 'ambiguous' | 'unknown';
 
 interface WebQueryBase {
@@ -59,6 +60,11 @@ export interface ActorsQueryInput {
   search?: { kind: 'exact_id'; value: string };
   propertyFilters: PropertyFilter[];
   activityMetric?: string;
+  interesting?:
+    | { reason: 'recently_activated'; metric: string }
+    | { reason: 'stalled' }
+    | { reason: 'at_risk' }
+    | { reason: 'changed_segment' };
 }
 
 export type OperationalQueryInput =
@@ -184,6 +190,13 @@ export interface ActorListItem {
   pinned_properties: Record<string, unknown>;
   identity_status: ActorIdentityStatus;
   order_reason: ActorOrderReason;
+  rank_reason: {
+    kind: 'recently_activated';
+    metric_key: string;
+    metric_name: string;
+    metric_purpose: string;
+    observed_at: string;
+  } | null;
   rank_evidence_window: { from: string; to: string };
 }
 
@@ -195,6 +208,16 @@ export interface ActorsResult {
     order: ActorOrder;
     next_cursor: string | null;
     activity_metric: { key: string; source: 'native'; population_filter: true } | null;
+    interesting: {
+      reason: 'recently_activated';
+      metric: {
+        key: string;
+        name: string;
+        purpose: string;
+        category: 'activation';
+        source: 'native';
+      };
+    } | null;
     capabilities: {
       property_filters: { available: false; reason: string };
       pinned_properties: { available: false; reason: string };
@@ -204,9 +227,13 @@ export interface ActorsResult {
         project_capability: boolean;
       };
       identity_profile: { available: false; reason: string };
-      outcome_rank: { available: false; reason: string };
+      outcome_rank:
+        | { available: true; reason: 'recently_activated' }
+        | { available: false; reason: string };
       interesting_categories: {
-        recently_activated: { available: false; requires: 'purpose_backed_activation_metric_or_funnel' };
+        recently_activated:
+          | { available: true; requires: 'active_native_activation_metric'; metric_count: number }
+          | { available: false; requires: 'active_native_activation_metric'; metric_count: 0 };
         stalled: { available: false; requires: 'purpose_backed_stall_definition' };
         at_risk: { available: false; requires: 'purpose_backed_risk_definition' };
         changed_segment: { available: false; requires: 'trusted_canonical_actor_property_source' };
@@ -218,7 +245,7 @@ export interface ActorsResult {
       pinned_properties: { source: null; fail_closed: true };
       ordering: {
         selected: ActorOrder;
-        input: 'last_seen' | 'first_seen' | 'total_events';
+        input: 'last_seen' | 'first_seen' | 'total_events' | 'activation_event_timestamp';
         relative_to: string;
       };
     };

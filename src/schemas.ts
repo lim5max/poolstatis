@@ -1188,13 +1188,22 @@ export const actorsQuerySchema = z.object({
   to: dateStr.nullable().optional(),
   limit: z.number().int().min(1).max(100).default(50),
   cursor: z.string().trim().min(1).max(8192).optional(),
-  order: z.enum(['last_seen_desc', 'first_seen_desc', 'events_desc']).default('last_seen_desc'),
+  order: z.enum(['last_seen_desc', 'first_seen_desc', 'events_desc', 'interesting_desc']).default('last_seen_desc'),
   search: z.object({
     kind: z.literal('exact_id'),
     value: z.string().trim().min(1).max(200),
   }).strict().optional(),
   propertyFilters: z.array(propertyFilterSchema).max(20).default([]),
   activityMetric: keySchema.optional(),
+  interesting: z.discriminatedUnion('reason', [
+    z.object({
+      reason: z.literal('recently_activated'),
+      metric: keySchema,
+    }).strict(),
+    z.object({ reason: z.literal('stalled') }).strict(),
+    z.object({ reason: z.literal('at_risk') }).strict(),
+    z.object({ reason: z.literal('changed_segment') }).strict(),
+  ]).optional(),
 }).strict();
 
 export const personQuerySchema = z.object({

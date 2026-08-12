@@ -15,6 +15,19 @@ beforeAll(async () => {
     key: 'actor_activity',
     source: { event: 'activity.performed', filters: [] },
   });
+  await activeMetric(env, {
+    key: 'activation_completed',
+    name: 'Activation completed',
+    purpose: 'Identifies the first meaningful outcome completed by an actor.',
+    source: { event: 'activation.completed', filters: [] },
+  });
+  await api(
+    env,
+    env.secretToken,
+    'PATCH',
+    `/api/v1/projects/${env.projectSlug}/metrics/activation_completed`,
+    { category: 'activation' },
+  );
   await api(env, env.ingestToken, 'POST', '/i/v1/events', {
     events: [
       {
@@ -26,6 +39,12 @@ beforeAll(async () => {
         event: 'activity.performed',
         distinct_id: 'mcp-stable',
         timestamp: '2026-07-29T11:00:00.000Z',
+      },
+      {
+        event: 'activation.completed',
+        distinct_id: 'mcp-activated',
+        timestamp: '2026-07-30T11:00:00.000Z',
+        properties: { email: 'redacted@example.test' },
       },
     ],
   });
@@ -107,6 +126,31 @@ describe('Actors REST/MCP parity', () => {
         capabilities: rest.body.meta.capabilities,
       },
     });
+
+    const interestingQuery = {
+      env: 'prod',
+      from: '2026-07-01T00:00:00.000Z',
+      to: '2026-08-01T00:00:00.000Z',
+      order: 'interesting_desc',
+      interesting: { reason: 'recently_activated', metric: 'activation_completed' },
+    };
+    const interestingRest = await api(
+      env,
+      env.secretToken,
+      'POST',
+      `/api/v1/projects/${env.projectSlug}/query`,
+      { kind: 'actors', ...interestingQuery },
+    );
+    const interestingMcp = await client.callTool({
+      name: 'list_actors',
+      arguments: { project: env.projectSlug, query: interestingQuery },
+    });
+    expect(interestingMcp.isError).not.toBe(true);
+    expect(interestingMcp.structuredContent).toMatchObject({
+      actors: interestingRest.body.actors,
+      meta: { interesting: interestingRest.body.meta.interesting },
+    });
+    expect(JSON.stringify(interestingMcp.structuredContent)).not.toContain('redacted@example.test');
 
     const restPerson = await api(
       env,

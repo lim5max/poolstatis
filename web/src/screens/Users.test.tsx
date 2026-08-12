@@ -11,6 +11,10 @@ vi.mock('../store', async (importOriginal) => ({
 
 const mockedStore = vi.mocked(useStore);
 const operationalQuery = vi.fn();
+Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+  configurable: true,
+  value: vi.fn(),
+});
 
 describe('People list', () => {
   beforeEach(() => {
@@ -23,6 +27,7 @@ describe('People list', () => {
         total_events: 4, active_days: 2, session_count: null,
         top_events: [{ event: 'page.viewed', count: 4 }], pinned_properties: {}, identity_status: 'unknown',
         order_reason: 'last_seen_in_window',
+        rank_reason: null,
         rank_evidence_window: {
           from: '2026-07-07T00:00:00Z',
           to: '2026-08-06T00:00:00Z',
@@ -37,6 +42,7 @@ describe('People list', () => {
         order: 'last_seen_desc',
         next_cursor: null,
         activity_metric: null,
+        interesting: null,
         capabilities: {
           property_filters: {
             available: false,
@@ -93,7 +99,7 @@ describe('People list', () => {
     expect(await screen.findByRole('heading', { name: 'People', level: 1 })).toBeInTheDocument();
     expect(screen.getByText('Ordered by last seen in this window')).toBeInTheDocument();
     expect(screen.getByText(/Evidence window:.*Jul 7, 2026.*Aug 6, 2026/)).toBeInTheDocument();
-    expect(screen.getByText(/Activation, stall, risk and segment changes are not ranked/)).toBeInTheDocument();
+    expect(screen.getByText(/Stall, risk and segment changes remain unavailable/)).toBeInTheDocument();
     expect(screen.getByText(/Activity properties remain redacted/)).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Observed signals first' })).not.toBeInTheDocument();
   });
@@ -136,6 +142,109 @@ describe('People list', () => {
       propertyFilters: [],
       limit: 50,
     })));
+  });
+
+  it('requests and explains a recently activated queue from an active native activation metric', async () => {
+    const metrics = vi.fn().mockResolvedValue([{
+      id: 'metric-activation',
+      key: 'activation_completed',
+      name: 'Activation completed',
+      purpose: 'Identifies the first meaningful product outcome completed by an actor.',
+      category: 'activation',
+      tags: [],
+      type: 'unique_actors',
+      source: { event: 'activation.completed' },
+      status: 'active',
+      owner: null,
+      deprecation_reason: null,
+      deprecated_at: null,
+    }]);
+    mockedStore.mockReturnValue({
+      project: 'alpha', env: 'prod',
+      client: { metrics, operationalQuery },
+    } as never);
+
+    render(<MemoryRouter><Users /></MemoryRouter>);
+    await screen.findByText('anon_7');
+
+    operationalQuery.mockResolvedValue({
+      kind: 'actors',
+      actors: [{
+        distinct_id: 'activated_9', raw_actor_count: 1,
+        first_seen: '2026-08-04T00:00:00Z', last_seen: '2026-08-05T00:00:00Z',
+        total_events: 2, active_days: 2, session_count: null,
+        top_events: [{ event: 'activation.completed', count: 1 }],
+        pinned_properties: {}, identity_status: 'unknown',
+        order_reason: 'recent_activation_in_window',
+        rank_reason: {
+          kind: 'recently_activated',
+          metric_key: 'activation_completed',
+          metric_name: 'Activation completed',
+          metric_purpose: 'Identifies the first meaningful product outcome completed by an actor.',
+          observed_at: '2026-08-05T00:00:00Z',
+        },
+        rank_evidence_window: {
+          from: '2026-07-07T00:00:00Z',
+          to: '2026-08-06T00:00:00Z',
+        },
+      }],
+      meta: {
+        computed_at: '2026-08-06T00:00:00Z',
+        date_range: { from: '2026-07-07T00:00:00Z', to: '2026-08-06T00:00:00Z' },
+        sampling: null,
+        source: 'native',
+        limit: 50,
+        order: 'interesting_desc',
+        next_cursor: null,
+        activity_metric: null,
+        interesting: {
+          reason: 'recently_activated',
+          metric: {
+            key: 'activation_completed', name: 'Activation completed',
+            purpose: 'Identifies the first meaningful product outcome completed by an actor.',
+            category: 'activation', source: 'native',
+          },
+        },
+        capabilities: {
+          property_filters: { available: false, reason: 'No canonical property source.' },
+          pinned_properties: { available: false, reason: 'No pinned property source.' },
+          session_count: {
+            source: 'canonical_browser_sessions', unavailable_value: null, project_capability: false,
+          },
+          identity_profile: { available: false, reason: 'No identity profile source.' },
+          outcome_rank: { available: true, reason: 'recently_activated' },
+          interesting_categories: {
+            recently_activated: {
+              available: true, requires: 'active_native_activation_metric', metric_count: 1,
+            },
+            stalled: { available: false, requires: 'purpose_backed_stall_definition' },
+            at_risk: { available: false, requires: 'purpose_backed_risk_definition' },
+            changed_segment: { available: false, requires: 'trusted_canonical_actor_property_source' },
+          },
+        },
+        provenance: {
+          identity_status: 'Only explicit server-owned links are classified.',
+          top_events: { registered_only: true, limit: 8 },
+          pinned_properties: { source: null, fail_closed: true },
+          ordering: {
+            selected: 'interesting_desc',
+            input: 'activation_event_timestamp',
+            relative_to: 'the exact query window',
+          },
+        },
+      },
+    });
+
+    fireEvent.click(screen.getAllByRole('combobox')[1]!);
+    fireEvent.click(await screen.findByRole('option', { name: 'Recently activated · Activation completed' }));
+
+    await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      order: 'interesting_desc',
+      interesting: { reason: 'recently_activated', metric: 'activation_completed' },
+    })));
+    expect(await screen.findByText('Recently activated in this window')).toBeInTheDocument();
+    expect(screen.getByText('Identifies the first meaningful product outcome completed by an actor.')).toBeInTheDocument();
+    expect(screen.getByText(/Stall, risk and segment-change ranking are unavailable/)).toBeInTheDocument();
   });
 
   it('never renders rows from the previous project while the next scope is pending or errors', async () => {

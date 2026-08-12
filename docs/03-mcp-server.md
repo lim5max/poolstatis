@@ -249,7 +249,10 @@ query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning
 query_stickiness(project, {metric, interval, date_from, env?})
 query_entities(project, {entity_type, filters?, limit, order_by?})
 list_actors(project, {env?, from?, to?, limit?, cursor?, order?, search?,
-  propertyFilters?, activityMetric?})
+  propertyFilters?, activityMetric?, interesting?})
+  // interesting_desc supports only
+  // {reason: "recently_activated", metric: "<active native activation metric>"}
+  // stalled / at_risk / changed_segment fail closed until typed sources exist
 
 propose_browser_analytics(project, route_keys[]) // finite reviewed vocabulary; atomic
 get_person(project, {distinct_id, env?, from?, to?, limit?, cursor?})
