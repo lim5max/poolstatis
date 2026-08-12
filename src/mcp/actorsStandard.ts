@@ -1,4 +1,4 @@
-export const ACTORS_STANDARD = `# Poolstatis actors and person contract
+export const ACTORS_STANDARD: string = `# Poolstatis actors and person contract
 
 Actors are query-time canonical identities derived from immutable events and
 active server-owned actor links. There is no mutable users table.
