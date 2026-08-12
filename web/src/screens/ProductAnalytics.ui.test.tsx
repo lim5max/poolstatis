@@ -60,6 +60,8 @@ function productStore(funnels: unknown[] = []) {
       properties: vi.fn().mockResolvedValue([]),
       releases: vi.fn().mockResolvedValue([]),
       experiments: vi.fn().mockResolvedValue([]),
+      funnelInvestigations: vi.fn().mockResolvedValue([]),
+      createFunnelInvestigation: vi.fn(),
       query: vi.fn().mockResolvedValue({
         kind: 'trend',
         series: [{ bucket: '2026-08-05T00:00:00Z', value: 8 }],
@@ -308,7 +310,18 @@ describe('Product answer-first surface', () => {
       primary_metric_key: 'signup_completed', secondary_metric_keys: [],
       started_at: '2026-07-18T00:00:00Z', concluded_at: null,
     }]);
-    current.client.evaluateRelease.mockResolvedValueOnce({ decision: { id: 'decision-1' }, idempotent: false });
+    current.client.createFunnelInvestigation.mockResolvedValueOnce({
+      investigation: {
+        id: '11111111-1111-4111-8111-111111111111',
+        env: 'prod',
+        saved_funnel: { id: 'f1', key: 'checkout', name: 'Checkout', goal: 'Complete signup', steps: [], window_seconds: 604800 },
+        transition: { from_step: 1, to_step: 2, from_metric: 'signup_started', to_metric: 'signup_completed', from_label: 'Started', to_label: 'Completed' },
+        query_spec: {}, query_result: {}, evidence: {},
+        lineage: { query_fingerprint: 'a'.repeat(64), result_fingerprint: 'b'.repeat(64) },
+        idempotency_key: 'test-idempotency', created_by: 'key:test', created_at: '2026-08-06T00:00:00Z',
+      },
+      idempotent: false,
+    });
     mockedStore.mockReturnValue(current);
 
     render(<MemoryRouter initialEntries={['/analyze/funnels?funnel=checkout&env=prod&from_step=1&to_step=2']}><ProductAnalytics surface="funnels" /></MemoryRouter>);
@@ -331,9 +344,6 @@ describe('Product answer-first surface', () => {
     expect(screen.getByRole('link', { name: /Experiment Signup copy/ })).toHaveAttribute('href', '/experiments');
     expect(screen.getByRole('button', { name: 'Investigate Started → Completed' })).toHaveAttribute('data-variant', 'default');
     expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
-    const saveProposal = screen.getByRole('button', { name: 'Evaluate temporally compatible release' });
-    expect(saveProposal).toHaveAttribute('data-variant', 'outline');
-    expect(screen.getByText(/does not persist this funnel investigation, establish an explicit funnel-release link, or prove causality/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
     await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
     expect(current.client.createAnalysisView.mock.calls[0][1].answer).toMatchObject({
@@ -341,12 +351,17 @@ describe('Product answer-first surface', () => {
       primary_value: { value: 30, unit: 'percent', formatted: '30%' },
       delta: { value: -15, unit: 'percentage_point', direction: 'down' },
     });
-    fireEvent.click(saveProposal);
-    await waitFor(() => expect(current.client.evaluateRelease).toHaveBeenCalledWith('alpha', 'release-1'));
-    const openProposal = screen.getByRole('link', { name: 'Open release proposal in Decisions' });
-    expect(openProposal).toHaveAttribute('href', '/decisions?decision=decision-1');
-    expect(openProposal).toHaveAttribute('data-variant', 'outline');
-    expect(screen.queryByText(/cannot be saved directly to Decisions/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Investigate Started → Completed' }));
+    await waitFor(() => expect(current.client.createFunnelInvestigation).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      funnel: 'checkout', env: 'prod', from_step: 1, to_step: 2,
+      date_from: '2026-07-07T00:00:00Z', date_to: '2026-08-06T00:00:00Z',
+    })));
+    expect(screen.getByText(/Saved artifact/)).toHaveTextContent('11111111-1111-4111-8111-111111111111');
+    expect(screen.getByRole('link', { name: /Continue through Ship with artifact/ })).toHaveAttribute('href', '/changes?investigation=11111111-1111-4111-8111-111111111111');
+    expect(screen.queryByRole('button', { name: 'Save proposal to Decisions' })).not.toBeInTheDocument();
+    expect(current.client.evaluateRelease).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy bounded task' }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('Poolstatis investigation: 11111111-1111-4111-8111-111111111111')));
     expect(current.client.query).toHaveBeenCalledTimes(1);
     expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({ kind: 'funnel', funnel: 'checkout', env: 'prod' }));
   });

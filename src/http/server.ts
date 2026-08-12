@@ -77,6 +77,9 @@ import {
   approveAction, getAction, listActions, prepareAction, rejectAction, retryAction,
 } from '../services/actions.js';
 import { getDecisionInbox } from '../services/webhooks.js';
+import {
+  createFunnelInvestigation, getFunnelInvestigation, listFunnelInvestigations,
+} from '../services/funnelInvestigations.js';
 import { registerAutomationRoutes } from './automationRoutes.js';
 import type { OutboundPolicyOptions } from '../security/outbound.js';
 import {
@@ -92,7 +95,7 @@ import {
   RateLimitExceeded, TenantRateLimiter, type TenantRateLimitOptions,
 } from '../services/rateLimiter.js';
 import {
-  deprecateMetricSchema, applyExperimentDecisionSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, measurementDeclarationSchema, prepareDecisionActionSchema, prepareExperimentSchema, rejectDecisionActionSchema, reviewDecisionSchema,
+  deprecateMetricSchema, applyExperimentDecisionSchema, applyMeasurementDeclarationSchema, approveDecisionActionSchema, editDecisionSchema, funnelInvestigationCreateSchema, measurementDeclarationSchema, prepareDecisionActionSchema, prepareExperimentSchema, rejectDecisionActionSchema, reviewDecisionSchema,
   actorDistinctIdSchema, actorLinkSchema, commitEventBackfillSchema, commitEventRevisionSchema, concludeExperimentSchema, createExperimentSchema, defineFunnelSchema, entityUpsertSchema, experienceCaptureSchema, experienceRouteRegistrationSchema, experienceSnapshotMetaSchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, ingestEnvelopeSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, previewEventBackfillSchema, previewEventRevisionSchema, propertyDefinitionSchema, propertyFilterSchema, purgeDataSchema,
   createMetricCategorySchema, querySchema, registerEntityTypeSchema, registerMetricSchema, registerReleaseSchema, transitionReleaseSchema, updateMetricCategorySchema, updateMetricSchema, webhookDestinationSchema, type PropertyFilter,
   metricDefinitionApplySchema, metricDefinitionPreviewSchema, semanticProjectComparisonSchema,
@@ -1631,6 +1634,49 @@ function registerPlatformRoutes(
     const result = await ctx.query.run(project.id, q);
     await recordQueryRun(ctx.pool, project.id, q.env, q, result, authOwner(req.auth));
     return result;
+  });
+
+  app.post('/api/v1/projects/:slug/funnel-investigations', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const result = await createFunnelInvestigation(
+      ctx.pool,
+      ctx.query,
+      project.id,
+      funnelInvestigationCreateSchema.parse(req.body),
+      authOwner(req.auth),
+    );
+    return reply.status(result.idempotent ? 200 : 201).send(result);
+  });
+
+  app.get('/api/v1/projects/:slug/funnel-investigations', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env, funnel, limit } = req.query as { env?: string; funnel?: string; limit?: string };
+    if (env !== undefined && (env.trim().length < 1 || env.trim().length > 100)) {
+      throw badRequest('invalid_query_param', 'env must contain between 1 and 100 characters');
+    }
+    if (funnel !== undefined && !z.string().regex(/^[a-z][a-z0-9_]*$/).max(100).safeParse(funnel).success) {
+      throw badRequest('invalid_query_param', 'funnel must be a saved funnel key');
+    }
+    const parsedLimit = limit === undefined ? 50 : Number(limit);
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      throw badRequest('invalid_query_param', 'limit must be an integer between 1 and 100');
+    }
+    return {
+      investigations: await listFunnelInvestigations(ctx.pool, project.id, {
+        ...(env ? { env: env.trim() } : {}),
+        ...(funnel ? { funnel } : {}),
+        limit: parsedLimit,
+      }),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/funnel-investigations/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const id = z.string().uuid().parse((req.params as { id: string }).id);
+    return { investigation: await getFunnelInvestigation(ctx.pool, project.id, id) };
   });
 
   app.post('/api/v1/projects/:slug/identity-links', async (req, reply) => {

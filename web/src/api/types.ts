@@ -168,6 +168,27 @@ export interface Funnel {
   window_seconds: number;
 }
 
+export interface FunnelInvestigation {
+  id: string;
+  env: string;
+  saved_funnel: Funnel;
+  transition: {
+    from_step: number;
+    to_step: number;
+    from_metric: string;
+    to_metric: string;
+    from_label: string;
+    to_label: string;
+  };
+  query_spec: Record<string, unknown>;
+  query_result: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  lineage: { query_fingerprint: string; result_fingerprint: string };
+  idempotency_key: string;
+  created_by: string;
+  created_at: string;
+}
+
 export type FeatureFlagStatus = 'draft' | 'active' | 'archived';
 
 export interface FeatureFlagVariant {

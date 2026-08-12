@@ -22,7 +22,7 @@ import {
   releaseOutcome,
   type ShipStage,
 } from '../components/ship-lifecycle';
-import type { Decision, DecisionDetail, Experiment, MeasurementContract, Release } from '../api/types';
+import type { Decision, DecisionDetail, Experiment, FunnelInvestigation, MeasurementContract, Release } from '../api/types';
 
 type LifecycleItem =
   | { kind: 'release'; id: string; stage: ShipStage; updatedAt: string; release: Release; detail?: DecisionDetail }
@@ -33,6 +33,11 @@ export function Changes() {
   const [params] = useSearchParams();
   const requestedReleaseId = params.get('release');
   const requestedExperimentKey = params.get('experiment');
+  const requestedInvestigationId = params.get('investigation');
+  const investigation = useAsync(async (): Promise<FunnelInvestigation | null> => {
+    if (!requestedInvestigationId) return null;
+    return client!.funnelInvestigation(project!, requestedInvestigationId);
+  }, [client, project, requestedInvestigationId]);
   const audit = useAsync(async () => {
     const [releases, listedDecisions, experiments, contracts] = await Promise.all([
       client!.releases(project!, { env }),
@@ -109,6 +114,24 @@ export function Changes() {
           Follow every release and experiment from preparation to a human-reviewed outcome.
         </p>
       </header>
+      {requestedInvestigationId ? (
+        investigation.loading ? <Loading what="reading funnel investigation…" />
+          : investigation.error ? <ErrorNote>{investigation.error}</ErrorNote>
+            : investigation.data ? (
+              <Panel title="Investigation carried into Ship" right={<Badge variant="outline">Evidence only</Badge>}>
+                <div className="space-y-2 text-sm">
+                  <div className="font-medium">{investigation.data.transition.from_label} → {investigation.data.transition.to_label}</div>
+                  <p className="text-muted-foreground">{investigation.data.saved_funnel.goal}</p>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <code className="break-all">{investigation.data.id}</code>
+                    <span>{investigation.data.env}</span>
+                    <span>{new Date(investigation.data.created_at).toLocaleString()}</span>
+                  </div>
+                  <p className="text-muted-foreground">This immutable artifact is descriptive context. It does not attach itself to a release, claim causality, or start an evaluation.</p>
+                </div>
+              </Panel>
+            ) : null
+      ) : null}
       {items.length === 0 ? (
         <>
           <GuidedFirstValue

@@ -630,6 +630,29 @@ canonical actor или связанных raw IDs. Response явно содер�
 }
 ```
 
+Из результата funnel нельзя автоматически вывести release decision. Перед
+передачей finding в Ship сохраните отдельный immutable artifact:
+
+```http
+POST /api/v1/projects/{slug}/funnel-investigations
+{
+  "idempotency_key": "checkout-step-2026-08-12",
+  "funnel": "checkout",
+  "env": "prod",
+  "date_from": "2026-08-05T00:00:00.000Z",
+  "date_to": "2026-08-12T00:00:00.000Z",
+  "from_step": 1,
+  "to_step": 2
+}
+```
+
+Клиент не передаёт готовые facts: сервер повторяет saved-funnel Query DSL и
+сохраняет snapshot definition, exact query/result/evidence, actor, timestamp и
+SHA-256 fingerprints. Artifact append-only и descriptive, not causal. Чтение:
+`GET /funnel-investigations?env=prod&funnel=checkout&limit=50` и
+`GET /funnel-investigations/{id}`. Позднейшая release evaluation должна ссылаться
+на конкретный investigation id, а не подбирать релиз по совпадению времени.
+
 ## Metric retirement and usage
 
 ```http

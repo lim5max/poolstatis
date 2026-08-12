@@ -1146,6 +1146,32 @@ export const funnelQuerySchema = z.object({
   env: z.string().default('prod'),
 });
 
+export const funnelInvestigationCreateSchema = z.object({
+  idempotency_key: z.string().trim().min(8).max(200),
+  funnel: keySchema,
+  env: z.string().trim().min(1).max(100).default('prod'),
+  date_from: z.string().datetime({ offset: true }),
+  date_to: z.string().datetime({ offset: true }),
+  from_step: z.number().int().nonnegative(),
+  to_step: z.number().int().positive(),
+}).strict().superRefine((input, ctx) => {
+  if (input.to_step !== input.from_step + 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['to_step'],
+      message: 'to_step must be the next saved funnel step after from_step',
+    });
+  }
+  if (Date.parse(input.date_to) <= Date.parse(input.date_from)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['date_to'],
+      message: 'date_to must be after date_from',
+    });
+  }
+});
+export type FunnelInvestigationCreateInput = z.infer<typeof funnelInvestigationCreateSchema>;
+
 export const entitiesQuerySchema = z.object({
   kind: z.literal('entities'),
   entity_type: z.string().min(1),

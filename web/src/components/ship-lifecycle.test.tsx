@@ -281,6 +281,45 @@ describe('Ship lifecycle', () => {
     expect(screen.getByRole('article', { name: 'Other release' })).not.toHaveAttribute('aria-current');
   });
 
+  it('reads an explicit funnel investigation handoff without treating it as a release decision', async () => {
+    const funnelInvestigation = vi.fn().mockResolvedValue({
+      id: '11111111-1111-4111-8111-111111111111', env: 'prod',
+      saved_funnel: {
+        id: 'funnel-1', key: 'activation', name: 'Activation',
+        goal: 'Measure whether actors reach the first meaningful outcome.',
+        steps: [], window_seconds: 86400,
+      },
+      transition: {
+        from_step: 0, to_step: 1, from_metric: 'started', to_metric: 'completed',
+        from_label: 'Started', to_label: 'Completed',
+      },
+      query_spec: {}, query_result: {}, evidence: {},
+      lineage: { query_fingerprint: 'a'.repeat(64), result_fingerprint: 'b'.repeat(64) },
+      idempotency_key: 'ship-context', created_by: 'key:test', created_at: '2026-08-12T00:00:00.000Z',
+    });
+    const evaluateRelease = vi.fn();
+    mockedStore.mockReturnValue({
+      client: {
+        releases: vi.fn().mockResolvedValue([release('deployed')]),
+        decisions: vi.fn().mockResolvedValue([]),
+        experiments: vi.fn().mockResolvedValue([]),
+        contracts: vi.fn().mockResolvedValue([]),
+        funnelInvestigation,
+        evaluateRelease,
+      },
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter initialEntries={['/changes?investigation=11111111-1111-4111-8111-111111111111']}><Changes /></MemoryRouter>);
+
+    expect(await screen.findByText('Investigation carried into Ship')).toBeInTheDocument();
+    expect(funnelInvestigation).toHaveBeenCalledWith('alpha', '11111111-1111-4111-8111-111111111111');
+    expect(screen.getByText('Started → Completed')).toBeInTheDocument();
+    expect(screen.getByText(/does not attach itself to a release/)).toBeInTheDocument();
+    expect(screen.getByText('Evidence only')).toBeInTheDocument();
+    expect(evaluateRelease).not.toHaveBeenCalled();
+  });
+
   it('renders concluded experiment rows without inventing a decision or rollout change', async () => {
     const closed = { ...experiment('concluded'), id: 'closed', name: 'Closed legacy test' };
     const recorded = {

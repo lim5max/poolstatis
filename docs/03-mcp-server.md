@@ -238,6 +238,12 @@ get_web_session(project, {metric, key_metric?, actor_id?, session_id, date_from,
 get_page_engagement(project, {metric, actor_id?, page_view_id, date_from, date_to?, filters?, env?})
 query_funnel(project, {funnel | steps | conversion_metric, date_from, date_to?, env?})
   // каждый step возвращает metric_key, purpose, category, actors и conversion_*
+create_funnel_investigation(project, {idempotency_key, funnel, env, date_from,
+  date_to, from_step, to_step})
+  // сервер повторяет saved-funnel query и сохраняет immutable result/evidence lineage
+list_funnel_investigations(project, {env?, funnel?, limit?})
+get_funnel_investigation(project, id)
+  // artifact descriptive, not causal; его id нужно явно передать в последующую работу
 query_retention(project, {start_metric, return_metric?, interval, periods, date_from, env?})
 query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning/resurrecting/dormant
 query_stickiness(project, {metric, interval, date_from, env?})

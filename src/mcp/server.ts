@@ -15,7 +15,7 @@ import {
   concludeExperimentSchema, createExperimentSchema, prepareExperimentSchema,
   createMetricCategorySchema,
   deprecateMetricSchema,
-  defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
+  defineFunnelSchema, entitiesQuerySchema, funnelInvestigationCreateSchema, funnelQuerySchema, lifecycleQuerySchema,
   experienceRouteRegistrationSchema, experienceSessionQuerySchema, experienceSurfaceSchema, featureFlagSchema, flagEvaluationSchema, interactionMapQuerySchema, registerEntityTypeSchema, registerMetricSchema,
   editDecisionSchema, eventRevisionPatchSchema, measurementDeclarationSchema, measurementTrustSchema, personQuerySchema, posthogConnectionSchema, propertyDefinitionSchema,
   approveDecisionActionSchema, prepareDecisionActionSchema, webhookDestinationSchema,
@@ -1132,6 +1132,41 @@ jsonTool(
   'Step-by-step conversion for a saved funnel, inline registry metric steps, or one registered conversion metric.',
   { project, query: funnelQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'funnel', ...query })),
+);
+
+jsonTool(
+  'create_funnel_investigation',
+  'Persist immutable evidence for one adjacent transition in a saved funnel. Poolstatis reruns the exact project/environment query server-side; this creates evidence, not a causal claim or approved decision.',
+  { project, investigation: funnelInvestigationCreateSchema },
+  wrap(({ project: slug, investigation }) => api(
+    'POST',
+    `/api/v1/projects/${slug}/funnel-investigations`,
+    investigation,
+  )),
+);
+
+jsonTool(
+  'list_funnel_investigations',
+  'List immutable saved-funnel investigation evidence for this project. Use an investigation id as the explicit lineage reference in later work; list order is newest first.',
+  {
+    project,
+    env: z.string().trim().min(1).max(100).optional(),
+    funnel: z.string().regex(/^[a-z][a-z0-9_]*$/).max(100).optional(),
+    limit: z.number().int().min(1).max(100).default(50),
+  },
+  wrap(({ project: slug, env, funnel, limit }) => {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (env) qs.set('env', env);
+    if (funnel) qs.set('funnel', funnel);
+    return api('GET', `/api/v1/projects/${slug}/funnel-investigations?${qs}`);
+  }),
+);
+
+jsonTool(
+  'get_funnel_investigation',
+  'Read one immutable saved-funnel investigation with exact query, result, evidence, creator, timestamps and SHA-256 lineage fingerprints.',
+  { project, id: z.string().uuid() },
+  wrap(({ project: slug, id }) => api('GET', `/api/v1/projects/${slug}/funnel-investigations/${id}`)),
 );
 
 jsonTool(

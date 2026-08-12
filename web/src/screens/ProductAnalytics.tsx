@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ErrorNote, Loading } from '@/components/ui';
 import { AnswerCanvas, CanonicalAnswer, type EvidenceTrust } from '@/components/analytics';
 import { DisclosureSummary } from '@/components/disclosure';
-import type { CreateSavedAnswerInput, Experiment, Funnel, MeasurementTrust, Metric, Release } from '../api/types';
+import type { CreateSavedAnswerInput, Experiment, Funnel, FunnelInvestigation, MeasurementTrust, Metric, Release } from '../api/types';
 import { useAsync, useStore } from '../store';
 import {
   ANALYSIS_TEMPLATES,
@@ -669,6 +669,8 @@ function summarizeProductAnswer(
 
 export interface FunnelLossSummary {
   kind: 'absolute' | 'percentage';
+  fromStep: number;
+  toStep: number;
   fromLabel: string;
   toLabel: string;
   fromMetric: string;
@@ -699,6 +701,8 @@ export function selectServerFunnelLoss(
   if (!from || !to) return null;
   return {
     kind: selected.kind,
+    fromStep: selected.loss.from_step,
+    toStep: selected.loss.to_step,
     fromLabel: from.label,
     toLabel: to.label,
     fromMetric: from.metric_key,
@@ -729,11 +733,19 @@ function FunnelBiggestLoss({
   const { client, project } = useStore();
   const [taskVisible, setTaskVisible] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [proposalState, setProposalState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [proposalDecisionId, setProposalDecisionId] = useState<string | null>(null);
+  const [investigationState, setInvestigationState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [investigationId, setInvestigationId] = useState<string | null>(null);
+  const [idempotencyKey, setIdempotencyKey] = useState('');
+  const investigations = useAsync(async (): Promise<FunnelInvestigation[]> => {
+    if (!client || !project || !funnel) return [];
+    return client.funnelInvestigations(project, { env, funnel: funnel.key, limit: 10 });
+  }, [client, project, env, funnel?.key]);
   useEffect(() => {
-    setProposalState('idle');
-    setProposalDecisionId(null);
+    setInvestigationState('idle');
+    setInvestigationId(null);
+    setIdempotencyKey(globalThis.crypto?.randomUUID?.() ?? `funnel-${Date.now()}-${Math.random()}`);
+    setTaskVisible(false);
+    setCopied(false);
   }, [env, funnel?.key, result.meta.computed_at]);
   const summary = selectServerFunnelLoss(result, requestedTransition);
   if (!funnel) return null;
@@ -754,10 +766,11 @@ function FunnelBiggestLoss({
     return <AnswerCanvas><div className="p-4 sm:p-5"><div className="text-sm font-medium text-muted-foreground">Biggest loss</div><h2 className="mt-1 text-xl font-semibold">No measured loss in this period</h2><p className="mt-2 text-sm text-muted-foreground">Every measured actor reached each saved funnel step. No loss or investigate action is implied.</p></div></AnswerCanvas>;
   }
   const compatible = selectCompatibleFunnelEvidence(result, summary.toMetric, relatedEvidence, env);
-  const temporallyCompatibleRelease = compatible.releases.find((release) => release.status === 'deployed' || release.status === 'observing') ?? null;
   const absoluteLabel = funnelLossLabel(result, result.summary?.biggest_absolute_loss ?? null);
   const percentageLabel = funnelLossLabel(result, result.summary?.biggest_percentage_loss ?? null);
-  const task = `Investigate the biggest measured loss in funnel ${funnel.key} without changing its definition.\n\nGoal: ${funnel.goal}\nEnvironment and exact period are in the attached Poolstatis query.\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nCurrent loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nUse registered metrics and trusted properties only. Compare safe breakdowns and report sample and data-quality limits. Do not claim causality or that this investigation has been persisted to a release or decision.`;
+  const task = investigationId
+    ? `Investigate one measured transition without changing its definition.\n\nPoolstatis investigation: ${investigationId}\nProject: ${project}\nSaved funnel: ${funnel.key}\nGoal: ${funnel.goal}\nEnvironment: ${env}\nExact UTC range: ${result.meta.date_range.from} to ${result.meta.date_range.to}\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nObserved loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nRead the immutable artifact with get_funnel_investigation. Use registered metrics and trusted properties only. Report sample and data-quality limits. Treat every result as descriptive, not causal, and cite the investigation id in any later release work.`
+    : '';
   const copyTask = async () => {
     try {
       await navigator.clipboard.writeText(task);
@@ -766,15 +779,24 @@ function FunnelBiggestLoss({
       setTaskVisible(true);
     }
   };
-  const saveProposal = async () => {
-    if (!temporallyCompatibleRelease || !client || !project || proposalState === 'saving' || proposalState === 'saved') return;
-    setProposalState('saving');
+  const saveInvestigation = async () => {
+    if (!client || !project || !idempotencyKey || investigationState === 'saving' || investigationState === 'saved') return;
+    setInvestigationState('saving');
     try {
-      const saved = await client.evaluateRelease(project, temporallyCompatibleRelease.id);
-      setProposalDecisionId(saved.decision.id);
-      setProposalState('saved');
+      const saved = await client.createFunnelInvestigation(project, {
+        idempotency_key: idempotencyKey,
+        funnel: funnel.key,
+        env,
+        date_from: result.meta.date_range.from,
+        date_to: result.meta.date_range.to,
+        from_step: summary.fromStep,
+        to_step: summary.toStep,
+      });
+      setInvestigationId(saved.investigation.id);
+      setInvestigationState('saved');
+      investigations.reload();
     } catch {
-      setProposalState('error');
+      setInvestigationState('error');
     }
   };
   return (
@@ -795,7 +817,13 @@ function FunnelBiggestLoss({
             <FunnelFact label="Affected goal" value={funnel.goal} />
           </div>
         </div>
-        <Button className="h-11 w-full lg:w-auto" onClick={() => void copyTask()}>{copied ? 'Investigation copied' : `Investigate ${summary.fromLabel} → ${summary.toLabel}`}</Button>
+        <div className="flex w-full flex-col gap-2 lg:w-auto">
+          <Button className="h-11 w-full" onClick={() => void saveInvestigation()} disabled={!idempotencyKey || investigationState === 'saving' || investigationState === 'saved'}>
+            {investigationState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
+            {investigationState === 'saving' ? 'Saving evidence…' : investigationState === 'saved' ? 'Investigation saved' : `Investigate ${summary.fromLabel} → ${summary.toLabel}`}
+          </Button>
+          {investigationId ? <Button className="h-11 w-full" variant="outline" onClick={() => void copyTask()}>{copied ? 'Task copied' : 'Copy bounded task'}</Button> : null}
+        </div>
       </div>
       {result.evidence?.warnings.length ? (
         <div className="border-t px-4 py-3 text-sm sm:px-5">
@@ -804,7 +832,27 @@ function FunnelBiggestLoss({
         </div>
       ) : null}
       <div className="border-t px-4 py-4 text-sm sm:px-5">
-        <div className="font-medium">Temporally compatible change context</div>
+        <div className="font-medium">Immutable investigation evidence</div>
+        <p className="mt-1 text-muted-foreground">Saving reruns this saved funnel and stores the exact query, result, evidence, creator and SHA-256 lineage. It does not create a causal claim or a Decisions proposal.</p>
+        {investigationId ? <p className="mt-2">Saved artifact <code className="break-all">{investigationId}</code>. Reference this id in any later release evaluation.</p> : null}
+        {investigationState === 'error' ? <p role="alert" className="mt-2 text-destructive">The evidence could not be reproduced and persisted. Rerun the funnel and try again.</p> : null}
+        {investigations.loading ? <p className="mt-2 text-muted-foreground">Reading saved investigations…</p> : investigations.error ? <p className="mt-2 text-muted-foreground">Saved investigations are temporarily unavailable.</p> : investigations.data?.length ? (
+          <div className="mt-3 space-y-2">
+            {investigations.data.map((investigation) => (
+              <div key={investigation.id} className="rounded-control border bg-muted/20 p-3">
+                <div className="font-medium">{investigation.transition.from_label} → {investigation.transition.to_label}</div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <code className="break-all">{investigation.id}</code>
+                  <span>{new Date(investigation.created_at).toLocaleString()}</span>
+                  <span>by {investigation.created_by}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : <p className="mt-2 text-muted-foreground">No persisted investigation exists for this saved funnel and environment yet.</p>}
+      </div>
+      <div className="border-t px-4 py-4 text-sm sm:px-5">
+        <div className="font-medium">Related change evidence</div>
         {compatible.releases.length === 0 && compatible.experiments.length === 0 ? (
           <p className="mt-1 text-muted-foreground">
             {relatedEvidenceUnavailable
@@ -826,24 +874,9 @@ function FunnelBiggestLoss({
           </div>
         )}
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          {proposalDecisionId ? (
-            <Button asChild variant="outline"><Link to={`/decisions?decision=${encodeURIComponent(proposalDecisionId)}`}>Open release proposal in Decisions</Link></Button>
-          ) : temporallyCompatibleRelease ? (
-            <Button type="button" variant="outline" onClick={() => void saveProposal()} disabled={proposalState === 'saving'}>
-              {proposalState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
-              {proposalState === 'saving' ? 'Evaluating release…' : 'Evaluate temporally compatible release'}
-            </Button>
-          ) : (
-            <p className="text-muted-foreground">No temporally compatible release is available to evaluate on its own frozen contract.</p>
-          )}
-          <Link className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to="/changes">Continue through Ship</Link>
+          <p className="text-muted-foreground">A compatible release is context only. Persist and cite an investigation before carrying this finding into Ship.</p>
+          {investigationId ? <Link className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to={`/changes?investigation=${encodeURIComponent(investigationId)}`}>Continue through Ship with artifact {investigationId.slice(0, 8)}</Link> : null}
         </div>
-        {temporallyCompatibleRelease && !proposalDecisionId ? (
-          <p className="mt-2 text-muted-foreground">
-            This action evaluates only the release&apos;s frozen contract. It does not persist this funnel investigation, establish an explicit funnel-release link, or prove causality.
-          </p>
-        ) : null}
-        {proposalState === 'error' && <p role="alert" className="mt-2 text-destructive">The release evidence could not be evaluated. Review its frozen contract and try again.</p>}
       </div>
       {taskVisible && (
         <div className="border-t p-4 sm:p-5">

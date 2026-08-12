@@ -1,5 +1,5 @@
 import type {
-  AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataHealthResult, DataHealthVerifyInput, DataHealthVerifyResult, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
+  AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataHealthResult, DataHealthVerifyInput, DataHealthVerifyResult, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, FunnelInvestigation, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
   BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectPortfolioResult, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
@@ -618,6 +618,36 @@ export class PoolstatisClient {
 
   funnels(slug: string) {
     return this.req<{ funnels: Funnel[] }>('GET', `/api/v1/projects/${slug}/funnels`).then((r) => r.funnels);
+  }
+
+  createFunnelInvestigation(slug: string, body: {
+    idempotency_key: string;
+    funnel: string;
+    env: string;
+    date_from: string;
+    date_to: string;
+    from_step: number;
+    to_step: number;
+  }) {
+    return this.req<{ investigation: FunnelInvestigation; idempotent: boolean }>(
+      'POST', `/api/v1/projects/${slug}/funnel-investigations`, body,
+    );
+  }
+
+  funnelInvestigations(slug: string, filter: { env?: string; funnel?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (filter.env) qs.set('env', filter.env);
+    if (filter.funnel) qs.set('funnel', filter.funnel);
+    if (filter.limit) qs.set('limit', String(filter.limit));
+    return this.req<{ investigations: FunnelInvestigation[] }>(
+      'GET', `/api/v1/projects/${slug}/funnel-investigations${qs.size ? `?${qs}` : ''}`,
+    ).then((response) => response.investigations);
+  }
+
+  funnelInvestigation(slug: string, id: string) {
+    return this.req<{ investigation: FunnelInvestigation }>(
+      'GET', `/api/v1/projects/${slug}/funnel-investigations/${id}`,
+    ).then((response) => response.investigation);
   }
 
   query(slug: string, query: AnalysisQueryInput) {
