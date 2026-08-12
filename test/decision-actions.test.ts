@@ -1,16 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
+import { activeMetric, api, createHumanReviewTestEnv, type HumanReviewTestEnv } from './helpers.js';
 
 const DAY = 86_400_000;
 
 describe('approval-gated decision actions', () => {
-  let env: TestEnv;
+  let env: HumanReviewTestEnv;
   let decisionId: string;
   let releaseId: string;
   let anchor: Date;
 
   beforeAll(async () => {
-    env = await createTestEnv();
+    env = await createHumanReviewTestEnv();
     anchor = new Date(Date.now() - 3 * DAY);
     await activeMetric(env, {
       key: 'activation_completed', type: 'unique_actors',
@@ -74,33 +74,44 @@ describe('approval-gated decision actions', () => {
     let flags = await api(env, env.secretToken, 'GET', path('/flags'));
     expect(flags.body.flags[0].variants[0].rollout_percentage).toBe(50);
 
-    const beforeDecision = await api(env, env.secretToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
+    const beforeDecision = await api(env, env.ownerToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
       confirmation_fingerprint: prepared.body.action.confirmation_fingerprint,
     });
     expect(beforeDecision.status).toBe(409);
     expect(beforeDecision.body.error.code).toBe('decision_approval_required');
-    await api(env, env.secretToken, 'POST', path(`/decisions/${decisionId}/approve`), {
+    await api(env, env.ownerToken, 'POST', path(`/decisions/${decisionId}/approve`), {
       rationale: 'The trusted measured activation improvement supports keeping the release.',
     });
-    const wrong = await api(env, env.secretToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
+    const secretDenied = await api(env, env.secretToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
+      confirmation_fingerprint: prepared.body.action.confirmation_fingerprint,
+    });
+    expect(secretDenied.status).toBe(403);
+    expect(secretDenied.body.error.code).toBe('human_user_required');
+    const memberDenied = await api(env, env.memberToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
+      confirmation_fingerprint: prepared.body.action.confirmation_fingerprint,
+    });
+    expect(memberDenied.status).toBe(403);
+    expect(memberDenied.body.error.code).toBe('insufficient_role');
+
+    const wrong = await api(env, env.adminToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
       confirmation_fingerprint: '0'.repeat(64),
     });
     expect(wrong.status).toBe(409);
     expect(wrong.body.error.code).toBe('action_confirmation_mismatch');
 
-    const approved = await api(env, env.secretToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
+    const approved = await api(env, env.adminToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
       confirmation_fingerprint: prepared.body.action.confirmation_fingerprint,
     });
     expect(approved.status).toBe(200);
     expect(approved.body.action).toMatchObject({
-      status: 'executed', approved_by: expect.stringMatching(/^key:/),
+      status: 'executed', approved_by: `user:${env.adminUserId}`,
       result: { flag_key: 'onboarding_flow', release_id: releaseId },
     });
     expect(approved.body.audit.map((entry: { event: string }) => entry.event)).toEqual(['prepared', 'approved', 'executed']);
     expect(approved.body.audit[1].snapshot.payload).toEqual(prepared.body.action.payload);
     flags = await api(env, env.secretToken, 'GET', path('/flags'));
     expect(flags.body.flags[0].variants).toEqual([{ key: 'control', rollout_percentage: 100 }, { key: 'test', rollout_percentage: 0 }]);
-    const retryApproval = await api(env, env.secretToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
+    const retryApproval = await api(env, env.adminToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
       confirmation_fingerprint: prepared.body.action.confirmation_fingerprint,
     });
     expect(retryApproval.body.audit).toHaveLength(3);
@@ -149,7 +160,7 @@ describe('approval-gated decision actions', () => {
     const webhook = await prepare('missing-webhook-1', 'generic_webhook', { event: 'decision.approved' });
     const failed = await approve(webhook.body.action);
     expect(failed.body.action).toMatchObject({ status: 'failed', error_code: 'webhook_destination_required' });
-    const retried = await api(env, env.secretToken, 'POST', path(`/actions/${webhook.body.action.id}/retry`), {});
+    const retried = await api(env, env.ownerToken, 'POST', path(`/actions/${webhook.body.action.id}/retry`), {});
     expect(retried.body.action.status).toBe('failed');
     expect(retried.body.audit.map((entry: { event: string }) => entry.event)).toEqual([
       'prepared', 'approved', 'failed', 'retried', 'failed',
@@ -164,7 +175,7 @@ describe('approval-gated decision actions', () => {
     });
   }
   async function approve(action: { id: string; confirmation_fingerprint: string }) {
-    return api(env, env.secretToken, 'POST', path(`/actions/${action.id}/approve`), {
+    return api(env, env.ownerToken, 'POST', path(`/actions/${action.id}/approve`), {
       confirmation_fingerprint: action.confirmation_fingerprint,
     });
   }

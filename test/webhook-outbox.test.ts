@@ -2,13 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { WebhookOutbox } from '../src/services/webhooks.js';
-import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
+import { activeMetric, api, createHumanReviewTestEnv, type HumanReviewTestEnv } from './helpers.js';
 
 const DAY = 86_400_000;
 const ENCRYPTION_KEY = 'webhook-outbox-controlled-encryption-key';
 
 describe('encrypted webhook outbox and decision inbox', () => {
-  let env: TestEnv;
+  let env: HumanReviewTestEnv;
   let host: string;
   let decisionId: string;
   let releaseId: string;
@@ -28,7 +28,7 @@ describe('encrypted webhook outbox and decision inbox', () => {
   beforeAll(async () => {
     await new Promise<void>((resolve) => receiver.listen(0, '127.0.0.1', resolve));
     host = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}`;
-    env = await createTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY, outboundPolicy: { allowLocalHttp: true } });
+    env = await createHumanReviewTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY, outboundPolicy: { allowLocalHttp: true } });
     const anchor = new Date(Date.now() - 3 * DAY);
     await activeMetric(env, {
       key: 'activation_completed', type: 'unique_actors',
@@ -100,7 +100,7 @@ describe('encrypted webhook outbox and decision inbox', () => {
   test('queues impact-first sanitized decision payload only after approval and exposes delivery state', async () => {
     let inbox = await api(env, env.secretToken, 'GET', path('/decision-inbox'));
     expect(inbox.body.decisions[0]).toMatchObject({ state: 'needs_attention', requested_choice: expect.any(String) });
-    await api(env, env.secretToken, 'POST', path(`/decisions/${decisionId}/approve`), {
+    await api(env, env.ownerToken, 'POST', path(`/decisions/${decisionId}/approve`), {
       rationale: 'The trusted activation evidence clears the declared threshold.',
     });
     inbox = await api(env, env.secretToken, 'GET', path('/decision-inbox'));
@@ -112,7 +112,7 @@ describe('encrypted webhook outbox and decision inbox', () => {
       expected_effect: 'Notify product operations about the accepted measured impact and requested follow-up.',
     });
     expect((await api(env, env.secretToken, 'GET', path('/webhook-deliveries'))).body.deliveries).toHaveLength(1);
-    const approved = await api(env, env.secretToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
+    const approved = await api(env, env.ownerToken, 'POST', path(`/actions/${prepared.body.action.id}/approve`), {
       confirmation_fingerprint: prepared.body.action.confirmation_fingerprint,
     });
     expect(approved.body.action).toMatchObject({ status: 'executed', result: { queued: true } });

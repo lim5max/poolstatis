@@ -4,13 +4,16 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createContext } from '../../src/http/context.js';
 import { ReleaseMonitor } from '../../src/services/releaseMonitor.js';
 import { WebhookOutbox } from '../../src/services/webhooks.js';
-import { activeMetric, api, createTestEnv, type TestEnv } from '../helpers.js';
+import {
+  activeMetric, api, createHumanReviewTestEnv, createTestEnv,
+  type HumanReviewTestEnv, type TestEnv,
+} from '../helpers.js';
 
 const DAY = 86_400_000;
 const ENCRYPTION_KEY = 'decision-loop-c-e2e-encryption-key';
 
 describe('full P0/P1 continuous product decision loop E2E', () => {
-  let native: TestEnv;
+  let native: HumanReviewTestEnv;
   let external: TestEnv;
   let anchor: Date;
   let posthogHost: string;
@@ -37,7 +40,7 @@ describe('full P0/P1 continuous product decision loop E2E', () => {
     await new Promise<void>((resolve) => webhook.listen(0, '127.0.0.1', resolve));
     posthogHost = `http://127.0.0.1:${(posthog.address() as AddressInfo).port}`;
     webhookHost = `http://127.0.0.1:${(webhook.address() as AddressInfo).port}`;
-    native = await createTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY, outboundPolicy: { allowLocalHttp: true } });
+    native = await createHumanReviewTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY, outboundPolicy: { allowLocalHttp: true } });
     external = await createTestEnv({ connectorEncryptionKey: ENCRYPTION_KEY, outboundPolicy: { allowLocalHttp: true } });
     anchor = new Date(Date.now() - 3 * DAY);
   });
@@ -87,7 +90,7 @@ describe('full P0/P1 continuous product decision loop E2E', () => {
     const explained = await api(native, native.secretToken, 'POST', path(native, `/decisions/${decision.id}/explain`), {});
     expect(explained.body).toMatchObject({ label: 'hypothesis', candidates: [expect.objectContaining({ key: 'setup_completed', interpretation: 'hypothesis' })] });
     expect((await api(native, native.secretToken, 'GET', path(native, '/decision-inbox'))).body.decisions[0].state).toBe('needs_attention');
-    await api(native, native.secretToken, 'POST', path(native, `/decisions/${decision.id}/approve`), {
+    await api(native, native.ownerToken, 'POST', path(native, `/decisions/${decision.id}/approve`), {
       rationale: 'The measured activation lift is trusted and clears the declared threshold.',
     });
     const followUp = await api(native, native.secretToken, 'POST', path(native, '/releases'), {
@@ -106,7 +109,7 @@ describe('full P0/P1 continuous product decision loop E2E', () => {
       expected_effect: 'Notify product operations about the accepted measured impact and preserve a delivery audit.',
     });
     expect(delivered).toHaveLength(1);
-    const action = await api(native, native.secretToken, 'POST', path(native, `/actions/${prepared.body.action.id}/approve`), {
+    const action = await api(native, native.ownerToken, 'POST', path(native, `/actions/${prepared.body.action.id}/approve`), {
       confirmation_fingerprint: prepared.body.action.confirmation_fingerprint,
     });
     expect(action.body.action).toMatchObject({ status: 'executed', result: { queued: true } });

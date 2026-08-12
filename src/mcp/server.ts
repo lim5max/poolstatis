@@ -562,21 +562,21 @@ jsonTool(
 
 jsonTool(
   'approve_decision',
-  'Approve the agent proposal with an explicit human rationale. Approval records an immutable revision; it does not execute an external action.',
+  'Compatibility surface for decision review. API-key and MCP sessions are intentionally denied with human_user_required; a signed-in workspace owner or admin must approve in the admin.',
   { project, id: z.string().uuid(), rationale: reviewDecisionSchema.shape.rationale },
   wrap(({ project: slug, id, rationale }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/approve`, { rationale })),
 );
 
 jsonTool(
   'reject_decision',
-  'Reject the agent proposal with an explicit rationale while preserving the original proposal in audit history.',
+  'Compatibility surface for decision review. API-key and MCP sessions are intentionally denied with human_user_required; a signed-in workspace owner or admin must reject in the admin.',
   { project, id: z.string().uuid(), rationale: reviewDecisionSchema.shape.rationale },
   wrap(({ project: slug, id, rationale }) => api('POST', `/api/v1/projects/${slug}/decisions/${id}/reject`, { rationale })),
 );
 
 jsonTool(
   'edit_decision',
-  'Approve a human-corrected outcome/rationale while preserving the prior agent proposal and rejection history.',
+  'Compatibility surface for decision review. API-key and MCP sessions are intentionally denied with human_user_required; a signed-in workspace owner or admin must save a correction in the admin.',
   {
     project,
     id: z.string().uuid(),
@@ -602,7 +602,7 @@ jsonTool(
 
 jsonTool(
   'approve_action',
-  'Execute only the exact previously prepared payload after human approval. The approval actor and fingerprint are audited; unsupported integrations stay inert.',
+  'Compatibility surface for approval-gated execution. API-key and MCP sessions are intentionally denied with human_user_required; a signed-in workspace owner or admin must approve the frozen payload in the admin.',
   { project, id: z.string().uuid(), confirmation_fingerprint: approveDecisionActionSchema.shape.confirmation_fingerprint },
   wrap(({ project: slug, id, confirmation_fingerprint }) => api('POST', `/api/v1/projects/${slug}/actions/${id}/approve`, { confirmation_fingerprint })),
 );

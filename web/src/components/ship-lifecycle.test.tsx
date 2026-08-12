@@ -235,6 +235,8 @@ describe('Ship lifecycle', () => {
       },
       project: 'alpha',
       env: 'prod',
+      tokenKind: 'user',
+      account: { membership: { role: 'owner' } },
     } as never);
 
     render(<MemoryRouter initialEntries={['/changes?release=release-target']}><Changes /></MemoryRouter>);
@@ -301,6 +303,8 @@ describe('Ship lifecycle', () => {
       },
       project: 'alpha',
       env: 'prod',
+      tokenKind: 'user',
+      account: { membership: { role: 'owner' } },
     } as never);
 
     render(<MemoryRouter><Decisions /></MemoryRouter>);
@@ -339,7 +343,10 @@ describe('Ship lifecycle', () => {
       decisionExplanations: vi.fn().mockResolvedValue([]),
       decisionActions: vi.fn().mockResolvedValue([]),
     };
-    mockedStore.mockImplementation(() => ({ client, project: 'alpha', env: currentEnv }) as never);
+    mockedStore.mockImplementation(() => ({
+      client, project: 'alpha', env: currentEnv,
+      tokenKind: 'user', account: { membership: { role: 'owner' } },
+    }) as never);
 
     const { rerender } = render(<MemoryRouter><Decisions /></MemoryRouter>);
     await screen.findByText('Review: keep');

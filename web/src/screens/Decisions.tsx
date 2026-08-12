@@ -13,7 +13,7 @@ import { GuidedFirstValue } from '../components/guided-first-value';
 import type { Decision, DecisionAction, DecisionActionType, DecisionDetail, DecisionOutcome, Release } from '../api/types';
 
 export function Decisions() {
-  const { client, project, env } = useStore();
+  const { client, project, env, tokenKind, account } = useStore();
   const [params] = useSearchParams();
   const requestedDecisionId = params.get('decision');
   const requestedExperimentKey = params.get('experiment');
@@ -41,6 +41,7 @@ export function Decisions() {
   const appliedRequestedDecision = useRef<string | null | undefined>(undefined);
   const [emptyBusy, setEmptyBusy] = useState(false);
   const [emptyError, setEmptyError] = useState<string | null>(null);
+  const reviewAccess = decisionReviewAccess(tokenKind, account?.membership.role);
   useEffect(() => {
     if (!list.data) return;
     const requested = requestedDecisionId && list.data.decisions.some((decision) => decision.id === requestedDecisionId)
@@ -123,13 +124,28 @@ export function Decisions() {
       {emptyError && <ErrorNote>{emptyError}</ErrorNote>}
     </> : <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
       <Panel title={<>Queue <span className="ml-2 font-sans text-sm font-normal text-muted-foreground">{list.data.decisions.length}</span></>}><div className="-m-2 space-y-1">{list.data.decisions.map((decision) => <button key={decision.id} type="button" onClick={() => setSelectedId(decision.id)} aria-pressed={selectedId === decision.id} className={`w-full rounded-control border-l-2 p-3 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${selectedId === decision.id ? 'border-brand-strong bg-primary/10 text-foreground' : 'border-transparent hover:bg-muted/50'}`}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{decisionQueueTitle(decision)}</span><ShipStageBadge stage={deriveDecisionStage(decision)} /></div>{decision.queue_priority && <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground"><span>{decision.queue_priority.evidence_readiness === 'ready' ? 'Ready evidence' : 'Evidence blocked'}</span><span>{queueRiskLabel(decision.queue_priority.risk)}</span></div>}<div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{decision.accepted_rationale ?? decision.proposed_rationale}</div></button>)}</div></Panel>
-      {detail.loading ? <Panel><Loading what="reproducing evidence…" /></Panel> : detail.error ? <ErrorNote>{detail.error}</ErrorNote> : detail.data ? <DecisionReview detail={detail.data} env={env} onChanged={() => { list.reload(); detail.reload(); loop.reload(); }} /> : null}
+      {detail.loading ? <Panel><Loading what="reproducing evidence…" /></Panel> : detail.error ? <ErrorNote>{detail.error}</ErrorNote> : detail.data ? <DecisionReview detail={detail.data} env={env} reviewAccess={reviewAccess} onChanged={() => { list.reload(); detail.reload(); loop.reload(); }} /> : null}
     </div>}
     {loop.error ? <ErrorNote>{loop.error}</ErrorNote> : loop.data && <ContinuousLoopSummary {...loop.data} />}
   </div>;
 }
 
-function DecisionReview({ detail, env, onChanged }: { detail: DecisionDetail; env: string; onChanged: () => void }) {
+type HumanReviewAccess = 'allowed' | 'sign_in_required' | 'insufficient_role';
+
+export function decisionReviewAccess(
+  tokenKind: string | null | undefined,
+  role: 'owner' | 'admin' | 'member' | undefined,
+): HumanReviewAccess {
+  if (tokenKind !== 'user') return 'sign_in_required';
+  return role === 'owner' || role === 'admin' ? 'allowed' : 'insufficient_role';
+}
+
+function DecisionReview({ detail, env, reviewAccess, onChanged }: {
+  detail: DecisionDetail;
+  env: string;
+  reviewAccess: HumanReviewAccess;
+  onChanged: () => void;
+}) {
   const { client, project } = useStore();
   const [rationale, setRationale] = useState(detail.decision.accepted_rationale ?? '');
   const [outcome, setOutcome] = useState<DecisionOutcome>(detail.decision.proposed_outcome);
@@ -185,12 +201,18 @@ function DecisionReview({ detail, env, onChanged }: { detail: DecisionDetail; en
     </Panel>
     <Panel title="Agent proposal"><div className="flex flex-wrap items-center gap-2"><OutcomeBadge outcome={detail.decision.proposed_outcome} /><span className="text-sm">{detail.decision.proposed_rationale}</span></div></Panel>
     <Panel title="Human decision" right={<span className="text-xs text-muted-foreground">Environment <code>{env}</code> · no delivery action is executed here</span>}>
-      <div className="grid gap-3 sm:grid-cols-[12rem_1fr]"><Select value={outcome} onValueChange={(value) => setOutcome(value as DecisionOutcome)}><SelectTrigger aria-label="Accepted decision outcome"><SelectValue /></SelectTrigger><SelectContent>{(['keep', 'fix', 'rollback', 'inconclusive'] as const).map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select><Textarea aria-label="Decision rationale" value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="Explain why this evidence supports the accepted decision." className="min-h-24" /></div>
-      {!environmentMatches && <div className="mt-3"><ErrorNote>This decision belongs to <code>{detail.release.env}</code>. Switch back to that environment before reviewing it.</ErrorNote></div>}
-      <div className="mt-3 flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={() => decide('reject')} disabled={!environmentMatches || detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'reject' && <Loader2 className="size-4 animate-spin" />}Reject</Button><Button variant="outline" onClick={() => decide('edit')} disabled={!environmentMatches || detail.decision.status === 'approved' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'edit' && <Loader2 className="size-4 animate-spin" />}Save correction</Button><Button onClick={() => decide('approve')} disabled={!environmentMatches || detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'approve' && <Loader2 className="size-4 animate-spin" />}Approve proposal</Button></div>
+      {reviewAccess === 'allowed' ? <>
+        <div className="grid gap-3 sm:grid-cols-[12rem_1fr]"><Select value={outcome} onValueChange={(value) => setOutcome(value as DecisionOutcome)}><SelectTrigger aria-label="Accepted decision outcome"><SelectValue /></SelectTrigger><SelectContent>{(['keep', 'fix', 'rollback', 'inconclusive'] as const).map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select><Textarea aria-label="Decision rationale" value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="Explain why this evidence supports the accepted decision." className="min-h-24" /></div>
+        {!environmentMatches && <div className="mt-3"><ErrorNote>This decision belongs to <code>{detail.release.env}</code>. Switch back to that environment before reviewing it.</ErrorNote></div>}
+        <div className="mt-3 flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={() => decide('reject')} disabled={!environmentMatches || detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'reject' && <Loader2 className="size-4 animate-spin" />}Reject</Button><Button variant="outline" onClick={() => decide('edit')} disabled={!environmentMatches || detail.decision.status === 'approved' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'edit' && <Loader2 className="size-4 animate-spin" />}Save correction</Button><Button onClick={() => decide('approve')} disabled={!environmentMatches || detail.decision.status !== 'proposed' || Boolean(busy) || rationale.trim().length < 10}>{busy === 'approve' && <Loader2 className="size-4 animate-spin" />}Approve proposal</Button></div>
+      </> : <p className="rounded-panel border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
+        {reviewAccess === 'sign_in_required'
+          ? 'API keys and MCP can read evidence and prepare a follow-up, but cannot record a human decision. Sign in as a workspace owner or admin to review.'
+          : 'Your workspace role can read this evidence, but only an owner or admin can approve, correct, or reject the proposal.'}
+      </p>}
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
     </Panel>
-    <DecisionAutomation detail={detail} mutationsEnabled={environmentMatches} onChanged={onChanged} />
+    <DecisionAutomation detail={detail} mutationsEnabled={environmentMatches} reviewAccess={reviewAccess} onChanged={onChanged} />
     <TechnicalDecisionRecord detail={detail} />
   </div>;
 }
@@ -241,7 +263,12 @@ function TechnicalDecisionRecord({ detail }: { detail: DecisionDetail }) {
   </details>;
 }
 
-function DecisionAutomation({ detail, mutationsEnabled, onChanged }: { detail: DecisionDetail; mutationsEnabled: boolean; onChanged: () => void }) {
+function DecisionAutomation({ detail, mutationsEnabled, reviewAccess, onChanged }: {
+  detail: DecisionDetail;
+  mutationsEnabled: boolean;
+  reviewAccess: HumanReviewAccess;
+  onChanged: () => void;
+}) {
   const { client, project } = useStore();
   const automation = useAsync(async () => {
     const [explanations, actions] = await Promise.all([
@@ -289,6 +316,9 @@ function DecisionAutomation({ detail, mutationsEnabled, onChanged }: { detail: D
     </Panel>
     <Panel title="Approval-gated actions" right={<span className="text-xs text-muted-foreground">prepare → fingerprint → approve → execute</span>}>
       <div className="grid gap-3 sm:grid-cols-[14rem_1fr_auto]"><Select value={actionType} onValueChange={(value) => setActionType(value as DecisionActionType)}><SelectTrigger aria-label="Prepared action type"><SelectValue /></SelectTrigger><SelectContent>{(['draft_implementation_prompt', 'schedule_observation', 'request_more_data', 'generic_webhook'] as const).map((type) => <SelectItem key={type} value={type}>{type.replaceAll('_', ' ')}</SelectItem>)}</SelectContent></Select><Textarea aria-label="Expected action effect" value={actionText} onChange={(event) => setActionText(event.target.value)} /><Button onClick={prepare} disabled={!mutationsEnabled || Boolean(busy) || actionText.trim().length < 10}>{busy === 'prepare' && <Loader2 className="size-4 animate-spin" />}Prepare</Button></div>
+      {reviewAccess !== 'allowed' && <p className="mt-3 rounded-panel border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
+        Prepared payloads stay inert until a signed-in workspace owner or admin reviews the exact fingerprint in this admin.
+      </p>}
       <div className="mt-4 space-y-2">{data.actions.map((action) => (
         <article key={action.id} className="rounded-panel border p-3" aria-label={`Prepared action ${action.action_type}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -307,8 +337,8 @@ function DecisionAutomation({ detail, mutationsEnabled, onChanged }: { detail: D
           </div>
           {action.error_message && <div className="mt-2 text-xs text-destructive">{action.error_message}</div>}
           <div className="mt-3 flex flex-wrap justify-end gap-2">
-            {action.status === 'prepared' && <><Button size="sm" variant="outline" onClick={() => reviewAction(action, 'reject')} disabled={!mutationsEnabled || busy === action.id}>Reject</Button><Button size="sm" onClick={() => reviewAction(action, 'approve')} disabled={!mutationsEnabled || busy === action.id}>Approve shown payload</Button></>}
-            {action.status === 'failed' && <Button size="sm" variant="outline" onClick={() => reviewAction(action, 'retry')} disabled={!mutationsEnabled || busy === action.id}>Retry</Button>}
+            {reviewAccess === 'allowed' && action.status === 'prepared' && <><Button size="sm" variant="outline" onClick={() => reviewAction(action, 'reject')} disabled={!mutationsEnabled || busy === action.id}>Reject</Button><Button size="sm" onClick={() => reviewAction(action, 'approve')} disabled={!mutationsEnabled || busy === action.id}>Approve shown payload</Button></>}
+            {reviewAccess === 'allowed' && action.status === 'failed' && <Button size="sm" variant="outline" onClick={() => reviewAction(action, 'retry')} disabled={!mutationsEnabled || busy === action.id}>Retry</Button>}
           </div>
         </article>
       ))}</div>

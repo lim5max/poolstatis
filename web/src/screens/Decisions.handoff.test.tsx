@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
-import { Decisions } from './Decisions';
+import { Decisions, decisionReviewAccess } from './Decisions';
 
 vi.mock('../store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../store')>()),
@@ -34,6 +34,14 @@ function decision(id: string, proposedOutcome: 'keep' | 'rollback', updatedAt: s
 }
 
 describe('Decisions handoff', () => {
+  it('keeps API keys and members read-only while allowing signed-in owner/admin review', () => {
+    expect(decisionReviewAccess('secret', undefined)).toBe('sign_in_required');
+    expect(decisionReviewAccess('personal', 'owner')).toBe('sign_in_required');
+    expect(decisionReviewAccess('user', 'member')).toBe('insufficient_role');
+    expect(decisionReviewAccess('user', 'owner')).toBe('allowed');
+    expect(decisionReviewAccess('user', 'admin')).toBe('allowed');
+  });
+
   it('selects the exact proposal referenced by the funnel handoff', async () => {
     const client = {
       decisions: vi.fn().mockResolvedValue([

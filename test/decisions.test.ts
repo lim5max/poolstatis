@@ -1,18 +1,21 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
+import {
+  activeMetric, api, createHumanReviewTestEnv, createTestEnv,
+  type HumanReviewTestEnv, type TestEnv,
+} from './helpers.js';
 import { proposeOutcome } from '../src/services/evaluation.js';
 
 const DAY = 86_400_000;
 
 describe('release evidence and immutable decision revisions', () => {
-  let env: TestEnv;
+  let env: HumanReviewTestEnv;
   let other: TestEnv;
   let anchor: Date;
 
   beforeAll(async () => {
-    env = await createTestEnv();
+    env = await createHumanReviewTestEnv();
     other = await createTestEnv();
     anchor = new Date(Date.now() - 4 * DAY);
     await activeMetric(env, {
@@ -88,13 +91,33 @@ describe('release evidence and immutable decision revisions', () => {
     });
     expect(evaluated.body.decision.proposed_rationale).toContain('50%');
 
-    const approved = await api(env, env.secretToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/approve`), {
+    const reviewBody = {
       rationale: 'The measured activation lift clears the declared threshold and the guardrail is stable.',
+    };
+    const personal = await api(env, env.ownerToken, 'POST', '/api/v1/me/tokens', {
+      label: 'Decision review read-only MCP',
+    });
+    expect(personal.status).toBe(201);
+    for (const [token, code] of [
+      [env.secretToken, 'human_user_required'],
+      [personal.body.token, 'human_user_required'],
+      [env.memberToken, 'insufficient_role'],
+    ] as const) {
+      const denied = await api(env, token, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/approve`), reviewBody);
+      expect(denied.status).toBe(403);
+      expect(denied.body.error.code).toBe(code);
+    }
+    const unchanged = await api(env, env.secretToken, 'GET', path(env, `/decisions/${evaluated.body.decision.id}`));
+    expect(unchanged.body.decision).toMatchObject({ status: 'proposed', current_revision: 1 });
+
+    const approved = await api(env, env.ownerToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/approve`), {
+      ...reviewBody,
     });
     expect(approved.status).toBe(200);
     expect(approved.body.decision).toMatchObject({
       status: 'approved', accepted_outcome: 'keep', current_revision: 2,
     });
+    expect(approved.body.revisions[1].actor).toBe(`user:${env.ownerUserId}`);
     expect(approved.body.revisions.map((revision: { action: string }) => revision.action))
       .toEqual(['proposed', 'approved']);
     expect(approved.body.release.status).toBe('decided');
@@ -127,7 +150,7 @@ describe('release evidence and immutable decision revisions', () => {
     const evaluated = await api(env, env.secretToken, 'POST', path(env, `/releases/${release.id}/evaluate`), {});
     expect(evaluated.body.decision.proposed_outcome).toBe('keep');
 
-    const rejected = await api(env, env.secretToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/reject`), {
+    const rejected = await api(env, env.adminToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/reject`), {
       rationale: 'The agent did not account for a known campaign change in this observation window.',
     });
     expect(rejected.body.decision).toMatchObject({ status: 'rejected', accepted_outcome: null });
@@ -136,7 +159,7 @@ describe('release evidence and immutable decision revisions', () => {
       previous_snapshot: expect.objectContaining({ status: 'proposed', proposed_outcome: 'keep' }),
     });
 
-    const edited = await api(env, env.secretToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/edit`), {
+    const edited = await api(env, env.ownerToken, 'POST', path(env, `/decisions/${evaluated.body.decision.id}/edit`), {
       outcome: 'keep',
       rationale: 'Keep the change, but record that the campaign is a confounder and recheck the next clean cohort.',
     });
@@ -256,7 +279,7 @@ describe('release evidence and immutable decision revisions', () => {
     ]));
     expect(distrusted.body.decision.proposed_outcome).toBe('inconclusive');
 
-    const forbiddenEdit = await api(env, env.secretToken, 'POST', path(env, `/decisions/${distrusted.body.decision.id}/edit`), {
+    const forbiddenEdit = await api(env, env.ownerToken, 'POST', path(env, `/decisions/${distrusted.body.decision.id}/edit`), {
       outcome: 'rollback',
       rationale: 'Force a directional conclusion despite the property trust blocker.',
     });

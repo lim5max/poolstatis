@@ -1,13 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { activeMetric, api, createTestEnv, type TestEnv } from '../helpers.js';
+import {
+  activeMetric, api, createHumanReviewTestEnv,
+  type HumanReviewTestEnv, type TestEnv,
+} from '../helpers.js';
 
 const DAY = 86_400_000;
 
 describe('Milestone B product decision loop E2E', () => {
-  let native: TestEnv;
-  let external: TestEnv;
+  let native: HumanReviewTestEnv;
+  let external: HumanReviewTestEnv;
   let anchor: Date;
   let posthogHost: string;
   const posthog = createServer(async (req, res) => {
@@ -20,8 +23,8 @@ describe('Milestone B product decision loop E2E', () => {
   beforeAll(async () => {
     await new Promise<void>((resolve) => posthog.listen(0, '127.0.0.1', resolve));
     posthogHost = `http://127.0.0.1:${(posthog.address() as AddressInfo).port}`;
-    native = await createTestEnv();
-    external = await createTestEnv({ connectorEncryptionKey: 'decision-loop-b-e2e-encryption-key', outboundPolicy: { allowLocalHttp: true } });
+    native = await createHumanReviewTestEnv();
+    external = await createHumanReviewTestEnv({ connectorEncryptionKey: 'decision-loop-b-e2e-encryption-key', outboundPolicy: { allowLocalHttp: true } });
     anchor = new Date(Date.now() - 4 * DAY);
   });
 
@@ -163,8 +166,8 @@ async function registerRelease(env: TestEnv, idempotencyKey: string, contractKey
   return response.body;
 }
 
-async function approve(env: TestEnv, decisionId: string) {
-  const response = await api(env, env.secretToken, 'POST', path(env, `/decisions/${decisionId}/approve`), {
+async function approve(env: HumanReviewTestEnv, decisionId: string) {
+  const response = await api(env, env.ownerToken, 'POST', path(env, `/decisions/${decisionId}/approve`), {
     rationale: 'The measured activation improvement clears the declared threshold with trusted evidence.',
   });
   expect(response.status).toBe(200);

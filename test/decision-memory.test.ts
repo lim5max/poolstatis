@@ -1,16 +1,19 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { activeMetric, api, createTestEnv, type TestEnv } from './helpers.js';
+import {
+  activeMetric, api, createHumanReviewTestEnv, createTestEnv,
+  type HumanReviewTestEnv, type TestEnv,
+} from './helpers.js';
 
 const DAY = 86_400_000;
 
 describe('project-scoped decision memory', () => {
-  let env: TestEnv;
+  let env: HumanReviewTestEnv;
   let other: TestEnv;
   let decisionId: string;
   let declaration: ReturnType<typeof makeDeclaration>;
 
   beforeAll(async () => {
-    env = await createTestEnv();
+    env = await createHumanReviewTestEnv();
     other = await createTestEnv();
     const anchor = new Date(Date.now() - 3 * DAY);
     await activeMetric(env, {
@@ -35,7 +38,7 @@ describe('project-scoped decision memory', () => {
     const evaluated = await api(env, env.secretToken, 'POST', path(env, `/releases/${release.body.id}/evaluate`), {});
     expect(evaluated.body.decision.proposed_outcome).toBe('keep');
     decisionId = evaluated.body.decision.id;
-    const corrected = await api(env, env.secretToken, 'POST', path(env, `/decisions/${decisionId}/edit`), {
+    const corrected = await api(env, env.ownerToken, 'POST', path(env, `/decisions/${decisionId}/edit`), {
       outcome: 'rollback',
       rationale: 'A known rollout confounder makes rollback safer despite the positive measured association.',
     });
