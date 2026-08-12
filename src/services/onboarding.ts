@@ -339,13 +339,14 @@ export async function getOnboardingStatus(
       Boolean(decisionRow || insightRow),
       decisionRow
         ? {
+            artifact_kind: 'protected_decision',
             decision_id: decisionRow.id,
             status: decisionRow.status,
             outcome: decisionRow.accepted_outcome ?? decisionRow.proposed_outcome,
             created_at: decisionRow.created_at,
           }
         : insightRow
-          ? { insight_id: insightRow.id, title: insightRow.title, created_at: insightRow.created_at }
+          ? { artifact_kind: 'saved_insight', insight_id: insightRow.id, title: insightRow.title, created_at: insightRow.created_at }
         : {},
       'No evidence-backed insight or decision has been saved.',
       'Save the real query result with one next action.',

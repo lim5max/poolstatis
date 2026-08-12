@@ -419,9 +419,19 @@ export function resolveSetupNextStep(input: {
     kind: 'retry', title: 'Setup status is unavailable', reason: input.error, label: 'Retry verification',
   };
   const blocker = input.status?.next_blocker;
-  if (input.status?.complete) return {
-    kind: 'route', title: 'Decision loop is ready', reason: 'Connection, definitions, the first answer, and the first saved decision have server proof.', label: 'Open Home', route: '/',
-  };
+  if (input.status?.complete) {
+    const finalArtifact = input.status.gates.find((gate) => gate.key === 'first_decision_saved');
+    const hasProtectedDecision = finalArtifact?.evidence.artifact_kind === 'protected_decision'
+      || typeof finalArtifact?.evidence.decision_id === 'string';
+    return {
+      kind: 'route',
+      title: hasProtectedDecision ? 'Decision loop is ready' : 'Analysis loop is ready',
+      reason: hasProtectedDecision
+        ? 'Connection, definitions, the first answer, and the first protected decision have server proof.'
+        : 'Connection, definitions, the first answer, and a saved evidence-backed insight have server proof. A protected human decision remains a separate Ship lifecycle step.',
+      label: 'Open Home', route: '/',
+    };
+  }
   if (!blocker) return {
     kind: 'retry', title: 'Next setup step is unavailable', reason: 'The server reports setup is incomplete but did not identify a next blocker.', label: 'Retry verification',
   };
@@ -463,6 +473,17 @@ const GATE_LABELS: Record<OnboardingGateKey, string> = {
   first_decision_saved: 'First decision saved',
 };
 
+function setupGateLabel(gate: DecisionLoopOnboardingStatus['gates'][number]): string {
+  if (gate.key !== 'first_decision_saved') return GATE_LABELS[gate.key];
+  if (gate.evidence.artifact_kind === 'protected_decision' || typeof gate.evidence.decision_id === 'string') {
+    return 'First protected decision saved';
+  }
+  if (gate.evidence.artifact_kind === 'saved_insight' || typeof gate.evidence.insight_id === 'string') {
+    return 'First evidence-backed insight saved';
+  }
+  return GATE_LABELS[gate.key];
+}
+
 function SetupEvidenceLedger({ status }: { status: DecisionLoopOnboardingStatus }) {
   return (
     <section className="overflow-hidden rounded-lg border bg-card" aria-labelledby="setup-evidence-title">
@@ -478,7 +499,7 @@ function SetupEvidenceLedger({ status }: { status: DecisionLoopOnboardingStatus 
             <li key={gate.key} className="grid min-w-0 gap-3 px-4 py-3 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)] sm:px-5">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium">{GATE_LABELS[gate.key]}</span>
+                  <span className="text-sm font-medium">{setupGateLabel(gate)}</span>
                   <Badge variant={gate.complete ? 'default' : gate.required ? 'outline' : 'secondary'}>{gate.complete ? 'Verified' : gate.required ? 'Pending' : 'Optional'}</Badge>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">

@@ -188,7 +188,10 @@ describe('proof-gated onboarding', () => {
 
     const afterUnrelatedInsight = await api(env, env.secretToken, 'GET', statusUrl());
     expect(afterUnrelatedInsight.body.final_result).toEqual(completed.body.final_result);
-    expect(gate(afterUnrelatedInsight.body, 'first_decision_saved').evidence.title).toBe('Signup completion observed');
+    expect(gate(afterUnrelatedInsight.body, 'first_decision_saved').evidence).toMatchObject({
+      artifact_kind: 'saved_insight',
+      title: 'Signup completion observed',
+    });
 
     await env.pool.query(
       `UPDATE api_keys SET revoked_at = now()
