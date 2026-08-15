@@ -333,6 +333,7 @@ describe('@poolstatis/mcp release artifact', () => {
     expect(workflow).toContain('test "$ACTUAL_SHA" = "$EXPECTED_SHA"');
     expect(workflow).toContain('id-token: write');
     expect(workflow).toContain('npm publish "$MCP_TARBALL" --access public --provenance');
+    expect(workflow).toContain('MCP_TARBALL="$PWD/${MCP_TARBALLS[0]}"');
     expect(workflow).toContain('path: release');
     expect(workflow).not.toContain('.release/');
     expect(workflow).not.toContain('NODE_AUTH_TOKEN');
