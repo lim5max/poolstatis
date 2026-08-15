@@ -97,5 +97,5 @@ jobs:
           )
           mapfile -t MCP_TARBALLS < <(find release -maxdepth 1 -type f -name 'poolstatis-mcp-*.tgz' -print)
           test "${#MCP_TARBALLS[@]}" -eq 1
-          MCP_TARBALL="${MCP_TARBALLS[0]}"
+          MCP_TARBALL="$PWD/${MCP_TARBALLS[0]}"
           npm publish "$MCP_TARBALL" --access public --provenance
