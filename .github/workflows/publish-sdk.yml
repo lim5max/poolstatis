@@ -52,6 +52,7 @@ jobs:
             pnpm --dir sdk exec vitest run test/package.test.ts
 
           SDK_CONSUMER="$PWD/.release/sdk-consumer"
+          SDK_SBOM_ROOT="$PWD/.release/sdk-sbom-root"
           SDK_SBOM="$PWD/.release/poolstatis-sdk-$SDK_VERSION.cdx.json"
           mkdir -p "$SDK_CONSUMER"
           (
@@ -59,6 +60,14 @@ jobs:
             npm init --yes >/dev/null
             npm install --ignore-scripts --no-fund --omit=optional "$SDK_TARBALL"
             npm audit --omit=dev
+          )
+
+          mkdir -p "$SDK_SBOM_ROOT"
+          tar -xzf "$SDK_TARBALL" -C "$SDK_SBOM_ROOT" --strip-components=1
+          (
+            cd "$SDK_SBOM_ROOT"
+            npm install --package-lock-only --ignore-scripts \
+              --no-audit --no-fund --omit=optional
             npx --yes @cyclonedx/cyclonedx-npm@6.0.1 \
               --package-lock-only --omit dev --omit optional \
               --mc-type library --output-reproducible --validate \

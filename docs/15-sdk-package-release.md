@@ -12,6 +12,7 @@ Before the first dispatch, an npm package owner must bind `@poolstatis/sdk` to:
 - repository `lim5max/poolstatis`;
 - workflow `publish-sdk.yml`;
 - environment left empty unless the npm publisher is configured with one.
+- allowed action `npm publish`.
 
 The workflow must already exist on `main` before this binding can be created.
 Do not dispatch it until the owner confirms the binding.
@@ -27,7 +28,8 @@ The 16-file tarball allowlist is unpacked and scanned for private keys plus
 high-entropy Poolstatis/npm tokens. A clean consumer proves the four prior
 `0.3.0` exports, the new `@poolstatis/sdk/replay` export, exact optional
 `@rrweb/record@2.1.1`, and a zero-vulnerability production audit. The workflow
-also creates and validates a reproducible CycloneDX SBOM with pinned
+also extracts that same tarball and creates a validated, reproducible CycloneDX
+SBOM whose main component is `@poolstatis/sdk@0.4.0`, using pinned
 `@cyclonedx/cyclonedx-npm@6.0.1`.
 
 Only that tested tarball is published with npm Trusted Publishing,

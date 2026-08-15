@@ -124,6 +124,7 @@ describe('@poolstatis/sdk 0.4.0 release artifact', () => {
     expect(workflow).toContain('id-token: write');
     expect(workflow).toContain('npm publish "$SDK_TARBALL" --access public --provenance');
     expect(workflow).toContain('@cyclonedx/cyclonedx-npm@6.0.1');
+    expect(workflow).toContain('tar -xzf "$SDK_TARBALL" -C "$SDK_SBOM_ROOT" --strip-components=1');
     expect(workflow).not.toContain('NODE_AUTH_TOKEN');
   });
 
