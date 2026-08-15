@@ -225,7 +225,9 @@ Do not copy the whole PostHog/Amplitude surface. Copy the parts that strengthen 
 
 ### Skip for now
 
-- Full session replay.
+- Default-on or broad full-session surveillance. Privacy-safe Session Replay
+  is shipped only as the separate consent- and exact-host-gated opt-in contract
+  documented in `docs/14-session-replay.md`.
 - Raw SQL/HogQL.
 - Broad autocapture by default.
 - Visual dashboard builder.
