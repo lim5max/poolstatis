@@ -296,6 +296,15 @@ afterAll(async () => {
 });
 
 describe('@poolstatis/mcp release artifact', () => {
+  it('publishes only an explicitly reviewed main SHA through Trusted Publishing', async () => {
+    const workflow = await readFile(join(root, '.github', 'workflows', 'publish-mcp.yml'), 'utf8');
+    expect(workflow).toContain('expected_sha:');
+    expect(workflow).toContain('test "$ACTUAL_SHA" = "$EXPECTED_SHA"');
+    expect(workflow).toContain('id-token: write');
+    expect(workflow).toContain('npm publish "$MCP_TARBALL" --access public --provenance');
+    expect(workflow).not.toContain('NODE_AUTH_TOKEN');
+  });
+
   it('installs into an empty project as an executable ESM bin with the expected license', async () => {
     const packageJson = JSON.parse(await readFile(
       join(tempProject, 'node_modules', '@poolstatis', 'mcp', 'package.json'),
@@ -330,9 +339,9 @@ describe('@poolstatis/mcp release artifact', () => {
   it('initializes, lists tools, and performs a project-scoped read against a safe fixture', async () => {
     const { client, stderr } = await connect(process.execPath, [cliModule]);
     try {
-      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.6.0' });
+      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.7.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
-      expect(tools.tools).toHaveLength(140);
+      expect(tools.tools).toHaveLength(142);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'get_project_portfolio',
@@ -358,6 +367,8 @@ describe('@poolstatis/mcp release artifact', () => {
         'get_web_session',
         'get_session_engagement',
         'get_page_engagement',
+        'list_session_replays',
+        'get_session_replay',
         'list_visual_experience_versions',
         'get_visual_experience_map',
         'compare_visual_experience',
@@ -390,6 +401,9 @@ describe('@poolstatis/mcp release artifact', () => {
       expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
         'approve_automation_proposal',
         'reject_automation_proposal',
+        'create_funnel_investigation',
+        'list_funnel_investigations',
+        'get_funnel_investigation',
       ]));
       const browserStandard = await client.readResource({
         uri: 'poolstatis://standard/browser-analytics',

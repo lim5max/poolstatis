@@ -245,7 +245,7 @@ export function mcpClientById(id: McpClientId): McpClientProfile {
   return MCP_CLIENTS.find((client) => client.id === id) ?? MCP_CLIENTS[0]!;
 }
 
-export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.6.0';
+export const MCP_PACKAGE_SPEC = '@poolstatis/mcp@0.7.0';
 
 function parseRunnerArgs(
   raw: string | undefined,

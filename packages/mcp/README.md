@@ -5,7 +5,7 @@ Thin stdio MCP runner for a Poolstatis API instance.
 ```sh
 POOLSTATIS_URL=https://api.example.com \
 POOLSTATIS_TOKEN=pt_your_token \
-pnpm dlx @poolstatis/mcp@0.6.0
+pnpm dlx @poolstatis/mcp@0.7.0
 ```
 
 `POOLSTATIS_TOKEN` must be a `pt_` personal token or project-scoped `sk_` key.
@@ -19,7 +19,7 @@ MCP over stdio only; stdout is reserved for protocol messages.
 ## Browser analytics contract
 
 Read `poolstatis://standard/browser-analytics` before instrumenting or
-diagnosing browser traffic. In `0.6.0` the embedded standard matches the
+diagnosing browser traffic. In `0.7.0` the embedded standard matches the
 production SDK/Core contract:
 
 - `@poolstatis/sdk/browser` starts collection immediately when the host calls
@@ -36,6 +36,15 @@ production SDK/Core contract:
 Existing `hasConsent` and `subscribeConsent` callbacks remain optional
 host-owned pause controls for older integrations. They are not required by the
 Poolstatis runtime.
+
+## Session Replay metadata
+
+Version `0.7.0` adds `list_session_replays` and `get_session_replay`. They
+return bounded, project-scoped manifest metadata and an admin viewer path.
+They never return rrweb events, reconstructed DOM, text, cursor samples,
+upload tokens or object-store keys. Recording and playback remain governed by
+the separate consent, host-policy, masking, retention and sandbox contract in
+Core.
 
 ## Compatibility
 

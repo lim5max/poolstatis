@@ -112,7 +112,7 @@ fields instead of pretending every client accepts Claude JSON.
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.6.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.7.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.xyz",
         "POOLSTATIS_TOKEN": "pt_..."
@@ -126,12 +126,11 @@ fields instead of pretending every client accepts Claude JSON.
 the stdio MCP protocol.
 
 The public runner is version-pinned so a hosted deploy cannot silently change
-its MCP runtime. `@poolstatis/mcp@0.6.0` includes the production browser
-analytics standard: immediate collection, finite route keys, server-derived
-country, bounded legacy SDK compatibility, and the existing historical-data
-and audited-correction tools. Each release remains fail-closed until its exact
-registry artifact passes fresh install, initialize, tool-list, and scoped-read
-smoke checks.
+its MCP runtime. `@poolstatis/mcp@0.7.0` includes the production browser
+analytics standard plus bounded Session Replay manifest discovery; replay DOM,
+text, cursor events and object keys remain unavailable through MCP. Each
+release remains fail-closed until its exact registry artifact passes fresh
+install, initialize, tool-list, and scoped-read smoke checks.
 
 Verify MCP from the configured client by calling `get_onboarding_status` with
 the target project and environment, then refresh **Setup & MCP**. A copied

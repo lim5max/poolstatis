@@ -2,6 +2,11 @@ name: Publish MCP package
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed main commit to publish
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -27,6 +32,12 @@ jobs:
           --health-retries 15
     steps:
       - uses: actions/checkout@v6
+      - name: Verify exact main lineage
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
       - uses: actions/setup-node@v6
         with:
           node-version: 24.x
@@ -48,4 +59,4 @@ jobs:
           POOLSTATIS_MCP_TARBALL="$MCP_TARBALL" \
           POOLSTATIS_MCP_PACK_OUTPUT="$PWD/.release/pack-output.txt" \
             pnpm mcp:package:test
-          npm publish "$MCP_TARBALL" --access public
+          npm publish "$MCP_TARBALL" --access public --provenance
