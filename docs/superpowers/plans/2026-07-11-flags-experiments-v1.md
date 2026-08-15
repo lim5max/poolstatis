@@ -1,5 +1,9 @@
 # Flags and Experiments v1 Implementation Plan
 
+> **Historical implementation plan — not the current UI status.** Flags and
+> experiments shipped, and the human workspace now includes answer-first
+> analysis screens and graphs. It remains not a general dashboard builder.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add deterministic feature flags and measurable A/B experiments to Poolstatis through the SDK, REST API, MCP server and admin UI.
@@ -14,7 +18,7 @@
 - Flag percentages use stable SHA-256 bucketing, never `Math.random()`.
 - v1 accepts stable `distinct_id` values and active `count`/`unique_actors` registry metrics only.
 - System exposures are `$feature_flag_called` events appended through `EventStore` with `registered=true`.
-- New platform metadata ships through REST, MCP and the headless admin UI in the same change.
+- New platform metadata ships through REST, MCP and the human analysis/admin UI in the same change.
 - Do not add DOM capture, raw SQL, cohorts or an analytics dashboard in this feature.
 
 ---
@@ -247,7 +251,7 @@ git add src/mcp/server.ts src/mcp/standard.ts src/cli/mcpSmoke.ts sdk/src/index.
 git commit -m "feat: expose flags to sdk and mcp"
 ```
 
-### Task 5: Add headless admin management and browser E2E
+### Task 5: Add analysis/admin management and browser E2E
 
 **Files:**
 - Create: `web/src/screens/Experiments.tsx`
@@ -288,8 +292,8 @@ Expected: FAIL because the route and controls do not exist.
 
 Install `@playwright/test` as a web dev dependency and include the matching
 lockfile update. Use `Panel`, `Toolbar`, `Confirm`, `Hint` and scale-only Tailwind classes from
-`web/src/components/ui.tsx`. Preserve the headless-admin positioning: tables
-and forms only, no synthetic charts. Configure Playwright to start backend and
+`web/src/components/ui.tsx`. For this historical feature task, keep the surface
+to tables and forms with no synthetic charts. Configure Playwright to start backend and
 Vite; seed the test project through the existing REST endpoint before the
 browser opens it.
 

@@ -1,5 +1,12 @@
 # Poolstatis Browser Acquisition Attribution — PRD
 
+> **Historical PRD — not the current integration reference.** The final shipped
+> contract starts on the host's `start()` call, uses finite `landing_route`
+> rather than raw/path-shaped landing values, and keeps legacy consent callbacks
+> only as optional host-owned pause controls. Use
+> [Browser Analytics](../../13-browser-analytics.md) and the SDK guide for the
+> current property names and behavior; the proposal details below are archival.
+
 Date: 2026-07-24
 Status: implemented
 Owner: Poolstatis

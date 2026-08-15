@@ -1,5 +1,11 @@
 # Session Replay v1 Implementation Plan
 
+> **Plan only — not a shipped capability.** The unchecked rrweb recorder,
+> storage, player, DOM snapshots, and cursor playback described below are not
+> implemented on Core `origin/main` as verified on 2026-08-15. The shipped
+> Browser Experience is a narrower labelled-interaction timeline plus bounded
+> click/scroll maps and coarse error types; it is not full session replay.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship consent-gated rrweb recording, isolated durable chunk storage, replay discovery, MCP metadata and a sandboxed admin player, proven end-to-end on Basic Project and the Poolstatis landing.

@@ -1,5 +1,12 @@
 # Poolstatis Agent Onboarding and Growth Plan
 
+> **Historical planning snapshot — not current product truth.** This document
+> records the 2026-06-27 proposal and its then-current gaps. Browser Analytics,
+> developer-labelled Browser Experience capture, interaction maps, session
+> timelines, answer-first graphs, and the published SDK were implemented later.
+> Use the current [README](../README.md), [gap analysis](05-gap-analysis.md),
+> [Browser Analytics](13-browser-analytics.md), and SDK guide for shipped status.
+
 > Date: 2026-06-27.
 > Goal: turn Poolstatis from "agent-native analytics infrastructure" into a product that a founder or coding agent can connect, verify, and trust in one session.
 

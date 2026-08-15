@@ -1,16 +1,16 @@
 # Poolstatis — guide for Claude
 
 **Agent-native product analytics** — a lightweight PostHog analog whose primary user is a
-coding agent (via MCP), not a human in a UI. The differentiator: every metric is registered
-with a mandatory `purpose` and every funnel with a `goal`, so semantics are first-class and
-insights are computable. The admin UI is a **headless platform admin** (tables to manage
-projects/registry/data/keys), NOT a per-project analytics dashboard — analytics consumption
-is the customer's job via MCP/SDK.
+coding agent (via MCP). The differentiator: every metric is registered with a mandatory
+`purpose` and every funnel with a `goal`, so semantics are first-class and insights are
+computable. The human UI is a **review and answer-first analysis workspace**: it ships Web,
+Product, Funnels, Saved, People, and Browser Experience screens with graphs, tables, session
+evidence, and admin controls. It is not a blank-canvas/general dashboard builder.
 
 ## Layout
 
 - `src/` — backend (TypeScript, Fastify, Postgres). Ingest API (`/i/v1/*`) + Platform API (`/api/v1/*`) + MCP server.
-- `web/` — admin SPA (Vite + **React 19** + **shadcn/ui** + Tailwind v4). Headless platform admin.
+- `web/` — human review, analysis, and admin SPA (Vite + **React 19** + **shadcn/ui** + Tailwind v4).
 - `sdk/` — `@poolstatis/sdk`, the browser+node client products embed.
 - `docs/` — `01-data-model` … `06-instrumenting-a-product`, `05-gap-analysis` (roadmap).
 - `migrations/` — plain `.sql`, applied in order by `src/db.ts` on `serve`/`migrate`.
@@ -50,10 +50,11 @@ docker compose -f docker-compose.selfhost.yml up -d --build  # self-host stack
   (`src/stores/eventStore.ts`). `PostgresEventStore` is the only impl; every method must be
   implementable on ClickHouse too — that's why the Query DSL stays narrow. No raw SQL is
   exposed to clients.
-- **Query DSL** (`POST /query`, discriminated union on `kind`): trend / funnel / entities /
-  retention / lifecycle / stickiness. Branches reference **registry metric keys**, never raw
-  event names. Add a new query type = new schema branch + `QueryService` case + `EventStore`
-  method + MCP tool + test.
+- **Query DSL** (`POST /query`, discriminated union on `kind`): registered metric analysis
+  includes trend / funnel / entities / retention / lifecycle / stickiness; bounded branches
+  cover Web/session engagement and Browser Experience evidence. Branches reference registry
+  metric keys where required and never expose raw SQL. Add a query type = schema branch +
+  `QueryService` case + `EventStore` method + MCP tool + test.
 - **Keys:** `pk_` ingest (write-only, safe in client code, encodes project+env), `sk_` secret
   (one project, read+manage), `pt_` personal (org-wide, for MCP). Auth in `src/http/auth.ts`.
 - **Ingest:** unregistered events are accepted but flagged (`registered=false`), not dropped;
@@ -86,6 +87,6 @@ docker compose -f docker-compose.selfhost.yml up -d --build  # self-host stack
 
 ## What's next
 
-See `docs/05-gap-analysis.md`. Near-term: auto-insights engine (the core unbuilt piece),
-actor identity/merge, cohorts, funnel correlation, then feature flags + experiments.
-Hosting/deploy and rate-limit enforcement are the gaps before "drop into any product" prod use.
+See `docs/05-gap-analysis.md`. Current priorities are design-partner validation,
+static cohorts, semantic rollups, experiment-health guidance, shared Cloud quota
+coordination, per-release MCP runner proof, and decision-loop operational health.

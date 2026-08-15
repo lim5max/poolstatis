@@ -1,5 +1,10 @@
 # Poolstatis Analyze, Navigation and Light Visual System — Program PRD
 
+> **Historical program record — not the current capability source.** Use the
+> current README, gap analysis, Browser Analytics docs, and SDK guide for shipped
+> analysis screens and capture defaults. In particular, browser capture now
+> starts on `start()` with optional host-owned pause callbacks.
+
 **Date:** 2026-07-30
 **Status:** approved direction, implementation program
 **Owner:** product owner
