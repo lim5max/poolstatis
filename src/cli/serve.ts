@@ -160,6 +160,11 @@ const prepareMaintenance = async (): Promise<void> => {
           onError: (error) => console.error('experience artifact retention failed', error),
         },
       );
+    }
+    // Consent tombstones and durable project-deletion jobs are privacy
+    // obligations, not optional retention. The flag only controls scheduled
+    // expiry of otherwise readable replay recordings.
+    if (!replayRetention && !stopping) {
       replayRetention = startReplayRetention(
         new ReplayService(
           maintenancePool,
@@ -173,8 +178,9 @@ const prepareMaintenance = async (): Promise<void> => {
         {
           intervalMs: config.retentionWorker.intervalMs,
           batchSize: Math.min(config.retentionWorker.batchSize, 100),
+          expireRecordings: config.retentionWorker.enabled,
           onResult: (result) => {
-            if (result.deleted > 0 || result.errors > 0) {
+            if (result.deleted > 0 || result.projectsDeleted > 0 || result.errors > 0) {
               console.log(JSON.stringify({ maintenance: 'session-replays', ...result }));
             }
           },

@@ -17,6 +17,7 @@ export function startReplayRetention(
     intervalMs: number;
     batchSize?: number;
     maxBatchesPerRun?: number;
+    expireRecordings?: boolean;
     onResult?: (result: ReplayRetentionResult) => void;
     onError?: (error: unknown) => void;
   },
@@ -31,7 +32,13 @@ export function startReplayRetention(
       };
       const maxBatches = options.maxBatchesPerRun ?? 10;
       for (let batch = 0; batch < maxBatches; batch += 1) {
-        const result = await purgeExpiredReplays(service, pool, options.batchSize ?? 100);
+        const result = await purgeExpiredReplays(
+          service,
+          pool,
+          options.batchSize ?? 100,
+          new Date(),
+          options.expireRecordings ?? true,
+        );
         aggregate.deleted += result.deleted;
         aggregate.errors += result.errors;
         aggregate.hasMore = result.hasMore;

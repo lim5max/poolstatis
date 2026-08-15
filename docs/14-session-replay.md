@@ -109,7 +109,10 @@ the registered route key.
   tombstone first, making reads return `410`, then retry physical deletion and
   scrub session/distinct/host/token/privacy identifiers from the final
   idempotency row.
-  A playback read starts one absolute bounded deadline before object loading,
+  `RETENTION_WORKER_ENABLED=false` disables scheduled expiry only; recovery of
+  consent tombstones and durable project-deletion jobs always remains active.
+  A playback read starts one absolute bounded deadline before DB connection
+  acquisition and object loading,
   holds a shared manifest lock through validation, audit and the remaining
   HTTP response lease;
   withdrawal waits for that read, so no playback can complete after withdrawal
@@ -121,7 +124,7 @@ Project deletion persists its database write barrier and durable job before
 any external deletion. Snapshot artifact keys are copied to a non-cascading
 work table, then the job checkpoints `artifacts → events → replays → metadata
 → objects`. Creation, chunk upload and completion reject late replay writes;
-the retention worker can resume any phase after a crash or store outage,
+the always-on privacy recovery loop can resume any phase after a crash or store outage,
 including the window before the first artifact/EventStore purge.
 
 Payload bytes live behind `ReplayObjectStore`; PostgreSQL contains manifests,

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { api, createTestEnv, type TestEnv } from './helpers.js';
+import { TEST_DB_URL } from './urls.js';
+import { createPool } from '../src/db.js';
 import { LocalReplayObjectStore, type ReplayObjectStore } from '../src/replay/objectStore.js';
 import { sanitizeReplayEvents } from '../src/replay/sanitize.js';
 import { purgeExpiredReplays, ReplayService } from '../src/services/replay.js';
@@ -215,6 +217,41 @@ describe('session replay vertical slice', () => {
     expect(result.deleted).toBeGreaterThanOrEqual(1);
     const gone = await api(env, env.secretToken, 'GET', `/api/v1/projects/${env.projectSlug}/replays/${id}?env=prod`);
     expect(gone.status).toBe(410);
+  });
+
+  it('recovers consent tombstones while scheduled replay expiry is disabled', async () => {
+    const tombstoned = await createReplay();
+    const merelyExpired = await createReplay();
+    const tombstonedId = tombstoned.body.replay.id as string;
+    const expiredId = merelyExpired.body.replay.id as string;
+    const now = new Date();
+    await env.pool.query(
+      `UPDATE replay_sessions
+       SET status = 'deleting', delete_after = $2,
+           delete_retry_after = '-infinity', deletion_claimed_until = '-infinity'
+       WHERE id = $1`,
+      [tombstonedId, new Date(now.getTime() + 7 * 86_400_000)],
+    );
+    await env.pool.query(
+      `UPDATE replay_sessions SET delete_after = $2
+       WHERE id = $1`,
+      [expiredId, new Date(now.getTime() - 1_000)],
+    );
+
+    const result = await purgeExpiredReplays(
+      new ReplayService(env.pool, new LocalReplayObjectStore(root)),
+      env.pool,
+      10,
+      now,
+      false,
+    );
+    expect(result.deleted).toBeGreaterThanOrEqual(1);
+    const statuses = await env.pool.query<{ id: string; status: string }>(
+      'SELECT id, status FROM replay_sessions WHERE id = ANY($1::uuid[])',
+      [[tombstonedId, expiredId]],
+    );
+    expect(statuses.rows.find((row) => row.id === tombstonedId)?.status).toBe('deleted');
+    expect(statuses.rows.find((row) => row.id === expiredId)?.status).toBe('recording');
   });
 
   it('physically removes replay objects through the env-scoped data purge seam', async () => {
@@ -474,6 +511,39 @@ describe('session replay vertical slice', () => {
     } finally {
       await target.close();
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('includes pool connection acquisition in the replay read deadline', async () => {
+    const pool = createPool(TEST_DB_URL, { max: 1 });
+    const blocker = await pool.connect();
+    let blockerReleased = false;
+    try {
+      const service = new ReplayService(pool, new LocalReplayObjectStore(root));
+      await expect(service.openEventsRead(
+        env.projectId,
+        'prod',
+        randomUUID(),
+        'test:pool-deadline',
+        25,
+      )).rejects.toMatchObject({
+        statusCode: 504,
+        code: 'replay_response_deadline_exceeded',
+      });
+
+      blocker.release();
+      blockerReleased = true;
+      const probe = await Promise.race([
+        pool.connect(),
+        new Promise<never>((_resolve, reject) => setTimeout(
+          () => reject(new Error('late replay pool acquisition was not released')),
+          1_000,
+        )),
+      ]);
+      probe.release();
+    } finally {
+      if (!blockerReleased) blocker.release();
+      await pool.end();
     }
   });
 });

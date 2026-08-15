@@ -393,20 +393,21 @@ export class ReplayService {
   ): Promise<ReplayEventsLease> {
     const boundedDeadlineMs = Math.min(30_000, Math.max(25, deadlineMs));
     const expiresAt = Date.now() + boundedDeadlineMs;
-    const client = await this.pool.connect();
+    const client = await acquireReplayClient(this.pool, expiresAt);
     try {
-      await client.query('BEGIN');
-      await client.query(
+      await withinReplayDeadline(client.query('BEGIN'), expiresAt);
+      const sqlBudgetMs = Math.max(1, expiresAt - Date.now());
+      await withinReplayDeadline(client.query(
         `SELECT set_config('statement_timeout', $1, true),
                 set_config('lock_timeout', $1, true)`,
-        [`${boundedDeadlineMs}ms`],
-      );
-      const sessionResult = await client.query<ReplayRow>(
+        [`${sqlBudgetMs}ms`],
+      ), expiresAt);
+      const sessionResult = await withinReplayDeadline(client.query<ReplayRow>(
         `${SESSION_SELECT}
          WHERE rs.project_id = $1 AND rs.env = $2 AND rs.id = $3
          FOR SHARE OF rs`,
         [projectId, env, replayId],
-      );
+      ), expiresAt);
       const row = sessionResult.rows[0];
       if (!row) throw notFound('session_replay');
       if (row.status === 'deleting' || row.status === 'deleted' || isExpired(row)) {
@@ -419,12 +420,12 @@ export class ReplayService {
       if (replay.status !== 'playable') {
         throw new ApiError(409, 'session_replay_incomplete', 'only contiguous replay sessions with an initial full snapshot are playable');
       }
-      const { rows } = await client.query<ChunkRow>(
+      const { rows } = await withinReplayDeadline(client.query<ChunkRow>(
         `SELECT sequence, object_key, checksum, stored_checksum, byte_size,
                 event_count, first_timestamp, last_timestamp, has_checkout
          FROM replay_chunks WHERE replay_id = $1 ORDER BY sequence`,
         [replayId],
-      );
+      ), expiresAt);
       const events: Array<Record<string, unknown>> = [];
       let bytes = 0;
       let previousLast: number | null = null;
@@ -473,10 +474,10 @@ export class ReplayService {
       if (bytes !== replay.byte_size || events.length !== replay.event_count) {
         throw corruptReplay('stored replay totals do not match the manifest');
       }
-      await client.query(
+      await withinReplayDeadline(client.query(
         'INSERT INTO replay_audit_log (project_id, replay_id, actor, action) VALUES ($1,$2,$3,\'view\')',
         [projectId, replayId, actor],
-      );
+      ), expiresAt);
       assertReplayDeadline(expiresAt);
       let closed = false;
       return {
@@ -494,6 +495,10 @@ export class ReplayService {
         },
       };
     } catch (error) {
+      if (isReplayDeadlineFailure(error, expiresAt)) {
+        client.release(true);
+        throw replayDeadlineError();
+      }
       await client.query('ROLLBACK').catch(() => {});
       client.release();
       throw error;
@@ -958,18 +963,55 @@ async function withinReplayDeadline<T>(operation: Promise<T>, expiresAt: number)
   }
 }
 
+async function acquireReplayClient(pool: pg.Pool, expiresAt: number): Promise<pg.PoolClient> {
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) throw replayDeadlineError();
+  let expired = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const pending = pool.connect().then((client) => {
+    if (expired) {
+      client.release();
+      throw replayDeadlineError();
+    }
+    return client;
+  });
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          expired = true;
+          reject(replayDeadlineError());
+        }, remaining);
+        timeout.unref();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function isReplayDeadlineFailure(error: unknown, expiresAt: number): boolean {
+  if (Date.now() >= expiresAt) return true;
+  if (error instanceof ApiError && error.code === 'replay_response_deadline_exceeded') return true;
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false;
+  return error.code === '57014' || error.code === '55P03';
+}
+
 export async function purgeExpiredReplays(
   service: ReplayService,
   pool: pg.Pool,
   limit = 100,
   now = new Date(),
+  expireRecordings = true,
 ): Promise<{ deleted: number; errors: number; hasMore: boolean }> {
   const { rows } = await pool.query<{ id: string; project_id: string }>(
     `WITH candidates AS (
        SELECT id FROM replay_sessions
-       WHERE delete_after <= $1 AND status <> 'deleted'
+       WHERE status <> 'deleted'
+         AND (status = 'deleting' OR ($3::boolean AND delete_after <= $1))
          AND delete_retry_after <= $1 AND deletion_claimed_until <= $1
-       ORDER BY delete_attempts, delete_after, id
+       ORDER BY (status = 'deleting') DESC, delete_attempts, delete_after, id
        FOR UPDATE SKIP LOCKED
        LIMIT $2
      )
@@ -978,7 +1020,7 @@ export async function purgeExpiredReplays(
      FROM candidates
      WHERE sessions.id = candidates.id
      RETURNING sessions.id, sessions.project_id`,
-    [now, limit],
+    [now, limit, expireRecordings],
   );
   let deleted = 0;
   let errors = 0;
@@ -993,10 +1035,11 @@ export async function purgeExpiredReplays(
   const more = await pool.query<{ has_more: boolean }>(
     `SELECT EXISTS (
        SELECT 1 FROM replay_sessions
-       WHERE delete_after <= $1 AND status <> 'deleted'
+       WHERE status <> 'deleted'
+         AND (status = 'deleting' OR ($2::boolean AND delete_after <= $1))
          AND delete_retry_after <= $1 AND deletion_claimed_until <= $1
      ) AS has_more`,
-    [now],
+    [now, expireRecordings],
   );
   return { deleted, errors, hasMore: more.rows[0]?.has_more === true };
 }

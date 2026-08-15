@@ -126,7 +126,9 @@ Keep Postgres private to the Docker network. Back up `poolstatis_pgdata` and
 `poolstatis_replays` together: replay manifests in Postgres are not useful
 without their checksum-verified objects. Restore-test both volumes as one
 lineage. Expired/withdrawn recordings are tombstoned before object deletion and
-the bounded retention worker retries incomplete physical cleanup.
+the bounded replay recovery loop retries incomplete physical cleanup. Setting
+`RETENTION_WORKER_ENABLED=false` stops planned event/artifact/replay expiry; it
+does not disable consent-withdrawal or project-deletion recovery.
 
 Recommended small VPS baseline: 2 vCPU, 4 GB RAM, and 50+ GB SSD. A 1 GB VPS can
 work for demos, but it is tight once Postgres, Node, the proxy, and the OS are all

@@ -3,9 +3,9 @@
 -- privacy policy, deletion audit and durable project cleanup contract.
 
 ALTER TABLE replay_sessions
-  ADD COLUMN IF NOT EXISTS mask_selectors text[] NOT NULL DEFAULT '{}'
+  ADD COLUMN mask_selectors text[] NOT NULL DEFAULT '{}'
     CHECK (cardinality(mask_selectors) <= 20),
-  ADD COLUMN IF NOT EXISTS block_selectors text[] NOT NULL DEFAULT '{}'
+  ADD COLUMN block_selectors text[] NOT NULL DEFAULT '{}'
     CHECK (cardinality(block_selectors) <= 20),
   ADD COLUMN delete_retry_after timestamptz NOT NULL DEFAULT '-infinity',
   ADD COLUMN deletion_claimed_until timestamptz NOT NULL DEFAULT '-infinity';
@@ -24,7 +24,7 @@ ALTER TABLE replay_audit_log
   ADD CONSTRAINT replay_audit_log_action_check
     CHECK (action IN ('view', 'delete', 'delete_requested', 'delete_completed'));
 
-CREATE UNIQUE INDEX IF NOT EXISTS replay_audit_delete_once_idx
+CREATE UNIQUE INDEX replay_audit_delete_once_idx
   ON replay_audit_log (replay_id, action)
   WHERE action IN ('delete_requested', 'delete_completed');
 
@@ -37,8 +37,6 @@ END
 $replay_audit_immutable$ LANGUAGE plpgsql;
 
 REVOKE ALL ON FUNCTION poolstatis_reject_replay_audit_mutation() FROM PUBLIC;
-
-DROP TRIGGER IF EXISTS replay_audit_log_append_only ON replay_audit_log;
 
 CREATE TRIGGER replay_audit_log_append_only
   BEFORE UPDATE OR DELETE ON replay_audit_log

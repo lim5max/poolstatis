@@ -60,9 +60,9 @@ describe('migration discovery', () => {
     const files = await discoverMigrationFiles(
       new URL('../migrations', import.meta.url).pathname,
     );
-    expect(files).toHaveLength(45);
+    expect(files).toHaveLength(46);
     expect(files.at(0)).toBe('001_init.sql');
-    expect(files.at(-1)).toBe('043_session_replay_hardening.sql');
+    expect(files.at(-1)).toBe('044_session_replay_project_deletion_phases.sql');
   });
 
   it('keeps AppleDouble files out of the Docker build context', async () => {
