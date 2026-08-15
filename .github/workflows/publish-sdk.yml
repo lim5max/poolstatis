@@ -38,19 +38,19 @@ jobs:
           pnpm --dir sdk build
       - name: Pack and verify one SDK artifact
         run: |
-          mkdir -p .release
+          mkdir -p release
           SDK_VERSION=$(node -p "require('./sdk/package.json').version")
           if npm view "@poolstatis/sdk@$SDK_VERSION" version >/dev/null 2>&1; then
             echo "@poolstatis/sdk@$SDK_VERSION already exists; refusing to overwrite"
             exit 1
           fi
-          SDK_TARBALL="$PWD/.release/poolstatis-sdk-$SDK_VERSION.tgz"
-          npm pack --json --pack-destination .release ./sdk > .release/sdk-pack-output.txt
+          SDK_TARBALL="$PWD/release/poolstatis-sdk-$SDK_VERSION.tgz"
+          npm pack --json --pack-destination release ./sdk > release/sdk-pack-output.txt
           POOLSTATIS_SDK_TARBALL="$SDK_TARBALL" \
-          POOLSTATIS_SDK_PACK_OUTPUT="$PWD/.release/sdk-pack-output.txt" \
+          POOLSTATIS_SDK_PACK_OUTPUT="$PWD/release/sdk-pack-output.txt" \
             pnpm --dir sdk exec vitest run test/package.test.ts
           (
-            cd .release
+            cd release
             sha512sum "poolstatis-sdk-$SDK_VERSION.tgz" > sdk.sha512
           )
       - name: Preserve immutable verified SDK artifact
@@ -58,8 +58,8 @@ jobs:
         with:
           name: poolstatis-sdk-release
           path: |
-            .release/poolstatis-sdk-*.tgz
-            .release/sdk.sha512
+            release/poolstatis-sdk-*.tgz
+            release/sdk.sha512
           if-no-files-found: error
           retention-days: 1
 
@@ -71,7 +71,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: poolstatis-sdk-release
-          path: .release
+          path: release
       - uses: actions/setup-node@v6
         with:
           node-version: 24.x
@@ -79,17 +79,17 @@ jobs:
       - name: Build SBOM from the immutable SDK artifact
         run: |
           (
-            cd .release
+            cd release
             sha512sum --check sdk.sha512
           )
-          mapfile -t SDK_TARBALLS < <(find .release -maxdepth 1 -type f -name 'poolstatis-sdk-*.tgz' -print)
+          mapfile -t SDK_TARBALLS < <(find release -maxdepth 1 -type f -name 'poolstatis-sdk-*.tgz' -print)
           test "${#SDK_TARBALLS[@]}" -eq 1
           SDK_TARBALL="${SDK_TARBALLS[0]}"
-          SDK_SBOM_ROOT="$PWD/.release/sdk-sbom-root"
+          SDK_SBOM_ROOT="$PWD/release/sdk-sbom-root"
           mkdir -p "$SDK_SBOM_ROOT"
           tar -xzf "$SDK_TARBALL" -C "$SDK_SBOM_ROOT" --strip-components=1
-          SDK_VERSION=$(node -p "require('./.release/sdk-sbom-root/package.json').version")
-          SDK_SBOM="$PWD/.release/poolstatis-sdk-$SDK_VERSION.cdx.json"
+          SDK_VERSION=$(node -p "require('./release/sdk-sbom-root/package.json').version")
+          SDK_SBOM="$PWD/release/poolstatis-sdk-$SDK_VERSION.cdx.json"
           (
             cd "$SDK_SBOM_ROOT"
             npm install --package-lock-only --ignore-scripts \
@@ -112,7 +112,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: poolstatis-sdk-sbom
-          path: .release/poolstatis-sdk-*.cdx.json
+          path: release/poolstatis-sdk-*.cdx.json
           if-no-files-found: error
           retention-days: 1
 
@@ -127,7 +127,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: poolstatis-sdk-release
-          path: .release
+          path: release
       - uses: actions/setup-node@v6
         with:
           node-version: 24.x
@@ -136,10 +136,10 @@ jobs:
       - name: Publish exact verified SDK tarball
         run: |
           (
-            cd .release
+            cd release
             sha512sum --check sdk.sha512
           )
-          mapfile -t SDK_TARBALLS < <(find .release -maxdepth 1 -type f -name 'poolstatis-sdk-*.tgz' -print)
+          mapfile -t SDK_TARBALLS < <(find release -maxdepth 1 -type f -name 'poolstatis-sdk-*.tgz' -print)
           test "${#SDK_TARBALLS[@]}" -eq 1
           SDK_TARBALL="${SDK_TARBALLS[0]}"
           npm publish "$SDK_TARBALL" --access public --provenance
