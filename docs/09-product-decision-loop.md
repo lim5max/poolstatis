@@ -40,7 +40,7 @@ properties и конкретные blockers/warnings. Property без явно �
 использовать как надёжный decision filter.
 
 Project schema включает те же metric category/tags, property meanings, identity summary и
-source status, которые видят REST, MCP и headless admin.
+source status, которые видят REST, MCP и human analysis/admin workspace.
 
 ## PostHog source
 

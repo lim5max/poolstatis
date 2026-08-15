@@ -1,5 +1,13 @@
 # Gaze Attention v1 Implementation Plan
 
+> **Plan only — not a shipped capability.** Gaze, cursor attention maps,
+> replay-side aggregates, replay schemas, and the referenced
+> `017_session_replay.sql` prerequisite are absent from Core `origin/main` as
+> verified on 2026-08-15. Do not treat the tasks or expected migration state
+> below as current implementation evidence. Current Browser Experience ships
+> only labelled clicks, scroll/section signals, coarse error types, bounded
+> interaction maps, and a per-session timeline without DOM or cursor replay.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add calibrated on-device webcam gaze estimation plus click/cursor/gaze attention maps without uploading camera frames or slowing normal analytics.

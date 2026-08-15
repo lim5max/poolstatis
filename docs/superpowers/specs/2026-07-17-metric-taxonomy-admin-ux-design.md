@@ -1,5 +1,9 @@
 # Metric taxonomy and admin UX design
 
+> **Historical design record — not the current UI status.** The human workspace
+> now includes answer-first analysis screens, graphs, and session evidence while
+> remaining intentionally short of a general dashboard builder.
+
 Date: 2026-07-17
 Status: approved design, awaiting written-spec review
 
@@ -152,4 +156,4 @@ The loop is complete only after API/MCP read-back and browser verification show 
 - No arbitrary nested category tree.
 - No managed tag CRUD system.
 - No automatic category assignment without an explainable recommendation and explicit registry write.
-- No attempt to turn the headless admin into a customer analytics dashboard.
+- No attempt to add a general dashboard builder with arbitrary tiles, layouts, or sharing.

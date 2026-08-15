@@ -140,7 +140,7 @@ Landing, public docs UI, `/login`, `/signup`, waitlist and public acquisition co
 
 ### 3.4 Non-negotiable boundaries
 
-- Core admin remains an agent-native headless platform admin, not a blank-canvas dashboard.
+- Core UI remains an agent-native review and answer-first analysis/admin workspace, not a blank-canvas dashboard builder.
 - No client or agent receives arbitrary SQL access.
 - Analytics query branches continue to reference registered metric keys.
 - Event facts remain immutable except through the existing audited revision/backfill

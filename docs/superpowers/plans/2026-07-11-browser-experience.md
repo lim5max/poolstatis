@@ -1,5 +1,11 @@
 # Browser Experience Implementation Plan
 
+> **Historical implementation plan — not the current runtime contract.** The
+> shipped observer starts immediately when the host calls `start()`; legacy
+> `hasConsent` callbacks remain only as an optional host-owned pause control.
+> Use the current [SDK guide](../../../sdk/README.md) and
+> [Browser Analytics docs](../../13-browser-analytics.md) for product truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship an optional privacy-safe browser interaction module with session timelines and click heatmaps.

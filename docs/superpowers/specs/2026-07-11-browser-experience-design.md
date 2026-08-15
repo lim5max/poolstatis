@@ -1,5 +1,11 @@
 # Browser Experience — Design
 
+> **Historical design record — not the current runtime contract.** The shipped
+> scope remains developer-labelled clicks, scroll/section signals, coarse error
+> types, bounded maps, and a session timeline without replay. Collection now
+> starts when the host calls `start()`; legacy consent callbacks are optional
+> host-owned pause controls. See the current SDK and Browser Analytics docs.
+
 ## Decision
 
 Poolstatis will ship a **Browser Experience** module instead of an rrweb DOM

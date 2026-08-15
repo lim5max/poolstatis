@@ -1,5 +1,10 @@
 # Flags and Experiments v1 — Design
 
+> **Historical design record.** The “Next modules” section below is not a
+> current status list. Browser Experience later shipped as immediate,
+> developer-labelled click/scroll/section/error capture with bounded maps and a
+> session timeline. Full DOM/video/cursor Session Replay remains unshipped.
+
 ## Decision
 
 Poolstatis will first add a server-evaluated feature-flag and experiment module
@@ -21,7 +26,7 @@ needs consent, masking, encrypted object storage and deletion workflows.
 - Measure a registered event-based primary metric after first exposure and
   report variant sizes, conversion, uplift, credible intervals and chance to
   win.
-- Expose every operation through REST, MCP, SDK and the headless admin UI.
+- Expose every operation through REST, MCP, SDK and the human analysis/admin UI.
 - Preserve the project invariants: metric references instead of raw outcome
   event names; every flag has a real `purpose`; every experiment a real
   `hypothesis`; event reads/writes stay behind `EventStore`.
@@ -117,7 +122,7 @@ effect), `create_experiment`, `list_experiments`, `start_experiment`,
 `conclude_experiment` and `get_experiment_results`. Tool descriptions explain
 the stable-identity requirement and surface `purpose`/`hypothesis` in output.
 
-The existing headless admin gains an `Experiments` screen with Flags and
+The existing human analysis/admin workspace gains an `Experiments` screen with Flags and
 Experiments tabs. It manages metadata and shows result numbers; it does not
 become a dashboard or a replay viewer.
 

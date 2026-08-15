@@ -184,15 +184,16 @@ curl -X PATCH "$POOLSTATIS_URL/api/v1/projects/my-app/metrics/signup" \
 
 ### 2. Send events
 
-The public ingest API is the available install-free path. The source tree also
-contains an [`sdk/`](../sdk/README.md) package for workspace/local integration,
-but `@poolstatis/sdk` is not currently published in npm. Do not run or recommend
-`npm add @poolstatis/sdk` until `npm view @poolstatis/sdk version` succeeds.
+The public ingest API is the install-free path. The reviewed npm release is
+`@poolstatis/sdk@0.3.0` (registry availability reverified on 2026-08-15); pin
+that exact version and follow the [`sdk/` guide](../sdk/README.md). For release
+work, re-run the registry and clean-consumer smoke instead of assuming a newer
+tag has the same contract.
 
 Use the HTTP examples below from one shared product integration module. Keep only
 the write-only `pk_` ingest key in product runtime code; never ship `sk_` or `pt_`.
-If the target already consumes an explicitly approved local/git SDK source,
-follow that installed version's guide instead.
+If the target consumes an explicitly approved local/git SDK source, follow
+that installed version's guide instead.
 
 ### 2.0 Browser landing attribution (optional)
 
@@ -200,9 +201,9 @@ follow that installed version's guide instead.
 `propose_acquisition_properties` (или `POST /properties/acquisition-attribution`)
 с platform credential. Это создаст пять `$utm_*` definitions как `proposed`;
 ингест-ключ в браузере не может и не должен менять реестр. Затем подключи
-локальный/одобренный `@poolstatis/sdk/attribution`, как показано в
+проверенный `@poolstatis/sdk/attribution`, как показано в
 [SDK guide](../sdk/README.md#browser-acquisition-attribution-optional-module).
-Не обещайте npm-установку, пока registry lookup пакета не проходит.
+Для воспроизводимой интеграции pin exact `@poolstatis/sdk@0.3.0`.
 
 Модуль пишет только обязательный finite `landing_route`, origin referrer и
 стандартные UTM; raw path/URL, full referrer, click ids и unknown query params
@@ -223,7 +224,7 @@ matching MCP tools). The experiment needs a 100%-allocated flag and an active
 `count`/`unique_actors` metric as outcome.
 
 ```ts
-// Resolve @poolstatis/sdk from the approved local/git dependency described above.
+// Pin the reviewed npm release or an explicitly approved local/git source.
 import { createClient } from "@poolstatis/sdk";
 
 const ph = createClient({
@@ -257,6 +258,7 @@ template. The source asset imports the same package as any other site:
 ```ts
 import { createClient } from '@poolstatis/sdk';
 import { createBrowserAnalytics } from '@poolstatis/sdk/browser';
+import { BrowserExperience } from '@poolstatis/sdk/experience';
 
 const client = createClient({
   url: 'https://api.example.com',
@@ -269,6 +271,18 @@ const analytics = createBrowserAnalytics({
   mapPagePath: () => 'home',
 });
 analytics.start();
+
+// Optional bounded interaction capture: only developer-labelled controls,
+// scroll milestones, registered section exposures, and coarse error types.
+const experience = new BrowserExperience({
+  client,
+  surface: 'checkout',
+  distinctId: () => currentUser.id,
+  route: () => 'checkout',
+  version: RELEASE_SHA,
+});
+await experience.start();
+// <button data-poolstatis-label="checkout.pay_now">Pay now</button>
 ```
 
 Do not paste this TypeScript or a bare npm import directly into a production
@@ -290,10 +304,10 @@ install the version-pinned Poolstatis MCP runner in Codex, Claude, Cursor or
 another developer agent. The agent registers semantics and queries evidence;
 MCP does not run inside the visitor's Bitrix request.
 
-This is the integration contract, not a claim that the npm release is already
-available. Run `npm view @poolstatis/sdk version` and the package consumer smoke
-before recommending npm installation. Until that passes, use only an explicitly
-reviewed local/git package source.
+This is the integration contract for the reviewed `@poolstatis/sdk@0.3.0`
+release. Before recommending another tag, run `npm view`, verify its integrity,
+and pass the package consumer smoke; otherwise keep the exact pin or use an
+explicitly reviewed local/git source.
 
 Do not add `variant` manually to your outcome events: Poolstatis records the
 first `$feature_flag_called` exposure itself and only counts outcomes that occur
@@ -345,10 +359,13 @@ curl "$POOLSTATIS_URL/api/v1/projects/my-app/events/sample?limit=10" \
 Or watch the admin **Data → Event stream** (filter to *unregistered*) and
 **Data → Data health** for off-standard drift.
 
-### 4. Query (this is what your own dashboards call)
+### 4. Query and review the answer
 
-Poolstatis is headless: you build dashboards on your side and pull via the Query API
-(or the `query_*` MCP tools). The DSL accepts registry metric **keys**, never raw SQL.
+Poolstatis includes answer-first Web, Product, Funnel, Saved, People and
+Experience analysis screens with graphs, tables and session evidence. It is not
+a general dashboard builder. External reporting can also consume the Query API
+or typed MCP tools. The DSL accepts registry metric **keys**, never caller-provided
+raw SQL.
 
 ```bash
 curl -X POST "$POOLSTATIS_URL/api/v1/projects/my-app/query" \
@@ -356,8 +373,12 @@ curl -X POST "$POOLSTATIS_URL/api/v1/projects/my-app/query" \
   -d '{"kind":"trend","metric":"signup","date_from":"-30d","interval":"day"}'
 ```
 
-Query kinds: `trend`, `funnel`, `entities`, `retention`, `lifecycle`, `stickiness`
-(see [04-http-api.md](04-http-api.md)).
+Query kinds include `trend`, `funnel`, `entities`, `retention`, `lifecycle`,
+`stickiness`, `web_analytics`, `web_sessions`, `web_session`, `page_engagement`,
+`interaction_map`, `experience_session`, `visual_experience`, and
+`visual_experience_compare` (see [04-http-api.md](04-http-api.md)). Browser
+Experience reads are bounded maps or an ordered interaction timeline, not DOM,
+video, or cursor replay.
 
 ---
 
@@ -371,6 +392,9 @@ Query kinds: `trend`, `funnel`, `entities`, `retention`, `lifecycle`, `stickines
 Для web analytics сначала прочитайте также
 `poolstatis://standard/browser-analytics`, затем вызовите
 `propose_browser_analytics`. Browser capture подключается только через отдельный
-локальный/одобренный `@poolstatis/sdk/browser` entrypoint, который стартует сразу;
-base SDK не меняет поведение. Публичную npm-доступность перед инструкцией по
-установке нужно проверять отдельно.
+`@poolstatis/sdk/browser` entrypoint, который стартует сразу; base SDK не меняет
+поведение. Для interaction maps и per-session timeline отдельно подключается
+`@poolstatis/sdk/experience`; он автоматически собирает только developer-labelled
+clicks, scroll milestones, registered section exposures и coarse error types,
+но не arbitrary DOM, stack traces или replay. Используй проверенный exact pin
+`@poolstatis/sdk@0.3.0`, а для другого релиза повтори registry/consumer smoke.

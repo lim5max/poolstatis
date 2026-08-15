@@ -2,8 +2,8 @@
 
 Poolstatis is agent-native product analytics. The repo is source-available under
 the PolyForm Shield License 1.0.0, and the architecture is intentionally narrow:
-semantic registry first, typed Query DSL, MCP tools for agents, and a headless
-admin for humans.
+semantic registry first, typed Query DSL, MCP tools for agents, and a human
+review/answer-first analysis and admin workspace without a general dashboard builder.
 
 ## Local setup
 

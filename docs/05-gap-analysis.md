@@ -1,6 +1,6 @@
 # Poolstatis gap analysis vs PostHog
 
-> **Updated:** 2026-07-20. **Lens:** agent-native, semantics-first and deliberately
+> **Updated:** 2026-08-15. **Lens:** agent-native, semantics-first and deliberately
 > lightweight. A feature ranks highly only when it strengthens a coding agent's
 > `ship → measure → decide` loop without bypassing registered meaning or requiring PostHog's
 > ClickHouse/Kafka/visual-dashboard footprint.
@@ -40,9 +40,11 @@ The main remaining product gaps are now:
    registry artifact passes fresh initialize, full tool-list, and a
    project-scoped semantic read.
 
-Session Replay, DOM autocapture, caller-provided SQL/HogQL and connector marketplaces remain
-intentional non-goals. They add volume or privacy/infra cost without strengthening the
-semantics-first agent workflow.
+Full DOM/video/cursor Session Replay, broad arbitrary-DOM/selector autocapture,
+full issue-oriented error tracking, caller-provided SQL/HogQL, a general dashboard builder,
+and connector marketplaces remain intentional non-goals. This does not remove the shipped
+developer-labelled click observer, scroll/section/error signals, interaction maps, Web session
+detail, per-session interaction timeline, or answer-first analysis screens and graphs.
 
 ## Shipped product surface
 
@@ -53,11 +55,20 @@ semantics-first agent workflow.
 - registry metrics with mandatory `purpose`, funnels with mandatory `goal`;
 - typed Query DSL: trend, funnel, entities, retention, lifecycle, stickiness and Browser
   Experience reads;
+- Browser/Web analytics: visitors, browser-tab sessions, SPA page views, foreground
+  engagement, bounce, bounded acquisition dimensions, actor-safe session/page detail;
+- developer-labelled click autocapture with normalized coordinates, scroll milestones,
+  registered section exposures and coarse `error | unhandled_rejection` types;
+- bounded click/scroll interaction maps, screenshot overlays and a per-session interaction
+  timeline, explicitly not DOM/video/cursor replay;
+- answer-first Web, Product, Funnels, Saved, People and Browser Experience screens with
+  graphs and tables, explicitly not a general dashboard builder;
 - audited, reversible actor links resolved at query time without rewriting events;
 - property definitions with type, purpose and `proposed | trusted | untrusted` state;
 - measurement trust reports for sample, registration, actor and target-property coverage;
 - proof-gated onboarding based on server facts, including a real MCP observation and query;
 - bounded encrypted read-only PostHog adapter for schema/sample/trend/funnel/retention.
+- previewed, idempotent historical backfill and audited optimistic event revision history.
 
 ### Ship, measure and decide
 
@@ -75,7 +86,8 @@ semantics-first agent workflow.
 - durable release monitor, evaluation attempts, encrypted webhook destinations and retrying
   outbox;
 - decision inbox and project-scoped, stale-aware history/similarity search;
-- admin audit surfaces: Setup & MCP, Measurement, Changes and Decisions;
+- human analysis and audit surfaces: Web, Product, Funnels, Saved, People, Browser Experience,
+  Setup & MCP, Measurement, Changes and Decisions;
 - REST and MCP surfaces for the same product workflow.
 
 The complete behavior and safety boundaries are documented in
@@ -94,7 +106,8 @@ The complete behavior and safety boundaries are documented in
 - Release monitor and webhook outbox use bounded batches, Postgres claims, idempotency keys and
   capped retries. This is durable for restarts; horizontal quota coordination is still a
   separate Cloud concern.
-- The headless admin is an operator/audit surface, not a customer analytics dashboard.
+- The human UI is an operator/audit and answer-first analysis surface, not a blank-canvas
+  dashboard builder with arbitrary tiles, layouts, sharing and subscriptions.
 
 ## Next priorities
 
@@ -107,7 +120,7 @@ Ranked by **(agent-native fit × decision value) / effort**.
 | 3 | **Semantic metric/funnel rollups** | M | Registry tells the system exactly what to precompute; extends the Postgres ceiling without exposing a second query model. |
 | 4 | **Experiment health** | S | Add SRM, sample-size/MDE/runtime guidance and guardrail health as pure, explainable computations. |
 | 5 | **Shared Cloud quota coordination** | S/M | Keep existing local limiter as fail-safe, add Redis/edge counters only for multi-replica hosted deployments. |
-| 6 | **MCP package/hosted runner proof** | S/M | Publish and exercise the real artifact before Setup presents its command as verified. |
+| 6 | **MCP package/hosted runner proof** | S/M | Reverify the exact published artifact with fresh install, initialize, tool-list and project-scoped reads for each hosted release before changing Setup's verified pin. |
 | 7 | **Decision-loop operational health** | M | Surface worker lag, terminal attempts, outbox dead rows and contract/release drift as agent-readable health, not hidden logs. |
 
 Recommended sequencing:
@@ -126,8 +139,9 @@ Recommended sequencing:
 - **Group analytics** — multi-entity event references and aggregation dimension for concrete B2B
   needs; the Entity primitive already exists.
 - **Funnel refinements** — exclusions, time-to-convert and conversion-over-time.
-- **Session primitive and paths** — derived edge lists, not a Sankey-first dashboard; likely to
-  stress Postgres earlier than semantic reads.
+- **Derived path analysis** — Web sessions and ordered route/session detail are shipped; a
+  reusable edge-list/path query is not. Add it only when its Postgres cost and decision value
+  are measured, rather than starting with a Sankey dashboard.
 - **Advanced trend math** — formulas, percentiles and smoothing after core decision evidence is
   proven with users.
 - **On-demand JSONL/CSV export** — bounded portability escape hatch, not a warehouse platform.
@@ -136,16 +150,17 @@ Recommended sequencing:
 - **Additional outbound destinations** — issue/draft-PR integrations only when credentials,
   permissions, undo and audit semantics are implemented; current unsupported actions stay inert.
 - **Session Replay add-on** — only as a separate encrypted object-storage system with consent,
-  masking, sampling, deletion and retention. DOM chunks never enter the events table.
+  masking, sampling, deletion and retention. DOM chunks never enter the events table. The
+  current labelled interaction timeline is shipped evidence, not an early replay implementation.
 
 ## Intentional skips
 
 | Feature | Why skip |
 |---------|----------|
-| DOM autocapture | Produces high-volume, semantically empty selector events and undermines mandatory purpose. |
+| Broad arbitrary-DOM/selector autocapture | Produces high-volume, semantically empty selector events and undermines mandatory purpose. Developer-labelled click/scroll/section capture remains shipped. |
 | Raw SQL / HogQL | Bypasses registry meaning, safety and storage portability. Add typed DSL branches instead. |
 | Broad CDP/connector marketplace | Integration maintenance does not compound the code-to-decision moat. Keep adapters narrow and evidence-driven. |
-| Dashboard-builder parity | The customer/agent consumes structured results; admin remains setup and audit. |
+| Dashboard-builder parity | The customer/agent consumes structured results; the human UI ships fixed answer-first analysis and audit surfaces, not arbitrary dashboard composition. |
 | ClickHouse/Kafka/Temporal by default | Add only after measured Postgres/worker limits, preserving `EventStore` and durable audit seams. |
 
 ## Strategic throughline
