@@ -5,7 +5,7 @@ Thin stdio MCP runner for a Poolstatis API instance.
 ```sh
 POOLSTATIS_URL=https://api.example.com \
 POOLSTATIS_TOKEN=pt_your_token \
-pnpm dlx @poolstatis/mcp@0.6.0
+pnpm dlx @poolstatis/mcp@0.7.0
 ```
 
 `POOLSTATIS_TOKEN` must be a `pt_` personal token or project-scoped `sk_` key.
@@ -16,10 +16,14 @@ embedded in the package, and the runner never prints the token.
 Node.js 22 and 24 are supported. The package is an ESM executable and speaks
 MCP over stdio only; stdout is reserved for protocol messages.
 
+The root programmatic export is pinned to the same published `0.7.0` profile as
+the CLI. Its `McpConfig` intentionally has no distribution override, so callers
+cannot swap the reviewed public contract for another internal profile.
+
 ## Browser analytics contract
 
 Read `poolstatis://standard/browser-analytics` before instrumenting or
-diagnosing browser traffic. In `0.6.0` the embedded standard matches the
+diagnosing browser traffic. In `0.7.0` the embedded standard matches the
 production SDK/Core contract:
 
 - `@poolstatis/sdk/browser` starts collection immediately when the host calls
@@ -36,6 +40,23 @@ production SDK/Core contract:
 Existing `hasConsent` and `subscribeConsent` callbacks remain optional
 host-owned pause controls for older integrations. They are not required by the
 Poolstatis runtime.
+
+## Session Replay metadata
+
+Version `0.7.0` adds `list_session_replays` and `get_session_replay`. They
+return bounded, project-scoped manifest metadata and an admin viewer path.
+They never return rrweb events, reconstructed DOM, text, cursor samples,
+upload tokens or object-store keys. Recording and playback remain governed by
+the separate consent, host-policy, masking, retention and sandbox contract in
+Core.
+
+## Funnel investigations
+
+Version `0.7.0` also publishes `create_funnel_investigation`,
+`list_funnel_investigations` and `get_funnel_investigation`. They operate on
+bounded saved-funnel evidence through the same project-scoped REST contract,
+preserve immutable lineage and integrity fingerprints, and remain descriptive
+rather than causal.
 
 ## Compatibility
 

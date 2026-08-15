@@ -1,0 +1,145 @@
+name: Publish SDK package
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed main commit to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify exact main lineage
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: corepack enable
+      - run: corepack prepare pnpm@10.13.1 --activate
+      - run: pnpm --dir sdk install --frozen-lockfile --ignore-workspace
+      - name: Test and build SDK
+        run: |
+          pnpm --dir sdk test
+          pnpm --dir sdk typecheck
+          pnpm --dir sdk build
+      - name: Pack and verify one SDK artifact
+        run: |
+          mkdir -p .release
+          SDK_VERSION=$(node -p "require('./sdk/package.json').version")
+          if npm view "@poolstatis/sdk@$SDK_VERSION" version >/dev/null 2>&1; then
+            echo "@poolstatis/sdk@$SDK_VERSION already exists; refusing to overwrite"
+            exit 1
+          fi
+          SDK_TARBALL="$PWD/.release/poolstatis-sdk-$SDK_VERSION.tgz"
+          npm pack --json --pack-destination .release ./sdk > .release/sdk-pack-output.txt
+          POOLSTATIS_SDK_TARBALL="$SDK_TARBALL" \
+          POOLSTATIS_SDK_PACK_OUTPUT="$PWD/.release/sdk-pack-output.txt" \
+            pnpm --dir sdk exec vitest run test/package.test.ts
+          (
+            cd .release
+            sha512sum "poolstatis-sdk-$SDK_VERSION.tgz" > sdk.sha512
+          )
+      - name: Preserve immutable verified SDK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: poolstatis-sdk-release
+          path: |
+            .release/poolstatis-sdk-*.tgz
+            .release/sdk.sha512
+          if-no-files-found: error
+          retention-days: 1
+
+  sbom:
+    if: github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: poolstatis-sdk-release
+          path: .release
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+      - name: Build SBOM from the immutable SDK artifact
+        run: |
+          (
+            cd .release
+            sha512sum --check sdk.sha512
+          )
+          mapfile -t SDK_TARBALLS < <(find .release -maxdepth 1 -type f -name 'poolstatis-sdk-*.tgz' -print)
+          test "${#SDK_TARBALLS[@]}" -eq 1
+          SDK_TARBALL="${SDK_TARBALLS[0]}"
+          SDK_SBOM_ROOT="$PWD/.release/sdk-sbom-root"
+          mkdir -p "$SDK_SBOM_ROOT"
+          tar -xzf "$SDK_TARBALL" -C "$SDK_SBOM_ROOT" --strip-components=1
+          SDK_VERSION=$(node -p "require('./.release/sdk-sbom-root/package.json').version")
+          SDK_SBOM="$PWD/.release/poolstatis-sdk-$SDK_VERSION.cdx.json"
+          (
+            cd "$SDK_SBOM_ROOT"
+            npm install --package-lock-only --ignore-scripts \
+              --no-audit --no-fund --omit=optional
+            npx --yes @cyclonedx/cyclonedx-npm@6.0.1 \
+              --package-lock-only --omit dev --omit optional \
+              --mc-type library --output-reproducible --validate \
+              --output-file "$SDK_SBOM"
+          )
+          test -s "$SDK_SBOM"
+          node - "$SDK_SBOM" <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const sbom = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          const component = sbom.metadata?.component;
+          if (component?.group !== '@poolstatis' || component?.name !== 'sdk' || component?.version !== '0.4.0') {
+            throw new Error('SBOM main component is not @poolstatis/sdk@0.4.0');
+          }
+          NODE
+      - name: Preserve verified SDK SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: poolstatis-sdk-sbom
+          path: .release/poolstatis-sdk-*.cdx.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: [verify, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: poolstatis-sdk-release
+          path: .release
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Publish exact verified SDK tarball
+        run: |
+          (
+            cd .release
+            sha512sum --check sdk.sha512
+          )
+          mapfile -t SDK_TARBALLS < <(find .release -maxdepth 1 -type f -name 'poolstatis-sdk-*.tgz' -print)
+          test "${#SDK_TARBALLS[@]}" -eq 1
+          SDK_TARBALL="${SDK_TARBALLS[0]}"
+          npm publish "$SDK_TARBALL" --access public --provenance

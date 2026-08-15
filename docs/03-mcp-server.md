@@ -218,11 +218,10 @@ list_session_replays(project, {env?, surface?, status?, limit?})
 get_session_replay(project, {replay_id, env?})
 ```
 
-Оба source/local tool возвращают только bounded manifest metadata и admin
-viewer path. DOM, rrweb events, cursor samples и object keys через MCP не
-выдаются. Тулы зарезервированы для следующего MCP package release и поэтому
-не расширяют уже опубликованный `@poolstatis/mcp@0.6.0` contract. Полный
-privacy/player contract: [14-session-replay.md](14-session-replay.md).
+Оба tool в `@poolstatis/mcp@0.7.0` возвращают только bounded manifest metadata
+и admin viewer path. DOM, rrweb events, cursor samples и object keys через MCP
+не выдаются. Полный privacy/player contract:
+[14-session-replay.md](14-session-replay.md).
 
 Visual map tools additionally return an agent-ready `agent_context`: the
 purpose-tagged scope, sample sizes, ordered section labels, counts and
@@ -276,11 +275,11 @@ list_data_quality_issues(project, {env?, limit?, since_days?})
   // semantic conflicts: e.g. brief.completed exists, but entity status is still "new"
 ```
 
-Три `*_funnel_investigation` tools доступны в Core source/local runner и
-зарезервированы для следующего MCP package release. Опубликованный
-`@poolstatis/mcp@0.6.0` их ещё не содержит; до отдельного publish gate используйте
-REST endpoints. Номер в `packages/mcp/package.json` сам по себе не является
-свидетельством публикации.
+Три `*_funnel_investigation` tools входят в контракт
+`@poolstatis/mcp@0.7.0`: они используют те же project-scoped REST endpoints,
+сохраняют immutable lineage и ограничивают период 366 днями. Номер в
+`packages/mcp/package.json` сам по себе не является свидетельством публикации;
+нужен registry read-back точной версии.
 
 MCP tools expose structured JSON output (`structuredContent`) with a text JSON fallback for older clients.
 Web tools используют только typed Query DSL и registry metric keys: raw SQL и
@@ -313,4 +312,4 @@ resolve_insight(project, id, {status: 'ack'|'resolved'})
 
 ## Транспорт
 
-MVP: stdio-сервер и version-pinned npm-пакет `@poolstatis/mcp@0.6.0` (токен только в env). Встроенный `poolstatis://standard/browser-analytics` соответствует production-контракту: сбор начинается сразу после `start()`, маршруты остаются конечными ключами, страна добавляется только серверным trusted-proxy/MMDB resolver, а совместимость старого SDK удаляет небезопасные path-поля без потери целого события. Hosted deploy включает пакет только после fresh-install initialize, полного tool-list и project-scoped read smoke. Поддерживаемые presets: Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers и custom MCP host. Streamable HTTP — отдельный этап после hosted-стабилизации.
+MVP: stdio-сервер и version-pinned npm-пакет `@poolstatis/mcp@0.7.0` (токен только в env). Встроенный `poolstatis://standard/browser-analytics` соответствует production-контракту, а replay tools возвращают только bounded manifest metadata. Hosted deploy включает пакет только после fresh-install initialize, полного tool-list и project-scoped read smoke. Поддерживаемые presets: Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers и custom MCP host. Streamable HTTP — отдельный этап после hosted-стабилизации.

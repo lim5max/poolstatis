@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -103,14 +104,44 @@ beforeAll(async () => {
     'dist/core/mcp/standard.js',
     'dist/core/automationSchemas.js',
     'dist/core/schemas.js',
+    'dist/index.d.ts',
+    'dist/index.js',
     'package.json',
   ];
   expect(pack.files.map((file) => file.path).sort()).toEqual(expectedFiles.sort());
   expect(pack.files.find((file) => file.path === 'dist/cli.js')?.mode).toBe(0o755);
   expect(pack.size).toBeLessThan(50_000);
-  // Two bounded replay metadata tools add no files or dependencies, but make
-  // the source-only server slightly larger. Keep a deliberate narrow ceiling.
-  expect(pack.unpackedSize).toBeLessThan(152_000);
+  // The replay metadata tools and fail-closed public facade add no dependency;
+  // keep their packed output inside a deliberate narrow bound.
+  expect(pack.unpackedSize).toBeLessThan(154_000);
+
+  const extractedPackDir = await mkdtemp(join(tmpdir(), 'poolstatis-mcp-scan-'));
+  try {
+    const listed = await execFileAsync('tar', ['-tzf', tarball], { maxBuffer: 1024 * 1024 });
+    const archiveEntries = listed.stdout.split('\n').filter(Boolean);
+    const expectedArchiveEntries = expectedFiles.map((path) => `package/${path}`);
+    expect(new Set(archiveEntries).size).toBe(archiveEntries.length);
+    expect(archiveEntries.every((entry) => (
+      entry.startsWith('package/')
+      && !entry.includes('\\')
+      && !entry.split('/').includes('..')
+    ))).toBe(true);
+    expect(archiveEntries.sort()).toEqual(expectedArchiveEntries.sort());
+    await execFileAsync('tar', ['-xzf', tarball, '-C', extractedPackDir]);
+    for (const path of expectedFiles) {
+      const info = await lstat(join(extractedPackDir, 'package', path));
+      expect(info.isFile()).toBe(true);
+      expect(info.isSymbolicLink()).toBe(false);
+    }
+    const packedText = (await Promise.all(expectedFiles.map((path) => (
+      readFile(join(extractedPackDir, 'package', path), 'utf8')
+    )))).join('\n');
+    expect(packedText).not.toMatch(/-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/);
+    expect(packedText).not.toMatch(/\b(?:pt|sk|pk)_[a-f0-9]{24,}\b/i);
+    expect(packedText).not.toMatch(/\bnpm_[a-z0-9]{36,}\b/i);
+  } finally {
+    await rm(extractedPackDir, { recursive: true, force: true });
+  }
 
   await writeFile(join(tempProject, 'package.json'), JSON.stringify({
     name: 'poolstatis-mcp-clean-consumer',
@@ -296,6 +327,15 @@ afterAll(async () => {
 });
 
 describe('@poolstatis/mcp release artifact', () => {
+  it('publishes only an explicitly reviewed main SHA through Trusted Publishing', async () => {
+    const workflow = await readFile(join(root, '.github', 'workflows', 'publish-mcp.yml'), 'utf8');
+    expect(workflow).toContain('expected_sha:');
+    expect(workflow).toContain('test "$ACTUAL_SHA" = "$EXPECTED_SHA"');
+    expect(workflow).toContain('id-token: write');
+    expect(workflow).toContain('npm publish "$MCP_TARBALL" --access public --provenance');
+    expect(workflow).not.toContain('NODE_AUTH_TOKEN');
+  });
+
   it('installs into an empty project as an executable ESM bin with the expected license', async () => {
     const packageJson = JSON.parse(await readFile(
       join(tempProject, 'node_modules', '@poolstatis', 'mcp', 'package.json'),
@@ -305,12 +345,14 @@ describe('@poolstatis/mcp release artifact', () => {
       engines: { node: string };
       bin: Record<string, string>;
       license: string;
+      exports: Record<string, { types: string; import: string }>;
       publishConfig: { access: string; registry: string };
     };
     expect(packageJson).toMatchObject({
       type: 'module',
       engines: { node: '>=22 <25' },
       bin: { 'poolstatis-mcp': './dist/cli.js' },
+      exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' } },
       license: 'PolyForm-Shield-1.0.0',
       publishConfig: {
         access: 'public',
@@ -327,12 +369,37 @@ describe('@poolstatis/mcp release artifact', () => {
     ), 'utf8')).toContain('PolyForm Shield License 1.0.0');
   });
 
+  it('pins the installed programmatic API to the published 0.7.0 tool profile', async () => {
+    const installedEntry = join(
+      tempProject,
+      'node_modules',
+      '@poolstatis',
+      'mcp',
+      'dist',
+      'index.js',
+    );
+    const publishedPackage = await import(pathToFileURL(installedEntry).href) as {
+      createMcpServer(config: { baseUrl: string; token: string; distribution?: string }): unknown;
+    };
+    const server = publishedPackage.createMcpServer({
+      baseUrl: fixtureUrl,
+      token: safeToken,
+      distribution: 'source',
+    }) as { _registeredTools: Record<string, unknown> };
+
+    expect(server._registeredTools).toHaveProperty('list_session_replays');
+    expect(server._registeredTools).toHaveProperty('get_session_replay');
+    expect(server._registeredTools).toHaveProperty('create_funnel_investigation');
+    expect(server._registeredTools).toHaveProperty('list_funnel_investigations');
+    expect(server._registeredTools).toHaveProperty('get_funnel_investigation');
+  });
+
   it('initializes, lists tools, and performs a project-scoped read against a safe fixture', async () => {
     const { client, stderr } = await connect(process.execPath, [cliModule]);
     try {
-      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.6.0' });
+      expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.7.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
-      expect(tools.tools).toHaveLength(140);
+      expect(tools.tools).toHaveLength(145);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'get_project_portfolio',
@@ -358,6 +425,11 @@ describe('@poolstatis/mcp release artifact', () => {
         'get_web_session',
         'get_session_engagement',
         'get_page_engagement',
+        'list_session_replays',
+        'get_session_replay',
+        'create_funnel_investigation',
+        'list_funnel_investigations',
+        'get_funnel_investigation',
         'list_visual_experience_versions',
         'get_visual_experience_map',
         'compare_visual_experience',

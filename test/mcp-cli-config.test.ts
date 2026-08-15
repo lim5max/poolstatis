@@ -24,14 +24,24 @@ describe('MCP CLI configuration', () => {
     expect(first).not.toBe(second);
   });
 
-  it('keeps pending source tools out of the pinned 0.6.0 distribution', () => {
+  it('publishes replay metadata and funnel investigations in 0.7.0', () => {
     const source = createMcpServer({
       baseUrl: 'https://source.example.test', token: 'pt_1111111111111111', distribution: 'source',
     });
-    const published = createMcpServer({
+    const published06 = createMcpServer({
       baseUrl: 'https://published.example.test', token: 'pt_2222222222222222', distribution: 'published-0.6.0',
     });
+    const published07 = createMcpServer({
+      baseUrl: 'https://published.example.test', token: 'pt_3333333333333333', distribution: 'published-0.7.0',
+    });
     expect((source as any)._registeredTools).toHaveProperty('create_funnel_investigation');
-    expect((published as any)._registeredTools).not.toHaveProperty('create_funnel_investigation');
+    expect((source as any)._registeredTools).toHaveProperty('list_session_replays');
+    expect((published06 as any)._registeredTools).not.toHaveProperty('create_funnel_investigation');
+    expect((published06 as any)._registeredTools).not.toHaveProperty('list_session_replays');
+    expect((published07 as any)._registeredTools).toHaveProperty('create_funnel_investigation');
+    expect((published07 as any)._registeredTools).toHaveProperty('list_funnel_investigations');
+    expect((published07 as any)._registeredTools).toHaveProperty('get_funnel_investigation');
+    expect((published07 as any)._registeredTools).toHaveProperty('list_session_replays');
+    expect((published07 as any)._registeredTools).toHaveProperty('get_session_replay');
   });
 });

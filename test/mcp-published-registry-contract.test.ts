@@ -12,8 +12,9 @@ const verifyPublishedPackage = process.env.POOLSTATIS_VERIFY_PUBLISHED_MCP === '
 const suite = verifyPublishedPackage ? describe : describe.skip;
 
 describe('declared MCP distribution boundary', () => {
-  it('keeps source-only tools outside the current published package contract', () => {
+  it('has no implemented source-only tools pending after the 0.7.0 package contract', () => {
     const published = new Set(PUBLISHED_MCP_TOOL_GROUPS.flatMap(([, tools]) => tools));
+    expect(SOURCE_ONLY_MCP_TOOLS_PENDING_PUBLICATION).toHaveLength(0);
     expect(SOURCE_ONLY_MCP_TOOLS_PENDING_PUBLICATION.every((tool) => !published.has(tool))).toBe(true);
   });
 });
@@ -62,8 +63,13 @@ suite('published MCP registry contract', () => {
       for (const tool of contract?.[1]?.split(',') ?? []) requiredBySkills.add(tool);
     }
 
-    expect(client.getServerVersion()).toMatchObject({ version: '0.6.0' });
-    expect(result.tools).toHaveLength(104);
+    expect(client.getServerVersion()).toMatchObject({ version: '0.7.0' });
+    expect(result.tools).toHaveLength(145);
+    expect(registryTools.has('list_session_replays')).toBe(true);
+    expect(registryTools.has('get_session_replay')).toBe(true);
+    expect(registryTools.has('create_funnel_investigation')).toBe(true);
+    expect(registryTools.has('list_funnel_investigations')).toBe(true);
+    expect(registryTools.has('get_funnel_investigation')).toBe(true);
     expect(setupTools.every((tool) => registryTools.has(tool))).toBe(true);
     expect([...requiredBySkills].every((tool) => registryTools.has(tool))).toBe(true);
     expect(stderr).toBe('');

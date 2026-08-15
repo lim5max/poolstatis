@@ -54,6 +54,7 @@ separate repositories.
 | [docs/11-repository-split.md](docs/11-repository-split.md) | System, site, and Cloud repository boundaries |
 | [docs/12-mcp-package-release.md](docs/12-mcp-package-release.md) | Public MCP package release and provenance gates |
 | [docs/14-session-replay.md](docs/14-session-replay.md) | Consent-gated rrweb recording, storage, privacy and sandboxed playback |
+| [docs/15-sdk-package-release.md](docs/15-sdk-package-release.md) | Public SDK pack, compatibility, Trusted Publisher and provenance gates |
 | [sdk/README.md](sdk/README.md) | `@poolstatis/sdk` client usage |
 | [.claude/skills/poolstatis-instrument](.claude/skills/poolstatis-instrument/SKILL.md) | Agent skill for product instrumentation |
 
@@ -112,7 +113,7 @@ fields instead of pretending every client accepts Claude JSON.
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.6.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.7.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.xyz",
         "POOLSTATIS_TOKEN": "pt_..."
@@ -126,12 +127,11 @@ fields instead of pretending every client accepts Claude JSON.
 the stdio MCP protocol.
 
 The public runner is version-pinned so a hosted deploy cannot silently change
-its MCP runtime. `@poolstatis/mcp@0.6.0` includes the production browser
-analytics standard: immediate collection, finite route keys, server-derived
-country, bounded legacy SDK compatibility, and the existing historical-data
-and audited-correction tools. Each release remains fail-closed until its exact
-registry artifact passes fresh install, initialize, tool-list, and scoped-read
-smoke checks.
+its MCP runtime. `@poolstatis/mcp@0.7.0` includes the production browser
+analytics standard plus bounded Session Replay manifest discovery; replay DOM,
+text, cursor events and object keys remain unavailable through MCP. Each
+release remains fail-closed until its exact registry artifact passes fresh
+install, initialize, tool-list, and scoped-read smoke checks.
 
 Verify MCP from the configured client by calling `get_onboarding_status` with
 the target project and environment, then refresh **Setup & MCP**. A copied

@@ -70,7 +70,7 @@ host just because both support MCP.
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "dlx", "@poolstatis/mcp@0.6.0"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp@0.7.0"],
       "env": {
         "POOLSTATIS_URL": "https://api.poolstatis.xyz",
         "POOLSTATIS_TOKEN": "pt_…"
@@ -83,10 +83,11 @@ host just because both support MCP.
 `--silent` is required — otherwise pnpm prints a banner to stdout and corrupts the
 stdio MCP protocol.
 
-`@poolstatis/mcp@0.6.0` includes the current Browser Analytics resource plus
-historical data and audited correction tools. Hosted deployments keep this pin
-fail-closed until its exact registry artifact passes fresh install, initialize,
-full tool-list, and project-scoped read.
+`@poolstatis/mcp@0.7.0` includes the current Browser Analytics resource plus
+bounded Session Replay manifest discovery, historical data and audited
+correction tools. Replay payload events and DOM never pass through MCP. Hosted
+deployments keep this pin fail-closed until its exact registry artifact passes
+fresh install, initialize, full tool-list, and project-scoped read.
 
 Verify the connection from the MCP client itself: ask it to call
 `get_onboarding_status` with the target `project` and explicit `env`, then

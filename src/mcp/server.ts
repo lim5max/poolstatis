@@ -38,16 +38,18 @@ import {
 export interface McpConfig {
   baseUrl: string;
   token: string;
-  distribution?: 'source' | 'published-0.6.0';
+  distribution?: 'source' | 'published-0.6.0' | 'published-0.7.0';
 }
 
-const SOURCE_ONLY_TOOLS_PENDING_PUBLICATION = new Set([
+const PUBLISHED_060_PENDING_TOOLS = new Set([
   'create_funnel_investigation',
   'list_funnel_investigations',
   'get_funnel_investigation',
   'list_session_replays',
   'get_session_replay',
 ]);
+
+const PUBLISHED_070_PENDING_TOOLS = new Set<string>();
 
 /** Configuration is checked before stdio opens so a broken launcher cannot leak a token to protocol output. */
 export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOKEN?: string }): McpConfig {
@@ -67,7 +69,7 @@ export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOK
 }
 
 export function createMcpServer(config: Readonly<McpConfig>): McpServer {
-const distribution = config.distribution ?? 'published-0.6.0';
+const distribution = config.distribution ?? 'published-0.7.0';
 async function api(method: string, path: string, body?: unknown): Promise<unknown> {
   const res = await fetch(`${config.baseUrl}${path}`, {
     method,
@@ -113,7 +115,7 @@ function wrap<A>(fn: (args: A) => Promise<unknown>): (args: A) => Promise<ToolRe
 
 const server = new McpServer({
   name: 'poolstatis',
-  version: distribution === 'published-0.6.0' ? '0.6.0' : '0.6.0-source',
+  version: distribution === 'source' ? '0.7.0-source' : distribution.replace('published-', ''),
 });
 const project = z.string().describe('project slug, see list_projects');
 
@@ -130,7 +132,8 @@ function jsonTool(
   inputSchema: z.ZodRawShape,
   handler: (args: any) => Promise<ToolResult>,
 ): void {
-  if (distribution === 'published-0.6.0' && SOURCE_ONLY_TOOLS_PENDING_PUBLICATION.has(name)) return;
+  if (distribution === 'published-0.6.0' && PUBLISHED_060_PENDING_TOOLS.has(name)) return;
+  if (distribution === 'published-0.7.0' && PUBLISHED_070_PENDING_TOOLS.has(name)) return;
   server.registerTool(
     name,
     { description, inputSchema, outputSchema: jsonOutputSchema },

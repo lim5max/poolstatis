@@ -42,6 +42,7 @@ afterAll(async () => {
 
 describe('session replay MCP metadata parity', () => {
   it('searches and gets bounded metadata without returning recording events', async () => {
+    expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.7.0-source' });
     const policy = { version: 'privacy-v1', text: 'masked', maskSelectors: [], blockSelectors: [] } as const;
     const created = await api(env, env.ingestToken, 'POST', '/i/v1/replays', {
       surface: 'workspace', route: 'workspace', session_id: 'mcp-replay-session',

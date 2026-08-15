@@ -1,12 +1,12 @@
 {
   "name": "@poolstatis/mcp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Official stdio MCP server for Poolstatis agent-native product analytics",
   "license": "PolyForm-Shield-1.0.0",
   "type": "module",
   "engines": { "node": ">=22 <25" },
   "bin": { "poolstatis-mcp": "./dist/cli.js" },
-  "exports": { ".": { "types": "./dist/core/mcp/server.d.ts", "import": "./dist/core/mcp/server.js" } },
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
   "files": ["dist", "README.md", "LICENSE"],
   "sideEffects": false,
   "repository": {
@@ -22,7 +22,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "pnpm --dir ../.. build && rm -rf dist && tsc -p tsconfig.json && mkdir -p dist/core/mcp && cp ../../dist/mcp/server.js ../../dist/mcp/server.d.ts ../../dist/mcp/standard.js ../../dist/mcp/browserStandard.js ../../dist/mcp/browserStandard.d.ts ../../dist/mcp/actorsStandard.js ../../dist/mcp/actorsStandard.d.ts dist/core/mcp/ && cp ../../dist/schemas.js ../../dist/automationSchemas.js dist/core/ && cp ../../LICENSE LICENSE && chmod 755 dist/cli.js",
+    "build": "pnpm --dir ../.. build && rm -rf dist && tsc -p tsconfig.json && mkdir -p dist/core/mcp && cp ../../dist/mcp/server.js ../../dist/mcp/server.d.ts ../../dist/mcp/standard.js ../../dist/mcp/browserStandard.js ../../dist/mcp/browserStandard.d.ts ../../dist/mcp/actorsStandard.js ../../dist/mcp/actorsStandard.d.ts dist/core/mcp/ && cp ../../dist/schemas.js ../../dist/automationSchemas.js dist/core/ && cp public/index.d.ts dist/ && cp ../../LICENSE LICENSE && chmod 755 dist/cli.js",
     "prepack": "pnpm run build"
   },
   "dependencies": {
