@@ -4,6 +4,7 @@ import { purgeExpiredReplays } from './replay.js';
 
 export interface ReplayRetentionResult {
   deleted: number;
+  projectsDeleted: number;
   errors: number;
   hasMore: boolean;
 }
@@ -25,7 +26,9 @@ export function startReplayRetention(
   const run = () => {
     if (stopped || running) return;
     running = (async () => {
-      const aggregate: ReplayRetentionResult = { deleted: 0, errors: 0, hasMore: false };
+      const aggregate: ReplayRetentionResult = {
+        deleted: 0, projectsDeleted: 0, errors: 0, hasMore: false,
+      };
       const maxBatches = options.maxBatchesPerRun ?? 10;
       for (let batch = 0; batch < maxBatches; batch += 1) {
         const result = await purgeExpiredReplays(service, pool, options.batchSize ?? 100);
@@ -34,6 +37,10 @@ export function startReplayRetention(
         aggregate.hasMore = result.hasMore;
         if (!result.hasMore) break;
       }
+      const projects = await service.retryProjectDeletionJobs(options.batchSize ?? 100);
+      aggregate.projectsDeleted += projects.deleted;
+      aggregate.errors += projects.errors;
+      aggregate.hasMore ||= projects.hasMore;
       options.onResult?.(aggregate);
     })()
       .catch((error) => options.onError?.(error))

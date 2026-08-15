@@ -130,11 +130,13 @@ function sanitizeValue(value: unknown, context: WalkContext): unknown {
   const tagName = typeof value.tagName === 'string' ? value.tagName.toLowerCase() : null;
   const blocked = tagName !== null && isBlockedNode(value, context.blockSelectors);
   const executable = tagName !== null && (blocked || ['script', 'iframe', 'object', 'embed', 'form', 'base', 'meta'].includes(tagName));
-  const contentEditable = isPlainObject(value.attributes)
-    && 'contenteditable' in value.attributes
-    && value.attributes.contenteditable !== false
-    && !(typeof value.attributes.contenteditable === 'string'
-      && value.attributes.contenteditable.toLowerCase() === 'false');
+  const contentEditableValue = isPlainObject(value.attributes)
+    ? attributeValue(value.attributes, 'contenteditable')
+    : undefined;
+  const contentEditable = contentEditableValue !== undefined
+    && contentEditableValue !== false
+    && !(typeof contentEditableValue === 'string'
+      && contentEditableValue.toLowerCase() === 'false');
   const inputIncremental = value.source === 5;
   const forceMaskText = Boolean(context.forceMaskText
     || tagName === 'input'

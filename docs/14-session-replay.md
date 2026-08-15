@@ -59,8 +59,9 @@ await replay.withdraw();
 `start()` fails before importing rrweb or making a request unless affirmative
 versioned consent and the exact current hostname both pass. A denied or
 unsampled session does not load recorder code and does not create a manifest.
-Withdrawal racing with initialization prevents rrweb from starting and
-best-effort tombstones any manifest whose upload token was already returned.
+Withdrawal racing with initialization prevents rrweb from starting. If its
+bounded delete attempts fail, the recorder retains the manifest/upload token;
+a repeated `withdraw()` retries the same tombstone instead of losing it.
 
 ## Privacy contract
 
@@ -100,15 +101,28 @@ the registered route key.
   60 KiB and uses `keepalive`. Larger or interrupted final chunks remain
   pending/incomplete; navigation-time delivery is never reported as complete.
 - Retention defaults to seven days (allowed range 1–30). Withdrawal and expiry
-  tombstone first, making reads return `410`, then retry physical deletion.
+  tombstone first, making reads return `410`, then retry physical deletion and
+  scrub session/distinct/host/token/privacy identifiers from the final
+  idempotency row.
   A playback read holds a shared manifest lock through validation, audit and
-  the HTTP response lifecycle;
+  a bounded 15-second HTTP response lease;
   withdrawal waits for that read, so no playback can complete after withdrawal
-  itself has completed.
+  itself has completed. Stalled/aborted responses roll back the view audit and
+  cannot retain a database connection indefinitely. Retention uses atomic
+  claims plus backoff so poison objects do not starve later expired sessions.
+
+Project deletion establishes a database replay-write barrier after its other
+purge prerequisites. Creation, chunk upload and completion then reject late
+writes. A durable cleanup job without a project foreign key survives the
+project cascade and retries the final replay-prefix sweep after a crash or
+object-store outage.
 
 Payload bytes live behind `ReplayObjectStore`; PostgreSQL contains manifests,
 chunk checksums/metadata and append-only privileged view, deletion-request and
-deletion-completion audit records. Replay-prefix deletion also removes deterministic
+deletion-completion audit records. Replay deletion audit is intentionally not
+foreign-keyed to `projects`: its immutable project UUID and original actor
+survive project deletion as proof of the two-phase removal, and hosted runtime
+can only select/insert those rows. Replay-prefix deletion also removes deterministic
 crash-orphans that have no committed chunk row. Self-host
 Compose persists objects in `poolstatis_replays` separately from Postgres.
 

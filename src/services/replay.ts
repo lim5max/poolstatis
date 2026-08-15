@@ -113,24 +113,37 @@ export class ReplayService {
     }
     const uploadToken = `rt_${randomBytes(32).toString('hex')}`;
     const deleteAfter = new Date(now.getTime() + input.retention_days * 86_400_000);
-    const { rows } = await this.pool.query<{ id: string }>(
-      `INSERT INTO replay_sessions (
-         project_id, surface_id, route_id, env, session_id, distinct_id, host,
-         version, device, consent_version, policy_version, policy_hash,
-         text_mode, mask_selectors, block_selectors, upload_token_hash,
-         started_at, last_seen_at, delete_after
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17,$18)
-       RETURNING id`,
-      [
-        projectId, surface.id, route.id, env, input.session_id, input.distinct_id,
-        input.host, input.version, input.device, input.consent_version,
-        input.policy.version, input.policy_hash, input.policy.text,
-        input.policy.maskSelectors, input.policy.blockSelectors,
-        hashToken(uploadToken), now, deleteAfter,
-      ],
-    );
+    const client = await this.pool.connect();
+    let replayId: string;
+    try {
+      await client.query('BEGIN');
+      await this.assertProjectReplayWritable(client, projectId);
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO replay_sessions (
+           project_id, surface_id, route_id, env, session_id, distinct_id, host,
+           version, device, consent_version, policy_version, policy_hash,
+           text_mode, mask_selectors, block_selectors, upload_token_hash,
+           started_at, last_seen_at, delete_after
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17,$18)
+         RETURNING id`,
+        [
+          projectId, surface.id, route.id, env, input.session_id, input.distinct_id,
+          input.host, input.version, input.device, input.consent_version,
+          input.policy.version, input.policy_hash, input.policy.text,
+          input.policy.maskSelectors, input.policy.blockSelectors,
+          hashToken(uploadToken), now, deleteAfter,
+        ],
+      );
+      replayId = rows[0]!.id;
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
     return {
-      replay: await this.getSession(projectId, env, rows[0]!.id, true),
+      replay: await this.getSession(projectId, env, replayId, true),
       upload_token: uploadToken,
     };
   }
@@ -157,6 +170,7 @@ export class ReplayService {
     let commitAttempted = false;
     try {
       await client.query('BEGIN');
+      await this.assertProjectReplayWritable(client, projectId);
       const session = await this.lockSession(client, projectId, env, replayId);
       this.assertUploadAllowed(session, input.upload_token, now);
       const duplicate = await client.query<{ checksum: string }>(
@@ -247,6 +261,7 @@ export class ReplayService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await this.assertProjectReplayWritable(client, projectId);
       const session = await this.lockSession(client, projectId, env, replayId);
       this.assertUploadAllowed(session, uploadToken, now, true);
       const chunks = await client.query<ChunkRow>(
@@ -470,7 +485,7 @@ export class ReplayService {
       const claimed = await claimClient.query(
         `UPDATE replay_sessions
          SET status = 'deleting', deleted_at = COALESCE(deleted_at, $3), last_seen_at = $3,
-             delete_after = LEAST(delete_after, $3)
+             delete_after = LEAST(delete_after, $3), deletion_claimed_until = $3 + interval '2 minutes'
          WHERE project_id = $1 AND id = $2 AND status <> 'deleted'
          RETURNING id`,
         [projectId, replayId, now],
@@ -507,6 +522,12 @@ export class ReplayService {
         await client.query(
           `UPDATE replay_sessions
            SET status = 'deleted', chunk_count = 0, event_count = 0, byte_size = 0,
+               session_id = 'deleted', distinct_id = 'deleted', host = 'deleted.invalid',
+               version = 'deleted', consent_version = 'deleted', policy_version = 'deleted',
+               policy_hash = repeat('0', 64), text_mode = 'masked',
+               mask_selectors = '{}', block_selectors = '{}',
+               upload_token_hash = repeat('0', 64),
+               deletion_claimed_until = '-infinity', delete_retry_after = 'infinity',
                last_delete_error = NULL
            WHERE project_id = $1 AND id = $2 AND status = 'deleting'`,
           [projectId, replayId],
@@ -534,12 +555,125 @@ export class ReplayService {
     } catch (error) {
       await this.pool.query(
         `UPDATE replay_sessions SET delete_attempts = delete_attempts + 1,
+             delete_retry_after = $3 + interval '5 seconds'
+               * power(2, LEAST(delete_attempts, 10)),
+             deletion_claimed_until = '-infinity',
              last_delete_error = 'replay physical deletion or metadata finalization failed'
          WHERE project_id = $1 AND id = $2`,
-        [projectId, replayId],
+        [projectId, replayId, now],
       ).catch(() => {});
       throw new ApiError(503, 'replay_delete_pending', 'replay is unreadable and physical deletion will be retried', undefined, { retryable: true });
     }
+  }
+
+  /**
+   * Establishes the replay write barrier only after the caller has purged
+   * non-replay project data. The durable job survives the project cascade, so
+   * a crashed request can finish both the database deletion and object sweep.
+   */
+  async beginProjectDeletion(projectId: string, actor: string, now = new Date()): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const pending = await client.query(
+        `UPDATE projects SET replay_deletion_pending = true
+         WHERE id = $1 RETURNING id`,
+        [projectId],
+      );
+      if (!pending.rowCount) throw notFound('project');
+      await client.query(
+        `INSERT INTO replay_project_deletion_jobs (
+           project_id, actor, retry_after, claimed_until, last_error
+         ) VALUES ($1,$2,'-infinity',$3::timestamptz + interval '2 minutes',NULL)
+         ON CONFLICT (project_id) DO UPDATE
+         SET claimed_until = GREATEST(
+               replay_project_deletion_jobs.claimed_until,
+               EXCLUDED.claimed_until
+             ),
+             retry_after = '-infinity', last_error = NULL`,
+        [projectId, actor, now],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Final object-prefix sweep after the project row has been removed. */
+  async completeProjectDeletion(projectId: string, now = new Date()): Promise<void> {
+    try {
+      await this.objects.deleteProject(projectId);
+      await this.pool.query(
+        'DELETE FROM replay_project_deletion_jobs WHERE project_id = $1',
+        [projectId],
+      );
+    } catch {
+      await this.failProjectDeletionJob(projectId, now);
+      throw new ApiError(
+        503,
+        'replay_project_delete_pending',
+        'project metadata is deleted and replay object cleanup will be retried',
+        undefined,
+        { retryable: true },
+      );
+    }
+  }
+
+  async retryProjectDeletionJobs(
+    limit = 100,
+    now = new Date(),
+  ): Promise<{ deleted: number; errors: number; hasMore: boolean }> {
+    const { rows } = await this.pool.query<{ project_id: string; actor: string }>(
+      `WITH candidates AS (
+         SELECT project_id FROM replay_project_deletion_jobs
+         WHERE completed_at IS NULL AND retry_after <= $1 AND claimed_until <= $1
+         ORDER BY attempts, retry_after, created_at
+         FOR UPDATE SKIP LOCKED
+         LIMIT $2
+       )
+       UPDATE replay_project_deletion_jobs jobs
+       SET claimed_until = $1 + interval '2 minutes'
+       FROM candidates
+       WHERE jobs.project_id = candidates.project_id
+       RETURNING jobs.project_id, jobs.actor`,
+      [now, limit],
+    );
+    let deleted = 0;
+    let errors = 0;
+    for (const row of rows) {
+      try {
+        await this.purgeSessions(row.project_id, row.actor, undefined, undefined, now);
+        const removed = await this.pool.query(
+          `DELETE FROM projects
+           WHERE id = $1 AND replay_deletion_pending = true`,
+          [row.project_id],
+        );
+        if (!removed.rowCount) {
+          const exists = await this.pool.query('SELECT 1 FROM projects WHERE id = $1', [row.project_id]);
+          if (exists.rowCount) throw new Error('project deletion job lost its replay write barrier');
+        }
+        await this.objects.deleteProject(row.project_id);
+        await this.pool.query(
+          'DELETE FROM replay_project_deletion_jobs WHERE project_id = $1',
+          [row.project_id],
+        );
+        deleted += 1;
+      } catch {
+        await this.failProjectDeletionJob(row.project_id, now);
+        errors += 1;
+      }
+    }
+    const more = await this.pool.query<{ has_more: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM replay_project_deletion_jobs
+         WHERE completed_at IS NULL AND retry_after <= $1 AND claimed_until <= $1
+       ) AS has_more`,
+      [now],
+    );
+    return { deleted, errors, hasMore: more.rows[0]?.has_more === true };
   }
 
   /** Physical replay purge used by project deletion and env-scoped data purge. */
@@ -572,8 +706,16 @@ export class ReplayService {
     }
   }
 
-  async purgeProjectObjects(projectId: string): Promise<void> {
-    await this.objects.deleteProject(projectId);
+  private async failProjectDeletionJob(projectId: string, now: Date): Promise<void> {
+    await this.pool.query(
+      `UPDATE replay_project_deletion_jobs
+       SET attempts = attempts + 1,
+           retry_after = $2 + interval '5 seconds' * power(2, LEAST(attempts, 10)),
+           claimed_until = '-infinity',
+           last_error = 'project replay object cleanup or metadata finalization failed'
+       WHERE project_id = $1`,
+      [projectId, now],
+    ).catch(() => {});
   }
 
   private async getRawSession(projectId: string, env: string, replayId: string): Promise<ReplayRow> {
@@ -602,6 +744,17 @@ export class ReplayService {
     );
     if (!rows[0]) throw notFound('session_replay');
     return rows[0];
+  }
+
+  private async assertProjectReplayWritable(client: pg.PoolClient, projectId: string): Promise<void> {
+    const { rows } = await client.query<{ replay_deletion_pending: boolean }>(
+      `SELECT replay_deletion_pending FROM projects
+       WHERE id = $1 FOR SHARE`,
+      [projectId],
+    );
+    if (!rows[0] || rows[0].replay_deletion_pending) {
+      throw new ApiError(410, 'replay_project_deleting', 'project deletion has disabled replay recording');
+    }
   }
 
   private assertUploadAllowed(session: ReplayRow, token: string, now: Date, allowCompleted = false): void {
@@ -633,15 +786,24 @@ export async function purgeExpiredReplays(
   now = new Date(),
 ): Promise<{ deleted: number; errors: number; hasMore: boolean }> {
   const { rows } = await pool.query<{ id: string; project_id: string }>(
-    `SELECT id, project_id FROM replay_sessions
-     WHERE delete_after <= $1 AND status <> 'deleted'
-     ORDER BY delete_after LIMIT $2`,
-    [now, limit + 1],
+    `WITH candidates AS (
+       SELECT id FROM replay_sessions
+       WHERE delete_after <= $1 AND status <> 'deleted'
+         AND delete_retry_after <= $1 AND deletion_claimed_until <= $1
+       ORDER BY delete_attempts, delete_after, id
+       FOR UPDATE SKIP LOCKED
+       LIMIT $2
+     )
+     UPDATE replay_sessions sessions
+     SET deletion_claimed_until = $1 + interval '2 minutes'
+     FROM candidates
+     WHERE sessions.id = candidates.id
+     RETURNING sessions.id, sessions.project_id`,
+    [now, limit],
   );
-  const batch = rows.slice(0, limit);
   let deleted = 0;
   let errors = 0;
-  for (const row of batch) {
+  for (const row of rows) {
     try {
       await service.deleteSession(row.project_id, row.id, 'retention:worker', now);
       deleted += 1;
@@ -649,7 +811,15 @@ export async function purgeExpiredReplays(
       errors += 1;
     }
   }
-  return { deleted, errors, hasMore: rows.length > limit };
+  const more = await pool.query<{ has_more: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM replay_sessions
+       WHERE delete_after <= $1 AND status <> 'deleted'
+         AND delete_retry_after <= $1 AND deletion_claimed_until <= $1
+     ) AS has_more`,
+    [now],
+  );
+  return { deleted, errors, hasMore: more.rows[0]?.has_more === true };
 }
 
 function publicSession(row: ReplayRow): ReplaySessionSummary {

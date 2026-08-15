@@ -90,6 +90,8 @@ export class ReplayRecorder {
   private stopInFlight: Promise<void> | null = null;
   private withdrawn = false;
   private starting: Promise<{ sampled: boolean; replayId: string | null }> | null = null;
+  private pendingWithdrawal: { replayId: string; uploadToken: string } | null = null;
+  private withdrawalInFlight: Promise<void> | null = null;
   private sampled = true;
   private sealing: Promise<void> = Promise.resolve();
   private drainMutex: Promise<void> = Promise.resolve();
@@ -118,6 +120,7 @@ export class ReplayRecorder {
 
   private async startInternal(): Promise<{ sampled: boolean; replayId: string | null }> {
     this.validateStartPolicy();
+    await this.deletePendingManifest();
     const sampleRate = this.options.sampleRate ?? 1;
     if (!Number.isFinite(sampleRate) || sampleRate < 0 || sampleRate > 1) throw new Error('replay sampleRate must be between 0 and 1');
     this.sampled = sampleRate === 1 || (sampleRate > 0 && Math.random() < sampleRate);
@@ -191,7 +194,8 @@ export class ReplayRecorder {
       this.acceptedEvents = 0;
       this.started = false;
       if (replayId && uploadToken) {
-        await this.request(`/i/v1/replays/${replayId}`, 'DELETE', { upload_token: uploadToken }).catch(() => {});
+        this.pendingWithdrawal = { replayId, uploadToken };
+        if (!this.withdrawn) await this.deletePendingManifest().catch(() => {});
       }
       throw error;
     }
@@ -243,20 +247,41 @@ export class ReplayRecorder {
 
   async withdraw(): Promise<void> {
     this.withdrawn = true;
+    if (this.withdrawalInFlight) return this.withdrawalInFlight;
+    const operation = this.withdrawInternal();
+    this.withdrawalInFlight = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.withdrawalInFlight === operation) this.withdrawalInFlight = null;
+    }
+  }
+
+  private async withdrawInternal(): Promise<void> {
     const starting = this.starting;
     if (starting) await starting.catch(() => {});
-    if (!this.started) return;
     const replayId = this.replayId;
     const uploadToken = this.uploadToken;
+    if (replayId && uploadToken) this.pendingWithdrawal = { replayId, uploadToken };
     this.detach();
     this.current = [];
     this.pending = [];
     this.currentBytes = 2;
+    this.replayId = null;
+    this.uploadToken = null;
+    this.started = false;
     for (const aborter of this.aborters) aborter.abort();
     this.aborters.clear();
-    if (replayId && uploadToken) {
-      await this.request(`/i/v1/replays/${replayId}`, 'DELETE', { upload_token: uploadToken });
-    }
+    await this.deletePendingManifest();
+  }
+
+  private async deletePendingManifest(): Promise<void> {
+    const pending = this.pendingWithdrawal;
+    if (!pending) return;
+    await this.requestWithRetry(`/i/v1/replays/${pending.replayId}`, 'DELETE', {
+      upload_token: pending.uploadToken,
+    }, false);
+    if (this.pendingWithdrawal === pending) this.pendingWithdrawal = null;
   }
 
   private accept(event: eventWithTime): void {
@@ -323,7 +348,7 @@ export class ReplayRecorder {
     }
   }
 
-  private async requestWithRetry(path: string, method: 'PUT' | 'POST', body: unknown, keepalive: boolean): Promise<unknown> {
+  private async requestWithRetry(path: string, method: 'PUT' | 'POST' | 'DELETE', body: unknown, keepalive: boolean): Promise<unknown> {
     let last: unknown;
     const attempts = keepalive ? 1 : MAX_ATTEMPTS;
     for (let attempt = 0; attempt < attempts; attempt += 1) {

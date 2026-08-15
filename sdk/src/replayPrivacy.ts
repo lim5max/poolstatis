@@ -129,11 +129,13 @@ function clone(value: unknown, context: CloneContext): unknown {
   const blocked = tagName !== '' && isBlockedNode(value, context.blockSelectors);
   const executable = blocked || ['script', 'iframe', 'object', 'embed', 'form', 'base', 'meta'].includes(tagName);
   const attributes = isObject(value.attributes) ? value.attributes : null;
-  const contentEditable = attributes !== null
-    && 'contenteditable' in attributes
-    && attributes.contenteditable !== false
-    && !(typeof attributes.contenteditable === 'string'
-      && attributes.contenteditable.toLowerCase() === 'false');
+  const contentEditableValue = attributes === null
+    ? undefined
+    : attributeValue(attributes, 'contenteditable');
+  const contentEditable = contentEditableValue !== undefined
+    && contentEditableValue !== false
+    && !(typeof contentEditableValue === 'string'
+      && contentEditableValue.toLowerCase() === 'false');
   const forceMask = context.forceMask
     || tagName === 'input'
     || tagName === 'textarea'

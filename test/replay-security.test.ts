@@ -97,7 +97,7 @@ describe('session replay privacy boundary', () => {
           {
             type: 2,
             tagName: 'div',
-            attributes: { contenteditable: true },
+            attributes: { CONTENTEDITABLE: true },
             childNodes: [{ type: 3, textContent: 'Editable Alice Secret' }],
           },
           { type: 2, tagName: 'p', attributes: {}, childNodes: [{ type: 3, textContent: 'Visible public label' }] },

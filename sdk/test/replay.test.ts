@@ -96,7 +96,7 @@ describe('ReplayRecorder', () => {
           {
             type: 2,
             tagName: 'div',
-            attributes: { contenteditable: true },
+            attributes: { CONTENTEDITABLE: true },
             childNodes: [{ type: 3, textContent: 'Editable Alice Secret' }],
           },
           { type: 2, tagName: 'p', attributes: {}, childNodes: [{ type: 3, textContent: 'Visible public label' }] },
@@ -274,6 +274,37 @@ describe('ReplayRecorder', () => {
     expect(calls.some((url) => url.endsWith('/66666666-6666-6666-6666-666666666666'))).toBe(true);
     await expect(recorder.start()).rejects.toThrow('consent was withdrawn');
   });
+
+  it('retains an in-flight manifest withdrawal after bounded transport failure', async () => {
+    let resolveCreate!: () => void;
+    const createPending = new Promise<void>((resolve) => { resolveCreate = resolve; });
+    let deleteCalls = 0;
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith('/i/v1/replays')) {
+        await createPending;
+        return response(201, {
+          replay: { id: '88888888-8888-8888-8888-888888888888' },
+          upload_token: 'rt_'.padEnd(70, 'h'),
+        });
+      }
+      deleteCalls += 1;
+      return deleteCalls <= 4
+        ? response(503, { error: { message: 'temporary withdrawal outage', retryable: true } })
+        : response(200, { deleted: true });
+    }) as unknown as typeof fetch;
+    const record = vi.fn(() => () => {}) as ReplayRecord;
+    const recorder = new ReplayRecorder(options(fetchImpl, record));
+    const starting = recorder.start();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    const firstWithdrawal = recorder.withdraw();
+    resolveCreate();
+    await expect(starting).rejects.toThrow('consent was withdrawn');
+    await expect(firstWithdrawal).rejects.toThrow('temporary withdrawal outage');
+    expect(deleteCalls).toBe(4);
+    await expect(recorder.withdraw()).resolves.toBeUndefined();
+    expect(deleteCalls).toBe(5);
+    expect(record).not.toHaveBeenCalled();
+  }, 10_000);
 
   it('uses keepalive only for one bounded pagehide chunk and leaves completion explicit', async () => {
     let emit: ((event: any) => void) | null = null;

@@ -113,7 +113,10 @@ declare module 'fastify' {
   interface FastifyRequest {
     auth: AuthContext;
     resolvedProject?: Project;
-    replayEventsLease?: ReplayEventsLease;
+    replayEventsLease?: {
+      lease: ReplayEventsLease;
+      timeout: ReturnType<typeof setTimeout>;
+    };
   }
 }
 
@@ -135,6 +138,7 @@ export interface ServerOptions {
   countryResolver?: CountryResolver;
   cursorSigningSecret?: string;
   setupTaskProvider?: SetupTaskProvider;
+  replayResponseTimeoutMs?: number;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -425,10 +429,17 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
     // room for percent-encoded Unicode while the schema enforces that bound.
     routerOptions: { maxParamLength: 2_000 },
   });
+  const replayResponseTimeoutMs = Math.min(
+    30_000,
+    Math.max(25, options.replayResponseTimeoutMs ?? 15_000),
+  );
   const closeReplayEventsLease = async (req: FastifyRequest, completed: boolean) => {
-    const lease = req.replayEventsLease;
+    const handle = req.replayEventsLease;
     delete req.replayEventsLease;
-    if (lease) await lease.close(completed);
+    if (handle) {
+      clearTimeout(handle.timeout);
+      await handle.lease.close(completed);
+    }
   };
   app.addHook('onResponse', async (req) => closeReplayEventsLease(req, true));
   app.addHook('onError', async (req) => closeReplayEventsLease(req, false));
@@ -656,7 +667,14 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
 
   registerIngestRoutes(app, ctx);
   registerAccountRoutes(app, ctx, publicUrl, mcpRunner);
-  registerPlatformRoutes(app, ctx, publicUrl, options.setupTaskProvider, Boolean(options.auth));
+  registerPlatformRoutes(
+    app,
+    ctx,
+    publicUrl,
+    options.setupTaskProvider,
+    Boolean(options.auth),
+    replayResponseTimeoutMs,
+  );
   return app;
 }
 
@@ -899,6 +917,7 @@ function registerPlatformRoutes(
   publicUrl: string,
   setupTaskProvider?: SetupTaskProvider,
   hosted = false,
+  replayResponseTimeoutMs = 15_000,
 ): void {
   const platform = (req: FastifyRequest) => {
     requirePlatformAccess(req.auth);
@@ -1155,18 +1174,22 @@ function registerPlatformRoutes(
       [project.id],
     );
     for (const artifact of artifacts.rows) await ctx.artifacts.delete(artifact.artifact_key);
-    const replaysDeleted = await ctx.replays.purgeSessions(
-      project.id,
-      `${authOwner(req.auth)}:project-delete`,
-    );
 
     // Keep the EventStore seam explicit for future non-Postgres stores. The
-    // database cascade remains the final race-safe ownership boundary.
+    // database cascade remains the final race-safe ownership boundary. The
+    // replay barrier is established only after these prerequisites, making a
+    // durable replay deletion job safe to finish after a process crash.
     const eventsDeleted = await ctx.eventStore.purge(project.id);
+    const replayDeleteActor = `${authOwner(req.auth)}:project-delete`;
+    await ctx.replays.beginProjectDeletion(project.id, replayDeleteActor);
+    const replaysDeleted = await ctx.replays.purgeSessions(
+      project.id,
+      replayDeleteActor,
+    );
     await deleteProject(ctx.pool, req.auth.orgId, project.slug);
-    await ctx.replays.purgeProjectObjects(project.id);
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
+    await ctx.replays.completeProjectDeletion(project.id);
     return {
       deleted: true,
       slug: project.slug,
@@ -1350,7 +1373,7 @@ function registerPlatformRoutes(
     return ctx.replays.getSession(project.id, env, z.string().uuid().parse(id), true);
   });
 
-  app.get('/api/v1/projects/:slug/replays/:id/events', async (req) => {
+  app.get('/api/v1/projects/:slug/replays/:id/events', async (req, reply) => {
     platform(req);
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
@@ -1361,7 +1384,15 @@ function registerPlatformRoutes(
       z.string().uuid().parse(id),
       authOwner(req.auth),
     );
-    req.replayEventsLease = lease;
+    const timeout = setTimeout(() => {
+      if (req.replayEventsLease?.lease !== lease) return;
+      delete req.replayEventsLease;
+      void lease.close(false).finally(() => {
+        if (!reply.raw.destroyed) reply.raw.destroy(new Error('session replay response deadline exceeded'));
+      });
+    }, replayResponseTimeoutMs);
+    timeout.unref();
+    req.replayEventsLease = { lease, timeout };
     return { replay: lease.replay, events: lease.events };
   });
 

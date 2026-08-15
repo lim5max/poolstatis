@@ -340,6 +340,70 @@ describe('session replay vertical slice', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it('bounds a stalled replay response lease so withdrawal cannot exhaust the pool', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'poolstatis-replay-response-deadline-'));
+    let markSendEntered!: () => void;
+    let releaseSend!: () => void;
+    const sendEntered = new Promise<void>((resolve) => { markSendEntered = resolve; });
+    const sendReleased = new Promise<void>((resolve) => { releaseSend = resolve; });
+    const target = await createTestEnv({
+      replayDir: directory,
+      replayResponseTimeoutMs: 50,
+    });
+    target.app.addHook('onSend', async (request, _reply, payload) => {
+      if (request.url.includes('/replays/') && request.url.includes('/events')) {
+        markSendEntered();
+        await sendReleased;
+      }
+      return payload;
+    });
+    try {
+      await api(target, target.secretToken, 'POST', `/api/v1/projects/${target.projectSlug}/experience/surfaces`, {
+        key: 'workspace', name: 'Workspace', purpose: 'Reproduce consented workspace interaction failures.',
+      });
+      const created = await createReplay(target);
+      const id = created.body.replay.id as string;
+      const token = created.body.upload_token as string;
+      const events = replayEvents(7_000);
+      expect((await api(target, target.ingestToken, 'PUT', `/i/v1/replays/${id}/chunks`, {
+        upload_token: token, sequence: 0, checksum: sha(events), events,
+      })).status).toBe(201);
+      expect((await api(target, target.ingestToken, 'POST', `/i/v1/replays/${id}/complete`, {
+        upload_token: token, last_sequence: 0,
+      })).body.status).toBe('playable');
+
+      const reading = api(
+        target,
+        target.secretToken,
+        'GET',
+        `/api/v1/projects/${target.projectSlug}/replays/${id}/events?env=prod`,
+      ).catch((error) => error);
+      await sendEntered;
+      const withdrawing = api(target, target.ingestToken, 'DELETE', `/i/v1/replays/${id}`, {
+        upload_token: token,
+      });
+      const withdrawal = await Promise.race([
+        withdrawing,
+        new Promise<never>((_resolve, reject) => setTimeout(
+          () => reject(new Error('withdrawal remained blocked past replay response deadline')),
+          1_000,
+        )),
+      ]);
+      expect(withdrawal.status).toBe(200);
+      const audit = await target.pool.query<{ action: string }>(
+        'SELECT action FROM replay_audit_log WHERE replay_id = $1',
+        [id],
+      );
+      expect(audit.rows.map((entry) => entry.action)).not.toContain('view');
+      releaseSend();
+      await reading;
+    } finally {
+      releaseSend();
+      await target.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('replay deletion crash convergence', () => {
@@ -377,15 +441,30 @@ describe('replay deletion crash convergence', () => {
       const failed = await api(target, target.secretToken, 'DELETE', `/api/v1/projects/${target.projectSlug}/replays/${id}`);
       expect(failed.status).toBe(503);
       expect((await api(target, target.secretToken, 'GET', `/api/v1/projects/${target.projectSlug}/replays/${id}?env=prod`)).status).toBe(410);
-      const retried = await purgeExpiredReplays(
-        new ReplayService(target.pool, store),
-        target.pool,
-        10,
-        new Date(Date.now() + 1_000),
+      await expect(new ReplayService(target.pool, store).deleteSession(
+        target.projectId,
+        id,
+        'retention:worker',
+        new Date(Date.now() + 6_000),
+      )).resolves.toEqual({ deleted: true });
+      const row = await target.pool.query<{
+        status: string;
+        session_id: string;
+        distinct_id: string;
+        host: string;
+        upload_token_hash: string;
+      }>(
+        `SELECT status, session_id, distinct_id, host, upload_token_hash
+         FROM replay_sessions WHERE id = $1`,
+        [id],
       );
-      expect(retried.deleted).toBeGreaterThanOrEqual(1);
-      const row = await target.pool.query<{ status: string }>('SELECT status FROM replay_sessions WHERE id = $1', [id]);
-      expect(row.rows[0]?.status).toBe('deleted');
+      expect(row.rows[0]).toEqual({
+        status: 'deleted',
+        session_id: 'deleted',
+        distinct_id: 'deleted',
+        host: 'deleted.invalid',
+        upload_token_hash: '0'.repeat(64),
+      });
       await expect(store.get(`${target.projectId}/${id}/1.json`)).rejects.toThrow();
       const audit = await target.pool.query<{ actor: string; action: string }>(
         'SELECT actor, action FROM replay_audit_log WHERE replay_id = $1 ORDER BY id',
@@ -396,6 +475,136 @@ describe('replay deletion crash convergence', () => {
       expect(audit.rows[0]?.actor).not.toBe('retention:worker');
       await expect(target.pool.query('UPDATE replay_audit_log SET actor = $2 WHERE replay_id = $1', [id, 'tampered']))
         .rejects.toThrow('append-only');
+    } finally {
+      await target.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not let poison replay deletions starve later expired sessions', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'poolstatis-replay-fair-retention-'));
+    const delegate = new LocalReplayObjectStore(directory);
+    const poison = new Set<string>();
+    class PoisonStore implements ReplayObjectStore {
+      put(key: string, bytes: Buffer) { return delegate.put(key, bytes); }
+      get(key: string, maxBytes?: number) { return delegate.get(key, maxBytes); }
+      delete(key: string) { return delegate.delete(key); }
+      deleteReplay(projectId: string, replayId: string) {
+        if (poison.has(replayId)) throw new Error('synthetic permanent replay deletion failure');
+        return delegate.deleteReplay(projectId, replayId);
+      }
+      deleteProject(projectId: string) { return delegate.deleteProject(projectId); }
+    }
+    const target = await createTestEnv({ replayObjectStore: new PoisonStore() });
+    try {
+      await api(target, target.secretToken, 'POST', `/api/v1/projects/${target.projectSlug}/experience/surfaces`, {
+        key: 'workspace', name: 'Workspace', purpose: 'Reproduce consented workspace interaction failures.',
+      });
+      const created = await Promise.all([createReplay(target), createReplay(target), createReplay(target)]);
+      const ids = created.map((result) => result.body.replay.id as string);
+      poison.add(ids[0]!);
+      poison.add(ids[1]!);
+      const now = new Date('1971-01-01T00:00:00.000Z');
+      await target.pool.query(
+        `UPDATE replay_sessions
+         SET delete_after = CASE WHEN id = ANY($1::uuid[])
+           THEN $2::timestamptz - interval '3 minutes'
+           ELSE $2::timestamptz - interval '1 minute' END
+         WHERE id = ANY($3::uuid[])`,
+        [ids.slice(0, 2), now, ids],
+      );
+      const service = new ReplayService(target.pool, new PoisonStore());
+      const first = await purgeExpiredReplays(service, target.pool, 2, now);
+      expect(first).toMatchObject({ deleted: 0, errors: 2, hasMore: true });
+      const second = await purgeExpiredReplays(service, target.pool, 2, now);
+      expect(second.deleted).toBe(1);
+      const statuses = await target.pool.query<{ id: string; status: string }>(
+        'SELECT id, status FROM replay_sessions WHERE id = ANY($1::uuid[])',
+        [ids],
+      );
+      expect(statuses.rows.find((row) => row.id === ids[2])?.status).toBe('deleted');
+    } finally {
+      await target.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks new replay writes once durable project deletion begins', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'poolstatis-replay-project-barrier-'));
+    const store = new LocalReplayObjectStore(directory);
+    const target = await createTestEnv({ replayObjectStore: store });
+    try {
+      await api(target, target.secretToken, 'POST', `/api/v1/projects/${target.projectSlug}/experience/surfaces`, {
+        key: 'workspace', name: 'Workspace', purpose: 'Reproduce consented workspace interaction failures.',
+      });
+      const created = await createReplay(target);
+      const service = new ReplayService(target.pool, store);
+      const now = new Date();
+      await service.beginProjectDeletion(target.projectId, 'test:project-delete', now);
+      const newManifest = await createReplay(target);
+      expect(newManifest).toMatchObject({ status: 410, body: { error: { code: 'replay_project_deleting' } } });
+      const upload = await api(target, target.ingestToken, 'PUT', `/i/v1/replays/${created.body.replay.id}/chunks`, {
+        upload_token: created.body.upload_token,
+        sequence: 0,
+        checksum: sha(replayEvents()),
+        events: replayEvents(),
+      });
+      expect(upload).toMatchObject({ status: 410, body: { error: { code: 'replay_project_deleting' } } });
+      const cleaned = await service.retryProjectDeletionJobs(10, new Date(now.getTime() + 3 * 60_000));
+      expect(cleaned).toMatchObject({ deleted: 1, errors: 0 });
+    } finally {
+      await target.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('finishes project prefix deletion from the durable job after the project row is gone', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'poolstatis-replay-project-job-'));
+    const delegate = new LocalReplayObjectStore(directory);
+    class FailFinalSweepStore implements ReplayObjectStore {
+      deleteProjectCalls = 0;
+      put(key: string, bytes: Buffer) { return delegate.put(key, bytes); }
+      get(key: string, maxBytes?: number) { return delegate.get(key, maxBytes); }
+      delete(key: string) { return delegate.delete(key); }
+      deleteReplay(projectId: string, replayId: string) { return delegate.deleteReplay(projectId, replayId); }
+      async deleteProject(projectId: string) {
+        this.deleteProjectCalls += 1;
+        if (this.deleteProjectCalls === 2) {
+          await delegate.put(`${projectId}/99999999-9999-9999-9999-999999999999/0.json`, Buffer.from('late orphan'));
+          throw new Error('synthetic final prefix outage');
+        }
+        return delegate.deleteProject(projectId);
+      }
+    }
+    const store = new FailFinalSweepStore();
+    const target = await createTestEnv({ replayObjectStore: store });
+    try {
+      await api(target, target.secretToken, 'POST', `/api/v1/projects/${target.projectSlug}/experience/surfaces`, {
+        key: 'workspace', name: 'Workspace', purpose: 'Reproduce consented workspace interaction failures.',
+      });
+      await createReplay(target);
+      const deleted = await api(target, target.personalToken, 'DELETE', `/api/v1/projects/${target.projectSlug}`, {
+        confirm_slug: target.projectSlug,
+      });
+      expect(deleted).toMatchObject({
+        status: 503,
+        body: { error: { code: 'replay_project_delete_pending', retryable: true } },
+      });
+      expect((await target.pool.query('SELECT 1 FROM projects WHERE id = $1', [target.projectId])).rowCount).toBe(0);
+      expect((await target.pool.query(
+        'SELECT 1 FROM replay_project_deletion_jobs WHERE project_id = $1',
+        [target.projectId],
+      )).rowCount).toBe(1);
+      const lateOrphan = `${target.projectId}/99999999-9999-9999-9999-999999999999/0.json`;
+      await expect(delegate.get(lateOrphan)).resolves.toEqual(Buffer.from('late orphan'));
+      const service = new ReplayService(target.pool, store);
+      const retried = await service.retryProjectDeletionJobs(10, new Date(Date.now() + 3 * 60_000));
+      expect(retried).toMatchObject({ deleted: 1, errors: 0 });
+      await expect(delegate.get(lateOrphan)).rejects.toThrow();
+      expect((await target.pool.query(
+        'SELECT 1 FROM replay_project_deletion_jobs WHERE project_id = $1',
+        [target.projectId],
+      )).rowCount).toBe(0);
     } finally {
       await target.close();
       await rm(directory, { recursive: true, force: true });
