@@ -920,7 +920,7 @@ describe('live customer screen UX', () => {
     render(<Experience />);
     expect(await screen.findByText(/Last accepted capture/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'View click details' })).toHaveAttribute('href', '#experience-evidence');
-    expect(screen.getByText(/aggregate maps · no DOM replay/)).toBeInTheDocument();
+    expect(screen.getByText(/aggregate maps · separate from DOM replay/)).toBeInTheDocument();
     expect(screen.getByText('Complete aggregate friction readiness')).toBeInTheDocument();
     expect(screen.getByText('Immutable deploy snapshot')).toBeInTheDocument();
     expect(screen.getByText('Add a deploy snapshot')).toBeInTheDocument();

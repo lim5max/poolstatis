@@ -1,5 +1,5 @@
 import { lstat, link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export interface ReplayObjectStore {
@@ -18,7 +18,7 @@ export class LocalReplayObjectStore implements ReplayObjectStore {
 
   async put(key: string, bytes: Buffer): Promise<'created' | 'existing'> {
     const path = this.pathFor(key);
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await this.ensureSafeParent(key);
     const temporary = `${path}.${randomUUID()}.tmp`;
     await writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' });
     try {
@@ -40,13 +40,42 @@ export class LocalReplayObjectStore implements ReplayObjectStore {
 
   async get(key: string): Promise<Buffer> {
     const path = this.pathFor(key);
+    await this.assertSafeParent(key);
     const info = await lstat(path);
     if (!info.isFile() || info.isSymbolicLink()) throw new Error('invalid replay object');
     return readFile(path);
   }
 
   async delete(key: string): Promise<void> {
-    await rm(this.pathFor(key), { force: true });
+    const path = this.pathFor(key);
+    await this.assertSafeParent(key);
+    await rm(path, { force: true });
+  }
+
+  private async ensureSafeParent(key: string): Promise<void> {
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    await assertDirectory(this.root);
+    const parts = key.split('/').slice(0, -1);
+    let current = this.root;
+    for (const part of parts) {
+      current = join(current, part);
+      try {
+        await mkdir(current, { mode: 0o700 });
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'EEXIST') throw error;
+      }
+      await assertDirectory(current);
+    }
+  }
+
+  private async assertSafeParent(key: string): Promise<void> {
+    await assertDirectory(this.root);
+    const parts = key.split('/').slice(0, -1);
+    let current = this.root;
+    for (const part of parts) {
+      current = join(current, part);
+      await assertDirectory(current);
+    }
   }
 
   private pathFor(key: string): string {
@@ -64,4 +93,9 @@ export class ReplayObjectConflictError extends Error {
     super('replay object already exists with different bytes');
     this.name = 'ReplayObjectConflictError';
   }
+}
+
+async function assertDirectory(path: string): Promise<void> {
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('invalid replay object directory');
 }

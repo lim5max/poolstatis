@@ -10,7 +10,7 @@ body { margin: 0; background: #f6f6f3; color: #171714; }
   gap: 8px;
   align-items: center;
   padding: 12px;
-  background: rgb(255 255 255 / 95%);
+  background: #fffffff2;
   border-bottom: 1px solid #d7d7d1;
 }
 button, input { min-height: 40px; font: inherit; }

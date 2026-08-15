@@ -3,7 +3,8 @@
 > **Historical design record.** The “Next modules” section below is not a
 > current status list. Browser Experience later shipped as immediate,
 > developer-labelled click/scroll/section/error capture with bounded maps and a
-> session timeline. Full DOM/video/cursor Session Replay remains unshipped.
+> session timeline. A separate consent-gated rrweb Session Replay module later
+> shipped; it is not part of Browser Experience or this flags release.
 
 ## Decision
 

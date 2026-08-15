@@ -1,10 +1,10 @@
 # Session Replay v1 Implementation Plan
 
-> **Plan only — not a shipped capability.** The unchecked rrweb recorder,
-> storage, player, DOM snapshots, and cursor playback described below are not
-> implemented on Core `origin/main` as verified on 2026-08-15. The shipped
-> Browser Experience is a narrower labelled-interaction timeline plus bounded
-> click/scroll maps and coarse error types; it is not full session replay.
+> **Historical plan — superseded by the shipped v1 contract.** Session Replay
+> now ships as the separate opt-in flow documented in
+> `docs/14-session-replay.md` and migration 042. This unchecked plan uses stale
+> migration/service assumptions and rrweb 2.1.0; the implemented exact recorder,
+> player and types contract is 2.1.1. Browser Experience remains separate.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

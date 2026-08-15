@@ -127,6 +127,31 @@ describe('ReplayRecorder', () => {
     await recorder.withdraw();
   });
 
+  it('withdraws a manifest created while start is still in flight without starting rrweb', async () => {
+    let resolveCreate!: () => void;
+    const createPending = new Promise<void>((resolve) => { resolveCreate = resolve; });
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      calls.push(String(url));
+      if (String(url).endsWith('/i/v1/replays')) {
+        await createPending;
+        return response(201, { replay: { id: '66666666-6666-6666-6666-666666666666' }, upload_token: 'rt_'.padEnd(70, 'f') });
+      }
+      return response(200, { deleted: true });
+    }) as unknown as typeof fetch;
+    const record = vi.fn(() => () => {}) as ReplayRecord;
+    const recorder = new ReplayRecorder(options(fetchImpl, record));
+    const starting = recorder.start();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    const withdrawing = recorder.withdraw();
+    resolveCreate();
+    await expect(starting).rejects.toThrow('consent was withdrawn');
+    await withdrawing;
+    expect(record).not.toHaveBeenCalled();
+    expect(calls.some((url) => url.endsWith('/66666666-6666-6666-6666-666666666666'))).toBe(true);
+    await expect(recorder.start()).rejects.toThrow('consent was withdrawn');
+  });
+
   it('uses keepalive only for one bounded pagehide chunk and leaves completion explicit', async () => {
     let emit: ((event: any) => void) | null = null;
     let pagehide: (() => void) | null = null;

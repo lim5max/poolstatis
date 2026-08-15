@@ -1,10 +1,11 @@
 # Session Replay and Gaze Attention v1 — Design
 
-> **Design only — not a shipped capability.** The rrweb DOM recorder/player,
-> cursor playback, and gaze module described below are not implemented on Core
-> `origin/main` as verified on 2026-08-15. Current Browser Experience ships only
-> a bounded labelled-interaction timeline, click/scroll maps, registered section
-> exposures, and coarse client-error types.
+> **Historical combined design — only replay later shipped.** The separate
+> consent-gated rrweb Session Replay module is implemented by the current
+> `docs/14-session-replay.md` contract with exact 2.1.1 packages. Gaze, webcam
+> processing and replay-derived attention maps in this older combined design
+> remain unshipped. Browser Experience stays an independent lower-sensitivity
+> labelled timeline and aggregate-map collector.
 
 ## Decision
 

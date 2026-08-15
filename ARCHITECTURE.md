@@ -27,6 +27,7 @@ Agent ── MCP ──► MCP Server ──► Platform API ──┤
 Analysis/admin UI ── HTTP ─────────────────────┘
                                       │
                                       ├──► Metadata + audit (Postgres)
+                                      ├──► ReplayObjectStore (bounded rrweb bytes)
                                       ├──► Release monitor (bounded, restart-safe)
                                       └──► Webhook outbox (encrypted destinations + retries)
 ```
@@ -38,6 +39,8 @@ Analysis/admin UI ── HTTP ────────────────�
 - **MCP Server** — typed agent surface над Platform API и нормативные instrumentation
   resources. Реальный MCP-вызов также является server-derived onboarding evidence.
 - **EventStore** — узкий storage seam для append-only событий и typed аналитических reads.
+- **ReplayObjectStore** — отдельный seam для consented, masked, checksum-verified
+  rrweb chunks; replay bytes не попадают в EventStore/Postgres metadata tables.
 - **Metadata + audit DB** — проекты, ключи, entities, registry, actor links, historical
   import batches, append-only event revisions, contracts, releases, evidence, decisions,
   actions, attempts и delivery history.

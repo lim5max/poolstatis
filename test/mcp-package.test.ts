@@ -108,7 +108,9 @@ beforeAll(async () => {
   expect(pack.files.map((file) => file.path).sort()).toEqual(expectedFiles.sort());
   expect(pack.files.find((file) => file.path === 'dist/cli.js')?.mode).toBe(0o755);
   expect(pack.size).toBeLessThan(50_000);
-  expect(pack.unpackedSize).toBeLessThan(150_000);
+  // Two bounded replay metadata tools add no files or dependencies, but make
+  // the source-only server slightly larger. Keep a deliberate narrow ceiling.
+  expect(pack.unpackedSize).toBeLessThan(152_000);
 
   await writeFile(join(tempProject, 'package.json'), JSON.stringify({
     name: 'poolstatis-mcp-clean-consumer',

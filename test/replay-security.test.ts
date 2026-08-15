@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -103,5 +103,18 @@ describe('session replay privacy boundary', () => {
     expect(await store.put(key, Buffer.from('safe'))).toBe('existing');
     await expect(store.put(key, Buffer.from('different'))).rejects.toBeInstanceOf(ReplayObjectConflictError);
     await expect(store.put('../escape', Buffer.from('x'))).rejects.toThrow('invalid replay object key');
+  });
+
+  it('refuses symlinked UUID directories before any object write', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'poolstatis-replay-store-'));
+    const outside = await mkdtemp(join(tmpdir(), 'poolstatis-replay-outside-'));
+    roots.push(root, outside);
+    const projectId = '11111111-1111-1111-1111-111111111111';
+    await symlink(outside, join(root, projectId));
+    const store = new LocalReplayObjectStore(root);
+    await expect(store.put(
+      `${projectId}/22222222-2222-2222-2222-222222222222/0.json`,
+      Buffer.from('safe'),
+    )).rejects.toThrow('invalid replay object directory');
   });
 });

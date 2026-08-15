@@ -4,7 +4,9 @@
 > scope remains developer-labelled clicks, scroll/section signals, coarse error
 > types, bounded maps, and a session timeline without replay. Collection now
 > starts when the host calls `start()`; legacy consent callbacks are optional
-> host-owned pause controls. See the current SDK and Browser Analytics docs.
+> host-owned pause controls. A separate consent-gated rrweb replay module later
+> shipped; it does not change this Browser Experience boundary. See the current
+> SDK and Session Replay docs.
 
 ## Decision
 

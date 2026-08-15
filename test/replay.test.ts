@@ -158,6 +158,35 @@ describe('session replay vertical slice', () => {
     expect(gone.status).toBe(410);
   });
 
+  it('physically removes replay objects through the env-scoped data purge seam', async () => {
+    const target = await createTestEnv({ replayDir: root });
+    try {
+      await api(target, target.secretToken, 'POST', `/api/v1/projects/${target.projectSlug}/experience/surfaces`, {
+        key: 'workspace', name: 'Workspace', purpose: 'Reproduce consented workspace interaction failures.',
+      });
+      const created = await createReplay(target);
+      const id = created.body.replay.id as string;
+      const token = created.body.upload_token as string;
+      const events = replayEvents(3_000);
+      expect((await api(target, target.ingestToken, 'PUT', `/i/v1/replays/${id}/chunks`, {
+        upload_token: token, sequence: 0, checksum: sha(events), events,
+      })).status).toBe(201);
+
+      const purged = await api(
+        target,
+        target.secretToken,
+        'POST',
+        `/api/v1/projects/${target.projectSlug}/data/purge`,
+        { env: 'prod', scope: 'all', confirm_slug: target.projectSlug },
+      );
+      expect(purged).toMatchObject({ status: 200, body: { replays_deleted: 1 } });
+      expect((await api(target, target.secretToken, 'GET', `/api/v1/projects/${target.projectSlug}/replays/${id}?env=prod`)).status).toBe(410);
+      await expect(new LocalReplayObjectStore(root).get(`${target.projectId}/${id}/0.json`)).rejects.toThrow();
+    } finally {
+      await target.close();
+    }
+  });
+
   it('rejects a corrupt stored object instead of passing it to the player', async () => {
     const created = await createReplay();
     const id = created.body.replay.id as string;

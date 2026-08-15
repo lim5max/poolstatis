@@ -11,7 +11,8 @@ screen-video format are out of scope.
 - Player: `@rrweb/replay@2.1.1`.
 - Shared types: `@rrweb/types@2.1.1`.
 - License: MIT.
-- The deprecated `rrweb` convenience package is not used.
+- The legacy `rrweb` convenience package is not used; recorder and player are
+  imported from their direct supported packages.
 - The SDK recorder is an explicit `@poolstatis/sdk/replay` export, so the core
   SDK and the existing `/i/v1/*` event contracts do not import or download
   rrweb.
@@ -30,6 +31,13 @@ screen-video format are out of scope.
 The version decision is based on the rrweb 2.1.1 release and the current
 official record/replay guide checked on 2026-08-15. The prior 2.1.0 planning
 document is historical and is not the package contract for this implementation.
+
+Official sources checked on 2026-08-15:
+
+- [rrweb 2.1.1 releases](https://github.com/rrweb-io/rrweb/releases)
+- [record/replay guide](https://github.com/rrweb-io/rrweb/blob/main/guide.md)
+- [`rrweb-snapshot` sandbox contract](https://www.npmjs.com/package/rrweb-snapshot)
+- [MIT license](https://github.com/rrweb-io/rrweb/blob/main/LICENSE)
 
 ## Protected assets and trust boundaries
 
@@ -51,7 +59,7 @@ controlled. A write-only ingest key never grants replay read access.
 
 | Threat | Control |
 | --- | --- |
-| Recording without user intent | `ReplayRecorder.start()` requires affirmative consent with a non-empty consent version and an exact host-policy match. Denial fails before the rrweb import, observers, manifest or network request. |
+| Recording without user intent | `ReplayRecorder.start()` requires affirmative consent with a non-empty consent version and an exact host-policy match. Denial fails before the rrweb import, observers, manifest or network request. Withdrawal racing with initialization prevents rrweb startup and deletes a manifest once its upload token is known. |
 | Host enables replay on the wrong domain | SDK requires an explicit allow-list of exact hostnames. The server compares a supplied browser `Origin`, when present, with the declared hostname. No wildcard or raw URL policy is accepted. |
 | Password/payment/form/contenteditable disclosure | Password, payment/auth/autocomplete targets are blocked. All inputs and textareas are masked in v1. Contenteditable is always masked. Server sanitization removes input values again. |
 | PII, tokens or secrets in visible DOM text | All text is masked by default. `text: visible` is explicit, but server redaction still masks secret/token/JWT/email/payment-looking strings. Hosts can tighten with `data-poolstatis-mask`, `.rr-mask` and configured mask selectors. |
@@ -77,8 +85,8 @@ controlled. A write-only ingest key never grants replay read access.
   replay data is dropped and the manifest completes as incomplete.
 - Flush cadence: 10 seconds; full checkout every 60 seconds or 10,000 events.
 - Pointer samples: at most 20 Hz (`mousemove: 50`).
-- Transport attempts: at most four per chunk with bounded exponential delay;
-  the stable sequence and checksum are reused.
+- Transport attempts: at most four 10-second attempts per chunk with bounded
+  exponential delay; the stable sequence and checksum are reused.
 - List API: at most 100 manifests. Viewer payload: at most 20 MiB and 50,000
   events. MCP returns metadata for at most 100 replays and no DOM payload.
 

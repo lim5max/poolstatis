@@ -15,6 +15,11 @@ event timeline and must not be presented as replay.
 The legacy `rrweb` convenience package is not used. Versions are exact so the
 snapshot/player contract changes only through a reviewed dependency update.
 
+Sources checked on 2026-08-15: [2.1.1 releases](https://github.com/rrweb-io/rrweb/releases),
+[official guide](https://github.com/rrweb-io/rrweb/blob/main/guide.md),
+[`rrweb-snapshot` sandbox warning](https://www.npmjs.com/package/rrweb-snapshot)
+and the [MIT license](https://github.com/rrweb-io/rrweb/blob/main/LICENSE).
+
 Install replay separately from the dependency-free base SDK:
 
 ```bash
@@ -52,6 +57,8 @@ await replay.withdraw();
 `start()` fails before importing rrweb or making a request unless affirmative
 versioned consent and the exact current hostname both pass. A denied or
 unsampled session does not load recorder code and does not create a manifest.
+Withdrawal racing with initialization prevents rrweb from starting and
+best-effort tombstones any manifest whose upload token was already returned.
 
 ## Privacy contract
 
@@ -78,7 +85,7 @@ the registered route key.
 - Session: at most 120 chunks, 50,000 events, 20 MiB and 30 minutes.
 - Browser queue: 5 MiB; dropped chunks retain their sequence gap, so the server
   marks the manifest `incomplete`, never playable.
-- Stable sequence + checksum retries: at most four attempts.
+- Stable sequence + checksum retries: at most four 10-second attempts.
 - `pagehide` attempts one request only when the complete request is at most
   60 KiB and uses `keepalive`. Larger or interrupted final chunks remain
   pending/incomplete; navigation-time delivery is never reported as complete.

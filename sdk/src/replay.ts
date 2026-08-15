@@ -61,6 +61,7 @@ const MAX_QUEUE_BYTES = 5 * 1024 * 1024;
 const MAX_DURATION_MS = 30 * 60 * 1000;
 const FLUSH_MS = 10_000;
 const MAX_ATTEMPTS = 4;
+const REQUEST_TIMEOUT_MS = 10_000;
 const IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/;
 const SURFACE = /^[a-z][a-z0-9_]{0,119}$/;
 
@@ -80,6 +81,7 @@ export class ReplayRecorder {
   private sequence = 0;
   private started = false;
   private stopped = false;
+  private withdrawn = false;
   private starting: Promise<{ sampled: boolean; replayId: string | null }> | null = null;
   private sampled = true;
   private sealing: Promise<void> = Promise.resolve();
@@ -100,6 +102,7 @@ export class ReplayRecorder {
   }
 
   async start(): Promise<{ sampled: boolean; replayId: string | null }> {
+    if (this.withdrawn) throw new Error('session replay consent was withdrawn');
     if (this.started) return { sampled: this.sampled, replayId: this.replayId };
     if (this.starting) return this.starting;
     this.starting = this.startInternal().finally(() => { this.starting = null; });
@@ -137,8 +140,10 @@ export class ReplayRecorder {
       }
       this.replayId = created.replay.id;
       this.uploadToken = created.upload_token;
+      if (this.withdrawn) throw new Error('session replay consent was withdrawn');
 
       const record = this.options.record ?? (await import('@rrweb/record')).record as ReplayRecord;
+      if (this.withdrawn) throw new Error('session replay consent was withdrawn');
       const privacy = rrwebPrivacyOptions(this.options.policy);
       const stop = record({
         emit: (event: eventWithTime) => this.accept(event),
@@ -149,6 +154,10 @@ export class ReplayRecorder {
         plugins: [],
       });
       if (typeof stop !== 'function') throw new Error('rrweb recorder did not start');
+      if (this.withdrawn) {
+        stop();
+        throw new Error('session replay consent was withdrawn');
+      }
       this.stopRecording = stop;
       this.started = true;
       this.browser.addEventListener('pagehide', this.onPageHide);
@@ -189,6 +198,8 @@ export class ReplayRecorder {
   }
 
   async stop(): Promise<void> {
+    const starting = this.starting;
+    if (starting) await starting;
     if (!this.started || this.stopped) return;
     this.detach();
     if (!this.sampled || !this.replayId || !this.uploadToken) return;
@@ -204,6 +215,9 @@ export class ReplayRecorder {
   }
 
   async withdraw(): Promise<void> {
+    this.withdrawn = true;
+    const starting = this.starting;
+    if (starting) await starting.catch(() => {});
     if (!this.started) return;
     const replayId = this.replayId;
     const uploadToken = this.uploadToken;
@@ -219,7 +233,7 @@ export class ReplayRecorder {
   }
 
   private accept(event: eventWithTime): void {
-    if (this.stopped || !this.options.consent.granted) return;
+    if (this.stopped || this.withdrawn || !this.options.consent.granted) return;
     const safe = sanitizeRecordedEvent(event, this.options.policy, this.route());
     const bytes = new TextEncoder().encode(JSON.stringify(safe)).byteLength + 1;
     if (bytes > MAX_CHUNK_BYTES) return;
@@ -292,15 +306,26 @@ export class ReplayRecorder {
     keepalive = false,
   ): Promise<unknown> {
     const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
     this.aborters.add(controller);
     try {
-      const response = await this.fetchImpl(`${this.options.url.replace(/\/$/, '')}${path}`, {
-        method,
-        headers: { authorization: `Bearer ${this.options.ingestKey}`, 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-        keepalive,
-      });
+      let response: Response;
+      try {
+        response = await this.fetchImpl(`${this.options.url.replace(/\/$/, '')}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${this.options.ingestKey}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+          keepalive,
+        });
+      } catch (error) {
+        if (timedOut) throw new ReplayTransportError('replay request timed out', true);
+        throw error;
+      }
       const payload = await response.json().catch(() => null) as { error?: { message?: string; retryable?: boolean } } | null;
       if (!response.ok) {
         const retryable = response.status === 408 || response.status === 429 || response.status >= 500
@@ -309,6 +334,7 @@ export class ReplayRecorder {
       }
       return payload;
     } finally {
+      clearTimeout(timeout);
       this.aborters.delete(controller);
     }
   }

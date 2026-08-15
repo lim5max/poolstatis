@@ -60,6 +60,16 @@ for (const device of [
     await context.route('https://fonts.googleapis.com/**', (route) => route.fulfill({
       status: 200, contentType: 'text/css', body: '',
     }));
+    const unexpectedNetwork: string[] = [];
+    const expectedOrigin = new URL(webUrl).origin;
+    context.on('request', (request) => {
+      const url = new URL(request.url());
+      if ((url.protocol === 'http:' || url.protocol === 'https:')
+          && url.origin !== expectedOrigin
+          && url.hostname !== 'fonts.googleapis.com') {
+        unexpectedNetwork.push(request.url());
+      }
+    });
     const page = await context.newPage();
     const browserErrors: string[] = [];
     page.on('console', (message) => {
@@ -129,6 +139,7 @@ for (const device of [
       .toBeGreaterThan(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(browserErrors).toEqual([]);
+    expect(unexpectedNetwork).toEqual([]);
     await context.close();
   });
 }

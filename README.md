@@ -200,6 +200,9 @@ Implemented:
   registered section exposures, and coarse client error types
 - Bounded click/scroll interaction maps, screenshot overlays, and a per-session interaction
   timeline; these are not DOM, video, or cursor replay
+- Separate consent- and exact-host-gated rrweb Session Replay with masked DOM/CSS,
+  mutations, navigation/viewport, click, scroll and cursor playback; payloads use a
+  retention-bound object-store seam and are never analytics events
 - Answer-first Web, Product, Funnel, Retention, Lifecycle, Stickiness, Entity, Saved, People,
   and Browser Experience graphs/tables; no general dashboard builder
 - Previewed idempotent historical imports and audited optimistic event revisions
@@ -216,7 +219,9 @@ Implemented:
 
 Next priorities are tracked in [docs/05-gap-analysis.md](docs/05-gap-analysis.md).
 
-Current deliberate limits: no full DOM/video/cursor session replay, no broad arbitrary-DOM
-autocapture, no full error tracking with messages/stacks/issues, no caller-provided raw SQL,
-and no general dashboard builder. See [docs/05-gap-analysis.md](docs/05-gap-analysis.md) for
-the exact boundary and rationale.
+Current deliberate limits: Session Replay is explicit opt-in rather than broad
+arbitrary-DOM autocapture; it does not capture screen video, gaze, audio,
+canvas pixels, console/network payloads or cross-origin iframe contents. There
+is also no full issue-oriented error tracking, caller-provided raw SQL or
+general dashboard builder. See [docs/05-gap-analysis.md](docs/05-gap-analysis.md)
+for the exact boundary and rationale.

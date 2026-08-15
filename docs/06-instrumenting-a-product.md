@@ -380,6 +380,12 @@ Query kinds include `trend`, `funnel`, `entities`, `retention`, `lifecycle`,
 Experience reads are bounded maps or an ordered interaction timeline, not DOM,
 video, or cursor replay.
 
+Для настоящего воспроизведения отдельно подключается consent-gated
+`@poolstatis/sdk/replay`: он записывает masked rrweb DOM mutations, viewport,
+click/scroll/cursor только после exact-host policy gate и хранит chunks вне
+EventStore. Не называйте Experience timeline replay и не включайте replay без
+отдельного purpose/consent review. Контракт: [14-session-replay.md](14-session-replay.md).
+
 ---
 
 ## See also
@@ -389,6 +395,8 @@ video, or cursor replay.
 - [03-mcp-server.md](03-mcp-server.md) — every MCP tool.
 - [04-http-api.md](04-http-api.md) — ingest + query API reference.
 - [05-gap-analysis.md](05-gap-analysis.md) — what's built vs PostHog, and what's next.
+- [14-session-replay.md](14-session-replay.md) — opt-in recorder, privacy,
+  retention, APIs and scriptless player.
 Для web analytics сначала прочитайте также
 `poolstatis://standard/browser-analytics`, затем вызовите
 `propose_browser_analytics`. Browser capture подключается только через отдельный
