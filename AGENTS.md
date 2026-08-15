@@ -133,6 +133,54 @@ docker compose -f docker-compose.selfhost.yml up -d --build  # self-host stack
   atomically, and run repeated live probes. Never run destructive migration or
   restore commands against the production `poolsatis` database during tests.
 
+## Release execution guardrails
+
+- Before the first mutating command in each repository, record `pwd`,
+  `git rev-parse --show-toplevel`, `git status --short --branch`, the exact HEAD,
+  and `git worktree list --porcelain`. Agent work must use its assigned isolated
+  worktree. Shared checkouts under `/Users/maksimstil/Desktop` are read-only
+  unless the user explicitly names that checkout as the mutation target.
+- Start every multi-repository release with one ledger that freezes the exact
+  Core, Cloud and site SHAs, package versions, current production lineage,
+  rollback target, and ordered phases. Treat implementation, package
+  publication, production mutation and public-truth updates as explicit states;
+  never use evidence from a later state before it exists. Use
+  `docs/releases/RELEASE_LEDGER_TEMPLATE.md` rather than an ad-hoc checklist.
+- When the user expands a release from source to packages, production or site,
+  update the ledger and report `completed / current / remaining` immediately.
+  Do not describe the release as nearly done while an authorized terminal phase
+  is still unstarted, and do not make the user infer progress from raw command
+  failures.
+- Discover production topology before writing commands: list the actual release
+  paths and Compose files, render the active Compose config, and inspect
+  `information_schema` before querying a table or column. Do not guess host
+  paths, service names or schema identifiers from an older release.
+- Build deployable assets only from the final merged SHA in a clean worktree.
+  Pass the release SHA explicitly to the build, prove it is embedded in the
+  output, and reject an existing or stale `dist` directory. Package publication
+  must use a non-hidden artifact directory and an absolute tarball path.
+- Treat source merge, registry publication, production deployment and public
+  documentation as separate truth states. Copy that claims a feature is live is
+  changed only after production read-back; consolidate those truth changes into
+  one post-deploy PR when possible.
+- Run desktop and mobile browser checks before the first site deployment and
+  repeat them against live production. A long hash, URL, table or code block is
+  an explicit mobile-overflow test case.
+- A newly opened PR with “no checks reported” is pending registration for a
+  bounded polling window, not immediately failed. A failed command must be
+  recorded once with command, exit code and stderr, then classified as
+  read-only probe, fail-closed gate or production mutation. Never blindly
+  repeat a deterministic or mutating failure. A read-only eventual-consistency
+  probe may use the same command only with a recorded backoff, attempt limit and
+  stop condition.
+- Keep a cleanup manifest for disposable databases, containers, directories and
+  worktrees. Stop resources before removing them, use exact targets, and never
+  replace manifest cleanup with a broad `rm`, `docker prune`, reset or clean.
+- After any release spanning packages plus production or more than one repo,
+  write a short postmortem and turn every preventable failure into either an
+  automated check or an enforceable rule. The 2026-08-15 replay release example
+  is in `docs/releases/2026-08-16-session-replay-release-postmortem.md`.
+
 ## What's next
 
 See `docs/05-gap-analysis.md`. Current priorities are design-partner validation,
