@@ -665,6 +665,56 @@ export const experienceSnapshotMetaSchema = z.object({
 }).strict();
 export type ExperienceSnapshotMetaInput = z.infer<typeof experienceSnapshotMetaSchema>;
 
+// ===== Session Replay (separate opt-in contract) =====
+
+const replaySelectorSchema = z.string().trim().min(1).max(200).refine(
+  (selector) => !/[\u0000\r\n]/.test(selector),
+  'selector must be one bounded CSS selector',
+);
+
+export const replayPrivacyPolicySchema = z.object({
+  version: experienceVersionSchema,
+  text: z.enum(['masked', 'visible']).default('masked'),
+  maskSelectors: z.array(replaySelectorSchema).max(20).default([]),
+  blockSelectors: z.array(replaySelectorSchema).max(20).default([]),
+}).strict();
+
+export const createReplaySessionSchema = z.object({
+  surface: keySchema,
+  route: experienceRouteSchema,
+  session_id: z.string().min(1).max(200),
+  distinct_id: z.string().min(1).max(200),
+  host: z.string().trim().min(1).max(253).regex(
+    /^(?:localhost|(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?))*)$/,
+    'host must be an exact hostname without scheme, port, path, query or wildcard',
+  ),
+  version: experienceVersionSchema.default('unversioned'),
+  device: z.enum(['desktop', 'mobile']),
+  consent_version: experienceVersionSchema,
+  policy: replayPrivacyPolicySchema,
+  policy_hash: z.string().regex(/^[a-f0-9]{64}$/),
+  retention_days: z.number().int().min(1).max(30).default(7),
+}).strict();
+
+export const replayChunkUploadSchema = z.object({
+  upload_token: z.string().min(32).max(256),
+  sequence: z.number().int().min(0).max(119),
+  checksum: z.string().regex(/^[a-f0-9]{64}$/),
+  events: z.array(z.unknown()).min(1).max(500),
+}).strict();
+
+export const completeReplaySessionSchema = z.object({
+  upload_token: z.string().min(32).max(256),
+  last_sequence: z.number().int().min(0).max(119),
+}).strict();
+
+export const withdrawReplaySessionSchema = z.object({
+  upload_token: z.string().min(32).max(256),
+}).strict();
+
+export type CreateReplaySessionInput = z.infer<typeof createReplaySessionSchema>;
+export type ReplayChunkUploadInput = z.infer<typeof replayChunkUploadSchema>;
+
 const experimentMetricKeysSchema = z.array(keySchema).max(5).default([]).superRefine((keys, ctx) => {
   const seen = new Set<string>();
   for (const [index, key] of keys.entries()) {

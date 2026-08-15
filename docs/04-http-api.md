@@ -120,6 +120,41 @@ duplicate fields и неразрешённые поля. `batch_id` обязат
 selectors, input values, error stack/message и network data не являются частью
 этого контракта.
 
+### Session Replay ingest (separate opt-in)
+
+Session Replay не использует обычный event envelope и не меняет его `207`,
+retry или idempotency semantics. Отдельный `@poolstatis/sdk/replay` после
+affirmative consent + exact-host gate вызывает:
+
+```text
+POST   /i/v1/replays
+PUT    /i/v1/replays/{id}/chunks
+POST   /i/v1/replays/{id}/complete
+DELETE /i/v1/replays/{id}
+```
+
+Create принимает только registered surface/route, finite host/version,
+consent/policy versions, exact policy SHA-256 и retention 1–30 дней. Он
+возвращает manifest id и отдельный scoped upload token. Chunk ограничен 500
+rrweb events и 512 KiB; `(id, sequence, checksum)` идемпотентен, а другой
+checksum для занятой sequence возвращает `409`. Complete делает replay
+`playable` только при contiguous sequences, initial full snapshot,
+неубывающем времени и duration ≤30 минут; gaps остаются `incomplete`.
+Withdrawal немедленно tombstone-ит запись до физического удаления.
+
+Authenticated read/delete contract:
+
+```text
+GET    /api/v1/projects/{slug}/replays
+GET    /api/v1/projects/{slug}/replays/{id}
+GET    /api/v1/projects/{slug}/replays/{id}/events
+DELETE /api/v1/projects/{slug}/replays/{id}
+```
+
+События доступны только для `playable` manifest, bounded до 20 MiB/50,000
+events, checksum-verified, повторно privacy-sanitized и audited. Полный SDK,
+masking, storage и sandbox contract: [14-session-replay.md](14-session-replay.md).
+
 ## Platform API
 
 CRUD-слой 1:1 с тулами MCP (см. [03-mcp-server.md](03-mcp-server.md)):

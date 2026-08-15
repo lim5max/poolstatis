@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { fileURLToPath, URL } from 'node:url';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { resolve } from 'node:path';
 
 const API_TARGET = process.env.POOLSTATIS_URL ?? 'http://127.0.0.1:3300';
 
@@ -22,6 +23,7 @@ export default defineConfig({
   },
   server: {
     port: 5273,
+    fs: { allow: [resolve(import.meta.dirname, '..')] },
     proxy: {
       '/api': { target: API_TARGET, changeOrigin: true },
       '/i': { target: API_TARGET, changeOrigin: true },

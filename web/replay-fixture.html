@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Poolstatis replay E2E fixture</title>
+    <link rel="stylesheet" href="/src/replay-fixture.css" />
+  </head>
+  <body>
+    <div class="toolbar">
+      <button id="start" type="button">Start consented recording</button>
+      <button id="mutate" type="button" disabled>Apply DOM change</button>
+      <button id="stop" type="button" disabled>Stop and complete</button>
+      <output id="status">idle</output>
+    </div>
+    <main>
+      <h1>Replay fixture workspace</h1>
+      <label>Secret password <input id="password" type="password" autocomplete="current-password" /></label>
+      <label>Private account name <input id="account-name" type="text" autocomplete="name" /></label>
+      <div id="editable" contenteditable="true">Private editable value</div>
+      <section><h2>Interaction target</h2><div id="target">Initial private state</div></section>
+      <aside id="scroller"><div class="scroll-content">Private scroll container</div></aside>
+      <div class="spacer" aria-hidden="true"></div>
+      <section><h2>Scroll destination</h2><p>Bottom marker</p></section>
+    </main>
+    <script type="module" src="/src/replay-fixture.ts"></script>
+  </body>
+</html>

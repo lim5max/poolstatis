@@ -56,6 +56,7 @@ import {
   deleteExperienceSnapshot, listExperienceRoutes, listExperienceSnapshots, listExperienceSurfaces,
   purgeExperienceSnapshots, readExperienceSnapshot, registerExperienceRoute,
 } from '../services/experience.js';
+import type { ReplaySessionStatus } from '../replay/types.js';
 import { createActorLink, listActorLinks, revokeActorLink } from '../services/identity.js';
 import { getPerson } from '../services/person.js';
 import {
@@ -103,7 +104,8 @@ import {
   metricDefinitionApplySchema, metricDefinitionPreviewSchema, semanticProjectComparisonSchema,
   updateExperimentSchema, updateFeatureFlagSchema, updatePropertyDefinitionSchema,
   browserAnalyticsSetupSchema, createPersonalTokenSchema, createProjectSchema, deleteProjectSchema, hostedOnboardingSchema, projectIntentInputSchema, setupTaskFeedbackSchema, setupTaskInputSchema, updateProfileSchema, usageDateSchema, usageMonthRangeSchema, usagePeriodSchema,
-  usageEntitlementUpdateSchema,
+  usageEntitlementUpdateSchema, completeReplaySessionSchema, createReplaySessionSchema,
+  replayChunkUploadSchema, withdrawReplaySessionSchema,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -126,17 +128,29 @@ export interface ServerOptions {
   outboundPolicy?: OutboundPolicyOptions;
   artifactStore?: CreateContextOptions['artifactStore'];
   artifactDir?: string;
+  replayObjectStore?: CreateContextOptions['replayObjectStore'];
+  replayDir?: string;
   countryResolver?: CountryResolver;
   cursorSigningSecret?: string;
   setupTaskProvider?: SetupTaskProvider;
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
-const PUBLIC_BROWSER_WRITE_CORS_ROUTES = new Set([
+const PUBLIC_BROWSER_POST_CORS_ROUTES = new Set([
   '/i/v1/events',
   '/i/v1/experience/events',
   '/i/v1/flags/evaluate',
+  '/i/v1/replays',
 ]);
+
+function publicBrowserWriteMethods(path: string): Array<'POST' | 'PUT' | 'DELETE'> {
+  if (PUBLIC_BROWSER_POST_CORS_ROUTES.has(path) || /^\/i\/v1\/replays\/[a-f0-9-]{36}\/complete$/.test(path)) {
+    return ['POST'];
+  }
+  if (/^\/i\/v1\/replays\/[a-f0-9-]{36}\/chunks$/.test(path)) return ['PUT'];
+  if (/^\/i\/v1\/replays\/[a-f0-9-]{36}$/.test(path)) return ['DELETE'];
+  return [];
+}
 const PUBLIC_BROWSER_WRITE_CORS_HEADERS = new Set([
   'authorization',
   'content-type',
@@ -173,16 +187,17 @@ function isPublicBrowserWriteCorsRequest(
   origin: string,
   configuredOrigins: ReadonlySet<string>,
 ): boolean {
+  const methods = publicBrowserWriteMethods(requestPath(req));
   if (configuredOrigins.has(origin)
-    || !PUBLIC_BROWSER_WRITE_CORS_ROUTES.has(requestPath(req))
+    || methods.length === 0
     || !isCanonicalHttpsOrigin(origin)) {
     return false;
   }
   if (req.method === 'OPTIONS') {
-    return req.headers['access-control-request-method']?.toUpperCase() === 'POST'
+    return methods.includes(req.headers['access-control-request-method']?.toUpperCase() as 'POST' | 'PUT' | 'DELETE')
       && hasAllowedPublicPreflightHeaders(req);
   }
-  return req.method === 'POST' && !req.headers.cookie && hasPublicIngestBearer(req);
+  return methods.includes(req.method as 'POST' | 'PUT' | 'DELETE') && !req.headers.cookie && hasPublicIngestBearer(req);
 }
 
 function authOwner(auth: AuthContext): string {
@@ -392,6 +407,8 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   if (options.outboundPolicy !== undefined) contextOptions.outboundPolicy = options.outboundPolicy;
   if (options.artifactStore !== undefined) contextOptions.artifactStore = options.artifactStore;
   if (options.artifactDir !== undefined) contextOptions.artifactDir = options.artifactDir;
+  if (options.replayObjectStore !== undefined) contextOptions.replayObjectStore = options.replayObjectStore;
+  if (options.replayDir !== undefined) contextOptions.replayDir = options.replayDir;
   if (options.countryResolver?.attribution !== undefined) {
     contextOptions.countryAttribution = options.countryResolver.attribution;
   }
@@ -435,7 +452,9 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
         : false;
       callback(null, {
         origin: configured || publicBrowserWrite,
-        methods: publicBrowserWrite ? ['POST'] : ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        methods: publicBrowserWrite
+          ? publicBrowserWriteMethods(requestPath(req))
+          : ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['authorization', 'content-type', 'x-poolstatis-client'],
         credentials: false,
       });
@@ -457,7 +476,7 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   app.addHook('onRequest', async (req) => {
     const origin = req.headers.origin;
     if (!origin || corsOrigins.has(origin) || req.method === 'OPTIONS') return;
-    if (PUBLIC_BROWSER_WRITE_CORS_ROUTES.has(requestPath(req))
+    if (publicBrowserWriteMethods(requestPath(req)).length > 0
       && isCanonicalHttpsOrigin(origin)
       && req.headers.cookie) {
       throw new ApiError(
@@ -657,6 +676,9 @@ function ingestRequestCost(route: string | undefined, body: unknown): number {
   if ((route === '/i/v1/events' || route === '/i/v1/experience/events') && Array.isArray(candidate.events)) {
     return Math.max(1, candidate.events.length);
   }
+  if (route === '/i/v1/replays/:id/chunks' && Array.isArray(candidate.events)) {
+    return Math.max(1, candidate.events.length);
+  }
   if (route === '/i/v1/entities' && Array.isArray(candidate.entities)) {
     return Math.max(1, candidate.entities.length);
   }
@@ -704,6 +726,58 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
     const result = await captureExperienceEvents(ctx.pool, ctx.eventStore, project.id, req.auth.env, experienceCaptureSchema.parse(req.body));
     ctx.query.invalidateProject(project.id);
     return result;
+  });
+
+  app.post('/i/v1/replays', async (req, reply) => {
+    requireKind(req.auth, 'ingest');
+    const project = await ingestProject(ctx, req.auth);
+    const result = await ctx.replays.createSession(
+      project.id,
+      req.auth.env,
+      createReplaySessionSchema.parse(req.body),
+      typeof req.headers.origin === 'string' ? req.headers.origin : undefined,
+    );
+    return reply.status(201).send(result);
+  });
+
+  app.put('/i/v1/replays/:id/chunks', { bodyLimit: 600 * 1024 }, async (req, reply) => {
+    requireKind(req.auth, 'ingest');
+    const project = await ingestProject(ctx, req.auth);
+    const { id } = req.params as { id: string };
+    const result = await ctx.replays.putChunk(
+      project.id,
+      req.auth.env,
+      z.string().uuid().parse(id),
+      replayChunkUploadSchema.parse(req.body),
+    );
+    return reply.status(result.duplicate ? 200 : 201).send(result);
+  });
+
+  app.post('/i/v1/replays/:id/complete', async (req) => {
+    requireKind(req.auth, 'ingest');
+    const project = await ingestProject(ctx, req.auth);
+    const { id } = req.params as { id: string };
+    const body = completeReplaySessionSchema.parse(req.body);
+    return ctx.replays.complete(
+      project.id,
+      req.auth.env,
+      z.string().uuid().parse(id),
+      body.upload_token,
+      body.last_sequence,
+    );
+  });
+
+  app.delete('/i/v1/replays/:id', async (req) => {
+    requireKind(req.auth, 'ingest');
+    const project = await ingestProject(ctx, req.auth);
+    const { id } = req.params as { id: string };
+    const body = withdrawReplaySessionSchema.parse(req.body);
+    return ctx.replays.withdraw(
+      project.id,
+      req.auth.env,
+      z.string().uuid().parse(id),
+      body.upload_token,
+    );
   });
 }
 
@@ -1071,6 +1145,10 @@ function registerPlatformRoutes(
       [project.id],
     );
     for (const artifact of artifacts.rows) await ctx.artifacts.delete(artifact.artifact_key);
+    const replaysDeleted = await ctx.replays.purgeSessions(
+      project.id,
+      `${authOwner(req.auth)}:project-delete`,
+    );
 
     // Keep the EventStore seam explicit for future non-Postgres stores. The
     // database cascade remains the final race-safe ownership boundary.
@@ -1083,6 +1161,7 @@ function registerPlatformRoutes(
       slug: project.slug,
       events_deleted: eventsDeleted,
       artifacts_deleted: artifacts.rows.length,
+      replays_deleted: replaysDeleted,
     };
   });
 
@@ -1227,6 +1306,54 @@ function registerPlatformRoutes(
   });
 
   // ----- browser experience -----
+
+  app.get('/api/v1/projects/:slug/replays', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env = req.auth.env, surface, status, limit } = req.query as {
+      env?: string; surface?: string; status?: string; limit?: string;
+    };
+    const statuses = new Set<ReplaySessionStatus>(['recording', 'playable', 'incomplete', 'deleting', 'deleted']);
+    if (status && !statuses.has(status as ReplaySessionStatus)) {
+      throw badRequest('invalid_query_param', 'status is not a valid replay status');
+    }
+    const parsedLimit = limit === undefined ? 50 : Number(limit);
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      throw badRequest('invalid_limit', 'limit must be an integer between 1 and 100');
+    }
+    return {
+      replays: await ctx.replays.listSessions(project.id, {
+        env,
+        ...(surface ? { surface } : {}),
+        ...(status ? { status: status as ReplaySessionStatus } : {}),
+        limit: parsedLimit,
+      }),
+    };
+  });
+
+  app.get('/api/v1/projects/:slug/replays/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const { env = req.auth.env } = req.query as { env?: string };
+    return ctx.replays.getSession(project.id, env, z.string().uuid().parse(id), true);
+  });
+
+  app.get('/api/v1/projects/:slug/replays/:id/events', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    const { env = req.auth.env } = req.query as { env?: string };
+    return ctx.replays.readEvents(project.id, env, z.string().uuid().parse(id), authOwner(req.auth));
+  });
+
+  app.delete('/api/v1/projects/:slug/replays/:id', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    return ctx.replays.deleteSession(project.id, z.string().uuid().parse(id), authOwner(req.auth));
+  });
+
   app.post('/api/v1/projects/:slug/experience/surfaces', async (req, reply) => {
     platform(req);
     const project = await resolveProject(req);
@@ -1639,6 +1766,7 @@ function registerPlatformRoutes(
     let events_deleted = 0;
     let entities_deleted = 0;
     let snapshots_deleted = 0;
+    let replays_deleted = 0;
     if (body.scope === 'events' || body.scope === 'all') {
       events_deleted = await ctx.eventStore.purge(project.id, body.env, body.distinct_id);
     }
@@ -1652,6 +1780,11 @@ function registerPlatformRoutes(
         project.id,
         body.env,
       );
+      replays_deleted = await ctx.replays.purgeSessions(
+        project.id,
+        `${authOwner(req.auth)}:data-purge`,
+        body.env,
+      );
     }
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
@@ -1659,6 +1792,7 @@ function registerPlatformRoutes(
       events_deleted,
       entities_deleted,
       snapshots_deleted,
+      replays_deleted,
       env: body.env,
       ...(body.distinct_id ? {
         distinct_id: body.distinct_id,

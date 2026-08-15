@@ -95,6 +95,26 @@ describe('browser ingest CORS', () => {
     },
   );
 
+  it.each([
+    ['/i/v1/replays', 'POST'],
+    ['/i/v1/replays/11111111-1111-4111-8111-111111111111/chunks', 'PUT'],
+    ['/i/v1/replays/11111111-1111-4111-8111-111111111111/complete', 'POST'],
+    ['/i/v1/replays/11111111-1111-4111-8111-111111111111', 'DELETE'],
+  ] as const)('allows only the required replay method for %s', async (url, method) => {
+    const response = await env.app.inject({
+      method: 'OPTIONS',
+      url,
+      headers: {
+        origin: CUSTOMER_ORIGIN,
+        'access-control-request-method': method,
+        'access-control-request-headers': 'authorization,content-type',
+      },
+    });
+    expect(response.statusCode).toBe(204);
+    expectAllowedOrigin(response, CUSTOMER_ORIGIN);
+    expect(response.headers['access-control-allow-methods']).toBe(method);
+  });
+
   it('reflects a future HTTPS customer origin only for an actual pk_ ingest request', async () => {
     const accepted = await env.app.inject({
       method: 'POST',

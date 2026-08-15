@@ -4,6 +4,8 @@ Docker Compose is the recommended self-host path. It runs:
 
 - Postgres with a persistent volume,
 - the Poolstatis Platform + Ingest API,
+- separate persistent volumes for Experience artifacts and consented session
+  replay objects,
 - the static admin console with `/api`, `/i`, and `/health` proxied to the API.
 
 ## Quick start
@@ -120,7 +122,11 @@ docker compose -f docker-compose.selfhost.yml run --rm poolstatis \
 ```
 
 Put the admin/API behind a reverse proxy such as Caddy, Nginx, or Traefik for TLS.
-Keep Postgres private to the Docker network. Back up the `poolstatis_pgdata` volume.
+Keep Postgres private to the Docker network. Back up `poolstatis_pgdata` and
+`poolstatis_replays` together: replay manifests in Postgres are not useful
+without their checksum-verified objects. Restore-test both volumes as one
+lineage. Expired/withdrawn recordings are tombstoned before object deletion and
+the bounded retention worker retries incomplete physical cleanup.
 
 Recommended small VPS baseline: 2 vCPU, 4 GB RAM, and 50+ GB SSD. A 1 GB VPS can
 work for demos, but it is tight once Postgres, Node, the proxy, and the OS are all

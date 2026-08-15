@@ -45,6 +45,8 @@ const SOURCE_ONLY_TOOLS_PENDING_PUBLICATION = new Set([
   'create_funnel_investigation',
   'list_funnel_investigations',
   'get_funnel_investigation',
+  'list_session_replays',
+  'get_session_replay',
 ]);
 
 /** Configuration is checked before stdio opens so a broken launcher cannot leak a token to protocol output. */
@@ -873,6 +875,34 @@ jsonTool(
     ]);
     return { routes: (routes as { routes: unknown }).routes, snapshots: (snapshots as { snapshots: unknown }).snapshots };
   }),
+);
+
+jsonTool(
+  'list_session_replays',
+  'Search up to 100 consented session replay manifests by environment, surface and lifecycle status. Returns bounded metadata and the admin viewer path, never rrweb events or DOM payloads.',
+  {
+    project,
+    env: z.string().min(1).max(40).default('prod'),
+    surface: z.string().min(1).max(120).optional(),
+    status: z.enum(['recording', 'playable', 'incomplete', 'deleting']).optional(),
+    limit: z.number().int().min(1).max(100).default(50),
+  },
+  wrap(({ project: slug, env, surface, status, limit }) => {
+    const query = new URLSearchParams({ env, limit: String(limit) });
+    if (surface) query.set('surface', surface);
+    if (status) query.set('status', status);
+    return api('GET', `/api/v1/projects/${slug}/replays?${query}`);
+  }),
+);
+
+jsonTool(
+  'get_session_replay',
+  'Read one project-scoped replay manifest and safe admin viewer path. This metadata tool intentionally never returns recorded DOM, text, cursor events or chunk object keys.',
+  { project, replay_id: z.string().uuid(), env: z.string().min(1).max(40).default('prod') },
+  wrap(({ project: slug, replay_id, env }) => api(
+    'GET',
+    `/api/v1/projects/${slug}/replays/${replay_id}?env=${encodeURIComponent(env)}`,
+  )),
 );
 
 // ===== Feature delivery =====

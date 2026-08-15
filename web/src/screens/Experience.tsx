@@ -21,6 +21,7 @@ import type {
   VisualExperienceCompareResponse,
   VisualExperienceResponse,
 } from '../api/types';
+import { ReplayPanel } from './ReplayPanel';
 
 export function Experience() {
   const { client, project, env, availableEnvs, setEnv } = useStore();
@@ -72,6 +73,8 @@ export function Experience() {
           </Field>
         </div>
       </Panel>
+
+      <ReplayPanel />
 
       {!experienceReady && (
         <ExperienceSetupGate

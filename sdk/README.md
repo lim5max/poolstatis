@@ -196,6 +196,43 @@ session id across actors fails with typed ambiguity instead of combining
 people; the read response includes canonical actor/link provenance. These are
 interaction maps, not gaze or full session replay.
 
+## Session Replay (separate consented module)
+
+Real DOM/cursor replay is an explicit subpath and does not load from the base,
+browser, attribution or Experience entrypoints. Install the exact supported
+recorder only in products that enable replay:
+
+```bash
+pnpm add @poolstatis/sdk @rrweb/record@2.1.1
+```
+
+```ts
+import { ReplayRecorder } from '@poolstatis/sdk/replay';
+
+const replay = new ReplayRecorder({
+  url: 'https://analytics.example.com',
+  ingestKey: 'pk_…',
+  surface: 'workspace',
+  route: 'workspace',
+  distinctId: () => currentUser.id,
+  version: RELEASE_SHA,
+  consent: { granted: replayConsent === true, version: 'replay-consent-v1' },
+  allowedHosts: ['app.example.com'],
+  policy: { version: 'replay-privacy-v1', text: 'masked' },
+});
+
+await replay.start();
+await replay.stop(); // or replay.withdraw() when consent is revoked
+```
+
+Consent and exact-host policy fail closed before the dynamic rrweb import.
+Passwords/payment/auth controls are blocked; all form and contenteditable
+values plus visible text are masked by default. URLs/query/hash, scripts,
+network assets, canvas and cross-origin iframes are not recorded. Pagehide only
+attempts a bounded keepalive chunk and never claims an oversized/final chunk
+was delivered. Full limits, selector controls, retention and player security:
+[Privacy-safe Session Replay](../docs/14-session-replay.md).
+
 ## Browser acquisition attribution (optional module)
 
 `@poolstatis/sdk/attribution` is a separate immediate browser entrypoint.

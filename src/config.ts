@@ -10,6 +10,7 @@ export interface Config {
   connectorEncryptionKey: string | null;
   outboundPolicy: { allowLocalHttp: boolean };
   experienceArtifactDir: string;
+  replayArtifactDir: string;
   cursorSigningSecret: string | null;
   ingestBuffer: {
     maxEvents: number;
@@ -387,6 +388,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     connectorEncryptionKey: env.POOLSTATIS_CONNECTOR_ENCRYPTION_KEY?.trim() || null,
     outboundPolicy: { allowLocalHttp: booleanValue(env.OUTBOUND_ALLOW_LOCAL_HTTP, false, 'OUTBOUND_ALLOW_LOCAL_HTTP') },
     experienceArtifactDir: env.POOLSTATIS_EXPERIENCE_ARTIFACT_DIR?.trim() || './data/experience-artifacts',
+    replayArtifactDir: env.POOLSTATIS_REPLAY_ARTIFACT_DIR?.trim() || './data/session-replays',
     cursorSigningSecret,
     ingestBuffer,
     queryCache: {
