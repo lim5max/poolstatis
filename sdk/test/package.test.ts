@@ -138,7 +138,7 @@ describe('@poolstatis/sdk 0.4.0 release artifact', () => {
     expect(workflow).toContain('test "$ACTUAL_SHA" = "$EXPECTED_SHA"');
     expect(workflow).toContain('id-token: write');
     expect(workflow).toContain('npm publish "$SDK_TARBALL" --access public --provenance');
-    expect(workflow).toContain('SDK_TARBALL="$PWD/${SDK_TARBALLS[0]}"');
+    expect(workflow.match(/SDK_TARBALL="\$PWD\/\$\{SDK_TARBALLS\[0\]\}"/g)).toHaveLength(2);
     expect(workflow).toContain('@cyclonedx/cyclonedx-npm@6.0.1');
     expect(workflow).toContain('tar -xzf "$SDK_TARBALL" -C "$SDK_SBOM_ROOT" --strip-components=1');
     expect(workflow).toContain('path: release');
