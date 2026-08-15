@@ -546,6 +546,45 @@ describe('session replay vertical slice', () => {
       await pool.end();
     }
   });
+
+  it('observes a late operation rejection when its synchronous start crosses the deadline', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    let releaseArgument: boolean | Error | undefined;
+    const client = {
+      query: () => {
+        const blockUntil = Date.now() + 35;
+        while (Date.now() < blockUntil) { /* deterministic deadline crossing */ }
+        return new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error('synthetic late query rejection')), 0);
+        });
+      },
+      release: (argument?: boolean | Error) => { releaseArgument = argument; },
+    };
+    const pool = { connect: async () => client };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const service = new ReplayService(
+        pool as never,
+        new LocalReplayObjectStore(root),
+      );
+      await expect(service.openEventsRead(
+        env.projectId,
+        'prod',
+        randomUUID(),
+        'test:late-rejection',
+        25,
+      )).rejects.toMatchObject({
+        statusCode: 504,
+        code: 'replay_response_deadline_exceeded',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(releaseArgument).toBe(true);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
 });
 
 describe('replay deletion crash convergence', () => {

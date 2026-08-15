@@ -395,14 +395,14 @@ export class ReplayService {
     const expiresAt = Date.now() + boundedDeadlineMs;
     const client = await acquireReplayClient(this.pool, expiresAt);
     try {
-      await withinReplayDeadline(client.query('BEGIN'), expiresAt);
+      await withinReplayDeadline(() => client.query('BEGIN'), expiresAt);
       const sqlBudgetMs = Math.max(1, expiresAt - Date.now());
-      await withinReplayDeadline(client.query(
+      await withinReplayDeadline(() => client.query(
         `SELECT set_config('statement_timeout', $1, true),
                 set_config('lock_timeout', $1, true)`,
         [`${sqlBudgetMs}ms`],
       ), expiresAt);
-      const sessionResult = await withinReplayDeadline(client.query<ReplayRow>(
+      const sessionResult = await withinReplayDeadline(() => client.query<ReplayRow>(
         `${SESSION_SELECT}
          WHERE rs.project_id = $1 AND rs.env = $2 AND rs.id = $3
          FOR SHARE OF rs`,
@@ -420,7 +420,7 @@ export class ReplayService {
       if (replay.status !== 'playable') {
         throw new ApiError(409, 'session_replay_incomplete', 'only contiguous replay sessions with an initial full snapshot are playable');
       }
-      const { rows } = await withinReplayDeadline(client.query<ChunkRow>(
+      const { rows } = await withinReplayDeadline(() => client.query<ChunkRow>(
         `SELECT sequence, object_key, checksum, stored_checksum, byte_size,
                 event_count, first_timestamp, last_timestamp, has_checkout
          FROM replay_chunks WHERE replay_id = $1 ORDER BY sequence`,
@@ -435,7 +435,7 @@ export class ReplayService {
         let stored: Buffer;
         try {
           stored = await withinReplayDeadline(
-            this.objects.get(chunk.object_key, Number(chunk.byte_size)),
+            () => this.objects.get(chunk.object_key, Number(chunk.byte_size)),
             expiresAt,
           );
         } catch (error) {
@@ -474,7 +474,7 @@ export class ReplayService {
       if (bytes !== replay.byte_size || events.length !== replay.event_count) {
         throw corruptReplay('stored replay totals do not match the manifest');
       }
-      await withinReplayDeadline(client.query(
+      await withinReplayDeadline(() => client.query(
         'INSERT INTO replay_audit_log (project_id, replay_id, actor, action) VALUES ($1,$2,$3,\'view\')',
         [projectId, replayId, actor],
       ), expiresAt);
@@ -946,9 +946,24 @@ function assertReplayDeadline(expiresAt: number): void {
   if (Date.now() >= expiresAt) throw replayDeadlineError();
 }
 
-async function withinReplayDeadline<T>(operation: Promise<T>, expiresAt: number): Promise<T> {
-  const remaining = expiresAt - Date.now();
+async function withinReplayDeadline<T>(start: () => Promise<T>, expiresAt: number): Promise<T> {
+  let remaining = expiresAt - Date.now();
   if (remaining <= 0) throw replayDeadlineError();
+  let operation: Promise<T>;
+  try {
+    operation = Promise.resolve(start());
+  } catch (error) {
+    if (Date.now() >= expiresAt) throw replayDeadlineError();
+    throw error;
+  }
+  remaining = expiresAt - Date.now();
+  if (remaining <= 0) {
+    // The factory may have crossed the boundary synchronously. Attach a
+    // rejection observer before returning 504 so a late transport/database
+    // failure cannot become an unhandled rejection and terminate Node.
+    void operation.catch(() => undefined);
+    throw replayDeadlineError();
+  }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
