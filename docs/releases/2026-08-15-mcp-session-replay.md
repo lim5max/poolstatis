@@ -1,4 +1,4 @@
-# MCP 0.7.0 privacy-safe Session Replay metadata
+# MCP 0.7.0 Session Replay metadata and funnel investigations
 
 `@poolstatis/mcp@0.7.0` adds two backwards-compatible, read-only tools:
 
@@ -11,8 +11,10 @@ samples, upload tokens or object-store keys. Recording still requires the
 separate SDK replay entrypoint, affirmative versioned consent and an exact-host
 policy. Playback remains server-sanitized and scriptless-sandboxed.
 
-The three funnel-investigation tools remain source/local only and are excluded
-from the `0.7.0` package profile. The release is complete only after the exact
-main artifact passes `publish-mcp.yml`, npm reports version and integrity, and
-a fresh registry-backed client initializes, lists exactly 142 tools and sees
-the replay tools without seeing funnel-investigation tools.
+The same release publishes `create_funnel_investigation`,
+`list_funnel_investigations` and `get_funnel_investigation`. They use bounded
+project-scoped REST parity, immutable lineage and integrity fingerprints; their
+evidence is descriptive, not causal. The release is complete only after the
+exact main artifact passes `publish-mcp.yml`, npm reports version and integrity,
+and a fresh registry-backed client initializes and lists exactly 145 tools,
+including both replay metadata and all three funnel-investigation tools.

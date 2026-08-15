@@ -8,8 +8,11 @@ versioned consent, an exact-host allowlist and the exact optional peer
 or dependency change.
 
 The registry release is not assumed from this source version. Publish only
-after pack/consumer gates, then require `npm view @poolstatis/sdk@0.4.0 version`
-read-back before using the install command in a production consumer.
+after the exact-main `publish-sdk.yml` Trusted Publisher workflow passes the
+pack/consumer, audit and SBOM gates, then require
+`npm view @poolstatis/sdk@0.4.0 version` read-back before using the install
+command in a production consumer. The workflow must not be dispatched until an
+npm package owner binds it to `lim5max/poolstatis`.
 
 # SDK 0.2 migration
 

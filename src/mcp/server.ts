@@ -49,11 +49,7 @@ const PUBLISHED_060_PENDING_TOOLS = new Set([
   'get_session_replay',
 ]);
 
-const PUBLISHED_070_PENDING_TOOLS = new Set([
-  'create_funnel_investigation',
-  'list_funnel_investigations',
-  'get_funnel_investigation',
-]);
+const PUBLISHED_070_PENDING_TOOLS = new Set<string>();
 
 /** Configuration is checked before stdio opens so a broken launcher cannot leak a token to protocol output. */
 export function validateMcpConfig(env: { POOLSTATIS_URL?: string; POOLSTATIS_TOKEN?: string }): McpConfig {

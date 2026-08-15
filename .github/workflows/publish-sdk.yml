@@ -1,0 +1,72 @@
+name: Publish SDK package
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed main commit to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify exact main lineage
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: corepack enable
+      - run: corepack prepare pnpm@10.13.1 --activate
+      - run: pnpm --dir sdk install --frozen-lockfile --ignore-workspace
+      - name: Test and build SDK
+        run: |
+          pnpm --dir sdk test
+          pnpm --dir sdk typecheck
+          pnpm --dir sdk build
+      - name: Pack and verify one SDK artifact
+        run: |
+          mkdir -p .release
+          SDK_VERSION=$(node -p "require('./sdk/package.json').version")
+          if npm view "@poolstatis/sdk@$SDK_VERSION" version >/dev/null 2>&1; then
+            echo "@poolstatis/sdk@$SDK_VERSION already exists; refusing to overwrite"
+            exit 1
+          fi
+          SDK_TARBALL="$PWD/.release/poolstatis-sdk-$SDK_VERSION.tgz"
+          npm pack --json --pack-destination .release ./sdk > .release/sdk-pack-output.txt
+          POOLSTATIS_SDK_TARBALL="$SDK_TARBALL" \
+          POOLSTATIS_SDK_PACK_OUTPUT="$PWD/.release/sdk-pack-output.txt" \
+            pnpm --dir sdk exec vitest run test/package.test.ts
+
+          SDK_CONSUMER="$PWD/.release/sdk-consumer"
+          SDK_SBOM="$PWD/.release/poolstatis-sdk-$SDK_VERSION.cdx.json"
+          mkdir -p "$SDK_CONSUMER"
+          (
+            cd "$SDK_CONSUMER"
+            npm init --yes >/dev/null
+            npm install --ignore-scripts --no-fund --omit=optional "$SDK_TARBALL"
+            npm audit --omit=dev
+            npx --yes @cyclonedx/cyclonedx-npm@6.0.1 \
+              --package-lock-only --omit dev --omit optional \
+              --mc-type library --output-reproducible --validate \
+              --output-file "$SDK_SBOM"
+          )
+          test -s "$SDK_SBOM"
+      - name: Publish exact verified SDK tarball
+        run: |
+          SDK_VERSION=$(node -p "require('./sdk/package.json').version")
+          SDK_TARBALL="$PWD/.release/poolstatis-sdk-$SDK_VERSION.tgz"
+          npm publish "$SDK_TARBALL" --access public --provenance

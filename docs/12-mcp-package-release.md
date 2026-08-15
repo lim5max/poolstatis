@@ -7,10 +7,10 @@ workspace build, passes the protocol smoke.
 Source-only tools may be implemented before a package release. Keep them out of
 the pinned distribution profile and out of `PUBLISHED_MCP_TOOL_GROUPS` until a
 new version passes every gate below. `@poolstatis/mcp@0.7.0` adds bounded
-Session Replay manifest discovery but does not include the funnel-investigation
-tools. Both the CLI and root programmatic export pin this profile; the public
-configuration has no distribution override. A local pack or manifest version
-is not proof that npm changed; require
+Session Replay manifest discovery plus the three bounded, immutable
+funnel-investigation tools. Both the CLI and root programmatic export pin this
+full 145-tool profile; the public configuration has no distribution override.
+A local pack or manifest version is not proof that npm changed; require
 registry version, integrity and fresh protocol read-back.
 
 ## Required gates

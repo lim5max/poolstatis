@@ -77,6 +77,13 @@ jobs:
           pnpm --dir sdk test
           pnpm --dir sdk typecheck
           pnpm --dir sdk build
+          mkdir -p .release
+          SDK_VERSION=$(node -p "require('./sdk/package.json').version")
+          SDK_TARBALL="$PWD/.release/poolstatis-sdk-$SDK_VERSION.tgz"
+          npm pack --json --pack-destination .release ./sdk > .release/sdk-pack-output.txt
+          POOLSTATIS_SDK_TARBALL="$SDK_TARBALL" \
+          POOLSTATIS_SDK_PACK_OUTPUT="$PWD/.release/sdk-pack-output.txt" \
+            pnpm --dir sdk exec vitest run test/package.test.ts
 
       - name: Test and pack MCP
         run: |

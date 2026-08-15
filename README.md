@@ -54,6 +54,7 @@ separate repositories.
 | [docs/11-repository-split.md](docs/11-repository-split.md) | System, site, and Cloud repository boundaries |
 | [docs/12-mcp-package-release.md](docs/12-mcp-package-release.md) | Public MCP package release and provenance gates |
 | [docs/14-session-replay.md](docs/14-session-replay.md) | Consent-gated rrweb recording, storage, privacy and sandboxed playback |
+| [docs/15-sdk-package-release.md](docs/15-sdk-package-release.md) | Public SDK pack, compatibility, Trusted Publisher and provenance gates |
 | [sdk/README.md](sdk/README.md) | `@poolstatis/sdk` client usage |
 | [.claude/skills/poolstatis-instrument](.claude/skills/poolstatis-instrument/SKILL.md) | Agent skill for product instrumentation |
 

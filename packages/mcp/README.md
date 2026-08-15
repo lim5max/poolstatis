@@ -17,8 +17,8 @@ Node.js 22 and 24 are supported. The package is an ESM executable and speaks
 MCP over stdio only; stdout is reserved for protocol messages.
 
 The root programmatic export is pinned to the same published `0.7.0` profile as
-the CLI. Its `McpConfig` intentionally has no distribution override, so local
-source-only tools cannot be enabled through the public package API.
+the CLI. Its `McpConfig` intentionally has no distribution override, so callers
+cannot swap the reviewed public contract for another internal profile.
 
 ## Browser analytics contract
 
@@ -49,6 +49,14 @@ They never return rrweb events, reconstructed DOM, text, cursor samples,
 upload tokens or object-store keys. Recording and playback remain governed by
 the separate consent, host-policy, masking, retention and sandbox contract in
 Core.
+
+## Funnel investigations
+
+Version `0.7.0` also publishes `create_funnel_investigation`,
+`list_funnel_investigations` and `get_funnel_investigation`. They operate on
+bounded saved-funnel evidence through the same project-scoped REST contract,
+preserve immutable lineage and integrity fingerprints, and remain descriptive
+rather than causal.
 
 ## Compatibility
 

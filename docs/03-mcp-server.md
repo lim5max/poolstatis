@@ -275,11 +275,11 @@ list_data_quality_issues(project, {env?, limit?, since_days?})
   // semantic conflicts: e.g. brief.completed exists, but entity status is still "new"
 ```
 
-Три `*_funnel_investigation` tools доступны в Core source/local runner и
-зарезервированы для следующего MCP package release. `@poolstatis/mcp@0.7.0`
-их не содержит; до отдельного publish gate используйте
-REST endpoints. Номер в `packages/mcp/package.json` сам по себе не является
-свидетельством публикации.
+Три `*_funnel_investigation` tools входят в контракт
+`@poolstatis/mcp@0.7.0`: они используют те же project-scoped REST endpoints,
+сохраняют immutable lineage и ограничивают период 366 днями. Номер в
+`packages/mcp/package.json` сам по себе не является свидетельством публикации;
+нужен registry read-back точной версии.
 
 MCP tools expose structured JSON output (`structuredContent`) with a text JSON fallback for older clients.
 Web tools используют только typed Query DSL и registry metric keys: raw SQL и

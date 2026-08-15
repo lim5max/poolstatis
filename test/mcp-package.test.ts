@@ -374,9 +374,9 @@ describe('@poolstatis/mcp release artifact', () => {
 
     expect(server._registeredTools).toHaveProperty('list_session_replays');
     expect(server._registeredTools).toHaveProperty('get_session_replay');
-    expect(server._registeredTools).not.toHaveProperty('create_funnel_investigation');
-    expect(server._registeredTools).not.toHaveProperty('list_funnel_investigations');
-    expect(server._registeredTools).not.toHaveProperty('get_funnel_investigation');
+    expect(server._registeredTools).toHaveProperty('create_funnel_investigation');
+    expect(server._registeredTools).toHaveProperty('list_funnel_investigations');
+    expect(server._registeredTools).toHaveProperty('get_funnel_investigation');
   });
 
   it('initializes, lists tools, and performs a project-scoped read against a safe fixture', async () => {
@@ -384,7 +384,7 @@ describe('@poolstatis/mcp release artifact', () => {
     try {
       expect(client.getServerVersion()).toEqual({ name: 'poolstatis', version: '0.7.0' });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
-      expect(tools.tools).toHaveLength(142);
+      expect(tools.tools).toHaveLength(145);
       expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'list_projects',
         'get_project_portfolio',
@@ -412,6 +412,9 @@ describe('@poolstatis/mcp release artifact', () => {
         'get_page_engagement',
         'list_session_replays',
         'get_session_replay',
+        'create_funnel_investigation',
+        'list_funnel_investigations',
+        'get_funnel_investigation',
         'list_visual_experience_versions',
         'get_visual_experience_map',
         'compare_visual_experience',
@@ -444,9 +447,6 @@ describe('@poolstatis/mcp release artifact', () => {
       expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
         'approve_automation_proposal',
         'reject_automation_proposal',
-        'create_funnel_investigation',
-        'list_funnel_investigations',
-        'get_funnel_investigation',
       ]));
       const browserStandard = await client.readResource({
         uri: 'poolstatis://standard/browser-analytics',
