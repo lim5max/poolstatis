@@ -8,6 +8,7 @@ import {
   retentionIndexesReady,
 } from '../services/retentionIndexes.js';
 import {
+  PostgresEventStore,
   rollingEventPartitionsReady,
 } from '../stores/postgresEventStore.js';
 import { createContext } from '../http/context.js';
@@ -163,6 +164,10 @@ const prepareMaintenance = async (): Promise<void> => {
         new ReplayService(
           maintenancePool,
           new LocalReplayObjectStore(config.replayArtifactDir),
+          {
+            artifacts: new LocalArtifactStore(config.experienceArtifactDir),
+            eventStore: new PostgresEventStore(maintenancePool, { managePartitions: false }),
+          },
         ),
         maintenancePool,
         {

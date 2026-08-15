@@ -164,6 +164,38 @@ describe('session replay privacy boundary', () => {
     ]) expect(serialized).not.toContain(forbidden);
   });
 
+  it('blocks case-fold attribute collisions before selectors or text policy are evaluated', () => {
+    const original = [{
+      type: 2,
+      timestamp: 350,
+      data: { node: { type: 0, childNodes: [{
+        type: 2,
+        tagName: 'body',
+        attributes: {},
+        childNodes: [
+          { type: 2, tagName: 'section', attributes: { class: 'safe', CLASS: 'private-block' }, childNodes: [{ type: 3, textContent: 'LEAK-CLASS-A' }] },
+          { type: 2, tagName: 'section', attributes: { CLASS: 'private-block', class: 'safe' }, childNodes: [{ type: 3, textContent: 'LEAK-CLASS-B' }] },
+          { type: 2, tagName: 'section', attributes: { id: 'safe', ID: 'private-id' }, childNodes: [{ type: 3, textContent: 'LEAK-ID' }] },
+          { type: 2, tagName: 'section', attributes: { title: 'safe', TITLE: 'private-attr' }, childNodes: [{ type: 3, textContent: 'LEAK-ATTR' }] },
+          { type: 2, tagName: 'section', attributes: { CONTENTEDITABLE: false, contenteditable: true }, childNodes: [{ type: 3, textContent: 'LEAK-EDITABLE' }] },
+        ],
+      }] } },
+    }];
+    const options = {
+      route: 'account',
+      textMode: 'visible' as const,
+      blockSelectors: ['.private-block', '#private-id', '[title="private-attr"]'],
+    };
+    const once = sanitizeReplayEvents(original, options);
+    const twice = sanitizeReplayEvents(once.events, options);
+    expect(twice.events).toEqual(once.events);
+    const serialized = JSON.stringify(once.events);
+    for (const secret of ['LEAK-CLASS-A', 'LEAK-CLASS-B', 'LEAK-ID', 'LEAK-ATTR', 'LEAK-EDITABLE']) {
+      expect(serialized).not.toContain(secret);
+    }
+    expect(serialized.match(/data-poolstatis-replay-blocked/g)).toHaveLength(5);
+  });
+
   it('rejects backward timestamps inside a chunk', () => {
     expect(() => sanitizeReplayEvents([
       { type: 4, timestamp: 200, data: { href: 'https://example.test/?token=x', width: 100, height: 100 } },

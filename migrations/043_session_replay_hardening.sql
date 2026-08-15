@@ -3,9 +3,9 @@
 -- privacy policy, deletion audit and durable project cleanup contract.
 
 ALTER TABLE replay_sessions
-  ADD COLUMN mask_selectors text[] NOT NULL DEFAULT '{}'
+  ADD COLUMN IF NOT EXISTS mask_selectors text[] NOT NULL DEFAULT '{}'
     CHECK (cardinality(mask_selectors) <= 20),
-  ADD COLUMN block_selectors text[] NOT NULL DEFAULT '{}'
+  ADD COLUMN IF NOT EXISTS block_selectors text[] NOT NULL DEFAULT '{}'
     CHECK (cardinality(block_selectors) <= 20),
   ADD COLUMN delete_retry_after timestamptz NOT NULL DEFAULT '-infinity',
   ADD COLUMN deletion_claimed_until timestamptz NOT NULL DEFAULT '-infinity';
@@ -24,7 +24,7 @@ ALTER TABLE replay_audit_log
   ADD CONSTRAINT replay_audit_log_action_check
     CHECK (action IN ('view', 'delete', 'delete_requested', 'delete_completed'));
 
-CREATE UNIQUE INDEX replay_audit_delete_once_idx
+CREATE UNIQUE INDEX IF NOT EXISTS replay_audit_delete_once_idx
   ON replay_audit_log (replay_id, action)
   WHERE action IN ('delete_requested', 'delete_completed');
 
@@ -38,6 +38,8 @@ $replay_audit_immutable$ LANGUAGE plpgsql;
 
 REVOKE ALL ON FUNCTION poolstatis_reject_replay_audit_mutation() FROM PUBLIC;
 
+DROP TRIGGER IF EXISTS replay_audit_log_append_only ON replay_audit_log;
+
 CREATE TRIGGER replay_audit_log_append_only
   BEFORE UPDATE OR DELETE ON replay_audit_log
   FOR EACH ROW EXECUTE FUNCTION poolstatis_reject_replay_audit_mutation();
@@ -47,12 +49,26 @@ CREATE TRIGGER replay_audit_log_append_only
 CREATE TABLE replay_project_deletion_jobs (
   project_id       uuid PRIMARY KEY,
   actor            text NOT NULL,
+  phase            text NOT NULL DEFAULT 'artifacts'
+    CHECK (phase IN ('artifacts', 'events', 'replays', 'metadata', 'objects')),
+  artifacts_deleted integer NOT NULL DEFAULT 0 CHECK (artifacts_deleted >= 0),
+  events_deleted   bigint NOT NULL DEFAULT 0 CHECK (events_deleted >= 0),
+  replays_deleted  integer NOT NULL DEFAULT 0 CHECK (replays_deleted >= 0),
   attempts         integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   retry_after      timestamptz NOT NULL DEFAULT '-infinity',
   claimed_until    timestamptz NOT NULL DEFAULT '-infinity',
   last_error       text,
   created_at       timestamptz NOT NULL DEFAULT clock_timestamp(),
   completed_at     timestamptz
+);
+
+-- Snapshot object keys must survive the project cascade just like the replay
+-- prefix job. Each delete is idempotent and individually checkpointed.
+CREATE TABLE replay_project_deletion_artifacts (
+  project_id   uuid NOT NULL REFERENCES replay_project_deletion_jobs(project_id) ON DELETE CASCADE,
+  artifact_key text NOT NULL,
+  deleted_at   timestamptz,
+  PRIMARY KEY (project_id, artifact_key)
 );
 
 CREATE INDEX replay_project_deletion_jobs_retry_idx
@@ -62,6 +78,30 @@ CREATE INDEX replay_project_deletion_jobs_retry_idx
 CREATE INDEX replay_sessions_deletion_claim_idx
   ON replay_sessions (delete_retry_after, deletion_claimed_until, delete_attempts, delete_after)
   WHERE status <> 'deleted';
+
+-- Snapshot bytes are written before their metadata row. Reject late metadata
+-- atomically after the deletion barrier; the service then removes the just-
+-- written object, while snapshots committed before the barrier are captured
+-- into replay_project_deletion_artifacts by beginProjectDeletion().
+CREATE FUNCTION poolstatis_reject_snapshot_for_deleting_project()
+RETURNS trigger AS $snapshot_delete_barrier$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM projects
+    WHERE id = NEW.project_id AND replay_deletion_pending = true
+  ) THEN
+    RAISE EXCEPTION 'project deletion has disabled snapshot writes'
+      USING ERRCODE = 'PSD01';
+  END IF;
+  RETURN NEW;
+END
+$snapshot_delete_barrier$ LANGUAGE plpgsql;
+
+REVOKE ALL ON FUNCTION poolstatis_reject_snapshot_for_deleting_project() FROM PUBLIC;
+
+CREATE TRIGGER experience_snapshots_project_delete_barrier
+  BEFORE INSERT OR UPDATE ON experience_snapshots
+  FOR EACH ROW EXECUTE FUNCTION poolstatis_reject_snapshot_for_deleting_project();
 
 -- Replace the 042 helper as part of the upgrade so calling the stable helper
 -- again cannot re-grant mutation access to append-only replay audit rows.
@@ -119,7 +159,8 @@ BEGIN
 
   EXECUTE $grant$
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
-      public.replay_project_deletion_jobs
+      public.replay_project_deletion_jobs,
+      public.replay_project_deletion_artifacts
     TO poolstatis_core_runtime
   $grant$;
   EXECUTE $revoke$

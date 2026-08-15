@@ -280,7 +280,7 @@ export class ReplayRecorder {
     if (!pending) return;
     await this.requestWithRetry(`/i/v1/replays/${pending.replayId}`, 'DELETE', {
       upload_token: pending.uploadToken,
-    }, false);
+    }, false, new Set([404, 410]));
     if (this.pendingWithdrawal === pending) this.pendingWithdrawal = null;
   }
 
@@ -348,13 +348,25 @@ export class ReplayRecorder {
     }
   }
 
-  private async requestWithRetry(path: string, method: 'PUT' | 'POST' | 'DELETE', body: unknown, keepalive: boolean): Promise<unknown> {
+  private async requestWithRetry(
+    path: string,
+    method: 'PUT' | 'POST' | 'DELETE',
+    body: unknown,
+    keepalive: boolean,
+    terminalStatuses: ReadonlySet<number> = new Set(),
+  ): Promise<unknown> {
     let last: unknown;
     const attempts = keepalive ? 1 : MAX_ATTEMPTS;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         return await this.request(path, method, body, keepalive);
       } catch (error) {
+        // Withdrawal is complete once the manifest is tenant-scoped absent or
+        // tombstoned, including the ambiguous-response case where the server
+        // deleted it but the browser never received the successful response.
+        if (error instanceof ReplayTransportError
+            && error.status !== null
+            && terminalStatuses.has(error.status)) return null;
         last = error;
         if (!(error instanceof ReplayTransportError) || !error.retryable || attempt === attempts - 1) break;
         await delay(250 * 2 ** attempt);
@@ -388,15 +400,19 @@ export class ReplayRecorder {
           keepalive,
         });
       } catch (error) {
-        if (timedOut) throw new ReplayTransportError('replay request timed out', true);
+        if (timedOut) throw new ReplayTransportError('replay request timed out', true, null);
         if (error instanceof ReplayTransportError) throw error;
-        throw new ReplayTransportError(error instanceof Error ? error.message : 'replay network request failed', true);
+        throw new ReplayTransportError(error instanceof Error ? error.message : 'replay network request failed', true, null);
       }
       const payload = await response.json().catch(() => null) as { error?: { message?: string; retryable?: boolean } } | null;
       if (!response.ok) {
         const retryable = response.status === 408 || response.status === 429 || response.status >= 500
           || payload?.error?.retryable === true;
-        throw new ReplayTransportError(payload?.error?.message ?? `replay request rejected: ${response.status}`, retryable);
+        throw new ReplayTransportError(
+          payload?.error?.message ?? `replay request rejected: ${response.status}`,
+          retryable,
+          response.status,
+        );
       }
       return payload;
     } finally {
@@ -440,7 +456,11 @@ export class ReplayRecorder {
 }
 
 class ReplayTransportError extends Error {
-  constructor(message: string, readonly retryable: boolean) {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    readonly status: number | null,
+  ) {
     super(message);
     this.name = 'ReplayTransportError';
   }

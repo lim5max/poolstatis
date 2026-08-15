@@ -3,6 +3,8 @@ import type pg from 'pg';
 import { ApiError, notFound } from '../errors.js';
 import { hashToken } from '../keys.js';
 import type { CreateReplaySessionInput, ReplayChunkUploadInput } from '../schemas.js';
+import type { ArtifactStore } from '../stores/artifactStore.js';
+import type { EventStore } from '../stores/eventStore.js';
 import { getExperienceRoute, getExperienceSurface } from './experience.js';
 import {
   ReplayObjectConflictError,
@@ -56,12 +58,33 @@ interface ChunkRow {
   has_checkout: boolean;
 }
 
+interface ProjectDeletionJobRow {
+  project_id: string;
+  actor: string;
+  phase: 'artifacts' | 'events' | 'replays' | 'metadata' | 'objects';
+  artifacts_deleted: number;
+  events_deleted: number | string;
+  replays_deleted: number;
+}
+
+export interface ProjectDeletionDependencies {
+  artifacts: Pick<ArtifactStore, 'delete'>;
+  eventStore: Pick<EventStore, 'purge'>;
+}
+
+export interface ReplayProjectDeletionResult {
+  artifactsDeleted: number;
+  eventsDeleted: number;
+  replaysDeleted: number;
+}
+
 export interface ReplayEventsRead {
   replay: ReplaySessionSummary;
   events: Array<Record<string, unknown>>;
 }
 
 export interface ReplayEventsLease extends ReplayEventsRead {
+  expiresAt: number;
   close(completed: boolean): Promise<void>;
 }
 
@@ -80,6 +103,7 @@ export class ReplayService {
   constructor(
     private readonly pool: pg.Pool,
     private readonly objects: ReplayObjectStore,
+    private readonly projectDeletion?: ProjectDeletionDependencies,
   ) {}
 
   async createSession(
@@ -365,10 +389,18 @@ export class ReplayService {
     env: string,
     replayId: string,
     actor: string,
+    deadlineMs = 15_000,
   ): Promise<ReplayEventsLease> {
+    const boundedDeadlineMs = Math.min(30_000, Math.max(25, deadlineMs));
+    const expiresAt = Date.now() + boundedDeadlineMs;
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query(
+        `SELECT set_config('statement_timeout', $1, true),
+                set_config('lock_timeout', $1, true)`,
+        [`${boundedDeadlineMs}ms`],
+      );
       const sessionResult = await client.query<ReplayRow>(
         `${SESSION_SELECT}
          WHERE rs.project_id = $1 AND rs.env = $2 AND rs.id = $3
@@ -401,11 +433,16 @@ export class ReplayService {
         if (chunk.sequence !== index) throw corruptReplay('stored replay chunk sequence is not contiguous');
         let stored: Buffer;
         try {
-          stored = await this.objects.get(chunk.object_key, Number(chunk.byte_size));
+          stored = await withinReplayDeadline(
+            this.objects.get(chunk.object_key, Number(chunk.byte_size)),
+            expiresAt,
+          );
         } catch (error) {
+          if (error instanceof ApiError) throw error;
           if (error instanceof ReplayObjectTooLargeError) throw corruptReplay('stored replay chunk exceeds its manifest size');
           throw new ApiError(503, 'replay_storage_unavailable', 'replay payload is temporarily unavailable', undefined, { retryable: true });
         }
+        assertReplayDeadline(expiresAt);
         bytes += stored.length;
         if (bytes > REPLAY_LIMITS.maxViewerBytes) throw new ApiError(413, 'replay_view_limit_exceeded', 'replay exceeds the viewer byte limit');
         if (stored.length !== Number(chunk.byte_size)) throw corruptReplay('stored replay chunk size does not match its manifest');
@@ -419,6 +456,7 @@ export class ReplayService {
           maskSelectors: row.mask_selectors,
           blockSelectors: row.block_selectors,
         });
+        assertReplayDeadline(expiresAt);
         if (sanitized.byteSize !== stored.length
             || sanitized.eventCount !== Number(chunk.event_count)
             || sanitized.firstTimestamp !== Number(chunk.first_timestamp)
@@ -439,10 +477,12 @@ export class ReplayService {
         'INSERT INTO replay_audit_log (project_id, replay_id, actor, action) VALUES ($1,$2,$3,\'view\')',
         [projectId, replayId, actor],
       );
+      assertReplayDeadline(expiresAt);
       let closed = false;
       return {
         replay,
         events,
+        expiresAt,
         close: async (completed: boolean) => {
           if (closed) return;
           closed = true;
@@ -467,7 +507,11 @@ export class ReplayService {
     uploadToken: string,
     now = new Date(),
   ): Promise<{ deleted: true }> {
-    const session = await this.getRawSession(projectId, env, replayId);
+    // A previous attempt may have committed the unreadable `deleting`
+    // tombstone before physical storage failed or its HTTP response was lost.
+    // The original upload token remains available until final deletion, so an
+    // authenticated retry can converge instead of getting stuck on 410.
+    const session = await this.getRawSession(projectId, env, replayId, true);
     this.assertToken(session.upload_token_hash, uploadToken);
     await this.deleteSession(projectId, replayId, 'consent:withdrawal', now);
     return { deleted: true };
@@ -567,9 +611,9 @@ export class ReplayService {
   }
 
   /**
-   * Establishes the replay write barrier only after the caller has purged
-   * non-replay project data. The durable job survives the project cascade, so
-   * a crashed request can finish both the database deletion and object sweep.
+   * Persists deletion intent before any external side effect. Snapshot object
+   * keys are copied into a non-cascading work table so recovery remains
+   * possible even after project metadata disappears.
    */
   async beginProjectDeletion(projectId: string, actor: string, now = new Date()): Promise<void> {
     const client = await this.pool.connect();
@@ -593,6 +637,12 @@ export class ReplayService {
              retry_after = '-infinity', last_error = NULL`,
         [projectId, actor, now],
       );
+      await client.query(
+        `INSERT INTO replay_project_deletion_artifacts (project_id, artifact_key)
+         SELECT $1, artifact_key FROM experience_snapshots WHERE project_id = $1
+         ON CONFLICT (project_id, artifact_key) DO NOTHING`,
+        [projectId],
+      );
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -602,20 +652,19 @@ export class ReplayService {
     }
   }
 
-  /** Final object-prefix sweep after the project row has been removed. */
-  async completeProjectDeletion(projectId: string, now = new Date()): Promise<void> {
+  /** Runs every durable deletion phase; safe to retry after any crash window. */
+  async processProjectDeletion(
+    projectId: string,
+    now = new Date(),
+  ): Promise<ReplayProjectDeletionResult> {
     try {
-      await this.objects.deleteProject(projectId);
-      await this.pool.query(
-        'DELETE FROM replay_project_deletion_jobs WHERE project_id = $1',
-        [projectId],
-      );
+      return await this.advanceProjectDeletion(projectId, now);
     } catch {
       await this.failProjectDeletionJob(projectId, now);
       throw new ApiError(
         503,
         'replay_project_delete_pending',
-        'project metadata is deleted and replay object cleanup will be retried',
+        'project deletion is durable and will be retried from its last completed phase',
         undefined,
         { retryable: true },
       );
@@ -626,7 +675,7 @@ export class ReplayService {
     limit = 100,
     now = new Date(),
   ): Promise<{ deleted: number; errors: number; hasMore: boolean }> {
-    const { rows } = await this.pool.query<{ project_id: string; actor: string }>(
+    const { rows } = await this.pool.query<{ project_id: string }>(
       `WITH candidates AS (
          SELECT project_id FROM replay_project_deletion_jobs
          WHERE completed_at IS NULL AND retry_after <= $1 AND claimed_until <= $1
@@ -645,21 +694,7 @@ export class ReplayService {
     let errors = 0;
     for (const row of rows) {
       try {
-        await this.purgeSessions(row.project_id, row.actor, undefined, undefined, now);
-        const removed = await this.pool.query(
-          `DELETE FROM projects
-           WHERE id = $1 AND replay_deletion_pending = true`,
-          [row.project_id],
-        );
-        if (!removed.rowCount) {
-          const exists = await this.pool.query('SELECT 1 FROM projects WHERE id = $1', [row.project_id]);
-          if (exists.rowCount) throw new Error('project deletion job lost its replay write barrier');
-        }
-        await this.objects.deleteProject(row.project_id);
-        await this.pool.query(
-          'DELETE FROM replay_project_deletion_jobs WHERE project_id = $1',
-          [row.project_id],
-        );
+        await this.advanceProjectDeletion(row.project_id, now);
         deleted += 1;
       } catch {
         await this.failProjectDeletionJob(row.project_id, now);
@@ -674,6 +709,106 @@ export class ReplayService {
       [now],
     );
     return { deleted, errors, hasMore: more.rows[0]?.has_more === true };
+  }
+
+  private async advanceProjectDeletion(
+    projectId: string,
+    now: Date,
+  ): Promise<ReplayProjectDeletionResult> {
+    if (!this.projectDeletion) {
+      throw new Error('project deletion dependencies are not configured');
+    }
+    let job = await this.getProjectDeletionJob(projectId);
+    if (!job) throw notFound('project_deletion_job');
+
+    if (job.phase === 'artifacts') {
+      while (true) {
+        const artifacts = await this.pool.query<{ artifact_key: string }>(
+          `SELECT artifact_key FROM replay_project_deletion_artifacts
+           WHERE project_id = $1 AND deleted_at IS NULL
+           ORDER BY artifact_key LIMIT 100`,
+          [projectId],
+        );
+        if (artifacts.rows.length === 0) break;
+        for (const artifact of artifacts.rows) {
+          await this.projectDeletion.artifacts.delete(artifact.artifact_key);
+          await this.pool.query(
+            `UPDATE replay_project_deletion_artifacts SET deleted_at = $3
+             WHERE project_id = $1 AND artifact_key = $2 AND deleted_at IS NULL`,
+            [projectId, artifact.artifact_key, now],
+          );
+        }
+      }
+      await this.pool.query(
+        `UPDATE replay_project_deletion_jobs
+         SET phase = 'events', artifacts_deleted = (
+           SELECT count(*) FROM replay_project_deletion_artifacts
+           WHERE project_id = $1 AND deleted_at IS NOT NULL
+         )
+         WHERE project_id = $1 AND phase = 'artifacts'`,
+        [projectId],
+      );
+      job = (await this.getProjectDeletionJob(projectId))!;
+    }
+
+    if (job.phase === 'events') {
+      const eventsDeleted = await this.projectDeletion.eventStore.purge(projectId);
+      await this.pool.query(
+        `UPDATE replay_project_deletion_jobs
+         SET phase = 'replays', events_deleted = events_deleted + $2
+         WHERE project_id = $1 AND phase = 'events'`,
+        [projectId, eventsDeleted],
+      );
+      job = (await this.getProjectDeletionJob(projectId))!;
+    }
+
+    if (job.phase === 'replays') {
+      const replaysDeleted = await this.purgeSessions(projectId, job.actor, undefined, undefined, now);
+      await this.pool.query(
+        `UPDATE replay_project_deletion_jobs
+         SET phase = 'metadata', replays_deleted = replays_deleted + $2
+         WHERE project_id = $1 AND phase = 'replays'`,
+        [projectId, replaysDeleted],
+      );
+      job = (await this.getProjectDeletionJob(projectId))!;
+    }
+
+    if (job.phase === 'metadata') {
+      const removed = await this.pool.query(
+        `DELETE FROM projects
+         WHERE id = $1 AND replay_deletion_pending = true`,
+        [projectId],
+      );
+      if (!removed.rowCount) {
+        const exists = await this.pool.query('SELECT 1 FROM projects WHERE id = $1', [projectId]);
+        if (exists.rowCount) throw new Error('project deletion job lost its durable write barrier');
+      }
+      await this.pool.query(
+        `UPDATE replay_project_deletion_jobs SET phase = 'objects'
+         WHERE project_id = $1 AND phase = 'metadata'`,
+        [projectId],
+      );
+      job = (await this.getProjectDeletionJob(projectId))!;
+    }
+
+    const result = projectDeletionResult(job);
+    if (job.phase === 'objects') {
+      await this.objects.deleteProject(projectId);
+      await this.pool.query(
+        'DELETE FROM replay_project_deletion_jobs WHERE project_id = $1',
+        [projectId],
+      );
+    }
+    return result;
+  }
+
+  private async getProjectDeletionJob(projectId: string): Promise<ProjectDeletionJobRow | null> {
+    const { rows } = await this.pool.query<ProjectDeletionJobRow>(
+      `SELECT project_id, actor, phase, artifacts_deleted, events_deleted, replays_deleted
+       FROM replay_project_deletion_jobs WHERE project_id = $1`,
+      [projectId],
+    );
+    return rows[0] ?? null;
   }
 
   /** Physical replay purge used by project deletion and env-scoped data purge. */
@@ -718,13 +853,18 @@ export class ReplayService {
     ).catch(() => {});
   }
 
-  private async getRawSession(projectId: string, env: string, replayId: string): Promise<ReplayRow> {
+  private async getRawSession(
+    projectId: string,
+    env: string,
+    replayId: string,
+    allowDeleting = false,
+  ): Promise<ReplayRow> {
     const { rows } = await this.pool.query<ReplayRow>(
       `${SESSION_SELECT} WHERE rs.project_id = $1 AND rs.env = $2 AND rs.id = $3`,
       [projectId, env, replayId],
     );
     if (!rows[0]) throw notFound('session_replay');
-    if (rows[0].status === 'deleting' || rows[0].status === 'deleted') {
+    if (rows[0].status === 'deleted' || rows[0].status === 'deleting' && !allowDeleting) {
       throw new ApiError(410, 'session_replay_deleted', 'session replay is deleted');
     }
     return rows[0];
@@ -776,6 +916,45 @@ export class ReplayService {
     if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
       throw new ApiError(403, 'replay_upload_token_invalid', 'replay upload token is invalid for this session');
     }
+  }
+}
+
+function replayDeadlineError(): ApiError {
+  return new ApiError(
+    504,
+    'replay_response_deadline_exceeded',
+    'replay payload could not be read within the bounded response deadline',
+    'retry the replay read later',
+    { retryable: true },
+  );
+}
+
+function projectDeletionResult(job: ProjectDeletionJobRow): ReplayProjectDeletionResult {
+  return {
+    artifactsDeleted: Number(job.artifacts_deleted),
+    eventsDeleted: Number(job.events_deleted),
+    replaysDeleted: Number(job.replays_deleted),
+  };
+}
+
+function assertReplayDeadline(expiresAt: number): void {
+  if (Date.now() >= expiresAt) throw replayDeadlineError();
+}
+
+async function withinReplayDeadline<T>(operation: Promise<T>, expiresAt: number): Promise<T> {
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) throw replayDeadlineError();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(replayDeadlineError()), remaining);
+        timeout.unref();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 

@@ -126,16 +126,17 @@ function clone(value: unknown, context: CloneContext): unknown {
   if (Array.isArray(value)) return value.map((item) => clone(item, context));
   if (!isObject(value)) return null;
   const tagName = typeof value.tagName === 'string' ? value.tagName.toLowerCase() : '';
-  const blocked = tagName !== '' && isBlockedNode(value, context.blockSelectors);
+  const attributes = isObject(value.attributes) ? value.attributes : {};
+  // A real DOM cannot expose case-fold duplicate attribute names, but crafted
+  // rrweb JSON can. Block the whole node so selector lookup and normalized
+  // output cannot disagree about which value wins.
+  const blocked = hasCaseFoldDuplicateAttributes(attributes)
+    || tagName !== '' && isBlockedNode(value, context.blockSelectors);
   const executable = blocked || ['script', 'iframe', 'object', 'embed', 'form', 'base', 'meta'].includes(tagName);
-  const attributes = isObject(value.attributes) ? value.attributes : null;
-  const contentEditableValue = attributes === null
-    ? undefined
-    : attributeValue(attributes, 'contenteditable');
-  const contentEditable = contentEditableValue !== undefined
-    && contentEditableValue !== false
-    && !(typeof contentEditableValue === 'string'
-      && contentEditableValue.toLowerCase() === 'false');
+  const contentEditable = attributeValues(attributes, 'contenteditable').some((candidate) => (
+    candidate !== false
+    && !(typeof candidate === 'string' && candidate.toLowerCase() === 'false')
+  ));
   const forceMask = context.forceMask
     || tagName === 'input'
     || tagName === 'textarea'
@@ -240,14 +241,17 @@ function sanitizeStyleDeclarationRemove(input: Record<string, any>): { property:
 function isBlockedNode(node: Record<string, any>, selectors: string[]): boolean {
   const tagName = typeof node.tagName === 'string' ? node.tagName.toLowerCase() : '';
   const attributes = isObject(node.attributes) ? node.attributes : {};
-  const type = typeof attributeValue(attributes, 'type') === 'string' ? String(attributeValue(attributes, 'type')).toLowerCase() : '';
-  const autocomplete = typeof attributeValue(attributes, 'autocomplete') === 'string'
-    ? String(attributeValue(attributes, 'autocomplete')).toLowerCase() : '';
+  const inputIsSensitive = attributeValues(attributes, 'type').some((value) => (
+    typeof value === 'string' && ['password', 'hidden'].includes(value.toLowerCase())
+  )) || attributeValues(attributes, 'autocomplete').some((value) => {
+    if (typeof value !== 'string') return false;
+    const normalized = value.toLowerCase();
+    return normalized.includes('cc-') || normalized.includes('password') || normalized === 'one-time-code';
+  });
   return hasAttribute(attributes, 'data-poolstatis-replay-blocked')
     || hasAttribute(attributes, 'data-poolstatis-block')
     || classTokens(attributes).includes('rr-block')
-    || tagName === 'input' && (type === 'password' || type === 'hidden'
-      || autocomplete.includes('cc-') || autocomplete.includes('password') || autocomplete === 'one-time-code')
+    || tagName === 'input' && inputIsSensitive
     || hasAttribute(attributes, 'data-payment')
     || hasAttribute(attributes, 'data-auth-token')
     || selectors.some((selector) => matchesSimpleSelector(node, selector));
@@ -267,27 +271,43 @@ function matchesSimpleSelector(node: Record<string, any>, selector: string): boo
   const attributes = isObject(node.attributes) ? node.attributes : {};
   const tagName = typeof node.tagName === 'string' ? node.tagName.toLowerCase() : '';
   if (selector.startsWith('.')) return classTokens(attributes).includes(selector.slice(1));
-  if (selector.startsWith('#')) return String(attributeValue(attributes, 'id') ?? '') === selector.slice(1);
+  if (selector.startsWith('#')) {
+    return attributeValues(attributes, 'id').some((value) => String(value) === selector.slice(1));
+  }
   const attribute = selector.match(/^\[([a-zA-Z_:][a-zA-Z0-9_.:-]*)(?:="([a-zA-Z0-9_.:-]{1,80})")?\]$/);
   if (attribute) {
-    const value = attributeValue(attributes, attribute[1]!);
-    return value !== undefined && (attribute[2] === undefined || String(value) === attribute[2]);
+    const values = attributeValues(attributes, attribute[1]!);
+    return values.length > 0 && (attribute[2] === undefined
+      || values.some((value) => String(value) === attribute[2]));
   }
   return tagName === selector.toLowerCase();
 }
 
 function hasAttribute(attributes: Record<string, any>, name: string): boolean {
-  return attributeValue(attributes, name) !== undefined;
+  return attributeValues(attributes, name).length > 0;
 }
 
-function attributeValue(attributes: Record<string, any>, name: string): unknown {
-  const entry = Object.entries(attributes).find(([candidate]) => candidate.toLowerCase() === name.toLowerCase());
-  return entry?.[1];
+function attributeValues(attributes: Record<string, any>, name: string): unknown[] {
+  const normalized = name.toLowerCase();
+  return Object.entries(attributes)
+    .filter(([candidate]) => candidate.toLowerCase() === normalized)
+    .map(([, value]) => value);
 }
 
 function classTokens(attributes: Record<string, any>): string[] {
-  const value = attributeValue(attributes, 'class');
-  return typeof value === 'string' ? value.split(/\s+/).filter(Boolean) : [];
+  return attributeValues(attributes, 'class').flatMap((value) => (
+    typeof value === 'string' ? value.split(/\s+/).filter(Boolean) : []
+  ));
+}
+
+function hasCaseFoldDuplicateAttributes(attributes: Record<string, any>): boolean {
+  const names = new Set<string>();
+  for (const name of Object.keys(attributes)) {
+    const normalized = name.toLowerCase();
+    if (names.has(normalized)) return true;
+    names.add(normalized);
+  }
+  return false;
 }
 
 function mask(value: string): string {

@@ -61,7 +61,9 @@ versioned consent and the exact current hostname both pass. A denied or
 unsampled session does not load recorder code and does not create a manifest.
 Withdrawal racing with initialization prevents rrweb from starting. If its
 bounded delete attempts fail, the recorder retains the manifest/upload token;
-a repeated `withdraw()` retries the same tombstone instead of losing it.
+a repeated `withdraw()` retries the same tombstone instead of losing it. A
+tenant-scoped `404`/`410` after an ambiguous response is terminal success:
+the manifest is already absent or unreadable.
 
 ## Privacy contract
 
@@ -74,6 +76,9 @@ Explicit `[data-poolstatis-block]` / `.rr-block` and
 `[data-poolstatis-mask]` / `.rr-mask` are always honored in addition to the
 bounded configured simple tag, class, id or attribute selectors. Their
 normalized policy is stored with the manifest so server validation repeats it.
+Crafted attribute names that collide case-insensitively (for example
+`class`/`CLASS`) block the entire node before selector or visible-text policy
+evaluation, so normalization cannot change which privacy rule wins.
 
 Default masked mode also masks unknown/non-structural string fields, not only
 known `textContent`/`value` keys. `<style>` text, rrweb `isStyle` text and
@@ -104,18 +109,20 @@ the registered route key.
   tombstone first, making reads return `410`, then retry physical deletion and
   scrub session/distinct/host/token/privacy identifiers from the final
   idempotency row.
-  A playback read holds a shared manifest lock through validation, audit and
-  a bounded 15-second HTTP response lease;
+  A playback read starts one absolute bounded deadline before object loading,
+  holds a shared manifest lock through validation, audit and the remaining
+  HTTP response lease;
   withdrawal waits for that read, so no playback can complete after withdrawal
   itself has completed. Stalled/aborted responses roll back the view audit and
   cannot retain a database connection indefinitely. Retention uses atomic
   claims plus backoff so poison objects do not starve later expired sessions.
 
-Project deletion establishes a database replay-write barrier after its other
-purge prerequisites. Creation, chunk upload and completion then reject late
-writes. A durable cleanup job without a project foreign key survives the
-project cascade and retries the final replay-prefix sweep after a crash or
-object-store outage.
+Project deletion persists its database write barrier and durable job before
+any external deletion. Snapshot artifact keys are copied to a non-cascading
+work table, then the job checkpoints `artifacts → events → replays → metadata
+→ objects`. Creation, chunk upload and completion reject late replay writes;
+the retention worker can resume any phase after a crash or store outage,
+including the window before the first artifact/EventStore purge.
 
 Payload bytes live behind `ReplayObjectStore`; PostgreSQL contains manifests,
 chunk checksums/metadata and append-only privileged view, deletion-request and

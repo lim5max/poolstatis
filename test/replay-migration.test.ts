@@ -53,6 +53,27 @@ describe('session replay hardening migration upgrade', () => {
         [projectId, surfaceId, routeId, 'a'.repeat(64)],
       );
 
+      // Some pre-merge test installations applied an early 042 that already
+      // carried these three hardening objects under their final names. The
+      // numbered 043 must upgrade both that state and the released base 042.
+      await database.query(
+        `ALTER TABLE replay_sessions
+           ADD COLUMN mask_selectors text[] NOT NULL DEFAULT '{}'
+             CHECK (cardinality(mask_selectors) <= 20),
+           ADD COLUMN block_selectors text[] NOT NULL DEFAULT '{}'
+             CHECK (cardinality(block_selectors) <= 20);
+         ALTER TABLE replay_audit_log
+           DROP CONSTRAINT replay_audit_log_action_check,
+           ADD CONSTRAINT replay_audit_log_action_check
+             CHECK (action IN ('view', 'delete_requested', 'delete_completed'));
+         CREATE UNIQUE INDEX replay_audit_delete_once_idx
+           ON replay_audit_log (replay_id, action)
+           WHERE action IN ('delete_requested', 'delete_completed');
+         CREATE TRIGGER replay_audit_log_append_only
+           BEFORE UPDATE OR DELETE ON replay_audit_log
+           FOR EACH ROW EXECUTE FUNCTION poolstatis_reject_immutable_mutation();`,
+      );
+
       await database.query(
         await readFile(resolve('migrations/043_session_replay_hardening.sql'), 'utf8'),
       );
@@ -82,6 +103,11 @@ describe('session replay hardening migration upgrade', () => {
          VALUES ($1,'upgrade:test')`,
         [projectId],
       );
+      await database.query(
+        `INSERT INTO replay_project_deletion_artifacts (project_id, artifact_key)
+         VALUES ($1,'durable/snapshot.png')`,
+        [projectId],
+      );
       await database.query('DELETE FROM projects WHERE id = $1', [projectId]);
       expect((await database.query<{ action: string; actor: string }>(
         `SELECT action, actor FROM replay_audit_log
@@ -91,14 +117,23 @@ describe('session replay hardening migration upgrade', () => {
         { action: 'delete_requested', actor: 'upgrade:test' },
         { action: 'delete_completed', actor: 'upgrade:test' },
       ]);
-      await expect(database.query(
-        'DELETE FROM replay_audit_log WHERE project_id = $1',
-        [projectId],
-      )).rejects.toThrow('append-only');
+      const immutableClient = await database.connect();
+      try {
+        await expect(immutableClient.query(
+          'DELETE FROM replay_audit_log WHERE project_id = $1',
+          [projectId],
+        )).rejects.toThrow('append-only');
+      } finally {
+        immutableClient.release();
+      }
       expect((await database.query(
         'SELECT 1 FROM replay_project_deletion_jobs WHERE project_id = $1',
         [projectId],
       )).rowCount).toBe(1);
+      expect((await database.query<{ artifact_key: string }>(
+        'SELECT artifact_key FROM replay_project_deletion_artifacts WHERE project_id = $1',
+        [projectId],
+      )).rows).toEqual([{ artifact_key: 'durable/snapshot.png' }]);
     } finally {
       await database?.end().catch(() => undefined);
       await admin.query(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`)

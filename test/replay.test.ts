@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,8 @@ import { api, createTestEnv, type TestEnv } from './helpers.js';
 import { LocalReplayObjectStore, type ReplayObjectStore } from '../src/replay/objectStore.js';
 import { sanitizeReplayEvents } from '../src/replay/sanitize.js';
 import { purgeExpiredReplays, ReplayService } from '../src/services/replay.js';
+import { PostgresEventStore } from '../src/stores/postgresEventStore.js';
+import type { ArtifactStore } from '../src/stores/artifactStore.js';
 
 let env: TestEnv;
 let other: TestEnv;
@@ -64,6 +66,13 @@ function replayEvents(start = 100) {
     { type: 3, timestamp: start + 3, data: { source: 0, texts: [{ id: 4, value: 'Changed private text' }], adds: [], removes: [], attributes: [] } },
     { type: 3, timestamp: start + 4, data: { source: 3, id: 2, x: 0, y: 480 } },
   ];
+}
+
+function projectDeletionDependencies(target: TestEnv) {
+  return {
+    artifacts: { delete: async (_key: string) => {} },
+    eventStore: new PostgresEventStore(target.pool, { managePartitions: false }),
+  };
 }
 
 describe('session replay vertical slice', () => {
@@ -404,6 +413,69 @@ describe('session replay vertical slice', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it('bounds object reads before a lease is returned and releases the deletion lock', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'poolstatis-replay-object-deadline-'));
+    const delegate = new LocalReplayObjectStore(directory);
+    class HangingReadStore implements ReplayObjectStore {
+      hangReads = false;
+      put(key: string, bytes: Buffer) { return delegate.put(key, bytes); }
+      get(key: string, maxBytes?: number): Promise<Buffer> {
+        if (this.hangReads) return new Promise<Buffer>(() => {});
+        return delegate.get(key, maxBytes);
+      }
+      delete(key: string) { return delegate.delete(key); }
+      deleteReplay(projectId: string, replayId: string) { return delegate.deleteReplay(projectId, replayId); }
+      deleteProject(projectId: string) { return delegate.deleteProject(projectId); }
+    }
+    const store = new HangingReadStore();
+    const target = await createTestEnv({
+      replayObjectStore: store,
+      replayResponseTimeoutMs: 50,
+    });
+    try {
+      await api(target, target.secretToken, 'POST', `/api/v1/projects/${target.projectSlug}/experience/surfaces`, {
+        key: 'workspace', name: 'Workspace', purpose: 'Reproduce consented workspace interaction failures.',
+      });
+      const created = await createReplay(target);
+      const id = created.body.replay.id as string;
+      const token = created.body.upload_token as string;
+      const events = replayEvents(8_000);
+      expect((await api(target, target.ingestToken, 'PUT', `/i/v1/replays/${id}/chunks`, {
+        upload_token: token, sequence: 0, checksum: sha(events), events,
+      })).status).toBe(201);
+      expect((await api(target, target.ingestToken, 'POST', `/i/v1/replays/${id}/complete`, {
+        upload_token: token, last_sequence: 0,
+      })).body.status).toBe('playable');
+
+      store.hangReads = true;
+      const reading = api(
+        target,
+        target.secretToken,
+        'GET',
+        `/api/v1/projects/${target.projectSlug}/replays/${id}/events?env=prod`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const withdrawing = api(target, target.ingestToken, 'DELETE', `/i/v1/replays/${id}`, {
+        upload_token: token,
+      });
+      const [read, withdrawal] = await Promise.race([
+        Promise.all([reading, withdrawing]),
+        new Promise<never>((_resolve, reject) => setTimeout(
+          () => reject(new Error('hung object read retained its connection or deletion lock')),
+          1_000,
+        )),
+      ]);
+      expect(read).toMatchObject({
+        status: 504,
+        body: { error: { code: 'replay_response_deadline_exceeded', retryable: true } },
+      });
+      expect(withdrawal.status).toBe(200);
+    } finally {
+      await target.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('replay deletion crash convergence', () => {
@@ -438,15 +510,15 @@ describe('replay deletion crash convergence', () => {
         upload_token: token, sequence: 0, checksum: sha(events), events,
       });
       await store.put(`${target.projectId}/${id}/1.json`, Buffer.from('orphan-without-metadata'));
-      const failed = await api(target, target.secretToken, 'DELETE', `/api/v1/projects/${target.projectSlug}/replays/${id}`);
+      const failed = await api(target, target.ingestToken, 'DELETE', `/i/v1/replays/${id}`, {
+        upload_token: token,
+      });
       expect(failed.status).toBe(503);
       expect((await api(target, target.secretToken, 'GET', `/api/v1/projects/${target.projectSlug}/replays/${id}?env=prod`)).status).toBe(410);
-      await expect(new ReplayService(target.pool, store).deleteSession(
-        target.projectId,
-        id,
-        'retention:worker',
-        new Date(Date.now() + 6_000),
-      )).resolves.toEqual({ deleted: true });
+      const retried = await api(target, target.ingestToken, 'DELETE', `/i/v1/replays/${id}`, {
+        upload_token: token,
+      });
+      expect(retried).toMatchObject({ status: 200, body: { deleted: true } });
       const row = await target.pool.query<{
         status: string;
         session_id: string;
@@ -472,7 +544,7 @@ describe('replay deletion crash convergence', () => {
       );
       expect(audit.rows.map((entry) => entry.action)).toEqual(['delete_requested', 'delete_completed']);
       expect(audit.rows[1]?.actor).toBe(audit.rows[0]?.actor);
-      expect(audit.rows[0]?.actor).not.toBe('retention:worker');
+      expect(audit.rows[0]?.actor).toBe('consent:withdrawal');
       await expect(target.pool.query('UPDATE replay_audit_log SET actor = $2 WHERE replay_id = $1', [id, 'tampered']))
         .rejects.toThrow('append-only');
     } finally {
@@ -538,9 +610,13 @@ describe('replay deletion crash convergence', () => {
         key: 'workspace', name: 'Workspace', purpose: 'Reproduce consented workspace interaction failures.',
       });
       const created = await createReplay(target);
-      const service = new ReplayService(target.pool, store);
+      const service = new ReplayService(target.pool, store, projectDeletionDependencies(target));
       const now = new Date();
       await service.beginProjectDeletion(target.projectId, 'test:project-delete', now);
+      const lateEvent = await api(target, target.ingestToken, 'POST', '/i/v1/events', {
+        events: [{ event: 'late.project.event', distinct_id: 'actor-late' }],
+      });
+      expect(lateEvent).toMatchObject({ status: 410, body: { error: { code: 'project_deleting' } } });
       const newManifest = await createReplay(target);
       expect(newManifest).toMatchObject({ status: 410, body: { error: { code: 'replay_project_deleting' } } });
       const upload = await api(target, target.ingestToken, 'PUT', `/i/v1/replays/${created.body.replay.id}/chunks`, {
@@ -552,6 +628,103 @@ describe('replay deletion crash convergence', () => {
       expect(upload).toMatchObject({ status: 410, body: { error: { code: 'replay_project_deleting' } } });
       const cleaned = await service.retryProjectDeletionJobs(10, new Date(now.getTime() + 3 * 60_000));
       expect(cleaned).toMatchObject({ deleted: 1, errors: 0 });
+    } finally {
+      await target.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('persists project deletion before side effects and resumes artifact and event phases', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'poolstatis-replay-project-phases-'));
+    const replayStore = new LocalReplayObjectStore(directory);
+    class FailingArtifactStore implements ArtifactStore {
+      private readonly values = new Map<string, Buffer>();
+      deleteCalls = 0;
+      put(key: string, bytes: Buffer) { this.values.set(key, bytes); return Promise.resolve(); }
+      async get(key: string) {
+        const value = this.values.get(key);
+        if (!value) throw new Error('artifact missing');
+        return value;
+      }
+      async delete(key: string) {
+        this.deleteCalls += 1;
+        if (this.deleteCalls === 1) throw new Error('synthetic artifact outage');
+        this.values.delete(key);
+      }
+    }
+    const artifacts = new FailingArtifactStore();
+    const target = await createTestEnv({ replayObjectStore: replayStore, artifactStore: artifacts });
+    let eventPurgeCalls = 0;
+    const eventStore = {
+      purge: async (_projectId: string) => {
+        eventPurgeCalls += 1;
+        if (eventPurgeCalls === 1) throw new Error('synthetic event store outage');
+        return 7;
+      },
+    };
+    try {
+      await api(target, target.secretToken, 'POST', `/api/v1/projects/${target.projectSlug}/experience/surfaces`, {
+        key: 'workspace', name: 'Workspace', purpose: 'Reproduce consented workspace interaction failures.',
+      });
+      await createReplay(target);
+      const location = await target.pool.query<{ surface_id: string; route_id: string }>(
+        `SELECT s.id AS surface_id, r.id AS route_id
+         FROM experience_surfaces s JOIN experience_routes r ON r.surface_id = s.id
+         WHERE s.project_id = $1 AND s.key = 'workspace' AND r.key = 'workspace'`,
+        [target.projectId],
+      );
+      const snapshotId = randomUUID();
+      const artifactKey = `${target.projectId}/${snapshotId}.png`;
+      await artifacts.put(artifactKey, Buffer.from('synthetic snapshot'));
+      await target.pool.query(
+        `INSERT INTO experience_snapshots (
+           id, project_id, surface_id, route_id, env, version, device, release_hash,
+           artifact_key, mime_type, byte_size, width, height, viewport_width,
+           viewport_height, document_width, document_height, captured_at, expires_at
+         ) VALUES ($1,$2,$3,$4,'prod','v1','desktop',$5,$6,'image/png',1,1,1,240,240,1,1,$7,$8)`,
+        [
+          snapshotId, target.projectId, location.rows[0]!.surface_id, location.rows[0]!.route_id,
+          'a'.repeat(64), artifactKey, new Date(), new Date(Date.now() + 86_400_000),
+        ],
+      );
+      const service = new ReplayService(target.pool, replayStore, { artifacts, eventStore });
+      const now = new Date();
+      await service.beginProjectDeletion(target.projectId, 'test:crash-before-side-effect', now);
+      expect((await target.pool.query(
+        'SELECT phase FROM replay_project_deletion_jobs WHERE project_id = $1',
+        [target.projectId],
+      )).rows[0]?.phase).toBe('artifacts');
+      await expect(artifacts.get(artifactKey)).resolves.toEqual(Buffer.from('synthetic snapshot'));
+
+      await expect(service.processProjectDeletion(target.projectId, now)).rejects.toMatchObject({
+        statusCode: 503,
+        code: 'replay_project_delete_pending',
+      });
+      expect((await target.pool.query(
+        'SELECT phase FROM replay_project_deletion_jobs WHERE project_id = $1',
+        [target.projectId],
+      )).rows[0]?.phase).toBe('artifacts');
+
+      await expect(service.processProjectDeletion(target.projectId, now)).rejects.toMatchObject({
+        statusCode: 503,
+        code: 'replay_project_delete_pending',
+      });
+      expect((await target.pool.query(
+        'SELECT phase FROM replay_project_deletion_jobs WHERE project_id = $1',
+        [target.projectId],
+      )).rows[0]?.phase).toBe('events');
+
+      await expect(service.processProjectDeletion(target.projectId, now)).resolves.toEqual({
+        artifactsDeleted: 1,
+        eventsDeleted: 7,
+        replaysDeleted: 1,
+      });
+      await expect(artifacts.get(artifactKey)).rejects.toThrow('artifact missing');
+      expect((await target.pool.query('SELECT 1 FROM projects WHERE id = $1', [target.projectId])).rowCount).toBe(0);
+      expect((await target.pool.query(
+        'SELECT 1 FROM replay_project_deletion_jobs WHERE project_id = $1',
+        [target.projectId],
+      )).rowCount).toBe(0);
     } finally {
       await target.close();
       await rm(directory, { recursive: true, force: true });
@@ -597,7 +770,7 @@ describe('replay deletion crash convergence', () => {
       )).rowCount).toBe(1);
       const lateOrphan = `${target.projectId}/99999999-9999-9999-9999-999999999999/0.json`;
       await expect(delegate.get(lateOrphan)).resolves.toEqual(Buffer.from('late orphan'));
-      const service = new ReplayService(target.pool, store);
+      const service = new ReplayService(target.pool, store, projectDeletionDependencies(target));
       const retried = await service.retryProjectDeletionJobs(10, new Date(Date.now() + 3 * 60_000));
       expect(retried).toMatchObject({ deleted: 1, errors: 0 });
       await expect(delegate.get(lateOrphan)).rejects.toThrow();

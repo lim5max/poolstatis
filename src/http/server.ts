@@ -20,7 +20,7 @@ import { generateSetupTask } from '../services/setupTask.js';
 import type { SetupTaskProvider } from '../services/setupTaskProvider.js';
 import { requiresOrganizationWriteReadiness } from './organizationWritePolicy.js';
 import {
-  createApiKey, createProject, deleteProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
+  createApiKey, createProject, getProjectBySlug, listApiKeys, listPersonalApiKeys,
   evaluateProjectHealth, getProjectPortfolio, listProjectsWithStats, revokeApiKey, revokePersonalApiKey,
   unscopedKeyOutcomeReadiness, type Project,
 } from '../services/projects.js';
@@ -758,7 +758,7 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.post('/i/v1/replays', async (req, reply) => {
     requireKind(req.auth, 'ingest');
-    const project = await ingestProject(ctx, req.auth);
+    const project = await ingestProject(ctx, req.auth, true);
     const result = await ctx.replays.createSession(
       project.id,
       req.auth.env,
@@ -770,7 +770,7 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.put('/i/v1/replays/:id/chunks', { bodyLimit: 600 * 1024 }, async (req, reply) => {
     requireKind(req.auth, 'ingest');
-    const project = await ingestProject(ctx, req.auth);
+    const project = await ingestProject(ctx, req.auth, true);
     const { id } = req.params as { id: string };
     const result = await ctx.replays.putChunk(
       project.id,
@@ -783,7 +783,7 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.post('/i/v1/replays/:id/complete', async (req) => {
     requireKind(req.auth, 'ingest');
-    const project = await ingestProject(ctx, req.auth);
+    const project = await ingestProject(ctx, req.auth, true);
     const { id } = req.params as { id: string };
     const body = completeReplaySessionSchema.parse(req.body);
     return ctx.replays.complete(
@@ -797,7 +797,7 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.delete('/i/v1/replays/:id', async (req) => {
     requireKind(req.auth, 'ingest');
-    const project = await ingestProject(ctx, req.auth);
+    const project = await ingestProject(ctx, req.auth, true);
     const { id } = req.params as { id: string };
     const body = withdrawReplaySessionSchema.parse(req.body);
     return ctx.replays.withdraw(
@@ -812,12 +812,16 @@ function registerIngestRoutes(app: FastifyInstance, ctx: AppContext): void {
 async function ingestProject(
   ctx: AppContext,
   auth: AuthContext,
+  allowDeleting = false,
 ): Promise<{ id: string; retention_months: number }> {
-  const { rows } = await ctx.pool.query(
-    'SELECT id, retention_months FROM projects WHERE id = $1',
+  const { rows } = await ctx.pool.query<{ id: string; retention_months: number; replay_deletion_pending: boolean }>(
+    'SELECT id, retention_months, replay_deletion_pending FROM projects WHERE id = $1',
     [auth.projectId],
   );
   if (!rows[0]) throw notFound('project');
+  if (rows[0].replay_deletion_pending && !allowDeleting) {
+    throw new ApiError(410, 'project_deleting', 'project deletion has disabled new ingest writes');
+  }
   return rows[0];
 }
 
@@ -1169,33 +1173,20 @@ function registerPlatformRoutes(
       throw badRequest('confirmation_mismatch', 'confirm_slug must equal the project slug');
     }
 
-    const artifacts = await ctx.pool.query<{ artifact_key: string }>(
-      'SELECT artifact_key FROM experience_snapshots WHERE project_id = $1 ORDER BY id',
-      [project.id],
-    );
-    for (const artifact of artifacts.rows) await ctx.artifacts.delete(artifact.artifact_key);
-
-    // Keep the EventStore seam explicit for future non-Postgres stores. The
-    // database cascade remains the final race-safe ownership boundary. The
-    // replay barrier is established only after these prerequisites, making a
-    // durable replay deletion job safe to finish after a process crash.
-    const eventsDeleted = await ctx.eventStore.purge(project.id);
     const replayDeleteActor = `${authOwner(req.auth)}:project-delete`;
+    // Intent and all external artifact keys are durable before the first
+    // destructive side effect. The same phased job is resumed by retention if
+    // this request or process disappears at any later boundary.
     await ctx.replays.beginProjectDeletion(project.id, replayDeleteActor);
-    const replaysDeleted = await ctx.replays.purgeSessions(
-      project.id,
-      replayDeleteActor,
-    );
-    await deleteProject(ctx.pool, req.auth.orgId, project.slug);
+    const deleted = await ctx.replays.processProjectDeletion(project.id);
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
-    await ctx.replays.completeProjectDeletion(project.id);
     return {
       deleted: true,
       slug: project.slug,
-      events_deleted: eventsDeleted,
-      artifacts_deleted: artifacts.rows.length,
-      replays_deleted: replaysDeleted,
+      events_deleted: deleted.eventsDeleted,
+      artifacts_deleted: deleted.artifactsDeleted,
+      replays_deleted: deleted.replaysDeleted,
     };
   });
 
@@ -1383,14 +1374,14 @@ function registerPlatformRoutes(
       env,
       z.string().uuid().parse(id),
       authOwner(req.auth),
+      replayResponseTimeoutMs,
     );
     const timeout = setTimeout(() => {
       if (req.replayEventsLease?.lease !== lease) return;
       delete req.replayEventsLease;
-      void lease.close(false).finally(() => {
-        if (!reply.raw.destroyed) reply.raw.destroy(new Error('session replay response deadline exceeded'));
-      });
-    }, replayResponseTimeoutMs);
+      if (!reply.raw.destroyed) reply.raw.destroy(new Error('session replay response deadline exceeded'));
+      void lease.close(false).catch(() => {});
+    }, Math.max(1, lease.expiresAt - Date.now()));
     timeout.unref();
     req.replayEventsLease = { lease, timeout };
     return { replay: lease.replay, events: lease.events };

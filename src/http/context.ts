@@ -60,6 +60,8 @@ export function createContext(pool: pg.Pool, options: CreateContextOptions = {})
   const posthog = new PostHogAdapter(pool, options.connectorEncryptionKey, options.outboundPolicy);
   const replayObjects = options.replayObjectStore
     ?? new LocalReplayObjectStore(options.replayDir ?? './data/session-replays');
+  const artifacts = options.artifactStore
+    ?? new LocalArtifactStore(options.artifactDir ?? './data/experience-artifacts');
   return {
     pool,
     eventStore,
@@ -74,9 +76,9 @@ export function createContext(pool: pg.Pool, options: CreateContextOptions = {})
     ),
     posthog,
     webhooks: new WebhookService(pool, options.connectorEncryptionKey, options.outboundPolicy),
-    artifacts: options.artifactStore ?? new LocalArtifactStore(options.artifactDir ?? './data/experience-artifacts'),
+    artifacts,
     replayObjects,
-    replays: new ReplayService(pool, replayObjects),
+    replays: new ReplayService(pool, replayObjects, { artifacts, eventStore }),
     ...(options.cursorSigningSecret
       ? { cursorSigningSecret: options.cursorSigningSecret }
       : {}),

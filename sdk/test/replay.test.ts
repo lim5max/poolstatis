@@ -169,6 +169,33 @@ describe('ReplayRecorder', () => {
     ]) expect(serialized).not.toContain(forbidden);
   });
 
+  it('blocks case-fold attribute collisions before selector and visible-text handling', () => {
+    const visiblePolicy = {
+      ...policy,
+      text: 'visible' as const,
+      blockSelectors: ['.private-block', '#private-id', '[title="private-attr"]'],
+    };
+    const event = {
+      type: 2, timestamp: 4, data: { node: { type: 0, childNodes: [{
+        type: 2, tagName: 'body', attributes: {}, childNodes: [
+          { type: 2, tagName: 'section', attributes: { class: 'safe', CLASS: 'private-block' }, childNodes: [{ type: 3, textContent: 'LEAK-CLASS-A' }] },
+          { type: 2, tagName: 'section', attributes: { CLASS: 'private-block', class: 'safe' }, childNodes: [{ type: 3, textContent: 'LEAK-CLASS-B' }] },
+          { type: 2, tagName: 'section', attributes: { id: 'safe', ID: 'private-id' }, childNodes: [{ type: 3, textContent: 'LEAK-ID' }] },
+          { type: 2, tagName: 'section', attributes: { title: 'safe', TITLE: 'private-attr' }, childNodes: [{ type: 3, textContent: 'LEAK-ATTR' }] },
+          { type: 2, tagName: 'section', attributes: { CONTENTEDITABLE: false, contenteditable: true }, childNodes: [{ type: 3, textContent: 'LEAK-EDITABLE' }] },
+        ],
+      }] } },
+    };
+    const once = sanitizeRecordedEvent(event, visiblePolicy, 'workspace');
+    const twice = sanitizeRecordedEvent(once, visiblePolicy, 'workspace');
+    expect(twice).toEqual(once);
+    const serialized = JSON.stringify(once);
+    for (const secret of ['LEAK-CLASS-A', 'LEAK-CLASS-B', 'LEAK-ID', 'LEAK-ATTR', 'LEAK-EDITABLE']) {
+      expect(serialized).not.toContain(secret);
+    }
+    expect(serialized.match(/data-poolstatis-replay-blocked/g)).toHaveLength(5);
+  });
+
   it('serializes flush and stop so two drains cannot shift away the next chunk', async () => {
     let emit: ((event: any) => void) | null = null;
     const record: ReplayRecord = (config) => {
@@ -290,7 +317,7 @@ describe('ReplayRecorder', () => {
       deleteCalls += 1;
       return deleteCalls <= 4
         ? response(503, { error: { message: 'temporary withdrawal outage', retryable: true } })
-        : response(200, { deleted: true });
+        : response(410, { error: { code: 'session_replay_deleted', message: 'replay deleted' } });
     }) as unknown as typeof fetch;
     const record = vi.fn(() => () => {}) as ReplayRecord;
     const recorder = new ReplayRecorder(options(fetchImpl, record));

@@ -345,6 +345,7 @@ export async function assertHostedDatabaseRoleSeparation(
     can_use_replay_chunks: boolean;
     can_use_replay_audit: boolean;
     can_use_replay_project_deletion_jobs: boolean;
+    can_use_replay_project_deletion_artifacts: boolean;
   }>(
     `SELECT
        current_user AS user_name,
@@ -405,7 +406,12 @@ export async function assertHostedDatabaseRoleSeparation(
          AND has_table_privilege(current_user, 'replay_project_deletion_jobs', 'INSERT')
          AND has_table_privilege(current_user, 'replay_project_deletion_jobs', 'UPDATE')
          AND has_table_privilege(current_user, 'replay_project_deletion_jobs', 'DELETE')
-         AS can_use_replay_project_deletion_jobs`,
+         AS can_use_replay_project_deletion_jobs,
+       has_table_privilege(current_user, 'replay_project_deletion_artifacts', 'SELECT')
+         AND has_table_privilege(current_user, 'replay_project_deletion_artifacts', 'INSERT')
+         AND has_table_privilege(current_user, 'replay_project_deletion_artifacts', 'UPDATE')
+         AND has_table_privilege(current_user, 'replay_project_deletion_artifacts', 'DELETE')
+         AS can_use_replay_project_deletion_artifacts`,
   );
   const migration = migrationRows[0];
   const runtime = runtimeRows[0];
@@ -425,7 +431,8 @@ export async function assertHostedDatabaseRoleSeparation(
       || !runtime.can_use_replay_sessions
       || !runtime.can_use_replay_chunks
       || !runtime.can_use_replay_audit
-      || !runtime.can_use_replay_project_deletion_jobs) {
+      || !runtime.can_use_replay_project_deletion_jobs
+      || !runtime.can_use_replay_project_deletion_artifacts) {
     throw new Error(
       'hosted database roles are not separated: use a deploy migrator with Core/activator ADMIN OPTION and a distinct poolstatis_core_runtime login without policy or migration-table access',
     );
@@ -451,6 +458,7 @@ export async function assertHostedRuntimeDatabaseRole(
     can_use_replay_chunks: boolean;
     can_use_replay_audit: boolean;
     can_use_replay_project_deletion_jobs: boolean;
+    can_use_replay_project_deletion_artifacts: boolean;
   }>(
     `SELECT
        pg_has_role(current_user, 'poolstatis_core_runtime', 'MEMBER') AS core_member,
@@ -507,7 +515,12 @@ export async function assertHostedRuntimeDatabaseRole(
          AND has_table_privilege(current_user, 'replay_project_deletion_jobs', 'INSERT')
          AND has_table_privilege(current_user, 'replay_project_deletion_jobs', 'UPDATE')
          AND has_table_privilege(current_user, 'replay_project_deletion_jobs', 'DELETE')
-         AS can_use_replay_project_deletion_jobs`,
+         AS can_use_replay_project_deletion_jobs,
+       has_table_privilege(current_user, 'replay_project_deletion_artifacts', 'SELECT')
+         AND has_table_privilege(current_user, 'replay_project_deletion_artifacts', 'INSERT')
+         AND has_table_privilege(current_user, 'replay_project_deletion_artifacts', 'UPDATE')
+         AND has_table_privilege(current_user, 'replay_project_deletion_artifacts', 'DELETE')
+         AS can_use_replay_project_deletion_artifacts`,
   );
   const runtime = rows[0];
   if (!runtime
@@ -523,7 +536,8 @@ export async function assertHostedRuntimeDatabaseRole(
       || !runtime.can_use_replay_sessions
       || !runtime.can_use_replay_chunks
       || !runtime.can_use_replay_audit
-      || !runtime.can_use_replay_project_deletion_jobs) {
+      || !runtime.can_use_replay_project_deletion_jobs
+      || !runtime.can_use_replay_project_deletion_artifacts) {
     throw new Error(
       'hosted runtime must use poolstatis_core_runtime without activation, policy-table, or schema-migration access',
     );
