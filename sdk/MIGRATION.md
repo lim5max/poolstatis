@@ -1,3 +1,16 @@
+# SDK 0.4 replay addition
+
+`@poolstatis/sdk` 0.4.0 adds the explicit `@poolstatis/sdk/replay` entrypoint.
+The existing base, browser, attribution and Experience exports are unchanged,
+and the base bundle does not import rrweb. Replay requires affirmative
+versioned consent, an exact-host allowlist and the exact optional peer
+`@rrweb/record@2.1.1`; applications that do not import `./replay` need no code
+or dependency change.
+
+The registry release is not assumed from this source version. Publish only
+after pack/consumer gates, then require `npm view @poolstatis/sdk@0.4.0 version`
+read-back before using the install command in a production consumer.
+
 # SDK 0.2 migration
 
 `@poolstatis/sdk` 0.2.0 makes browser acquisition attribution fail closed.

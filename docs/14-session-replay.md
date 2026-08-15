@@ -20,10 +20,12 @@ Sources checked on 2026-08-15: [2.1.1 releases](https://github.com/rrweb-io/rrwe
 [`rrweb-snapshot` sandbox warning](https://www.npmjs.com/package/rrweb-snapshot)
 and the [MIT license](https://github.com/rrweb-io/rrweb/blob/main/LICENSE).
 
-Install replay separately from the dependency-free base SDK:
+The source release candidate is `@poolstatis/sdk@0.4.0`; the currently
+published `0.3.0` does not contain `./replay`. After `npm view` confirms the
+new exact version, install replay separately from the dependency-free base SDK:
 
 ```bash
-pnpm add @poolstatis/sdk @rrweb/record@2.1.1
+pnpm add @poolstatis/sdk@0.4.0 @rrweb/record@2.1.1
 ```
 
 ```ts
@@ -69,7 +71,13 @@ targets. All inputs, textareas and contenteditable content are masked. Default
 scripts, nested iframes, embeds and network-bearing attributes are removed.
 Explicit `[data-poolstatis-block]` / `.rr-block` and
 `[data-poolstatis-mask]` / `.rr-mask` are always honored in addition to the
-bounded configured selectors.
+bounded configured simple tag, class, id or attribute selectors. Their
+normalized policy is stored with the manifest so server validation repeats it.
+
+Default masked mode also masks unknown/non-structural string fields, not only
+known `textContent`/`value` keys. `<style>` text, rrweb `isStyle` text and
+stylesheet/declaration mutations always pass through the CSS sanitizer even
+when visible copy was explicitly allowed.
 
 IDs/classes are replaced before upload with deterministic structural tokens.
 The bounded CSS sanitizer rewrites selectors to the same tokens, retains a
@@ -85,15 +93,23 @@ the registered route key.
 - Session: at most 120 chunks, 50,000 events, 20 MiB and 30 minutes.
 - Browser queue: 5 MiB; dropped chunks retain their sequence gap, so the server
   marks the manifest `incomplete`, never playable.
-- Stable sequence + checksum retries: at most four 10-second attempts.
+- Stable sequence + checksum retries: at most four 10-second attempts. Final
+  completion uses the same bounded retry and a failed `stop()` can be called
+  again without restarting capture or losing queued chunks.
 - `pagehide` attempts one request only when the complete request is at most
   60 KiB and uses `keepalive`. Larger or interrupted final chunks remain
   pending/incomplete; navigation-time delivery is never reported as complete.
 - Retention defaults to seven days (allowed range 1–30). Withdrawal and expiry
   tombstone first, making reads return `410`, then retry physical deletion.
+  A playback read holds a shared manifest lock through validation, audit and
+  the HTTP response lifecycle;
+  withdrawal waits for that read, so no playback can complete after withdrawal
+  itself has completed.
 
 Payload bytes live behind `ReplayObjectStore`; PostgreSQL contains manifests,
-chunk checksums/metadata and privileged view/delete audit records. Self-host
+chunk checksums/metadata and append-only privileged view, deletion-request and
+deletion-completion audit records. Replay-prefix deletion also removes deterministic
+crash-orphans that have no committed chunk row. Self-host
 Compose persists objects in `poolstatis_replays` separately from Postgres.
 
 ## Read surfaces and player isolation

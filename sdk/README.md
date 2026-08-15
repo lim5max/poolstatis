@@ -203,7 +203,7 @@ browser, attribution or Experience entrypoints. Install the exact supported
 recorder only in products that enable replay:
 
 ```bash
-pnpm add @poolstatis/sdk @rrweb/record@2.1.1
+pnpm add @poolstatis/sdk@0.4.0 @rrweb/record@2.1.1
 ```
 
 ```ts
@@ -224,6 +224,11 @@ const replay = new ReplayRecorder({
 await replay.start();
 await replay.stop(); // or replay.withdraw() when consent is revoked
 ```
+
+`./replay` is the opt-in `0.4.0` contract. The published `0.3.0` package does
+not export it; do not use this registry command until `npm view
+@poolstatis/sdk@0.4.0 version` succeeds. A source checkout can verify the same
+artifact with `pnpm --dir sdk pack` before publication.
 
 Consent and exact-host policy fail closed before the dynamic rrweb import.
 Passwords/payment/auth controls are blocked; all form and contenteditable

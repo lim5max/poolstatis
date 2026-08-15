@@ -15,6 +15,8 @@ CREATE TABLE replay_sessions (
   policy_version      text NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 120),
   policy_hash         text NOT NULL CHECK (policy_hash ~ '^[a-f0-9]{64}$'),
   text_mode           text NOT NULL CHECK (text_mode IN ('masked', 'visible')),
+  mask_selectors      text[] NOT NULL DEFAULT '{}' CHECK (cardinality(mask_selectors) <= 20),
+  block_selectors     text[] NOT NULL DEFAULT '{}' CHECK (cardinality(block_selectors) <= 20),
   status              text NOT NULL DEFAULT 'recording'
     CHECK (status IN ('recording', 'playable', 'incomplete', 'deleting', 'deleted')),
   upload_token_hash   text NOT NULL,
@@ -51,7 +53,7 @@ CREATE TABLE replay_audit_log (
   project_id  uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   replay_id   uuid NOT NULL,
   actor       text NOT NULL,
-  action      text NOT NULL CHECK (action IN ('view', 'delete')),
+  action      text NOT NULL CHECK (action IN ('view', 'delete_requested', 'delete_completed')),
   created_at  timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
@@ -64,6 +66,12 @@ CREATE INDEX replay_chunks_replay_sequence_idx
   ON replay_chunks (replay_id, sequence);
 CREATE INDEX replay_audit_project_time_idx
   ON replay_audit_log (project_id, created_at DESC);
+CREATE UNIQUE INDEX replay_audit_delete_once_idx
+  ON replay_audit_log (replay_id, action)
+  WHERE action IN ('delete_requested', 'delete_completed');
+CREATE TRIGGER replay_audit_log_append_only
+  BEFORE UPDATE OR DELETE ON replay_audit_log
+  FOR EACH ROW EXECUTE FUNCTION poolstatis_reject_immutable_mutation();
 
 CREATE FUNCTION poolstatis_prepare_replay_role_grants()
 RETURNS void AS $replay_grants$

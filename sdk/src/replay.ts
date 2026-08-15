@@ -58,6 +58,9 @@ const MAX_CHUNK_BYTES = 512 * 1024;
 const MAX_KEEPALIVE_REQUEST_BYTES = 60 * 1024;
 const MAX_CHUNK_EVENTS = 500;
 const MAX_QUEUE_BYTES = 5 * 1024 * 1024;
+const MAX_SESSION_BYTES = 20 * 1024 * 1024;
+const MAX_SESSION_EVENTS = 50_000;
+const MAX_SESSION_CHUNKS = 120;
 const MAX_DURATION_MS = 30 * 60 * 1000;
 const FLUSH_MS = 10_000;
 const MAX_ATTEMPTS = 4;
@@ -79,8 +82,12 @@ export class ReplayRecorder {
   private currentBytes = 2;
   private pending: PendingChunk[] = [];
   private sequence = 0;
+  private acceptedBytes = 0;
+  private acceptedEvents = 0;
   private started = false;
-  private stopped = false;
+  private detached = false;
+  private finalized = false;
+  private stopInFlight: Promise<void> | null = null;
   private withdrawn = false;
   private starting: Promise<{ sampled: boolean; replayId: string | null }> | null = null;
   private sampled = true;
@@ -177,7 +184,11 @@ export class ReplayRecorder {
       this.sequence = 0;
       this.sealing = Promise.resolve();
       this.drainMutex = Promise.resolve();
-      this.stopped = false;
+      this.detached = false;
+      this.finalized = false;
+      this.stopInFlight = null;
+      this.acceptedBytes = 0;
+      this.acceptedEvents = 0;
       this.started = false;
       if (replayId && uploadToken) {
         await this.request(`/i/v1/replays/${replayId}`, 'DELETE', { upload_token: uploadToken }).catch(() => {});
@@ -191,27 +202,43 @@ export class ReplayRecorder {
   }
 
   private async flushInternal(keepalive: boolean): Promise<void> {
-    if (!this.sampled || !this.replayId || !this.uploadToken || this.stopped) return;
+    if (!this.sampled || !this.replayId || !this.uploadToken || this.detached) return;
     this.seal();
     await this.sealing;
     return this.serializeDrain(keepalive);
   }
 
   async stop(): Promise<void> {
+    if (this.finalized) return;
+    if (this.stopInFlight) return this.stopInFlight;
+    const operation = this.stopInternal();
+    this.stopInFlight = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.stopInFlight === operation) this.stopInFlight = null;
+    }
+  }
+
+  private async stopInternal(): Promise<void> {
     const starting = this.starting;
     if (starting) await starting;
-    if (!this.started || this.stopped) return;
+    if (!this.started) return;
     this.detach();
-    if (!this.sampled || !this.replayId || !this.uploadToken) return;
+    if (!this.sampled || !this.replayId || !this.uploadToken) {
+      this.finalized = true;
+      return;
+    }
     this.seal();
     await this.sealing;
     await this.serializeDrain(false);
     if (this.sequence > 0) {
-      await this.request(`/i/v1/replays/${this.replayId}/complete`, 'POST', {
+      await this.requestWithRetry(`/i/v1/replays/${this.replayId}/complete`, 'POST', {
         upload_token: this.uploadToken,
         last_sequence: this.sequence - 1,
-      });
+      }, false);
     }
+    this.finalized = true;
   }
 
   async withdraw(): Promise<void> {
@@ -233,13 +260,26 @@ export class ReplayRecorder {
   }
 
   private accept(event: eventWithTime): void {
-    if (this.stopped || this.withdrawn || !this.options.consent.granted) return;
+    if (this.detached || this.withdrawn || !this.options.consent.granted) return;
     const safe = sanitizeRecordedEvent(event, this.options.policy, this.route());
     const bytes = new TextEncoder().encode(JSON.stringify(safe)).byteLength + 1;
     if (bytes > MAX_CHUNK_BYTES) return;
     if (this.current.length >= MAX_CHUNK_EVENTS || this.currentBytes + bytes > MAX_CHUNK_BYTES) this.seal();
+    if (this.sequence >= MAX_SESSION_CHUNKS
+        || this.acceptedEvents >= MAX_SESSION_EVENTS
+        || this.acceptedBytes + bytes > MAX_SESSION_BYTES) {
+      this.detach();
+      void this.stop().catch(this.onError);
+      return;
+    }
     this.current.push(safe);
     this.currentBytes += bytes;
+    this.acceptedBytes += bytes;
+    this.acceptedEvents += 1;
+    if (this.acceptedEvents >= MAX_SESSION_EVENTS || this.acceptedBytes >= MAX_SESSION_BYTES) {
+      this.detach();
+      void this.stop().catch(this.onError);
+    }
   }
 
   private seal(): void {
@@ -283,7 +323,7 @@ export class ReplayRecorder {
     }
   }
 
-  private async requestWithRetry(path: string, method: 'PUT', body: unknown, keepalive: boolean): Promise<unknown> {
+  private async requestWithRetry(path: string, method: 'PUT' | 'POST', body: unknown, keepalive: boolean): Promise<unknown> {
     let last: unknown;
     const attempts = keepalive ? 1 : MAX_ATTEMPTS;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -324,7 +364,8 @@ export class ReplayRecorder {
         });
       } catch (error) {
         if (timedOut) throw new ReplayTransportError('replay request timed out', true);
-        throw error;
+        if (error instanceof ReplayTransportError) throw error;
+        throw new ReplayTransportError(error instanceof Error ? error.message : 'replay network request failed', true);
       }
       const payload = await response.json().catch(() => null) as { error?: { message?: string; retryable?: boolean } } | null;
       if (!response.ok) {
@@ -361,7 +402,8 @@ export class ReplayRecorder {
   }
 
   private detach(): void {
-    this.stopped = true;
+    if (this.detached) return;
+    this.detached = true;
     this.stopRecording?.();
     this.stopRecording = null;
     this.browser.removeEventListener('pagehide', this.onPageHide);

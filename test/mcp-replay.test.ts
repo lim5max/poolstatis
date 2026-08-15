@@ -67,7 +67,7 @@ describe('session replay MCP metadata parity', () => {
       arguments: { project: env.projectSlug, replay_id: replayId, env: 'prod' },
     });
     expect(detail.isError).not.toBe(true);
-    expect(detail.structuredContent).toMatchObject({ id: replayId, viewer_path: `/experience?replay=${replayId}` });
+    expect(detail.structuredContent).toMatchObject({ id: replayId, viewer_path: `/experience?replay=${replayId}&env=prod` });
     const serialized = JSON.stringify({ list: listed.structuredContent, detail: detail.structuredContent });
     expect(serialized).not.toContain('upload_token');
     expect(serialized).not.toContain('object_key');

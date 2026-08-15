@@ -10,9 +10,16 @@ const ROUTE = /^[a-z][a-z0-9_.:-]{0,119}$/;
 const HOST = /^(?:localhost|(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?))*)$/;
 const SECRET = /(?:bearer\s+[a-z0-9._~-]+|(?:sk|pk|pt)_[a-f0-9]{12,}|eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}|\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b|\b(?:\d[ -]*?){13,19}\b)/gi;
 const URL = /(?:https?:\/\/|javascript:|data:|blob:|url\s*\()/i;
+const RELATIVE_LOCATION = /^\s*(?:\/|\.{1,2}\/|\?|#)/;
+const LOCATION_KEY = /^(?:url|uri|path|pathname|search|hash|location|baseurl)$/i;
 const NETWORK_ATTRIBUTE = /^(?:src|srcset|href|action|formaction|poster|background|ping|integrity|nonce|crossorigin|referrerpolicy|srcdoc)$/i;
-const SAFE_ATTRIBUTE = /^(?:class|id|role|aria-[a-z-]+|title|alt|type|name|placeholder|style|_csstext|disabled|checked|selected|readonly|multiple|tabindex|colspan|rowspan|width|height|contenteditable)$/i;
+const SAFE_ATTRIBUTE = /^(?:class|id|role|aria-[a-z-]+|title|alt|type|name|placeholder|style|_csstext|disabled|checked|selected|readonly|multiple|tabindex|colspan|rowspan|width|height|contenteditable|data-poolstatis-replay-blocked)$/i;
 const CANONICAL_STRUCTURAL_TOKEN = /^rr-[0-9a-f]{8}$/i;
+const BOOLEAN_ATTRIBUTE = /^(?:disabled|checked|selected|readonly|multiple)$/i;
+const NUMERIC_ATTRIBUTE = /^(?:tabindex|colspan|rowspan|width|height)$/i;
+const SAFE_ROLE = /^(?:button|link|dialog|main|navigation|banner|contentinfo|region|heading|list|listitem|img|presentation|none|status|alert|tab|tabpanel|textbox|checkbox|radio|menu|menuitem|progressbar|slider|switch|table|row|cell)$/i;
+const SAFE_INPUT_TYPE = /^(?:button|submit|reset|text|checkbox|radio|range|number|date|time|search)$/i;
+const SIMPLE_SELECTOR = /^(?:[a-z][a-z0-9-]*|[.#][a-zA-Z_][a-zA-Z0-9_-]*|\[[a-zA-Z_:][a-zA-Z0-9_.:-]*(?:="[a-zA-Z0-9_.:-]{1,80}")?\])$/;
 const SAFE_CSS_PROPERTY = /^(?:display|position|top|right|bottom|left|inset(?:-(?:block|inline)(?:-(?:start|end))?)?|z-index|float|clear|overflow(?:-[xy])?|visibility|opacity|box-sizing|width|min-width|max-width|height|min-height|max-height|margin(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?|padding(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?|border(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?(?:-(?:width|style|color))?|border-radius|border-collapse|border-spacing|outline(?:-(?:width|style|color|offset))?|flex(?:-(?:basis|direction|flow|grow|shrink|wrap))?|align-(?:content|items|self)|justify-(?:content|items|self)|place-(?:content|items|self)|gap|row-gap|column-gap|grid(?:-(?:auto-columns|auto-flow|auto-rows|column|column-end|column-gap|column-start|gap|row|row-end|row-gap|row-start|template-columns|template-rows))?|order|columns|column-count|column-width|object-fit|object-position|transform|transform-origin|translate|rotate|scale|font-size|font-style|font-weight|font-stretch|line-height|letter-spacing|word-break|word-spacing|overflow-wrap|white-space|text-align|text-decoration(?:-(?:color|line|style|thickness))?|text-transform|text-overflow|text-indent|color|background-color|box-shadow|vertical-align|list-style-position|list-style-type|table-layout|pointer-events|user-select|aspect-ratio|scroll-behavior|scroll-margin(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?|scroll-padding(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?|overscroll-behavior(?:-[xy])?)$/i;
 const FIXED_BLOCK_SELECTORS = [
   '[data-poolstatis-block]',
@@ -48,8 +55,8 @@ export function assertReplayPolicy(
   }
   if (!allowedHosts.includes(currentHost)) throw new Error('current host is not allowed by replay host policy');
   for (const selectors of [policy.maskSelectors ?? [], policy.blockSelectors ?? []]) {
-    if (selectors.length > 20 || selectors.some((selector) => !selector.trim() || selector.length > 200 || /[\u0000\r\n]/.test(selector))) {
-      throw new Error('replay selectors must be non-empty bounded CSS selectors');
+    if (selectors.length > 20 || selectors.some((selector) => !SIMPLE_SELECTOR.test(selector))) {
+      throw new Error('replay selectors must be bounded simple tag, class, id or attribute selectors');
     }
   }
 }
@@ -69,7 +76,16 @@ export function rrwebPrivacyOptions(policy: ReplayPrivacyPolicy) {
 
 /** Second client-side pass; the server repeats a stricter independent pass. */
 export function sanitizeRecordedEvent(event: unknown, policy: ReplayPrivacyPolicy, route: string): unknown {
-  const copy = clone(event, { textMode: policy.text, route, forceMask: false, key: '' });
+  const copy = clone(event, {
+    textMode: policy.text,
+    route,
+    forceMask: false,
+    cssText: false,
+    cssRule: false,
+    maskSelectors: policy.maskSelectors ?? [],
+    blockSelectors: policy.blockSelectors ?? [],
+    key: '',
+  });
   if (isObject(copy) && isObject(copy.data) && copy.data.source === 5 && typeof copy.data.text === 'string') {
     copy.data.text = mask(copy.data.text);
   }
@@ -80,20 +96,29 @@ interface CloneContext {
   textMode: 'masked' | 'visible';
   route: string;
   forceMask: boolean;
+  cssText: boolean;
+  cssRule: boolean;
+  maskSelectors: string[];
+  blockSelectors: string[];
   key: string;
 }
 
 function clone(value: unknown, context: CloneContext): unknown {
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
   if (typeof value === 'string') {
-    if (context.key === '_cssText' || context.key === 'cssText' || context.key === 'rule') {
+    if (context.key === '_cssText' || context.key === 'cssText' || context.key === 'rule'
+        || context.cssRule && (context.key === 'replace' || context.key === 'replaceSync')
+        || context.cssText && context.key === 'textContent') {
       return sanitizeCssStylesheet(value);
     }
     if (context.key === 'href') return `https://replay.invalid/${context.route}`;
+    if (LOCATION_KEY.test(context.key)) return '••••';
     if ((context.key === 'textContent' || context.key === 'value' || context.key === 'text')
         && (context.forceMask || context.textMode === 'masked')) return mask(value);
+    if (context.textMode === 'masked') return mask(value);
     if (URL.test(value)) return '••••';
     URL.lastIndex = 0;
+    if (RELATIVE_LOCATION.test(value)) return '••••';
     const redacted = value.replace(SECRET, '••••');
     SECRET.lastIndex = 0;
     return redacted;
@@ -101,12 +126,23 @@ function clone(value: unknown, context: CloneContext): unknown {
   if (Array.isArray(value)) return value.map((item) => clone(item, context));
   if (!isObject(value)) return null;
   const tagName = typeof value.tagName === 'string' ? value.tagName.toLowerCase() : '';
-  const executable = ['script', 'iframe', 'object', 'embed', 'form', 'base', 'meta'].includes(tagName);
+  const blocked = tagName !== '' && isBlockedNode(value, context.blockSelectors);
+  const executable = blocked || ['script', 'iframe', 'object', 'embed', 'form', 'base', 'meta'].includes(tagName);
   const attributes = isObject(value.attributes) ? value.attributes : null;
+  const contentEditable = attributes !== null
+    && 'contenteditable' in attributes
+    && attributes.contenteditable !== false
+    && !(typeof attributes.contenteditable === 'string'
+      && attributes.contenteditable.toLowerCase() === 'false');
   const forceMask = context.forceMask
     || tagName === 'input'
     || tagName === 'textarea'
-    || (typeof attributes?.contenteditable === 'string' && attributes.contenteditable.toLowerCase() !== 'false');
+    || contentEditable
+    || value.source === 5
+    || tagName !== '' && isMaskedNode(value, context.maskSelectors);
+  const cssText = context.cssText || value.isStyle === true || tagName === 'style';
+  const cssRule = context.cssRule || value.source === 8 || value.source === 15;
+  const styleDeclaration = value.source === 13;
   const output: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
     if (key === '__proto__' || key === 'prototype' || key === 'constructor' || /^on/i.test(key)) continue;
@@ -119,30 +155,137 @@ function clone(value: unknown, context: CloneContext): unknown {
       for (const [name, attribute] of Object.entries(child)) {
         const lower = name.toLowerCase();
         if (/^on/i.test(name) || NETWORK_ATTRIBUTE.test(name) || lower === 'value'
-          || lower.startsWith('data-') || !SAFE_ATTRIBUTE.test(lower)) continue;
+          || lower.startsWith('data-') && lower !== 'data-poolstatis-replay-blocked'
+          || !SAFE_ATTRIBUTE.test(lower)) continue;
+        const value = String(attribute).slice(0, 2_000);
+        const outputName = lower === '_csstext' ? '_cssText' : lower;
         if (lower === 'id' || lower === 'class') {
-          safe[name] = structuralTokens(String(attribute));
+          safe[outputName] = structuralTokens(value);
         } else if (lower === 'name' || lower === 'title' || lower === 'alt' || lower === 'placeholder'
           || lower.startsWith('aria-') && lower !== 'aria-hidden') {
-          safe[name] = '••••';
+          safe[outputName] = '••••';
         } else if (lower === 'style') {
-          safe[name] = sanitizeCssDeclarations(String(attribute));
+          safe[outputName] = sanitizeCssDeclarations(value);
         } else if (lower === '_csstext') {
-          safe[name] = sanitizeCssStylesheet(String(attribute));
+          safe[outputName] = sanitizeCssStylesheet(value);
+        } else if (BOOLEAN_ATTRIBUTE.test(lower)) {
+          if (attribute === true || value === '' || value.toLowerCase() === lower) safe[outputName] = '';
+        } else if (NUMERIC_ATTRIBUTE.test(lower)) {
+          if (/^-?\d{1,6}$/.test(value)) {
+            const numeric = Number(value);
+            if (Number.isSafeInteger(numeric) && numeric >= -1 && numeric <= 100_000) safe[outputName] = String(numeric);
+          }
+        } else if (lower === 'contenteditable') {
+          safe[outputName] = value.toLowerCase() === 'false' ? 'false' : 'true';
+        } else if (lower === 'aria-hidden') {
+          safe[outputName] = /^(?:true|false)$/i.test(value) ? value.toLowerCase() : '••••';
+        } else if (lower === 'role') {
+          safe[outputName] = SAFE_ROLE.test(value) ? value.toLowerCase() : '••••';
+        } else if (lower === 'type') {
+          safe[outputName] = SAFE_INPUT_TYPE.test(value) ? value.toLowerCase() : '••••';
         } else {
-          safe[name] = clone(attribute, { ...context, forceMask, key: name });
+          safe[outputName] = clone(attribute, { ...context, forceMask, key: lower });
         }
       }
       output.attributes = executable ? { 'data-poolstatis-replay-blocked': 'true' } : safe;
+      continue;
+    }
+    if (styleDeclaration && key === 'set' && isObject(child)) {
+      const set = sanitizeStyleDeclarationSet(child);
+      if (set) output.set = set;
+      continue;
+    }
+    if (styleDeclaration && key === 'remove' && isObject(child)) {
+      const remove = sanitizeStyleDeclarationRemove(child);
+      if (remove) output.remove = remove;
       continue;
     }
     if (executable && (key === 'childNodes' || key === 'textContent')) {
       output[key] = key === 'childNodes' ? [] : '';
       continue;
     }
-    output[key] = clone(child, { ...context, forceMask, key });
+    output[key] = clone(child, {
+      ...context,
+      forceMask,
+      key,
+      cssText,
+      cssRule,
+    });
   }
   return output;
+}
+
+function sanitizeStyleDeclarationSet(input: Record<string, any>): Record<string, string | null> | null {
+  if (typeof input.property !== 'string' || input.value !== null && typeof input.value !== 'string') return null;
+  const declaration = sanitizeCssDeclarations(`${input.property}:${input.value ?? ''}`);
+  const colon = declaration.indexOf(':');
+  if (colon <= 0) return null;
+  return {
+    property: declaration.slice(0, colon),
+    value: input.value === null ? null : declaration.slice(colon + 1),
+    priority: input.priority === 'important' ? 'important' : '',
+  };
+}
+
+function sanitizeStyleDeclarationRemove(input: Record<string, any>): { property: string } | null {
+  if (typeof input.property !== 'string') return null;
+  let property = input.property.trim().toLowerCase();
+  if (property.startsWith('--')) property = canonicalCustomProperty(property);
+  else if (!SAFE_CSS_PROPERTY.test(property)) return null;
+  return { property };
+}
+
+function isBlockedNode(node: Record<string, any>, selectors: string[]): boolean {
+  const tagName = typeof node.tagName === 'string' ? node.tagName.toLowerCase() : '';
+  const attributes = isObject(node.attributes) ? node.attributes : {};
+  const type = typeof attributeValue(attributes, 'type') === 'string' ? String(attributeValue(attributes, 'type')).toLowerCase() : '';
+  const autocomplete = typeof attributeValue(attributes, 'autocomplete') === 'string'
+    ? String(attributeValue(attributes, 'autocomplete')).toLowerCase() : '';
+  return hasAttribute(attributes, 'data-poolstatis-replay-blocked')
+    || hasAttribute(attributes, 'data-poolstatis-block')
+    || classTokens(attributes).includes('rr-block')
+    || tagName === 'input' && (type === 'password' || type === 'hidden'
+      || autocomplete.includes('cc-') || autocomplete.includes('password') || autocomplete === 'one-time-code')
+    || hasAttribute(attributes, 'data-payment')
+    || hasAttribute(attributes, 'data-auth-token')
+    || selectors.some((selector) => matchesSimpleSelector(node, selector));
+}
+
+function isMaskedNode(node: Record<string, any>, selectors: string[]): boolean {
+  const tagName = typeof node.tagName === 'string' ? node.tagName.toLowerCase() : '';
+  const attributes = isObject(node.attributes) ? node.attributes : {};
+  return tagName === 'input'
+    || tagName === 'textarea'
+    || hasAttribute(attributes, 'data-poolstatis-mask')
+    || classTokens(attributes).includes('rr-mask')
+    || selectors.some((selector) => matchesSimpleSelector(node, selector));
+}
+
+function matchesSimpleSelector(node: Record<string, any>, selector: string): boolean {
+  const attributes = isObject(node.attributes) ? node.attributes : {};
+  const tagName = typeof node.tagName === 'string' ? node.tagName.toLowerCase() : '';
+  if (selector.startsWith('.')) return classTokens(attributes).includes(selector.slice(1));
+  if (selector.startsWith('#')) return String(attributeValue(attributes, 'id') ?? '') === selector.slice(1);
+  const attribute = selector.match(/^\[([a-zA-Z_:][a-zA-Z0-9_.:-]*)(?:="([a-zA-Z0-9_.:-]{1,80})")?\]$/);
+  if (attribute) {
+    const value = attributeValue(attributes, attribute[1]!);
+    return value !== undefined && (attribute[2] === undefined || String(value) === attribute[2]);
+  }
+  return tagName === selector.toLowerCase();
+}
+
+function hasAttribute(attributes: Record<string, any>, name: string): boolean {
+  return attributeValue(attributes, name) !== undefined;
+}
+
+function attributeValue(attributes: Record<string, any>, name: string): unknown {
+  const entry = Object.entries(attributes).find(([candidate]) => candidate.toLowerCase() === name.toLowerCase());
+  return entry?.[1];
+}
+
+function classTokens(attributes: Record<string, any>): string[] {
+  const value = attributeValue(attributes, 'class');
+  return typeof value === 'string' ? value.split(/\s+/).filter(Boolean) : [];
 }
 
 function mask(value: string): string {

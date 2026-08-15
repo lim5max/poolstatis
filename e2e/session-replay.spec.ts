@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -143,6 +144,89 @@ for (const device of [
     await context.close();
   });
 }
+
+test('does not let malicious visible style replay escape over the network', async () => {
+  const policy = { version: 'browser-e2e-visible-v1', text: 'visible' as const, maskSelectors: [], blockSelectors: [] };
+  const created = await api(env, env.ingestToken, 'POST', '/i/v1/replays', {
+    surface: 'workspace', route: 'workspace', session_id: `malicious-style-${Date.now()}`,
+    distinct_id: 'browser-e2e-adversary', host: '127.0.0.1', version: 'browser-e2e-v1', device: 'desktop',
+    consent_version: 'browser-e2e-consent-v1', policy,
+    policy_hash: createHash('sha256').update(JSON.stringify(policy)).digest('hex'), retention_days: 1,
+  });
+  expect(created.status).toBe(201);
+  const replayId = created.body.replay.id as string;
+  const uploadToken = created.body.upload_token as string;
+  const timestamp = Date.now();
+  const events = [{
+    type: 4,
+    timestamp,
+    data: { href: 'https://app.example.test/private?token=secret#account', width: 1280, height: 800 },
+  }, {
+    type: 2,
+    timestamp: timestamp + 1,
+    data: {
+      node: {
+        type: 0, id: 1, childNodes: [{
+          type: 1, id: 2, name: 'html', publicId: '', systemId: '',
+        }, {
+          type: 2, id: 3, tagName: 'html', attributes: {}, childNodes: [{
+            type: 2, id: 4, tagName: 'head', attributes: {}, childNodes: [{
+              type: 2, id: 5, tagName: 'style', attributes: {}, childNodes: [{
+                type: 3,
+                id: 6,
+                isStyle: true,
+                textContent: '@import "//replay-escape.invalid/private.css"; body { height:48rem; overflow:auto; background-image:url(https://replay-escape.invalid/pixel); content:"alice@example.test" }',
+              }],
+            }],
+          }, {
+            type: 2, id: 7, tagName: 'body', attributes: {}, childNodes: [{
+              type: 2, id: 8, tagName: 'main', attributes: {}, childNodes: [{
+                type: 3, id: 9, textContent: 'Visible safe replay content',
+              }],
+            }],
+          }],
+        }],
+      },
+      initialOffset: { top: 0, left: 0 },
+    },
+  }];
+  expect((await api(env, env.ingestToken, 'PUT', `/i/v1/replays/${replayId}/chunks`, {
+    upload_token: uploadToken,
+    sequence: 0,
+    checksum: createHash('sha256').update(JSON.stringify(events)).digest('hex'),
+    events,
+  })).status).toBe(201);
+  expect((await api(env, env.ingestToken, 'POST', `/i/v1/replays/${replayId}/complete`, {
+    upload_token: uploadToken, last_sequence: 0,
+  })).body.status).toBe('playable');
+
+  const stored = await api(env, env.secretToken, 'GET', `/api/v1/projects/${env.projectSlug}/replays/${replayId}/events?env=prod`);
+  expect(JSON.stringify(stored.body)).not.toContain('replay-escape.invalid');
+  expect(JSON.stringify(stored.body)).toContain('height:48rem;overflow:auto');
+
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const escaped: string[] = [];
+  await context.route('https://replay-escape.invalid/**', (route) => {
+    escaped.push(route.request().url());
+    return route.fulfill({ status: 204, body: '' });
+  });
+  await context.route('https://fonts.googleapis.com/**', (route) => route.fulfill({
+    status: 200, contentType: 'text/css', body: '',
+  }));
+  const page = await context.newPage();
+  await page.goto(`${webUrl}/replay-fixture.html`);
+  await page.evaluate(({ adminToken, projectSlug }) => {
+    localStorage.setItem('poolstatis.conn', JSON.stringify({ baseUrl: '', token: adminToken }));
+    localStorage.setItem('poolstatis.project', projectSlug);
+    localStorage.setItem(`poolstatis.env.${projectSlug}`, 'prod');
+  }, { adminToken: env.personalToken, projectSlug: env.projectSlug });
+  await page.goto(`${webUrl}/experience?replay=${replayId}&env=prod`);
+  await expect(page.locator(`iframe[title="Session replay content ${replayId}"]`)).toHaveAttribute('sandbox', 'allow-same-origin');
+  await expect(page.getByRole('button', { name: 'Play' })).toBeEnabled();
+  await page.waitForTimeout(500);
+  expect(escaped).toEqual([]);
+  await context.close();
+});
 
 async function freePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {

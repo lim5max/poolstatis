@@ -1,6 +1,6 @@
 {
   "name": "@poolstatis/sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Zero-dependency Poolstatis SDK for Node, immediate browser analytics, engagement, attribution and privacy-bounded experience evidence.",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {

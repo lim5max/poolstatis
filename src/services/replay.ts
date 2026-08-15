@@ -4,7 +4,11 @@ import { ApiError, notFound } from '../errors.js';
 import { hashToken } from '../keys.js';
 import type { CreateReplaySessionInput, ReplayChunkUploadInput } from '../schemas.js';
 import { getExperienceRoute, getExperienceSurface } from './experience.js';
-import { ReplayObjectConflictError, type ReplayObjectStore } from '../replay/objectStore.js';
+import {
+  ReplayObjectConflictError,
+  ReplayObjectTooLargeError,
+  type ReplayObjectStore,
+} from '../replay/objectStore.js';
 import { sanitizeReplayEvents } from '../replay/sanitize.js';
 import {
   REPLAY_LIMITS,
@@ -28,6 +32,8 @@ interface ReplayRow {
   policy_version: string;
   policy_hash: string;
   text_mode: ReplayTextMode;
+  mask_selectors: string[];
+  block_selectors: string[];
   status: ReplaySessionStatus;
   upload_token_hash: string;
   chunk_count: number;
@@ -50,10 +56,20 @@ interface ChunkRow {
   has_checkout: boolean;
 }
 
+export interface ReplayEventsRead {
+  replay: ReplaySessionSummary;
+  events: Array<Record<string, unknown>>;
+}
+
+export interface ReplayEventsLease extends ReplayEventsRead {
+  close(completed: boolean): Promise<void>;
+}
+
 const SESSION_SELECT = `
   SELECT rs.id, rs.project_id, s.key AS surface, r.key AS route, rs.env,
          rs.session_id, rs.distinct_id, rs.host, rs.version, rs.device,
          rs.consent_version, rs.policy_version, rs.policy_hash, rs.text_mode,
+         rs.mask_selectors, rs.block_selectors,
          rs.status, rs.upload_token_hash, rs.chunk_count, rs.event_count,
          rs.byte_size, rs.started_at, rs.completed_at, rs.delete_after
   FROM replay_sessions rs
@@ -101,13 +117,15 @@ export class ReplayService {
       `INSERT INTO replay_sessions (
          project_id, surface_id, route_id, env, session_id, distinct_id, host,
          version, device, consent_version, policy_version, policy_hash,
-         text_mode, upload_token_hash, started_at, last_seen_at, delete_after
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15,$16)
+         text_mode, mask_selectors, block_selectors, upload_token_hash,
+         started_at, last_seen_at, delete_after
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17,$18)
        RETURNING id`,
       [
         projectId, surface.id, route.id, env, input.session_id, input.distinct_id,
         input.host, input.version, input.device, input.consent_version,
         input.policy.version, input.policy_hash, input.policy.text,
+        input.policy.maskSelectors, input.policy.blockSelectors,
         hashToken(uploadToken), now, deleteAfter,
       ],
     );
@@ -156,6 +174,8 @@ export class ReplayService {
       const sanitized = sanitizeReplayEvents(input.events, {
         route: session.route,
         textMode: session.text_mode,
+        maskSelectors: session.mask_selectors,
+        blockSelectors: session.block_selectors,
       });
       const storedJson = JSON.stringify(sanitized.events);
       const storedBytes = Buffer.from(storedJson);
@@ -266,7 +286,11 @@ export class ReplayService {
     filters: { env?: string; surface?: string; status?: ReplaySessionStatus; limit?: number } = {},
   ): Promise<ReplaySessionSummary[]> {
     const params: unknown[] = [projectId];
-    const predicates = ['rs.project_id = $1', "rs.status <> 'deleted'"];
+    const predicates = [
+      'rs.project_id = $1',
+      "rs.status NOT IN ('deleting', 'deleted')",
+      'rs.delete_after > clock_timestamp()',
+    ];
     for (const [column, value] of [
       ['rs.env', filters.env],
       ['s.key', filters.surface],
@@ -301,7 +325,7 @@ export class ReplayService {
     );
     const row = rows[0];
     if (!row) throw notFound('session_replay');
-    if (row.status === 'deleting' || row.status === 'deleted') {
+    if (row.status === 'deleting' || row.status === 'deleted' || isExpired(row)) {
       throw new ApiError(410, 'session_replay_deleted', 'session replay is deleted');
     }
     if (!includeRecording && row.status === 'recording') {
@@ -315,55 +339,110 @@ export class ReplayService {
     env: string,
     replayId: string,
     actor: string,
-  ): Promise<{ replay: ReplaySessionSummary; events: Array<Record<string, unknown>> }> {
-    const replay = await this.getSession(projectId, env, replayId);
-    if (replay.status !== 'playable') {
-      throw new ApiError(409, 'session_replay_incomplete', 'only contiguous replay sessions with an initial full snapshot are playable');
-    }
-    const { rows } = await this.pool.query<ChunkRow>(
-      `SELECT sequence, object_key, checksum, stored_checksum, byte_size,
-              event_count, first_timestamp, last_timestamp, has_checkout
-       FROM replay_chunks WHERE replay_id = $1 ORDER BY sequence`,
-      [replayId],
-    );
-    const events: Array<Record<string, unknown>> = [];
-    let bytes = 0;
-    let previousLast: number | null = null;
-    if (rows.length !== replay.chunk_count) throw corruptReplay('stored replay chunk count does not match its manifest');
-    for (const [index, chunk] of rows.entries()) {
-      if (chunk.sequence !== index) throw corruptReplay('stored replay chunk sequence is not contiguous');
-      const stored = await this.objects.get(chunk.object_key).catch(() => {
-        throw new ApiError(503, 'replay_storage_unavailable', 'replay payload is temporarily unavailable', undefined, { retryable: true });
-      });
-      bytes += stored.length;
-      if (bytes > REPLAY_LIMITS.maxViewerBytes) throw new ApiError(413, 'replay_view_limit_exceeded', 'replay exceeds the viewer byte limit');
-      if (stored.length !== Number(chunk.byte_size)) throw corruptReplay('stored replay chunk size does not match its manifest');
-      const json = stored.toString('utf8');
-      if (sha256(json) !== chunk.stored_checksum) throw corruptReplay('stored replay chunk failed its integrity check');
-      let parsed: unknown;
-      try { parsed = JSON.parse(json); } catch { throw corruptReplay('stored replay chunk is not valid JSON'); }
-      const sanitized = sanitizeReplayEvents(parsed, { route: replay.route, textMode: replay.text_mode });
-      if (sanitized.byteSize !== stored.length
-          || sanitized.eventCount !== Number(chunk.event_count)
-          || sanitized.firstTimestamp !== Number(chunk.first_timestamp)
-          || sanitized.lastTimestamp !== Number(chunk.last_timestamp)
-          || sanitized.hasCheckout !== chunk.has_checkout
-          || previousLast !== null && sanitized.firstTimestamp < previousLast
-          || index === 0 && !sanitized.hasCheckout) {
-        throw corruptReplay('stored replay chunk metadata failed playback validation');
+  ): Promise<ReplayEventsRead> {
+    const lease = await this.openEventsRead(projectId, env, replayId, actor);
+    await lease.close(true);
+    return { replay: lease.replay, events: lease.events };
+  }
+
+  async openEventsRead(
+    projectId: string,
+    env: string,
+    replayId: string,
+    actor: string,
+  ): Promise<ReplayEventsLease> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const sessionResult = await client.query<ReplayRow>(
+        `${SESSION_SELECT}
+         WHERE rs.project_id = $1 AND rs.env = $2 AND rs.id = $3
+         FOR SHARE OF rs`,
+        [projectId, env, replayId],
+      );
+      const row = sessionResult.rows[0];
+      if (!row) throw notFound('session_replay');
+      if (row.status === 'deleting' || row.status === 'deleted' || isExpired(row)) {
+        throw new ApiError(410, 'session_replay_deleted', 'session replay is deleted');
       }
-      previousLast = sanitized.lastTimestamp;
-      events.push(...sanitized.events);
-      if (events.length > REPLAY_LIMITS.maxViewerEvents) throw new ApiError(413, 'replay_view_limit_exceeded', 'replay exceeds the viewer event limit');
+      if (row.status === 'recording') {
+        throw new ApiError(409, 'session_replay_recording', 'session replay is still recording');
+      }
+      const replay = publicSession(row);
+      if (replay.status !== 'playable') {
+        throw new ApiError(409, 'session_replay_incomplete', 'only contiguous replay sessions with an initial full snapshot are playable');
+      }
+      const { rows } = await client.query<ChunkRow>(
+        `SELECT sequence, object_key, checksum, stored_checksum, byte_size,
+                event_count, first_timestamp, last_timestamp, has_checkout
+         FROM replay_chunks WHERE replay_id = $1 ORDER BY sequence`,
+        [replayId],
+      );
+      const events: Array<Record<string, unknown>> = [];
+      let bytes = 0;
+      let previousLast: number | null = null;
+      if (rows.length !== replay.chunk_count) throw corruptReplay('stored replay chunk count does not match its manifest');
+      for (const [index, chunk] of rows.entries()) {
+        if (chunk.sequence !== index) throw corruptReplay('stored replay chunk sequence is not contiguous');
+        let stored: Buffer;
+        try {
+          stored = await this.objects.get(chunk.object_key, Number(chunk.byte_size));
+        } catch (error) {
+          if (error instanceof ReplayObjectTooLargeError) throw corruptReplay('stored replay chunk exceeds its manifest size');
+          throw new ApiError(503, 'replay_storage_unavailable', 'replay payload is temporarily unavailable', undefined, { retryable: true });
+        }
+        bytes += stored.length;
+        if (bytes > REPLAY_LIMITS.maxViewerBytes) throw new ApiError(413, 'replay_view_limit_exceeded', 'replay exceeds the viewer byte limit');
+        if (stored.length !== Number(chunk.byte_size)) throw corruptReplay('stored replay chunk size does not match its manifest');
+        const json = stored.toString('utf8');
+        if (sha256(json) !== chunk.stored_checksum) throw corruptReplay('stored replay chunk failed its integrity check');
+        let parsed: unknown;
+        try { parsed = JSON.parse(json); } catch { throw corruptReplay('stored replay chunk is not valid JSON'); }
+        const sanitized = sanitizeReplayEvents(parsed, {
+          route: replay.route,
+          textMode: replay.text_mode,
+          maskSelectors: row.mask_selectors,
+          blockSelectors: row.block_selectors,
+        });
+        if (sanitized.byteSize !== stored.length
+            || sanitized.eventCount !== Number(chunk.event_count)
+            || sanitized.firstTimestamp !== Number(chunk.first_timestamp)
+            || sanitized.lastTimestamp !== Number(chunk.last_timestamp)
+            || sanitized.hasCheckout !== chunk.has_checkout
+            || previousLast !== null && sanitized.firstTimestamp < previousLast
+            || index === 0 && !sanitized.hasCheckout) {
+          throw corruptReplay('stored replay chunk metadata failed playback validation');
+        }
+        previousLast = sanitized.lastTimestamp;
+        events.push(...sanitized.events);
+        if (events.length > REPLAY_LIMITS.maxViewerEvents) throw new ApiError(413, 'replay_view_limit_exceeded', 'replay exceeds the viewer event limit');
+      }
+      if (bytes !== replay.byte_size || events.length !== replay.event_count) {
+        throw corruptReplay('stored replay totals do not match the manifest');
+      }
+      await client.query(
+        'INSERT INTO replay_audit_log (project_id, replay_id, actor, action) VALUES ($1,$2,$3,\'view\')',
+        [projectId, replayId, actor],
+      );
+      let closed = false;
+      return {
+        replay,
+        events,
+        close: async (completed: boolean) => {
+          if (closed) return;
+          closed = true;
+          try {
+            await client.query(completed ? 'COMMIT' : 'ROLLBACK');
+          } finally {
+            client.release();
+          }
+        },
+      };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      client.release();
+      throw error;
     }
-    if (bytes !== replay.byte_size || events.length !== replay.event_count) {
-      throw corruptReplay('stored replay totals do not match the manifest');
-    }
-    await this.pool.query(
-      'INSERT INTO replay_audit_log (project_id, replay_id, actor, action) VALUES ($1,$2,$3,\'view\')',
-      [projectId, replayId, actor],
-    );
-    return { replay, events };
   }
 
   async withdraw(
@@ -385,26 +464,42 @@ export class ReplayService {
     actor: string,
     now = new Date(),
   ): Promise<{ deleted: true }> {
-    const claimed = await this.pool.query(
-      `UPDATE replay_sessions
-       SET status = 'deleting', deleted_at = COALESCE(deleted_at, $3), last_seen_at = $3
-       WHERE project_id = $1 AND id = $2 AND status <> 'deleted'`,
-      [projectId, replayId, now],
-    );
-    if (!claimed.rowCount) {
-      const existing = await this.pool.query<{ status: ReplaySessionStatus }>(
-        'SELECT status FROM replay_sessions WHERE project_id = $1 AND id = $2',
-        [projectId, replayId],
-      );
-      if (existing.rows[0]?.status === 'deleted') return { deleted: true };
-      throw notFound('session_replay');
-    }
-    const chunks = await this.pool.query<{ object_key: string }>(
-      'SELECT object_key FROM replay_chunks WHERE replay_id = $1 ORDER BY sequence',
-      [replayId],
-    );
+    const claimClient = await this.pool.connect();
     try {
-      for (const chunk of chunks.rows) await this.objects.delete(chunk.object_key);
+      await claimClient.query('BEGIN');
+      const claimed = await claimClient.query(
+        `UPDATE replay_sessions
+         SET status = 'deleting', deleted_at = COALESCE(deleted_at, $3), last_seen_at = $3,
+             delete_after = LEAST(delete_after, $3)
+         WHERE project_id = $1 AND id = $2 AND status <> 'deleted'
+         RETURNING id`,
+        [projectId, replayId, now],
+      );
+      if (!claimed.rowCount) {
+        const existing = await claimClient.query<{ status: ReplaySessionStatus }>(
+          'SELECT status FROM replay_sessions WHERE project_id = $1 AND id = $2',
+          [projectId, replayId],
+        );
+        await claimClient.query('COMMIT');
+        if (existing.rows[0]?.status === 'deleted') return { deleted: true };
+        throw notFound('session_replay');
+      }
+      await claimClient.query(
+        `INSERT INTO replay_audit_log (project_id, replay_id, actor, action)
+         VALUES ($1,$2,$3,'delete_requested')
+         ON CONFLICT (replay_id, action)
+         WHERE action IN ('delete_requested', 'delete_completed') DO NOTHING`,
+        [projectId, replayId, actor],
+      );
+      await claimClient.query('COMMIT');
+    } catch (error) {
+      await claimClient.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      claimClient.release();
+    }
+    try {
+      await this.objects.deleteReplay(projectId, replayId);
       const client = await this.pool.connect();
       try {
         await client.query('BEGIN');
@@ -417,7 +512,15 @@ export class ReplayService {
           [projectId, replayId],
         );
         await client.query(
-          'INSERT INTO replay_audit_log (project_id, replay_id, actor, action) VALUES ($1,$2,$3,\'delete\')',
+          `INSERT INTO replay_audit_log (project_id, replay_id, actor, action)
+           SELECT $1, $2, COALESCE(
+             (SELECT actor FROM replay_audit_log
+              WHERE replay_id = $2 AND action = 'delete_requested'
+              ORDER BY id LIMIT 1),
+             $3
+           ), 'delete_completed'
+           ON CONFLICT (replay_id, action)
+           WHERE action IN ('delete_requested', 'delete_completed') DO NOTHING`,
           [projectId, replayId, actor],
         );
         await client.query('COMMIT');
@@ -444,6 +547,7 @@ export class ReplayService {
     projectId: string,
     actor: string,
     env?: string,
+    distinctId?: string,
     now = new Date(),
   ): Promise<number> {
     let deleted = 0;
@@ -452,16 +556,24 @@ export class ReplayService {
         `SELECT id FROM replay_sessions
          WHERE project_id = $1 AND status <> 'deleted'
            AND ($2::text IS NULL OR env = $2)
+           AND ($3::text IS NULL OR distinct_id = $3)
          ORDER BY id
          LIMIT 100`,
-        [projectId, env ?? null],
+        [projectId, env ?? null, distinctId ?? null],
       );
-      if (rows.length === 0) return deleted;
+      if (rows.length === 0) {
+        if (env === undefined && distinctId === undefined) await this.objects.deleteProject(projectId);
+        return deleted;
+      }
       for (const row of rows) {
         await this.deleteSession(projectId, row.id, actor, now);
         deleted += 1;
       }
     }
+  }
+
+  async purgeProjectObjects(projectId: string): Promise<void> {
+    await this.objects.deleteProject(projectId);
   }
 
   private async getRawSession(projectId: string, env: string, replayId: string): Promise<ReplayRow> {
@@ -519,16 +631,17 @@ export async function purgeExpiredReplays(
   pool: pg.Pool,
   limit = 100,
   now = new Date(),
-): Promise<{ deleted: number; errors: number }> {
+): Promise<{ deleted: number; errors: number; hasMore: boolean }> {
   const { rows } = await pool.query<{ id: string; project_id: string }>(
     `SELECT id, project_id FROM replay_sessions
      WHERE delete_after <= $1 AND status <> 'deleted'
      ORDER BY delete_after LIMIT $2`,
-    [now, limit],
+    [now, limit + 1],
   );
+  const batch = rows.slice(0, limit);
   let deleted = 0;
   let errors = 0;
-  for (const row of rows) {
+  for (const row of batch) {
     try {
       await service.deleteSession(row.project_id, row.id, 'retention:worker', now);
       deleted += 1;
@@ -536,7 +649,7 @@ export async function purgeExpiredReplays(
       errors += 1;
     }
   }
-  return { deleted, errors };
+  return { deleted, errors, hasMore: rows.length > limit };
 }
 
 function publicSession(row: ReplayRow): ReplaySessionSummary {
@@ -560,7 +673,7 @@ function publicSession(row: ReplayRow): ReplaySessionSummary {
     started_at: row.started_at,
     completed_at: row.completed_at,
     delete_after: row.delete_after,
-    viewer_path: `/experience?replay=${row.id}`,
+    viewer_path: `/experience?replay=${row.id}&env=${encodeURIComponent(row.env)}`,
   };
 }
 
@@ -570,4 +683,8 @@ function sha256(value: string): string {
 
 function corruptReplay(message: string): ApiError {
   return new ApiError(409, 'replay_object_corrupt', message);
+}
+
+function isExpired(row: Pick<ReplayRow, 'delete_after'>, now = new Date()): boolean {
+  return new Date(row.delete_after).getTime() <= now.getTime();
 }

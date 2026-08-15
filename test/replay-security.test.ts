@@ -2,7 +2,11 @@ import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LocalReplayObjectStore, ReplayObjectConflictError } from '../src/replay/objectStore.js';
+import {
+  LocalReplayObjectStore,
+  ReplayObjectConflictError,
+  ReplayObjectTooLargeError,
+} from '../src/replay/objectStore.js';
 import { sanitizeReplayEvents } from '../src/replay/sanitize.js';
 
 const roots: string[] = [];
@@ -30,6 +34,8 @@ describe('session replay privacy boundary', () => {
               alt: '4111 1111 1111 1111',
               placeholder: 'Alice Smith',
               'data-user-email': 'alice@example.com',
+              disabled: 'alice@example.com',
+              width: 'alice@example.com',
               style: 'color:red;content:"alice@example.com";background-image:url(https://evil.test/x)',
               onclick: 'top.location="https://evil.test"',
               src: 'https://evil.test/pixel',
@@ -52,11 +58,125 @@ describe('session replay privacy boundary', () => {
     expect(serialized).toContain('"role":"main"');
   });
 
+  it('masks non-allowlisted rrweb string fields by default', () => {
+    const payload = sanitizeReplayEvents([{
+      type: 3,
+      timestamp: 101,
+      data: {
+        source: 0,
+        arbitraryFutureField: 'Alice Smith private workspace',
+        nested: { vendorPayload: 'customer-4111 1111 1111 1111' },
+      },
+    }], { route: 'account', textMode: 'masked' });
+
+    const serialized = JSON.stringify(payload.events);
+    expect(serialized).not.toContain('Alice Smith');
+    expect(serialized).not.toContain('private workspace');
+    expect(serialized).not.toContain('customer-');
+    expect(serialized).toContain('••••');
+  });
+
+  it('sanitizes style-node text and input-like data even when visible text is allowed', () => {
+    const payload = sanitizeReplayEvents([{
+      type: 2,
+      timestamp: 200,
+      data: { node: { type: 0, childNodes: [{
+        type: 2,
+        tagName: 'body',
+        attributes: {},
+        childNodes: [
+          {
+            type: 2,
+            tagName: 'style',
+            attributes: {},
+            childNodes: [{
+              type: 3,
+              textContent: '@import "//evil.test/private.css"; .private-panel { height:48rem; overflow-y:auto; background-image:url(https://evil.test/pixel); content:"alice@example.test" }',
+            }],
+          },
+          {
+            type: 2,
+            tagName: 'div',
+            attributes: { contenteditable: true },
+            childNodes: [{ type: 3, textContent: 'Editable Alice Secret' }],
+          },
+          { type: 2, tagName: 'p', attributes: {}, childNodes: [{ type: 3, textContent: 'Visible public label' }] },
+        ],
+      }] } },
+    }, {
+      type: 3,
+      timestamp: 201,
+      data: { source: 5, id: 4, text: 'Typed Alice Secret', isChecked: false },
+    }], { route: 'account', textMode: 'visible' });
+
+    const serialized = JSON.stringify(payload.events);
+    expect(serialized).toContain('height:48rem;overflow-y:auto');
+    expect(serialized).toContain('Visible public label');
+    for (const forbidden of [
+      'evil.test', 'background-image', 'content:', 'alice@example.test',
+      'Editable Alice Secret', 'Typed Alice Secret', '@import',
+    ]) expect(serialized).not.toContain(forbidden);
+  });
+
+  it('sanitizes rrweb stylesheet/declaration mutations and reapplies explicit selectors', () => {
+    const payload = sanitizeReplayEvents([{
+      type: 2,
+      timestamp: 300,
+      data: { node: { type: 0, childNodes: [{
+        type: 2,
+        tagName: 'body',
+        attributes: {},
+        childNodes: [
+          { type: 2, tagName: 'section', attributes: { class: 'private-block' }, childNodes: [{ type: 3, textContent: 'Blocked Alice Secret' }] },
+          { type: 2, tagName: 'p', attributes: { 'data-mask-me': '' }, childNodes: [{ type: 3, textContent: 'Masked Alice Secret' }] },
+          { type: 2, tagName: 'p', attributes: {}, childNodes: [{ type: 3, textContent: 'Visible public label' }] },
+        ],
+      }] } },
+    }, {
+      type: 3,
+      timestamp: 301,
+      data: {
+        source: 8,
+        id: 2,
+        replaceSync: '@import "//evil.test/x"; .private-panel { height:48rem; background-image:url(https://evil.test/pixel) }',
+      },
+    }, {
+      type: 3,
+      timestamp: 302,
+      data: { source: 13, id: 2, index: [0], set: { property: 'height', value: '32rem', priority: 'important' } },
+    }, {
+      type: 3,
+      timestamp: 303,
+      data: { source: 13, id: 2, index: [0], set: { property: 'background-image', value: 'url(https://evil.test/x)' } },
+    }], {
+      route: 'account',
+      textMode: 'visible',
+      blockSelectors: ['.private-block'],
+      maskSelectors: ['[data-mask-me]'],
+    });
+
+    const serialized = JSON.stringify(payload.events);
+    expect(serialized).toContain('height:48rem');
+    expect(serialized).toContain('"property":"height","value":"32rem","priority":"important"');
+    expect(serialized).toContain('Visible public label');
+    for (const forbidden of [
+      'evil.test', '@import', 'background-image', 'Blocked Alice Secret', 'Masked Alice Secret',
+    ]) expect(serialized).not.toContain(forbidden);
+  });
+
   it('rejects backward timestamps inside a chunk', () => {
     expect(() => sanitizeReplayEvents([
       { type: 4, timestamp: 200, data: { href: 'https://example.test/?token=x', width: 100, height: 100 } },
       { type: 2, timestamp: 100, data: { node: { type: 0, childNodes: [] } } },
     ], { route: 'home', textMode: 'masked' })).toThrow('timestamps');
+  });
+
+  it('does not treat a late full snapshot as a playable initial anchor', () => {
+    const payload = sanitizeReplayEvents([
+      { type: 3, timestamp: 100, data: { source: 1, positions: [{ x: 1, y: 1, id: 1, timeOffset: 0 }] } },
+      { type: 2, timestamp: 101, data: { node: { type: 0, childNodes: [] } } },
+    ], { route: 'home', textMode: 'masked' });
+    expect(payload.hasCheckout).toBe(false);
   });
 
   it('preserves safe layout CSS with matching private selectors and is idempotent', () => {
@@ -101,6 +221,7 @@ describe('session replay privacy boundary', () => {
     const key = '11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222/0.json';
     expect(await store.put(key, Buffer.from('safe'))).toBe('created');
     expect(await store.put(key, Buffer.from('safe'))).toBe('existing');
+    await expect(store.get(key, 3)).rejects.toBeInstanceOf(ReplayObjectTooLargeError);
     await expect(store.put(key, Buffer.from('different'))).rejects.toBeInstanceOf(ReplayObjectConflictError);
     await expect(store.put('../escape', Buffer.from('x'))).rejects.toThrow('invalid replay object key');
   });

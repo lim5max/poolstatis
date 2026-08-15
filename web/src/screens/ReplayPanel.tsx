@@ -17,9 +17,18 @@ export function ReplayPanel() {
       : Promise.resolve([]),
     [project, env],
   );
-  const requested = new URLSearchParams(window.location.search).get('replay');
+  const search = new URLSearchParams(window.location.search);
+  const requested = search.get('replay');
+  const requestedEnv = search.get('env') ?? env;
+  const requestedReplay = useAsync(
+    () => requested && typeof client?.sessionReplay === 'function'
+      ? client.sessionReplay(project!, requested, requestedEnv)
+      : Promise.resolve(null),
+    [client, project, requested, requestedEnv],
+  );
   const [selectedId, setSelectedId] = useState<string | null>(requested);
-  const selected = data?.find((replay) => replay.id === selectedId) ?? null;
+  const selected = data?.find((replay) => replay.id === selectedId)
+    ?? (requestedReplay.data?.id === selectedId ? requestedReplay.data : null);
   const [events, setEvents] = useState<Array<Record<string, unknown>> | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
   const [playerLoading, setPlayerLoading] = useState(false);
@@ -34,14 +43,14 @@ export function ReplayPanel() {
     setEvents(null);
     setPlayerError(null);
     setPlayerLoading(true);
-    client!.sessionReplayEvents(project!, selected.id, env)
+    client!.sessionReplayEvents(project!, selected.id, selected.env)
       .then((response) => { if (active) setEvents(response.events); })
       .catch((caught) => {
         if (active) setPlayerError(caught instanceof Error ? caught.message : 'Replay payload could not be loaded.');
       })
       .finally(() => { if (active) setPlayerLoading(false); });
     return () => { active = false; };
-  }, [client, env, project, selected]);
+  }, [client, project, selected]);
 
   return (
     <Panel
@@ -56,6 +65,7 @@ export function ReplayPanel() {
         </p>
         {loading && <div role="status" className="py-8 text-center text-sm text-muted-foreground">Loading session replays…</div>}
         {error && <div className="space-y-3"><ErrorNote>{error}</ErrorNote><Button variant="outline" size="sm" onClick={reload}>Try again</Button></div>}
+        {requestedReplay.error && selectedId === requested && <ErrorNote>{requestedReplay.error}</ErrorNote>}
         {!loading && !error && data?.length === 0 && (
           <EmptyState
             headline="No consented replays yet"

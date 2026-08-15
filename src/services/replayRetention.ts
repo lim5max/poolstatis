@@ -5,6 +5,7 @@ import { purgeExpiredReplays } from './replay.js';
 export interface ReplayRetentionResult {
   deleted: number;
   errors: number;
+  hasMore: boolean;
 }
 
 /** Retryable bounded deletion for expired or previously tombstoned recordings. */
@@ -14,6 +15,7 @@ export function startReplayRetention(
   options: {
     intervalMs: number;
     batchSize?: number;
+    maxBatchesPerRun?: number;
     onResult?: (result: ReplayRetentionResult) => void;
     onError?: (error: unknown) => void;
   },
@@ -22,8 +24,18 @@ export function startReplayRetention(
   let running: Promise<void> | null = null;
   const run = () => {
     if (stopped || running) return;
-    running = purgeExpiredReplays(service, pool, options.batchSize ?? 100)
-      .then((result) => options.onResult?.(result))
+    running = (async () => {
+      const aggregate: ReplayRetentionResult = { deleted: 0, errors: 0, hasMore: false };
+      const maxBatches = options.maxBatchesPerRun ?? 10;
+      for (let batch = 0; batch < maxBatches; batch += 1) {
+        const result = await purgeExpiredReplays(service, pool, options.batchSize ?? 100);
+        aggregate.deleted += result.deleted;
+        aggregate.errors += result.errors;
+        aggregate.hasMore = result.hasMore;
+        if (!result.hasMore) break;
+      }
+      options.onResult?.(aggregate);
+    })()
       .catch((error) => options.onError?.(error))
       .finally(() => { running = null; });
   };

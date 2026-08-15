@@ -36,7 +36,7 @@ const replay: ReplaySessionSummary = {
   policy_version: 'privacy-v1', text_mode: 'masked', status: 'playable', chunk_count: 1,
   event_count: 2, byte_size: 200, started_at: '2026-08-15T10:00:00.000Z',
   completed_at: '2026-08-15T10:01:00.000Z', delete_after: '2026-08-22T10:00:00.000Z',
-  viewer_path: '/experience?replay=11111111-1111-4111-8111-111111111111',
+  viewer_path: '/experience?replay=11111111-1111-4111-8111-111111111111&env=prod',
 };
 
 function store(client: Record<string, unknown>) {

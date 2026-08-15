@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { ReplayRecorder, type ReplayBrowser, type ReplayRecord } from '../src/replay.js';
 import { sanitizeRecordedEvent } from '../src/replayPrivacy.js';
@@ -27,6 +28,17 @@ function options(fetchImpl: typeof fetch, record: ReplayRecord, extra: Record<st
 }
 
 describe('ReplayRecorder', () => {
+  it('exposes replay only through the versioned opt-in package contract', async () => {
+    const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+    expect(packageJson.version).toBe('0.4.0');
+    expect(packageJson.exports['./replay']).toEqual({
+      types: './dist/replay.d.ts',
+      import: './dist/replay.js',
+    });
+    expect(packageJson.peerDependencies['@rrweb/record']).toBe('2.1.1');
+    expect(packageJson.peerDependenciesMeta['@rrweb/record']).toEqual({ optional: true });
+  });
+
   it('fails closed before recorder/network when consent or host policy is absent', async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const record = vi.fn() as ReplayRecord;
@@ -53,6 +65,56 @@ describe('ReplayRecorder', () => {
     }
   });
 
+  it('masks unknown rrweb strings by default and sanitizes style text in visible mode', () => {
+    const masked = sanitizeRecordedEvent({
+      type: 3,
+      timestamp: 1,
+      data: { source: 0, arbitraryFutureField: 'Alice private workspace', nested: { vendor: 'customer-secret' } },
+    }, policy, 'workspace');
+    const maskedJson = JSON.stringify(masked);
+    expect(maskedJson).not.toContain('Alice private workspace');
+    expect(maskedJson).not.toContain('customer-secret');
+
+    const visiblePolicy = { ...policy, text: 'visible' as const };
+    const visible = sanitizeRecordedEvent({
+      type: 2,
+      timestamp: 2,
+      data: { node: { type: 0, childNodes: [{
+        type: 2,
+        tagName: 'body',
+        attributes: {},
+        childNodes: [
+          {
+            type: 2,
+            tagName: 'style',
+            attributes: {},
+            childNodes: [{
+              type: 3,
+              textContent: '@import "//evil.test/private.css"; .private-panel { height:48rem; overflow-y:auto; background-image:url(https://evil.test/pixel); content:"alice@example.test" }',
+            }],
+          },
+          {
+            type: 2,
+            tagName: 'div',
+            attributes: { contenteditable: true },
+            childNodes: [{ type: 3, textContent: 'Editable Alice Secret' }],
+          },
+          { type: 2, tagName: 'p', attributes: {}, childNodes: [{ type: 3, textContent: 'Visible public label' }] },
+        ],
+      }] } },
+    }, visiblePolicy, 'workspace');
+    const input = sanitizeRecordedEvent({
+      type: 3, timestamp: 3, data: { source: 5, id: 4, text: 'Typed Alice Secret', isChecked: false },
+    }, visiblePolicy, 'workspace');
+    const visibleJson = JSON.stringify([visible, input]);
+    expect(visibleJson).toContain('height:48rem;overflow-y:auto');
+    expect(visibleJson).toContain('Visible public label');
+    for (const forbidden of [
+      'evil.test', 'background-image', 'content:', 'alice@example.test',
+      'Editable Alice Secret', 'Typed Alice Secret', '@import',
+    ]) expect(visibleJson).not.toContain(forbidden);
+  });
+
   it('keeps bounded layout CSS aligned with tokenized selectors across repeated passes', () => {
     const event = {
       type: 2, timestamp: 1, data: { node: { type: 2, tagName: 'main', attributes: {
@@ -71,6 +133,40 @@ describe('ReplayRecorder', () => {
     for (const forbidden of ['alice-private-panel', 'scroll-content', 'alice@example.test', 'evil.test', 'background-image', 'content:']) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it('sanitizes rrweb CSS mutations and enforces explicit selectors client-side', () => {
+    const visiblePolicy = {
+      ...policy,
+      text: 'visible' as const,
+      blockSelectors: ['.private-block'],
+      maskSelectors: ['[data-mask-me]'],
+    };
+    const events = [{
+      type: 2, timestamp: 1, data: { node: { type: 0, childNodes: [{
+        type: 2, tagName: 'body', attributes: {}, childNodes: [
+          { type: 2, tagName: 'section', attributes: { class: 'private-block' }, childNodes: [{ type: 3, textContent: 'Blocked Alice Secret' }] },
+          { type: 2, tagName: 'p', attributes: { 'data-mask-me': '' }, childNodes: [{ type: 3, textContent: 'Masked Alice Secret' }] },
+          { type: 2, tagName: 'p', attributes: {}, childNodes: [{ type: 3, textContent: 'Visible public label' }] },
+        ],
+      }] } },
+    }, {
+      type: 3, timestamp: 2, data: {
+        source: 8,
+        replace: '@import "//evil.test/x"; .private-panel { height:48rem; background-image:url(https://evil.test/pixel) }',
+      },
+    }, {
+      type: 3, timestamp: 3, data: {
+        source: 13, id: 2, index: [0], set: { property: 'height', value: '32rem', priority: 'important' },
+      },
+    }];
+    const serialized = JSON.stringify(events.map((event) => sanitizeRecordedEvent(event, visiblePolicy, 'workspace')));
+    expect(serialized).toContain('height:48rem');
+    expect(serialized).toContain('"property":"height","value":"32rem","priority":"important"');
+    expect(serialized).toContain('Visible public label');
+    for (const forbidden of [
+      'evil.test', '@import', 'background-image', 'Blocked Alice Secret', 'Masked Alice Secret',
+    ]) expect(serialized).not.toContain(forbidden);
   });
 
   it('serializes flush and stop so two drains cannot shift away the next chunk', async () => {
@@ -125,6 +221,33 @@ describe('ReplayRecorder', () => {
     await expect(recorder.start()).resolves.toMatchObject({ sampled: true, replayId: expect.any(String) });
     expect(attempts).toBe(2);
     await recorder.withdraw();
+  });
+
+  it('can retry finalization after all bounded complete attempts fail transiently', async () => {
+    let emit: ((event: any) => void) | null = null;
+    const record: ReplayRecord = (config) => {
+      emit = config.emit as (event: any) => void;
+      return () => {};
+    };
+    let completeCalls = 0;
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith('/i/v1/replays')) {
+        return response(201, { replay: { id: '77777777-7777-7777-7777-777777777777' }, upload_token: 'rt_'.padEnd(70, 'g') });
+      }
+      if (String(url).endsWith('/complete')) {
+        completeCalls += 1;
+        return completeCalls <= 4
+          ? response(503, { error: { message: 'temporary complete outage', retryable: true } })
+          : response(200, { status: 'playable' });
+      }
+      return response(200, { accepted: true });
+    }) as unknown as typeof fetch;
+    const recorder = new ReplayRecorder(options(fetchImpl, record));
+    await recorder.start();
+    emit!({ type: 2, timestamp: 1, data: { node: { type: 0, childNodes: [] } } });
+    await expect(recorder.stop()).rejects.toThrow('temporary complete outage');
+    await expect(recorder.stop()).resolves.toBeUndefined();
+    expect(completeCalls).toBe(5);
   });
 
   it('withdraws a manifest created while start is still in flight without starting rrweb', async () => {

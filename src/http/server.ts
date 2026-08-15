@@ -57,6 +57,7 @@ import {
   purgeExperienceSnapshots, readExperienceSnapshot, registerExperienceRoute,
 } from '../services/experience.js';
 import type { ReplaySessionStatus } from '../replay/types.js';
+import type { ReplayEventsLease } from '../services/replay.js';
 import { createActorLink, listActorLinks, revokeActorLink } from '../services/identity.js';
 import { getPerson } from '../services/person.js';
 import {
@@ -112,6 +113,7 @@ declare module 'fastify' {
   interface FastifyRequest {
     auth: AuthContext;
     resolvedProject?: Project;
+    replayEventsLease?: ReplayEventsLease;
   }
 }
 
@@ -423,6 +425,14 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
     // room for percent-encoded Unicode while the schema enforces that bound.
     routerOptions: { maxParamLength: 2_000 },
   });
+  const closeReplayEventsLease = async (req: FastifyRequest, completed: boolean) => {
+    const lease = req.replayEventsLease;
+    delete req.replayEventsLease;
+    if (lease) await lease.close(completed);
+  };
+  app.addHook('onResponse', async (req) => closeReplayEventsLease(req, true));
+  app.addHook('onError', async (req) => closeReplayEventsLease(req, false));
+  app.addHook('onRequestAbort', async (req) => closeReplayEventsLease(req, false));
   (app as FastifyInstance & { countryResolver?: CountryResolver }).countryResolver =
     options.countryResolver ?? UNKNOWN_COUNTRY_RESOLVER;
   app.addContentTypeParser(['image/png', 'image/webp'], { parseAs: 'buffer' }, (_req, body, done) => {
@@ -1154,6 +1164,7 @@ function registerPlatformRoutes(
     // database cascade remains the final race-safe ownership boundary.
     const eventsDeleted = await ctx.eventStore.purge(project.id);
     await deleteProject(ctx.pool, req.auth.orgId, project.slug);
+    await ctx.replays.purgeProjectObjects(project.id);
     ctx.ingest.invalidateRegistry(project.id);
     ctx.query.invalidateProject(project.id);
     return {
@@ -1344,7 +1355,14 @@ function registerPlatformRoutes(
     const project = await resolveProject(req);
     const { id } = req.params as { id: string };
     const { env = req.auth.env } = req.query as { env?: string };
-    return ctx.replays.readEvents(project.id, env, z.string().uuid().parse(id), authOwner(req.auth));
+    const lease = await ctx.replays.openEventsRead(
+      project.id,
+      env,
+      z.string().uuid().parse(id),
+      authOwner(req.auth),
+    );
+    req.replayEventsLease = lease;
+    return { replay: lease.replay, events: lease.events };
   });
 
   app.delete('/api/v1/projects/:slug/replays/:id', async (req) => {
@@ -1769,6 +1787,14 @@ function registerPlatformRoutes(
     let replays_deleted = 0;
     if (body.scope === 'events' || body.scope === 'all') {
       events_deleted = await ctx.eventStore.purge(project.id, body.env, body.distinct_id);
+      if (body.distinct_id) {
+        replays_deleted = await ctx.replays.purgeSessions(
+          project.id,
+          `${authOwner(req.auth)}:data-subject-purge`,
+          body.env,
+          body.distinct_id,
+        );
+      }
     }
     if (body.scope === 'entities' || body.scope === 'all') {
       entities_deleted = await deleteEntities(ctx.pool, project.id, body.env);

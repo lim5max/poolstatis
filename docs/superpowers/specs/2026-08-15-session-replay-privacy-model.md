@@ -13,7 +13,9 @@ screen-video format are out of scope.
 - License: MIT.
 - The legacy `rrweb` convenience package is not used; recorder and player are
   imported from their direct supported packages.
-- The SDK recorder is an explicit `@poolstatis/sdk/replay` export, so the core
+- The source release candidate is `@poolstatis/sdk@0.4.0`; its opt-in export is
+  `@poolstatis/sdk/replay`. Published `0.3.0` does not have that export and must not be documented as installable
+  until exact registry read-back. The explicit subpath means the core
   SDK and the existing `/i/v1/*` event contracts do not import or download
   rrweb.
 - Recorded events remain untrusted after server validation. Playback uses
@@ -61,15 +63,17 @@ controlled. A write-only ingest key never grants replay read access.
 | --- | --- |
 | Recording without user intent | `ReplayRecorder.start()` requires affirmative consent with a non-empty consent version and an exact host-policy match. Denial fails before the rrweb import, observers, manifest or network request. Withdrawal racing with initialization prevents rrweb startup and deletes a manifest once its upload token is known. |
 | Host enables replay on the wrong domain | SDK requires an explicit allow-list of exact hostnames. The server compares a supplied browser `Origin`, when present, with the declared hostname. No wildcard or raw URL policy is accepted. |
-| Password/payment/form/contenteditable disclosure | Password, payment/auth/autocomplete targets are blocked. All inputs and textareas are masked in v1. Contenteditable is always masked. Server sanitization removes input values again. |
-| PII, tokens or secrets in visible DOM text | All text is masked by default. `text: visible` is explicit, but server redaction still masks secret/token/JWT/email/payment-looking strings. Hosts can tighten with `data-poolstatis-mask`, `.rr-mask` and configured mask selectors. |
-| Sensitive component subtree | `data-poolstatis-block`, `.rr-block` and configured block selectors produce geometry-only placeholders. Payment/auth selectors are always included. |
-| Raw URL/query/hash or signed asset leak | The SDK replaces navigation URLs with a synthetic origin plus a developer-provided finite route key. The server removes query/hash, credentials, `javascript:`, `data:`, `blob:`, external URLs, CSS imports/URLs/content, inline handlers, `srcdoc` and network-bearing attributes. ID/class/custom-property values become deterministic structural tokens; the bounded CSS allowlist rewrites selectors to the same idempotent mapping. |
+| Password/payment/form/contenteditable disclosure | Password, payment/auth/autocomplete targets are blocked. All inputs, source-5 input mutations and contenteditable values (including boolean attributes) are masked independently by SDK and server. |
+| PII, tokens or secrets in visible DOM text | Default `text: masked` fail-closes every non-structural string field, including unknown future rrweb fields. `text: visible` is explicit, but server redaction still masks secret/token/JWT/email/payment-looking strings and all input-like data. Hosts can tighten with `data-poolstatis-mask`, `.rr-mask` and configured mask selectors. |
+| Sensitive component subtree | `data-poolstatis-block`, `.rr-block` and configured simple tag/class/id/attribute block selectors produce geometry-only placeholders. The normalized selector policy is stored with the manifest so the server independently repeats it; payment/auth selectors are always included. |
+| Raw URL/query/hash or signed asset leak | The SDK replaces navigation URLs with a synthetic origin plus a developer-provided finite route key. The server removes query/hash, credentials, `javascript:`, `data:`, `blob:`, external URLs, CSS imports/URLs/content, inline handlers, `srcdoc` and network-bearing attributes. `<style>` text, `isStyle` text and rrweb stylesheet/declaration mutations all use the bounded CSS parser. ID/class/custom-property values become deterministic structural tokens; CSS selectors use the same idempotent mapping. |
 | Script or request execution in viewer | Payload is revalidated on read. The official rrweb iframe has `allow-same-origin` only and no script capability; unsafe rrweb modes and user interaction are disabled. Malicious scripts, handlers, forms and URLs are removed before storage and again before delivery. Runtime rejects any unexpected sandbox attribute. |
 | Tenant/object-key traversal | Every manifest read is project + environment scoped. Object keys are server-generated UUID paths and the filesystem adapter rejects traversal and symlinks. MCP never returns payload/object keys. |
-| Replay flood/decompression bomb | Bounded JSON body, events/chunk, bytes/chunk, chunks/session, session bytes, duration, pointer sampling, memory queue and retry attempts. V1 accepts uncompressed JSON only, so compressed bombs never reach storage. |
+| Replay flood/decompression bomb | Bounded JSON body, events/chunk, bytes/chunk, chunks/session, session bytes, duration, pointer sampling, memory queue and retry attempts. Files are size-checked through a no-follow handle before bounded allocation. V1 accepts uncompressed JSON only, so compressed bombs never reach storage. |
 | Duplicate/reordered retry corruption | Chunks are idempotent by `(replay_id, sequence, checksum)`. Same checksum is accepted; a different checksum is `409`. Completion requires contiguous sequences, monotonic timestamps and an initial full snapshot. |
-| Consent withdrawal or expired retention remains readable | Withdrawal tombstones first, then deletes objects. Tombstoned sessions return `410` before physical cleanup. Retention uses a bounded retryable worker and server-owned `delete_after`. |
+| Consent withdrawal or expired retention remains readable | Reads reject an elapsed `delete_after` immediately. Playback holds a shared manifest lock through object validation, append-only view audit and HTTP response completion; an aborted response rolls back that audit. Withdrawal takes the conflicting lock, so its completion is a read barrier. Tombstone/request audit commits first, then retryable prefix deletion removes committed chunks, crash-orphans and temporary files. The original actor is retained across worker completion. |
+| Final upload or completion response is lost | Chunks keep stable sequence/checksum idempotency. `stop()` detaches recording separately from finalization, retries transient chunk/complete failures and can be called again after all bounded attempts fail; client totals stop before server chunk/event/byte limits. |
+| Data-subject deletion omits DOM-derived data | Exact raw `distinct_id` event purge invokes the same replay prefix purge for that environment and reports `identity_scope: exact_raw_distinct_id`; no unreviewed alias expansion is implied. |
 | Existing analytics regression | Replay uses new opt-in routes and SDK entrypoint. Existing `/i/v1/events`, `/i/v1/experience/events`, published SDK fixtures and `207` semantics are unchanged. Replay `4xx` is non-retryable; `408/429/5xx` is retryable under a bounded stable chunk id. |
 
 ## v1 limits
@@ -85,8 +89,9 @@ controlled. A write-only ingest key never grants replay read access.
   replay data is dropped and the manifest completes as incomplete.
 - Flush cadence: 10 seconds; full checkout every 60 seconds or 10,000 events.
 - Pointer samples: at most 20 Hz (`mousemove: 50`).
-- Transport attempts: at most four 10-second attempts per chunk with bounded
-  exponential delay; the stable sequence and checksum are reused.
+- Transport attempts: at most four 10-second attempts per chunk or completion
+  call with bounded exponential delay; the stable sequence/checksum and final
+  sequence are reused, and a later `stop()` can resume finalization.
 - List API: at most 100 manifests. Viewer payload: at most 20 MiB and 50,000
   events. MCP returns metadata for at most 100 replays and no DOM payload.
 
@@ -102,8 +107,10 @@ visible copy.
 
 ## Required evidence before merge
 
-- Unit and integration tests for policy gates, redaction, malicious payloads,
-  limits, idempotency, tenant isolation, completion, withdrawal and retention.
+- Unit and integration tests for policy gates, generic-string redaction,
+  malicious style/input payloads, limits, idempotency, tenant isolation,
+  completion retry, concurrent withdrawal/read, subject purge, orphan cleanup,
+  append-only audit and retention read barriers.
 - Published-SDK compatibility fixture still passes.
 - Browser E2E records a full snapshot, layout CSS, DOM mutation, scroll and
   pointer motion, then visibly reconstructs scrollable layout, mutation,

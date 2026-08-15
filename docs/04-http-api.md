@@ -123,7 +123,9 @@ selectors, input values, error stack/message и network data не являютс
 ### Session Replay ingest (separate opt-in)
 
 Session Replay не использует обычный event envelope и не меняет его `207`,
-retry или idempotency semantics. Отдельный `@poolstatis/sdk/replay` после
+retry или idempotency semantics. Отдельный export `@poolstatis/sdk/replay` из
+source release candidate `@poolstatis/sdk@0.4.0` (опубликованный `0.3.0` этого
+export ещё не имеет) после
 affirmative consent + exact-host gate вызывает:
 
 ```text

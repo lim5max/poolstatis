@@ -380,11 +380,14 @@ Query kinds include `trend`, `funnel`, `entities`, `retention`, `lifecycle`,
 Experience reads are bounded maps or an ordered interaction timeline, not DOM,
 video, or cursor replay.
 
-Для настоящего воспроизведения отдельно подключается consent-gated
-`@poolstatis/sdk/replay`: он записывает masked rrweb DOM mutations, viewport,
+Для настоящего воспроизведения отдельно подключается consent-gated export
+`@poolstatis/sdk/replay` из source release candidate `@poolstatis/sdk@0.4.0`:
+он записывает masked rrweb DOM mutations, viewport,
 click/scroll/cursor только после exact-host policy gate и хранит chunks вне
 EventStore. Не называйте Experience timeline replay и не включайте replay без
-отдельного purpose/consent review. Контракт: [14-session-replay.md](14-session-replay.md).
+отдельного purpose/consent review. Опубликованный `0.3.0` replay export ещё не
+содержит; registry installation допустима только после exact-version read-back.
+Контракт: [14-session-replay.md](14-session-replay.md).
 
 ---
 

@@ -667,9 +667,9 @@ export type ExperienceSnapshotMetaInput = z.infer<typeof experienceSnapshotMetaS
 
 // ===== Session Replay (separate opt-in contract) =====
 
-const replaySelectorSchema = z.string().trim().min(1).max(200).refine(
-  (selector) => !/[\u0000\r\n]/.test(selector),
-  'selector must be one bounded CSS selector',
+const replaySelectorSchema = z.string().trim().min(1).max(200).regex(
+  /^(?:[a-z][a-z0-9-]*|[.#][a-zA-Z_][a-zA-Z0-9_-]*|\[[a-zA-Z_:][a-zA-Z0-9_.:-]*(?:="[a-zA-Z0-9_.:-]{1,80}")?\])$/,
+  'selector must be one simple tag, class, id or attribute selector',
 );
 
 export const replayPrivacyPolicySchema = z.object({
