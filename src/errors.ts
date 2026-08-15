@@ -76,5 +76,12 @@ export function databasePolicyError(error: unknown): ApiError | null {
   if (code === 'PSO01') {
     return organizationWriteDisabled();
   }
+  if (code === 'PSD01') {
+    return new ApiError(
+      410,
+      'project_deleting',
+      'project deletion has disabled new writes',
+    );
+  }
   return null;
 }

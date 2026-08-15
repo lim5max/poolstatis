@@ -414,6 +414,36 @@ export interface ExperienceSnapshot {
   stale: boolean;
 }
 
+export type ReplaySessionStatus = 'recording' | 'playable' | 'incomplete' | 'deleting' | 'deleted';
+
+export interface ReplaySessionSummary {
+  id: string;
+  surface: string;
+  route: string;
+  env: string;
+  session_id: string;
+  distinct_id: string;
+  host: string;
+  version: string;
+  device: 'desktop' | 'mobile';
+  consent_version: string;
+  policy_version: string;
+  text_mode: 'masked' | 'visible';
+  status: ReplaySessionStatus;
+  chunk_count: number;
+  event_count: number;
+  byte_size: number;
+  started_at: string;
+  completed_at: string | null;
+  delete_after: string;
+  viewer_path: string;
+}
+
+export interface ReplayEventsResponse {
+  replay: ReplaySessionSummary;
+  events: Array<Record<string, unknown>>;
+}
+
 export interface VisualExperienceResponse {
   kind: 'visual_experience';
   surface: Pick<ExperienceSurface, 'key' | 'name' | 'purpose' | 'status'>;

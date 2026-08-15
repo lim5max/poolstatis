@@ -3,8 +3,9 @@
 > **Historical implementation plan — not the current runtime contract.** The
 > shipped Browser Experience starts when the host calls `start()` and does not
 > require a built-in consent gate; legacy callbacks are optional host-owned
-> pause controls. Its labelled timeline and maps are shipped, but full DOM,
-> video, gaze, and cursor replay are not.
+> pause controls. Its labelled timeline and maps remain distinct from the
+> separately shipped consent-gated rrweb Session Replay module. Gaze/video are
+> still not shipped.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -18,7 +19,8 @@
 
 - Capture only labelled clicks, normalized coordinates, scroll milestones, page views, and coarse error types.
 - Never capture DOM, text/input values, CSS selectors, raw URLs, query strings, stacks, or error messages.
-- Full session replay is out of scope and must be reported as not implemented.
+- Full session replay is out of scope for this historical Browser Experience
+  plan; current status must be read from `docs/14-session-replay.md`.
 - Preserve existing uncommitted work in Basic Project and `poolstatis-site`.
 - No git commit or push unless the user explicitly requests it.
 

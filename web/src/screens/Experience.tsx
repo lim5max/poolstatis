@@ -21,6 +21,7 @@ import type {
   VisualExperienceCompareResponse,
   VisualExperienceResponse,
 } from '../api/types';
+import { ReplayPanel } from './ReplayPanel';
 
 export function Experience() {
   const { client, project, env, availableEnvs, setEnv } = useStore();
@@ -54,14 +55,14 @@ export function Experience() {
     <div className="space-y-4">
       <Panel
         title="Visual Experience"
-        right={<span className="text-sm text-muted-foreground">aggregate maps · no DOM replay</span>}
+        right={<span className="text-sm text-muted-foreground">aggregate maps · separate from DOM replay</span>}
       >
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-3xl">
             <p className="text-sm text-muted-foreground">
               Read clicks, scroll reach and named-section aggregate reach on the immutable page version that produced them.
-              Poolstatis stores only consented coordinates and developer labels — never DOM, text, form values,
-              query strings or pointer paths.
+              This lower-sensitivity collector stores only consented coordinates and developer labels — never DOM,
+              text, form values, query strings or pointer paths. Session Replay is a separate explicit opt-in below.
             </p>
           </div>
           <Field label="Environment">
@@ -72,6 +73,8 @@ export function Experience() {
           </Field>
         </div>
       </Panel>
+
+      <ReplayPanel />
 
       {!experienceReady && (
         <ExperienceSetupGate
@@ -151,7 +154,7 @@ function ExperienceSetupGate({
   const task = experienceSetupTask(project, env, surfaces);
   return <GuidedFirstValue
     title={hasRoute ? 'Complete aggregate friction readiness' : 'Set up Browser Experience'}
-    outcome="Build a privacy-safe friction readout from accepted aggregate clicks, scroll reach, and stable developer labels. Poolstatis never captures DOM, page text, form values, pointer paths, or session replay."
+    outcome="Build a privacy-safe friction readout from accepted aggregate clicks, scroll reach, and stable developer labels. This Browser Experience collector never captures DOM, page text, form values or pointer paths; Session Replay is a separate explicit opt-in."
     checks={[
       {
         label: 'Purposeful active surface',
@@ -239,7 +242,7 @@ ${knownSurfaces}
 2. Use the installed Poolstatis MCP tools. Read existing state first, then use create_experience_surface and register_experience_route as needed. Do not delete, archive, rename, or overwrite existing surfaces, routes, events, or project data. If every existing surface is archived, create a fresh active surface with a new stable key.
 3. Reuse the Poolstatis client and SDK version already compatible with this project. Add BrowserExperience from @poolstatis/sdk/experience only where browser code runs. Do not upgrade the SDK unless compatibility with the existing ingest contract is verified.
 4. Keep the product key in the local environment where it is already saved. Do not ask me to paste or expose any key in chat, source code, logs, screenshots, or git.
-5. Capture only normalized coordinates and stable developer labels such as data-poolstatis-label and data-poolstatis-section. Never capture DOM, text, form values, raw URLs, query strings, pointer paths, or session replay.
+5. Through BrowserExperience, capture only normalized coordinates and stable developer labels such as data-poolstatis-label and data-poolstatis-section. Never capture DOM, text, form values, raw URLs, query strings or pointer paths through this collector. Session Replay is a separate consent- and exact-host-gated module and is not part of this setup task.
 6. Upload the exact deploy PNG or WebP with its stable route, version, device, viewport and release hash through the Poolstatis admin or Platform API. Never substitute a snapshot from another release.
 7. Run the relevant tests and build, open one real route in "${env}", and verify that Poolstatis accepted a real Browser Experience event. Read the surface, route, capture recency and snapshot metadata back from the server. Report the files changed and the server-side verification. Do not call the setup complete from a local mock alone.`;
 }

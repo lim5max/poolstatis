@@ -211,6 +211,19 @@ values, stacks и network data в Poolstatis не отправляются.
 surface/window, чтение без `actor_id` завершается typed ambiguity error.
 Ответ всегда содержит canonical actor identity и active-link provenance.
 
+### Session Replay metadata
+
+```text
+list_session_replays(project, {env?, surface?, status?, limit?})
+get_session_replay(project, {replay_id, env?})
+```
+
+Оба source/local tool возвращают только bounded manifest metadata и admin
+viewer path. DOM, rrweb events, cursor samples и object keys через MCP не
+выдаются. Тулы зарезервированы для следующего MCP package release и поэтому
+не расширяют уже опубликованный `@poolstatis/mcp@0.6.0` contract. Полный
+privacy/player contract: [14-session-replay.md](14-session-replay.md).
+
 Visual map tools additionally return an agent-ready `agent_context`: the
 purpose-tagged scope, sample sizes, ordered section labels, counts and
 percentages, largest adjacent-section aggregate reach decreases, safe-label click concentration,

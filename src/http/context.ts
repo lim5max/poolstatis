@@ -15,6 +15,8 @@ import type { OutboundPolicyOptions } from '../security/outbound.js';
 import { LocalArtifactStore, type ArtifactStore } from '../stores/artifactStore.js';
 import type { CountryResolver } from '../services/country.js';
 import { EventManagementService } from '../services/eventManagement.js';
+import { LocalReplayObjectStore, type ReplayObjectStore } from '../replay/objectStore.js';
+import { ReplayService } from '../services/replay.js';
 
 /** Shared service wiring for the HTTP server, CLI, and tests. */
 export interface AppContext {
@@ -25,6 +27,8 @@ export interface AppContext {
   posthog: PostHogAdapter;
   webhooks: WebhookService;
   artifacts: ArtifactStore;
+  replayObjects: ReplayObjectStore;
+  replays: ReplayService;
   cursorSigningSecret?: string;
   events: EventManagementService;
 }
@@ -37,6 +41,8 @@ export interface CreateContextOptions {
   outboundPolicy?: OutboundPolicyOptions;
   artifactStore?: ArtifactStore;
   artifactDir?: string;
+  replayObjectStore?: ReplayObjectStore;
+  replayDir?: string;
   countryAttribution?: CountryResolver['attribution'];
   cursorSigningSecret?: string;
 }
@@ -52,6 +58,10 @@ export function createContext(pool: pg.Pool, options: CreateContextOptions = {})
     ? undefined
     : new QueryCache(options.queryCache ?? { ttlMs: 1_000, maxEntries: 1_000 });
   const posthog = new PostHogAdapter(pool, options.connectorEncryptionKey, options.outboundPolicy);
+  const replayObjects = options.replayObjectStore
+    ?? new LocalReplayObjectStore(options.replayDir ?? './data/session-replays');
+  const artifacts = options.artifactStore
+    ?? new LocalArtifactStore(options.artifactDir ?? './data/experience-artifacts');
   return {
     pool,
     eventStore,
@@ -66,7 +76,9 @@ export function createContext(pool: pg.Pool, options: CreateContextOptions = {})
     ),
     posthog,
     webhooks: new WebhookService(pool, options.connectorEncryptionKey, options.outboundPolicy),
-    artifacts: options.artifactStore ?? new LocalArtifactStore(options.artifactDir ?? './data/experience-artifacts'),
+    artifacts,
+    replayObjects,
+    replays: new ReplayService(pool, replayObjects, { artifacts, eventStore }),
     ...(options.cursorSigningSecret
       ? { cursorSigningSecret: options.cursorSigningSecret }
       : {}),

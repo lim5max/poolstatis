@@ -8,6 +8,7 @@ import {
   retentionIndexesReady,
 } from '../services/retentionIndexes.js';
 import {
+  PostgresEventStore,
   rollingEventPartitionsReady,
 } from '../stores/postgresEventStore.js';
 import { createContext } from '../http/context.js';
@@ -18,6 +19,9 @@ import {
   prepareHostedOrganizationPolicies,
 } from '../services/accounts.js';
 import { LocalArtifactStore } from '../stores/artifactStore.js';
+import { LocalReplayObjectStore } from '../replay/objectStore.js';
+import { ReplayService } from '../services/replay.js';
+import { startReplayRetention } from '../services/replayRetention.js';
 import { startExperienceArtifactRetention } from '../services/experienceArtifactRetention.js';
 import {
   createLocalMmdbCountryResolver,
@@ -84,6 +88,7 @@ const app = buildServer(pool, {
   outboundPolicy: config.outboundPolicy,
   manageEventPartitions: !hostedPolicyRequired,
   artifactDir: config.experienceArtifactDir,
+  replayDir: config.replayArtifactDir,
   ...(countryResolver ? { countryResolver } : {}),
   ...(config.connectorEncryptionKey
     ? { connectorEncryptionKey: config.connectorEncryptionKey }
@@ -100,6 +105,7 @@ let retentionWorker: ReturnType<typeof startRetentionWorker> | null = null;
 let releaseMonitorWorker: ReturnType<typeof startReleaseMonitor> | null = null;
 let webhookOutboxWorker: ReturnType<typeof startWebhookOutbox> | null = null;
 let experienceArtifactRetention: ReturnType<typeof startExperienceArtifactRetention> | null = null;
+let replayRetention: ReturnType<typeof startReplayRetention> | null = null;
 let controlTowerAutomationWorker: ReturnType<typeof startControlTowerAutomation> | null = null;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let maintenanceTask: Promise<void> | null = null;
@@ -152,6 +158,33 @@ const prepareMaintenance = async (): Promise<void> => {
             }
           },
           onError: (error) => console.error('experience artifact retention failed', error),
+        },
+      );
+    }
+    // Consent tombstones and durable project-deletion jobs are privacy
+    // obligations, not optional retention. The flag only controls scheduled
+    // expiry of otherwise readable replay recordings.
+    if (!replayRetention && !stopping) {
+      replayRetention = startReplayRetention(
+        new ReplayService(
+          maintenancePool,
+          new LocalReplayObjectStore(config.replayArtifactDir),
+          {
+            artifacts: new LocalArtifactStore(config.experienceArtifactDir),
+            eventStore: new PostgresEventStore(maintenancePool, { managePartitions: false }),
+          },
+        ),
+        maintenancePool,
+        {
+          intervalMs: config.retentionWorker.intervalMs,
+          batchSize: Math.min(config.retentionWorker.batchSize, 100),
+          expireRecordings: config.retentionWorker.enabled,
+          onResult: (result) => {
+            if (result.deleted > 0 || result.projectsDeleted > 0 || result.errors > 0) {
+              console.log(JSON.stringify({ maintenance: 'session-replays', ...result }));
+            }
+          },
+          onError: (error) => console.error('session replay retention failed', error),
         },
       );
     }
@@ -245,6 +278,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     await webhookOutboxWorker?.stop();
     await controlTowerAutomationWorker?.stop();
     await experienceArtifactRetention?.stop();
+    await replayRetention?.stop();
     await maintenancePool.end();
     await pool.end();
     process.exit(0);

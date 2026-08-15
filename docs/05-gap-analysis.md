@@ -40,11 +40,12 @@ The main remaining product gaps are now:
    registry artifact passes fresh initialize, full tool-list, and a
    project-scoped semantic read.
 
-Full DOM/video/cursor Session Replay, broad arbitrary-DOM/selector autocapture,
-full issue-oriented error tracking, caller-provided SQL/HogQL, a general dashboard builder,
-and connector marketplaces remain intentional non-goals. This does not remove the shipped
-developer-labelled click observer, scroll/section/error signals, interaction maps, Web session
-detail, per-session interaction timeline, or answer-first analysis screens and graphs.
+Broad arbitrary-DOM/selector autocapture, screen-video/gaze/audio capture, full
+issue-oriented error tracking, caller-provided SQL/HogQL, a general dashboard
+builder, and connector marketplaces remain intentional non-goals. Session
+Replay is shipped only as a separate consent- and exact-host-gated rrweb
+module with default text/input masking, bounded object storage, deletion and
+retention; it does not weaken the lower-sensitivity Browser Experience contract.
 
 ## Shipped product surface
 
@@ -61,6 +62,9 @@ detail, per-session interaction timeline, or answer-first analysis screens and g
   registered section exposures and coarse `error | unhandled_rejection` types;
 - bounded click/scroll interaction maps, screenshot overlays and a per-session interaction
   timeline, explicitly not DOM/video/cursor replay;
+- separate opt-in Session Replay: rrweb full snapshots, bounded safe layout CSS,
+  DOM mutations, navigation/viewport, click, scroll and cursor playback, with
+  masked IDs/text/forms, object-store payloads, audit, withdrawal and retention;
 - answer-first Web, Product, Funnels, Saved, People and Browser Experience screens with
   graphs and tables, explicitly not a general dashboard builder;
 - audited, reversible actor links resolved at query time without rewriting events;
@@ -149,9 +153,6 @@ Recommended sequencing:
   experiments.
 - **Additional outbound destinations** — issue/draft-PR integrations only when credentials,
   permissions, undo and audit semantics are implemented; current unsupported actions stay inert.
-- **Session Replay add-on** — only as a separate encrypted object-storage system with consent,
-  masking, sampling, deletion and retention. DOM chunks never enter the events table. The
-  current labelled interaction timeline is shipped evidence, not an early replay implementation.
 
 ## Intentional skips
 

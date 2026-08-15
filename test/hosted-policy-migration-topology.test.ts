@@ -162,7 +162,7 @@ describe('hosted policy migration role topology', () => {
       deploy = createPool(deployUrl, { max: 2 });
       const applied = await migrateWithEvidence(deploy);
       expect(applied.at(-1)).toBe(
-        '041_usage_entitlement_control.sql',
+        '044_session_replay_project_deletion_phases.sql',
       );
       const beforePrepare = await deploy.query<{
         marker_owner: string;
@@ -211,6 +211,12 @@ describe('hosted policy migration role topology', () => {
       );
       await deploy.query(
         'SELECT poolstatis_prepare_usage_entitlement_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_replay_role_grants()',
+      );
+      await deploy.query(
+        'SELECT poolstatis_prepare_replay_hardening_role_grants()',
       );
       await deploy.query(
         'SELECT poolstatis_prepare_hosted_policy_role_hardening()',
@@ -536,7 +542,7 @@ describe('hosted policy migration role topology', () => {
             WHERE tgname LIKE '%policy_ready') AS policy_triggers`,
       );
       expect(state.rows).toEqual([{
-        last_migration: '041_usage_entitlement_control.sql',
+        last_migration: '044_session_replay_project_deletion_phases.sql',
         marker_table: 'organization_policy_state',
         policy_functions: [
           'poolstatis_activate_organization_policy',
@@ -625,6 +631,8 @@ describe('hosted policy migration role topology', () => {
       await selfHost.query('SELECT poolstatis_prepare_metric_definition_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_data_health_role_grants()');
       await selfHost.query('SELECT poolstatis_prepare_usage_entitlement_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_replay_role_grants()');
+      await selfHost.query('SELECT poolstatis_prepare_replay_hardening_role_grants()');
       await selfHost.query('SELECT poolstatis_apply_hosted_policy_role_hardening()');
       await ensureRollingEventPartitions(selfHost, new Date(), 12);
       await ensureRetentionIndexes(selfHost);
@@ -767,7 +775,7 @@ describe('hosted policy migration role topology', () => {
       );
       const applied = await migrateWithEvidence(selfHost);
       expect(applied.at(-1)).toBe(
-        '041_usage_entitlement_control.sql',
+        '044_session_replay_project_deletion_phases.sql',
       );
       const topology = await selfHost.query<{
         superuser: boolean;

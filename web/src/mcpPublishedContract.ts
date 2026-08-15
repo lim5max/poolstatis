@@ -17,4 +17,6 @@ export const SOURCE_ONLY_MCP_TOOLS_PENDING_PUBLICATION = [
   'create_funnel_investigation',
   'list_funnel_investigations',
   'get_funnel_investigation',
+  'list_session_replays',
+  'get_session_replay',
 ] as const;

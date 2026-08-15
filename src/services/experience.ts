@@ -220,6 +220,14 @@ export async function createExperienceSnapshot(
       'physical image dimensions must use one consistent scale for the declared CSS document dimensions',
     );
   }
+  const projectState = await pool.query<{ replay_deletion_pending: boolean }>(
+    'SELECT replay_deletion_pending FROM projects WHERE id = $1',
+    [projectId],
+  );
+  if (!projectState.rows[0]) throw notFound('project');
+  if (projectState.rows[0].replay_deletion_pending) {
+    throw new ApiError(410, 'project_deleting', 'project deletion has disabled snapshot writes');
+  }
   const [surface, route] = await Promise.all([
     getExperienceSurface(pool, projectId, input.surface),
     getExperienceRoute(pool, projectId, input.surface, input.route),

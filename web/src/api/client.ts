@@ -1,6 +1,6 @@
 import type {
   AccountMe, AccountMode, ActorLink, ActorLinkAudit, ApiKeyRow, AutomationInboxNotification, AutomationProposal, CreateSavedAnswerInput, DataHealthResult, DataHealthVerifyInput, DataHealthVerifyResult, DataQualityResponse, Decision, DecisionActionDetail, DecisionActionType, DecisionDetail, DecisionExplanation, DecisionHistoryItem, DecisionInboxItem, DecisionLoopOnboardingStatus, DecisionOutcome, EntityRow, EvidenceSet, Experiment, ExperimentReadiness, ExperimentResult, FeatureFlag, FeatureFlagStatus, Funnel, FunnelInvestigation, HostedOnboardingResult, IngestWarning, InsightFeedSchedule, InsightFeedSnapshot, MeasurementContract, MeasurementReadiness, MeasurementTrust, Metric, MetricCategoryDefinition, MetricDefinitionDetail, MetricDefinitionPreview, MetricStatus, MetricUsage, MonitorFinding, MonitorPolicy, NotificationDelivery, NotificationDestination, PreparedExperiment, ProjectIntent, ProjectIntentInput, SavedAnswer, SavedAnswerAudit, SemanticProjectComparison, SetupTaskAgent, SetupTaskFeedbackInput, SetupTaskResponse, UpdateSavedAnswerInput,
-  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectPortfolioResult, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, UsageEntitlementControl, VisualExperienceCompareResponse, VisualExperienceResponse,
+  BackfillPreview, BackfillRecord, EventRevision, EventRevisionPatch, EventRevisionPreview, ProjectPortfolioResult, ProjectSchema, ProjectWithStats, PropertyDefinition, Release, ReleaseStatus, ReplayEventsResponse, ReplaySessionStatus, ReplaySessionSummary, SampleEvent, SampleFilter, SourceConnection, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionsResponse, WebSessionResponse, WebhookDelivery, WebhookDestination, ExperienceRoute, ExperienceSnapshot, ExperienceSurface, InteractionMapResponse, ExperienceSessionResponse, OrganizationUsage, OrganizationUsageActivity, OrganizationUsageRange, PersonalToken, UsageEntitlementControl, VisualExperienceCompareResponse, VisualExperienceResponse,
 } from './types';
 import type { AnalysisQueryInput, AnalysisQueryResult } from '../analysis/visualization';
 import type { OperationalQueryInput, OperationalQueryResult, PersonResult } from '../analysis/operations';
@@ -845,6 +845,33 @@ export class PoolstatisClient {
 
   experienceSession(slug: string, body: { surface: string; session_id: string; date_from?: string; date_to?: string; env: string; limit?: number }) {
     return this.req<ExperienceSessionResponse>('POST', `/api/v1/projects/${slug}/query`, { kind: 'experience_session', ...body });
+  }
+
+  sessionReplays(slug: string, filter: { env: string; surface?: string; status?: ReplaySessionStatus; limit?: number }) {
+    const query = new URLSearchParams({ env: filter.env, limit: String(filter.limit ?? 50) });
+    if (filter.surface) query.set('surface', filter.surface);
+    if (filter.status) query.set('status', filter.status);
+    return this.req<{ replays: ReplaySessionSummary[] }>(
+      'GET', `/api/v1/projects/${slug}/replays?${query}`,
+    ).then((response) => response.replays);
+  }
+
+  sessionReplay(slug: string, replayId: string, env: string) {
+    return this.req<ReplaySessionSummary>(
+      'GET', `/api/v1/projects/${slug}/replays/${encodeURIComponent(replayId)}?env=${encodeURIComponent(env)}`,
+    );
+  }
+
+  sessionReplayEvents(slug: string, replayId: string, env: string) {
+    return this.req<ReplayEventsResponse>(
+      'GET', `/api/v1/projects/${slug}/replays/${encodeURIComponent(replayId)}/events?env=${encodeURIComponent(env)}`,
+    );
+  }
+
+  deleteSessionReplay(slug: string, replayId: string) {
+    return this.req<{ deleted: true }>(
+      'DELETE', `/api/v1/projects/${slug}/replays/${encodeURIComponent(replayId)}`,
+    );
   }
 
   trend(slug: string, body: {
