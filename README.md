@@ -1,8 +1,9 @@
 # Poolstatis
 
 **Agent-native product analytics.** Poolstatis is a lightweight PostHog-style
-analytics system whose primary user is a coding agent over MCP, not a human
-clicking through dashboards.
+analytics system whose primary user is a coding agent over MCP. Humans still
+get answer-first analysis screens, graphs, tables, session evidence, and review
+controls; Poolstatis does not provide a general dashboard builder.
 
 The core idea is that metrics are created with semantics from the start. Every
 metric has a required `purpose`, and every funnel has a `goal`, so
@@ -21,7 +22,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the
 project rules and release hygiene.
 
 This repository contains the system itself: backend, ingest API, MCP server,
-SDK, headless admin SPA, migrations, technical docs, and Docker self-hosting.
+SDK, human analysis/admin SPA, migrations, technical docs, and Docker self-hosting.
 The marketing site, public docs UI, waitlist, and future Cloud-only code live in
 separate repositories.
 
@@ -165,17 +166,19 @@ curl -X POST https://api.poolstatis.xyz/i/v1/events \
   -d '{"events":[{"event":"signup.completed","distinct_id":"u1"}]}'
 ```
 
-## Platform Admin
+## Human Analysis And Admin
 
-`web/` is a minimal headless platform admin. It is not a per-project analytics
-dashboard; customers consume analytics through MCP, SDK integrations, or their
-own dashboards.
+`web/` is a review, answer-first analysis, and platform-admin workspace. It ships
+Web analytics, Product, Funnels, Saved answers, People, and Browser Experience
+screens with real graphs, tables, interaction maps, and session evidence. It is
+not a blank-canvas dashboard builder with arbitrary tiles, layouts, and sharing;
+the primary programmable decision surface remains MCP, SDK, and REST.
 
-The admin includes tables for projects, metric registry management, data health,
+The workspace also includes projects, metric registry management, data health,
 events, entities, measurement trust, release changes, decision inbox/review/action history,
-API keys, onboarding, webhook delivery, and Setup & MCP presets. In hosted mode,
-human login is handled through Auth0/OIDC, while scoped Poolstatis keys remain
-the runtime access model:
+API keys, onboarding, historical imports and corrections, webhook delivery, and Setup & MCP
+presets. In hosted mode, human login is handled through Auth0/OIDC, while scoped Poolstatis
+keys remain the runtime access model:
 
 - `pk_` ingest keys are write-only and safe for product clients.
 - `sk_` secret keys provide project-level platform access.
@@ -191,15 +194,29 @@ Implemented:
 - Entities
 - Query DSL for `trend`, `funnel`, `entities`, `retention`, `lifecycle`, and
   `stickiness`
+- Browser and Web session analytics for visitors, sessions, page views, foreground
+  engagement, bounce, routes, bounded acquisition dimensions, and session/page detail
+- Developer-labelled click autocapture with normalized coordinates, scroll milestones,
+  registered section exposures, and coarse client error types
+- Bounded click/scroll interaction maps, screenshot overlays, and a per-session interaction
+  timeline; these are not DOM, video, or cursor replay
+- Answer-first Web, Product, Funnel, Retention, Lifecycle, Stickiness, Entity, Saved, People,
+  and Browser Experience graphs/tables; no general dashboard builder
+- Previewed idempotent historical imports and audited optimistic event revisions
 - Deterministic feature flags, automatic exposure events, and Bayesian A/B
   experiment results over registered metrics
 - Repository-owned measurement contracts, immutable release provenance, evidence snapshots,
   human decision revisions, bounded release monitoring, correlation hypotheses,
   approval-gated actions, encrypted webhook outbox, and project-scoped decision memory
 - MCP server with typed tools and resources
-- Headless admin SPA
+- Human analysis and admin SPA
 - Instrumentation standard
 - Agent instrumentation skill
 - Docker Compose self-hosting path
 
 Next priorities are tracked in [docs/05-gap-analysis.md](docs/05-gap-analysis.md).
+
+Current deliberate limits: no full DOM/video/cursor session replay, no broad arbitrary-DOM
+autocapture, no full error tracking with messages/stacks/issues, no caller-provided raw SQL,
+and no general dashboard builder. See [docs/05-gap-analysis.md](docs/05-gap-analysis.md) for
+the exact boundary and rationale.

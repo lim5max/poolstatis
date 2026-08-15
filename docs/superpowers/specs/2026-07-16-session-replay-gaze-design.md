@@ -1,5 +1,11 @@
 # Session Replay and Gaze Attention v1 — Design
 
+> **Design only — not a shipped capability.** The rrweb DOM recorder/player,
+> cursor playback, and gaze module described below are not implemented on Core
+> `origin/main` as verified on 2026-08-15. Current Browser Experience ships only
+> a bounded labelled-interaction timeline, click/scroll maps, registered section
+> exposures, and coarse client-error types.
+
 ## Decision
 
 Poolstatis will add two optional, consent-separated browser modules on top of

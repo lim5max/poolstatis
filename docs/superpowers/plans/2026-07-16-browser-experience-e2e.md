@@ -1,5 +1,11 @@
 # Browser Experience Consumer E2E Implementation Plan
 
+> **Historical implementation plan — not the current runtime contract.** The
+> shipped Browser Experience starts when the host calls `start()` and does not
+> require a built-in consent gate; legacy callbacks are optional host-owned
+> pause controls. Its labelled timeline and maps are shipped, but full DOM,
+> video, gaze, and cursor replay are not.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Prove that the optional Browser Experience SDK works from a real consumer through ingest, Postgres, REST, MCP, and admin UI using Basic Project, without misrepresenting interaction maps as gaze or full DOM replay.

@@ -2,9 +2,10 @@
 
 ## Принципы
 
-1. **Agent-native.** Основной интерфейс платформы — MCP и HTTP API. Headless admin нужен
-   для настройки, trust-аудита и human approval; аналитическое потребление остаётся у
-   агента и клиента.
+1. **Agent-native.** Основной программируемый интерфейс платформы — MCP и HTTP API.
+   Human UI остаётся review и answer-first analysis workspace: Web, Product, Funnels,
+   Saved, People и Browser Experience дают графики, таблицы, session evidence,
+   настройку, trust-аудит и human approval. Это не general dashboard builder.
 2. **Семантика обязательна.** Метрика не может существовать без `purpose`, воронка — без
    `goal`, measurement contract — без бизнес-гипотезы и владельца решения.
 3. **Schema-on-write с мягкой валидацией.** Ингест принимает любые события, но помечает,
@@ -23,7 +24,7 @@
 Product SDK ── /i/v1/* ──► Ingest API ──► EventStore (Postgres adapter)
                                               ▲
 Agent ── MCP ──► MCP Server ──► Platform API ──┤
-Headless admin ── HTTP ────────────────────────┘
+Analysis/admin UI ── HTTP ─────────────────────┘
                                       │
                                       ├──► Metadata + audit (Postgres)
                                       ├──► Release monitor (bounded, restart-safe)
@@ -37,8 +38,9 @@ Headless admin ── HTTP ─────────────────�
 - **MCP Server** — typed agent surface над Platform API и нормативные instrumentation
   resources. Реальный MCP-вызов также является server-derived onboarding evidence.
 - **EventStore** — узкий storage seam для append-only событий и typed аналитических reads.
-- **Metadata + audit DB** — проекты, ключи, entities, registry, actor links, contracts,
-  releases, evidence, decisions, actions, attempts и delivery history.
+- **Metadata + audit DB** — проекты, ключи, entities, registry, actor links, historical
+  import batches, append-only event revisions, contracts, releases, evidence, decisions,
+  actions, attempts и delivery history.
 - **Release monitor** — обрабатывает due releases по фиксированным окнам, сохраняет
   immutable evidence и proposal, повторяет сбои с bounded backoff.
 - **Webhook outbox** — доставляет только явно одобренные sanitized payloads;
@@ -79,7 +81,9 @@ evidence set, decision revision, explanation hypothesis и prepared action. Он
 
 - Runtime остаётся single-Postgres; process-local quota и workers не дают глобальной
   координации между несколькими API replicas.
-- PostHog adapter read-only и bounded; raw import и caller-provided HogQL запрещены.
+- PostHog adapter read-only и bounded: он не мигрирует данные автоматически и не
+  открывает caller-provided HogQL. Для собственного event contract отдельно shipped
+  previewed/idempotent historical backfill и append-only revision history.
 - Static/dynamic cohorts и semantic materialized rollups ещё не реализованы.
 - ClickHouse/очередь вводятся только после измеренного превышения Postgres ceiling.
 

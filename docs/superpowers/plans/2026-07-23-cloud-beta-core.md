@@ -1,5 +1,9 @@
 # Poolstatis Cloud Beta Core Implementation Plan
 
+> **Historical implementation plan — not the current UI status.** The current
+> human workspace ships answer-first Web/Product/Funnel/Experience analysis,
+> graphs, tables, and admin controls without a general dashboard builder.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development task-by-task. Every task is test-first, committed separately, and reviewed before the next task starts.
 
 **Goal:** Make the source-available core safe and complete for a hosted multi-tenant beta without embedding Poolstatis Cloud pricing, Auth0 tenant secrets, Resend credentials, or operator-only behavior.
@@ -174,7 +178,7 @@ Run: `pnpm --dir web test --run cloud-ui.test.tsx`
 
 - [ ] **Step 3: Implement screens with existing shadcn helpers**
 
-Use `Panel`, `Toolbar`, `Hint`, `Confirm`, and existing typography. Do not create a per-project analytics dashboard; this remains a headless customer/platform admin.
+Use `Panel`, `Toolbar`, `Hint`, `Confirm`, and existing typography. This task must not add a general dashboard builder; retain the fixed answer-first customer/platform analysis and admin model.
 
 - [ ] **Step 4: Verify GREEN and production build**
 

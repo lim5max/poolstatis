@@ -97,4 +97,6 @@ into this system repo.
   version has not passed a fresh registry smoke.
 - Cloud availability before the waitlist intake and hosted app are live.
 - Billing enforcement before limits and metering are visible to users.
-- A dashboard product; Poolstatis stays headless and agent-first.
+- A general dashboard builder. Poolstatis stays agent-first while shipping
+  fixed answer-first analysis screens, graphs, tables, saved answers, Web
+  sessions and Browser Experience evidence for human review.

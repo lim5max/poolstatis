@@ -419,7 +419,7 @@ Exact names may change during implementation planning, but the capability set mu
 - search decision history;
 - PostHog source configure/verify/schema read.
 
-### Headless admin
+### Human analysis and admin workspace
 
 Add product-oriented audit surfaces, not a dashboard builder:
 
