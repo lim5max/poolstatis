@@ -121,13 +121,14 @@ Core accepts a maximum
 seven-day monotonic duration per page and rejects impossible snapshots where
 foreground time exceeds elapsed time.
 
-Foreground time is not wall-clock time and Poolstatis does not record video or
-DOM session replay. A session is engaged when it has at least 10 seconds of
-measured foreground time, at least two page views, or an explicitly selected
-key-metric event. Bounce is reported only for fully measured sessions; missing
-terminal timing remains incomplete instead of becoming a false zero/bounce.
-Every accepted `page.viewed` and `page.engagement` remains one stored,
-billable event.
+Foreground time is not wall-clock time. This Browser Experience module does
+not record video or DOM replay; real DOM/cursor replay is available only
+through the separate consented opt-in module documented below. A session is
+engaged when it has at least 10 seconds of measured foreground time, at least
+two page views, or an explicitly selected key-metric event. Bounce is reported
+only for fully measured sessions; missing terminal timing remains incomplete
+instead of becoming a false zero/bounce. Every accepted `page.viewed` and
+`page.engagement` remains one stored, billable event.
 
 Legacy `hasConsent` and `subscribeConsent` callbacks remain compatible as an
 optional host-owned pause control. New integrations omit them.
