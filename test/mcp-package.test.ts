@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -103,14 +104,29 @@ beforeAll(async () => {
     'dist/core/mcp/standard.js',
     'dist/core/automationSchemas.js',
     'dist/core/schemas.js',
+    'dist/index.d.ts',
+    'dist/index.js',
     'package.json',
   ];
   expect(pack.files.map((file) => file.path).sort()).toEqual(expectedFiles.sort());
   expect(pack.files.find((file) => file.path === 'dist/cli.js')?.mode).toBe(0o755);
   expect(pack.size).toBeLessThan(50_000);
-  // Two bounded replay metadata tools add no files or dependencies, but make
-  // the source-only server slightly larger. Keep a deliberate narrow ceiling.
-  expect(pack.unpackedSize).toBeLessThan(152_000);
+  // The replay metadata tools and fail-closed public facade add no dependency;
+  // keep their packed output inside a deliberate narrow bound.
+  expect(pack.unpackedSize).toBeLessThan(154_000);
+
+  const extractedPackDir = await mkdtemp(join(tmpdir(), 'poolstatis-mcp-scan-'));
+  try {
+    await execFileAsync('tar', ['-xzf', tarball, '-C', extractedPackDir]);
+    const packedText = (await Promise.all(expectedFiles.map((path) => (
+      readFile(join(extractedPackDir, 'package', path), 'utf8')
+    )))).join('\n');
+    expect(packedText).not.toMatch(/-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/);
+    expect(packedText).not.toMatch(/\b(?:pt|sk|pk)_[a-f0-9]{24,}\b/i);
+    expect(packedText).not.toMatch(/\bnpm_[a-z0-9]{36,}\b/i);
+  } finally {
+    await rm(extractedPackDir, { recursive: true, force: true });
+  }
 
   await writeFile(join(tempProject, 'package.json'), JSON.stringify({
     name: 'poolstatis-mcp-clean-consumer',
@@ -314,12 +330,14 @@ describe('@poolstatis/mcp release artifact', () => {
       engines: { node: string };
       bin: Record<string, string>;
       license: string;
+      exports: Record<string, { types: string; import: string }>;
       publishConfig: { access: string; registry: string };
     };
     expect(packageJson).toMatchObject({
       type: 'module',
       engines: { node: '>=22 <25' },
       bin: { 'poolstatis-mcp': './dist/cli.js' },
+      exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' } },
       license: 'PolyForm-Shield-1.0.0',
       publishConfig: {
         access: 'public',
@@ -334,6 +352,31 @@ describe('@poolstatis/mcp release artifact', () => {
       'mcp',
       'LICENSE',
     ), 'utf8')).toContain('PolyForm Shield License 1.0.0');
+  });
+
+  it('pins the installed programmatic API to the published 0.7.0 tool profile', async () => {
+    const installedEntry = join(
+      tempProject,
+      'node_modules',
+      '@poolstatis',
+      'mcp',
+      'dist',
+      'index.js',
+    );
+    const publishedPackage = await import(pathToFileURL(installedEntry).href) as {
+      createMcpServer(config: { baseUrl: string; token: string; distribution?: string }): unknown;
+    };
+    const server = publishedPackage.createMcpServer({
+      baseUrl: fixtureUrl,
+      token: safeToken,
+      distribution: 'source',
+    }) as { _registeredTools: Record<string, unknown> };
+
+    expect(server._registeredTools).toHaveProperty('list_session_replays');
+    expect(server._registeredTools).toHaveProperty('get_session_replay');
+    expect(server._registeredTools).not.toHaveProperty('create_funnel_investigation');
+    expect(server._registeredTools).not.toHaveProperty('list_funnel_investigations');
+    expect(server._registeredTools).not.toHaveProperty('get_funnel_investigation');
   });
 
   it('initializes, lists tools, and performs a project-scoped read against a safe fixture', async () => {

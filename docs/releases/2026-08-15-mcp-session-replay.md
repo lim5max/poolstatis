@@ -16,4 +16,3 @@ from the `0.7.0` package profile. The release is complete only after the exact
 main artifact passes `publish-mcp.yml`, npm reports version and integrity, and
 a fresh registry-backed client initializes, lists exactly 142 tools and sees
 the replay tools without seeing funnel-investigation tools.
-

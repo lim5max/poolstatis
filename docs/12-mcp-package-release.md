@@ -8,7 +8,9 @@ Source-only tools may be implemented before a package release. Keep them out of
 the pinned distribution profile and out of `PUBLISHED_MCP_TOOL_GROUPS` until a
 new version passes every gate below. `@poolstatis/mcp@0.7.0` adds bounded
 Session Replay manifest discovery but does not include the funnel-investigation
-tools. A local pack or manifest version is not proof that npm changed; require
+tools. Both the CLI and root programmatic export pin this profile; the public
+configuration has no distribution override. A local pack or manifest version
+is not proof that npm changed; require
 registry version, integrity and fresh protocol read-back.
 
 ## Required gates
@@ -16,7 +18,7 @@ registry version, integrity and fresh protocol read-back.
 1. Run `pnpm typecheck`, `pnpm test`, `pnpm --dir sdk test`,
    `pnpm --dir sdk build`, and `pnpm --dir web build`.
 2. Run `pnpm mcp:package:test` on Node.js 22 and 24.
-3. Pack once with `npm pack`, verify the eight-file allowlist, executable bin,
+3. Pack once with `npm pack`, verify the 15-file allowlist, executable bin,
    size limit, license, and secret scan, then install that tarball into an empty
    project.
 4. Generate a CycloneDX SBOM and run `npm audit --omit=dev` in that clean

@@ -16,6 +16,10 @@ embedded in the package, and the runner never prints the token.
 Node.js 22 and 24 are supported. The package is an ESM executable and speaks
 MCP over stdio only; stdout is reserved for protocol messages.
 
+The root programmatic export is pinned to the same published `0.7.0` profile as
+the CLI. Its `McpConfig` intentionally has no distribution override, so local
+source-only tools cannot be enabled through the public package API.
+
 ## Browser analytics contract
 
 Read `poolstatis://standard/browser-analytics` before instrumenting or
