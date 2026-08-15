@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -117,7 +117,22 @@ beforeAll(async () => {
 
   const extractedPackDir = await mkdtemp(join(tmpdir(), 'poolstatis-mcp-scan-'));
   try {
+    const listed = await execFileAsync('tar', ['-tzf', tarball], { maxBuffer: 1024 * 1024 });
+    const archiveEntries = listed.stdout.split('\n').filter(Boolean);
+    const expectedArchiveEntries = expectedFiles.map((path) => `package/${path}`);
+    expect(new Set(archiveEntries).size).toBe(archiveEntries.length);
+    expect(archiveEntries.every((entry) => (
+      entry.startsWith('package/')
+      && !entry.includes('\\')
+      && !entry.split('/').includes('..')
+    ))).toBe(true);
+    expect(archiveEntries.sort()).toEqual(expectedArchiveEntries.sort());
     await execFileAsync('tar', ['-xzf', tarball, '-C', extractedPackDir]);
+    for (const path of expectedFiles) {
+      const info = await lstat(join(extractedPackDir, 'package', path));
+      expect(info.isFile()).toBe(true);
+      expect(info.isSymbolicLink()).toBe(false);
+    }
     const packedText = (await Promise.all(expectedFiles.map((path) => (
       readFile(join(extractedPackDir, 'package', path), 'utf8')
     )))).join('\n');

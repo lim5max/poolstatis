@@ -725,9 +725,11 @@ SHA-256 fingerprints. Artifact append-only и descriptive, not causal. Чтен�
 `GET /funnel-investigations?env=prod&funnel=checkout&limit=50` и
 `GET /funnel-investigations/{id}`. Позднейшая release evaluation должна ссылаться
 на конкретный investigation id, а не подбирать релиз по совпадению времени.
-Source/local MCP содержит эквивалентные tools, но опубликованный
-`@poolstatis/mcp@0.7.0` их не содержит; публикация требует отдельного
-version bump и registry read-back по `docs/12-mcp-package-release.md`.
+`@poolstatis/mcp@0.7.0` включает эквивалентные
+`create_funnel_investigation`, `list_funnel_investigations` и
+`get_funnel_investigation`; до успешного registry read-back эта версия остаётся
+release candidate, а не опубликованным пакетом. Полный gate описан в
+`docs/12-mcp-package-release.md`.
 
 ## Metric retirement and usage
 

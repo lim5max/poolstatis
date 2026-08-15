@@ -10,10 +10,9 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
+  verify:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     services:
@@ -46,7 +45,7 @@ jobs:
       - run: corepack enable
       - run: corepack prepare pnpm@10.13.1 --activate
       - run: pnpm install --frozen-lockfile
-      - name: Pack, test, and publish one artifact
+      - name: Pack and test one artifact
         run: |
           mkdir -p .release
           MCP_VERSION=$(node -p "require('./packages/mcp/package.json').version")
@@ -59,4 +58,44 @@ jobs:
           POOLSTATIS_MCP_TARBALL="$MCP_TARBALL" \
           POOLSTATIS_MCP_PACK_OUTPUT="$PWD/.release/pack-output.txt" \
             pnpm mcp:package:test
+          (
+            cd .release
+            sha512sum "poolstatis-mcp-$MCP_VERSION.tgz" > mcp.sha512
+          )
+      - name: Preserve immutable verified MCP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: poolstatis-mcp-release
+          path: |
+            .release/poolstatis-mcp-*.tgz
+            .release/mcp.sha512
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: poolstatis-mcp-release
+          path: .release
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Publish exact verified MCP tarball
+        run: |
+          (
+            cd .release
+            sha512sum --check mcp.sha512
+          )
+          mapfile -t MCP_TARBALLS < <(find .release -maxdepth 1 -type f -name 'poolstatis-mcp-*.tgz' -print)
+          test "${#MCP_TARBALLS[@]}" -eq 1
+          MCP_TARBALL="${MCP_TARBALLS[0]}"
           npm publish "$MCP_TARBALL" --access public --provenance
