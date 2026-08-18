@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROJECT_MENU_ITEMS, activeNavigationItem, navigationForProject } from './navigation';
+import { PROJECT_MENU_ITEMS, activeNavigationItem, analyticsNavigationTarget, navigationForProject } from './navigation';
 
 describe('mode-aware navigation contract', () => {
   it('keeps funnels directly reachable for every project mode', () => {
@@ -33,5 +33,17 @@ describe('mode-aware navigation contract', () => {
     expect(activeNavigationItem('/measurement')).toBe('/measurement');
     expect(activeNavigationItem('/usage')).toBe('/usage');
     expect(activeNavigationItem('/automation')).toBe('/automation');
+  });
+
+  it('carries only valid date-range state to range-aware destinations', () => {
+    expect(analyticsNavigationTarget('/analyze/product', '?range=today&metric=landing_visitors')).toBe(
+      '/analyze/product?range=today',
+    );
+    expect(analyticsNavigationTarget('/experience', '?range=custom&from=2026-08-17&to=2026-08-18')).toBe(
+      '/experience?range=custom&from=2026-08-17&to=2026-08-18',
+    );
+    expect(analyticsNavigationTarget('/analyze/saved', '?range=today')).toBe('/analyze/saved');
+    expect(analyticsNavigationTarget('/analyze/web', '?range=custom&from=2026-02-30&to=2026-03-01')).toBe('/analyze/web');
+    expect(analyticsNavigationTarget('/analyze/users', '?range=custom&from=2026-08-19&to=2026-08-18')).toBe('/analyze/users');
   });
 });

@@ -33,7 +33,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, Dia
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { DisclosureSummary } from '@/components/disclosure';
-import { navigationForProject, type NavigationItem, type ProjectMode, type ProjectNavigation } from './analysis/navigation';
+import { analyticsNavigationTarget, navigationForProject, type NavigationItem, type ProjectMode, type ProjectNavigation } from './analysis/navigation';
 import { Connect } from './screens/Connect';
 import { Projects } from './screens/Projects';
 import { Overview } from './screens/Overview';
@@ -269,6 +269,7 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
+  const location = useLocation();
   if (collapsed) {
     return (
       <div className="mt-2 border-t pt-2">
@@ -283,7 +284,7 @@ function SecondaryNavigation({ navigation, collapsed, onNavigate }: {
               const Icon = NAV_ICONS[item.label] ?? LayoutGrid;
               return item.availability === 'available' && item.to ? (
                 <DropdownMenuItem key={item.label} asChild>
-                  <NavLink to={item.to} onClick={onNavigate}><Icon className="size-4" />{item.label}</NavLink>
+                  <NavLink to={analyticsNavigationTarget(item.to, location.search)} onClick={onNavigate}><Icon className="size-4" />{item.label}</NavLink>
                 </DropdownMenuItem>
               ) : (
                 <DropdownMenuItem key={item.label} disabled title={item.reason}><Icon className="size-4" />{item.label}</DropdownMenuItem>
@@ -314,6 +315,7 @@ function NavigationRow({ item, signal, collapsed, onNavigate }: {
   onNavigate?: () => void;
 }) {
   const Icon = NAV_ICONS[item.label] ?? LayoutGrid;
+  const location = useLocation();
   if (item.availability === 'unavailable' || !item.to) {
     return (
       <div
@@ -332,7 +334,7 @@ function NavigationRow({ item, signal, collapsed, onNavigate }: {
   }
   return (
     <NavLink
-      to={item.to}
+      to={analyticsNavigationTarget(item.to, location.search)}
       end={item.to === '/'}
       onClick={onNavigate}
       title={collapsed ? item.label : undefined}
