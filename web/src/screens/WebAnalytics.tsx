@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -26,6 +26,7 @@ import {
 } from '../analysis/operations';
 import { previousAnalyticsRange, type AnalyticsRangeSelection, type ResolvedAnalyticsRange } from '../analysis/ranges';
 import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
+import { analyticsNavigationTarget } from '../analysis/navigation';
 import type { FunnelQueryResult, TrendQueryResult, VisualizationSpec } from '../analysis/visualization';
 import type { MeasurementAnswerDependency, MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 import { useAsync, useStore } from '../store';
@@ -149,6 +150,7 @@ export function parseWebRouteKeys(value: string): string[] {
 }
 
 export function WebAnalytics() {
+  const location = useLocation();
   const { client, project, env } = useStore();
   const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const [dimension, setDimension] = useState<BreakdownView>('source');
@@ -523,7 +525,7 @@ export function WebAnalytics() {
                   <TableRow key={`${session.actor_id}:${session.session_id}`}>
                     <TableCell>
                       <Link
-                        to={`/analyze/users/${encodeURIComponent(session.actor_id)}`}
+                        to={analyticsNavigationTarget(`/analyze/users/${encodeURIComponent(session.actor_id)}`, location.search)}
                         className="inline-flex max-w-full break-all rounded-control px-1 py-0.5 font-mono text-xs text-foreground underline-offset-4 hover:bg-muted hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {session.actor_id}
