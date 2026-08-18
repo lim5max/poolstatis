@@ -151,6 +151,10 @@ describe('People list', () => {
       from: '2026-08-01T00:00:00.000Z',
       to: '2026-08-05T00:00:00.000Z',
     })));
+    expect(screen.getByRole('link', { name: 'Open actor anon_7' })).toHaveAttribute(
+      'href',
+      '/analyze/users/anon_7?range=custom&from=2026-08-01&to=2026-08-04',
+    );
     expect(screen.queryByRole('columnheader', { name: 'Order evidence' })).not.toBeInTheDocument();
     expect(view.container.querySelector('.text-xs')).toBeNull();
   });

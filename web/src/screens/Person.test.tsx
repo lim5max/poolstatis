@@ -61,6 +61,10 @@ describe('Person profile', () => {
     await waitFor(() => expect(personSummary).toHaveBeenLastCalledWith('alpha', 'actor-7', expect.objectContaining({
       env: 'prod', from: '2026-08-01T00:00:00.000Z', to: '2026-08-05T00:00:00.000Z',
     })));
+    expect(screen.getByRole('link', { name: 'People' })).toHaveAttribute(
+      'href',
+      '/analyze/users?range=custom&from=2026-08-01&to=2026-08-04',
+    );
     expect(screen.queryByText('Last 30 days')).not.toBeInTheDocument();
     expect(view.container.querySelector('.text-xs')).toBeNull();
   });

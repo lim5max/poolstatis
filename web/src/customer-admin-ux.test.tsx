@@ -156,6 +156,28 @@ describe('customer admin shell', () => {
     expect(within(screen.getByLabelText('Account navigation')).getByRole('link', { name: 'Profile' })).toHaveAttribute('href', '/profile');
   });
 
+  it('preserves the selected analytics range across analytics navigation', () => {
+    render(<MemoryRouter initialEntries={['/?range=custom&from=2026-08-17&to=2026-08-18']}><App /></MemoryRouter>);
+
+    expect(screen.getByRole('link', { name: 'Web' })).toHaveAttribute(
+      'href',
+      '/analyze/web?range=custom&from=2026-08-17&to=2026-08-18',
+    );
+    expect(screen.getByRole('link', { name: 'Product' })).toHaveAttribute(
+      'href',
+      '/analyze/product?range=custom&from=2026-08-17&to=2026-08-18',
+    );
+    expect(screen.getByRole('link', { name: 'Funnels' })).toHaveAttribute(
+      'href',
+      '/analyze/funnels?range=custom&from=2026-08-17&to=2026-08-18',
+    );
+    expect(screen.getByRole('link', { name: 'People' })).toHaveAttribute(
+      'href',
+      '/analyze/users?range=custom&from=2026-08-17&to=2026-08-18',
+    );
+    expect(screen.getByRole('link', { name: 'Saved' })).toHaveAttribute('href', '/analyze/saved');
+  });
+
   it('keeps an unfinished project recoverable after the user navigates away from onboarding', async () => {
     const current = baseStore() as any;
     current.envReady = true;

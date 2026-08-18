@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { ErrorNote, KpiRail, Loading, PageHeading, fmtNum, fmtRelative } from '@/components/ui';
@@ -12,7 +12,7 @@ import type { AnalyticsRangeSelection, ResolvedAnalyticsRange } from '../analysi
 import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import type { AttentionItem, ControlTowerAction, ControlTowerResult, Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
 import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
-import type { ProjectMode } from '../analysis/navigation';
+import { analyticsNavigationTarget, type ProjectMode } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
 import {
   claimProductTelemetryOnce,
@@ -252,10 +252,11 @@ function AttentionAction({ action, primary, telemetryUserId, onRetry }: {
   telemetryUserId?: string | null;
   onRetry: () => void;
 }) {
+  const location = useLocation();
   if (action.kind === 'navigate') {
     return (
       <Button asChild variant={primary ? 'default' : 'outline'} className="h-auto min-h-11 w-full whitespace-normal py-2 lg:w-auto">
-        <Link to={action.href} onClick={() => trackHomeAction(actionTelemetry(action.href), telemetryUserId)}>
+        <Link to={analyticsNavigationTarget(action.href, location.search)} onClick={() => trackHomeAction(actionTelemetry(action.href), telemetryUserId)}>
           {action.label} <ArrowRight className="size-4" />
         </Link>
       </Button>
@@ -333,6 +334,7 @@ function BothHome({
   attention: AttentionItem[];
   onRetry: () => void;
 }) {
+  const location = useLocation();
   const identityState = schema === null
     ? 'unavailable'
     : schema.identity.active_links > 0
@@ -354,8 +356,8 @@ function BothHome({
       />
       <div className="flex max-w-full gap-1 overflow-x-auto rounded-control border bg-card p-1" aria-label="Both mode surfaces">
         <span className="flex min-h-11 items-center rounded-control bg-secondary px-4 text-sm font-medium">All</span>
-        <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to="/analyze/web">Website</Link>
-        <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to="/analyze/product">Product</Link>
+        <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to={analyticsNavigationTarget('/analyze/web', location.search)}>Website</Link>
+        <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to={analyticsNavigationTarget('/analyze/product', location.search)}>Product</Link>
       </div>
       <div className="rounded-panel border border-warning/35 bg-warning/5 px-4 py-3 text-sm text-muted-foreground">
         {identityState === 'unavailable'

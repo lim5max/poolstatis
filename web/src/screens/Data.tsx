@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { Add as Plus, X } from '@/components/icons';
 import { useStore, useAsync } from '../store';
 import {
@@ -18,6 +18,7 @@ import {
 import { DataHealthControl } from '../components/data-health-control';
 import { AnalyticsDateRange } from '../components/AnalyticsDateRange';
 import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
+import { analyticsNavigationTarget } from '../analysis/navigation';
 import type {
   BackfillPreview, DataQualityIssue, EntityRow, EventRevisionPatch, EventRevisionPreview, FilterOp,
   ObservedEvent, SampleEvent, SampleFilter,
@@ -177,6 +178,7 @@ const OPS: FilterOp[] = ['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte', 'is_s
 const OP_LABEL: Record<FilterOp, string> = { eq: 'is', ne: 'is not', contains: 'contains', gt: '>', gte: '≥', lt: '<', lte: '≤', in: 'is any of', is_set: 'is set', is_not_set: 'is not set' };
 
 function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: string; initialActor?: string; observed: ObservedEvent[] }) {
+  const location = useLocation();
   const { client, project, env } = useStore();
   const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const [eventFilter, setEventFilter] = useState<string>(initialEvent ?? '');
@@ -253,7 +255,7 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
               {rows.map((e) => (
                 <TableRow key={e.id}>
                   <TableCell className="font-medium">{e.event}</TableCell>
-                  <TableCell><Link to={`/data/person/${encodeURIComponent(e.distinct_id)}`} className="text-xs font-mono text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground">{e.distinct_id}</Link></TableCell>
+                  <TableCell><Link to={analyticsNavigationTarget(`/data/person/${encodeURIComponent(e.distinct_id)}`, location.search)} className="text-xs font-mono text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground">{e.distinct_id}</Link></TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-sm truncate" title={JSON.stringify(e.properties)}>{JSON.stringify(e.properties)}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{new Date(e.timestamp).toLocaleString()}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">
@@ -651,6 +653,7 @@ function Warnings() {
 const isIdentityType = (type: string, rows: EntityRow[]) => type === 'user' || rows.some((r) => 'email' in r.properties || 'name' in r.properties);
 
 function Entities({ types }: { types: string[] }) {
+  const location = useLocation();
   const { client, project, env } = useStore();
   const [type, setType] = useState(types[0] ?? '');
   const { data, error, loading } = useAsync(() => (type ? client!.entities(project!, { entity_type: type, limit: 100, env }) : Promise.resolve([])), [project, env, type]);
@@ -677,7 +680,7 @@ function Entities({ types }: { types: string[] }) {
                 <TableRow key={e.entity_id}>
                   <TableCell className="font-medium">
                     {identity
-                      ? <Link to={`/data/person/${encodeURIComponent(e.entity_id)}`} className="text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground">{e.entity_id}</Link>
+                      ? <Link to={analyticsNavigationTarget(`/data/person/${encodeURIComponent(e.entity_id)}`, location.search)} className="text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground">{e.entity_id}</Link>
                       : e.entity_id}
                   </TableCell>
                   {propKeys.map((k) => <TableCell key={k} className="text-xs text-muted-foreground">{fmtVal(e.properties[k])}</TableCell>)}

@@ -135,6 +135,19 @@ describe('goal-aware Attention', () => {
 
   it('shows the answer before attention and applies a custom period to every Home answer query', async () => {
     const client = websiteClient() as Record<string, any>;
+    const tower = controlTowerResponse();
+    client.controlTower.mockResolvedValue({
+      ...tower,
+      attention: [{
+        ...tower.attention[0],
+        primary_action: {
+          id: 'inspect_funnel',
+          kind: 'navigate',
+          label: 'Inspect funnel',
+          href: '/analyze/funnels?funnel=activation_funnel',
+        },
+      }],
+    });
     setStore(client);
     const view = render(<MemoryRouter><Overview /></MemoryRouter>);
 
@@ -163,6 +176,10 @@ describe('goal-aware Attention', () => {
       date_to: '2026-08-04T00:00:00.000Z',
     }));
     expect(screen.getByText('Aug 1–3, 2026')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Inspect funnel/ })).toHaveAttribute(
+      'href',
+      '/analyze/funnels?funnel=activation_funnel&range=custom&from=2026-08-01&to=2026-08-03',
+    );
     expect(view.container.querySelector('.text-xs')).toBeNull();
   });
 
@@ -442,9 +459,11 @@ describe('goal-aware Attention', () => {
 
   it('does not claim a cross-surface path without identity evidence', async () => {
     setStore(websiteClient('both', 0));
-    render(<MemoryRouter><Overview /></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/?range=today']}><Overview /></MemoryRouter>);
 
     expect(await screen.findByText('Website and product activity are not linked yet.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Website' })).toHaveAttribute('href', '/analyze/web?range=today');
+    expect(screen.getByRole('link', { name: 'Product' })).toHaveAttribute('href', '/analyze/product?range=today');
     expect(screen.getByText(/Add stable identity evidence/)).toBeInTheDocument();
     expect(screen.queryByText(/drove.*activated/i)).not.toBeInTheDocument();
   });

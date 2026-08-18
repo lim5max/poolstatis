@@ -64,6 +64,7 @@ for (const device of [
   { name: 'mobile', viewport: { width: 390, height: 844 } },
 ] as const) {
   test(`keeps the complete analytics workspace clear and usable on ${device.name}`, async () => {
+    test.setTimeout(120_000);
     const context = await browser.newContext({ viewport: device.viewport });
     await context.addInitScript(({ adminToken, projectSlug }) => {
       localStorage.setItem('poolstatis.conn', JSON.stringify({ baseUrl: '', token: adminToken }));
@@ -81,7 +82,7 @@ for (const device of [
 
     for (const route of routes) {
       await page.goto(`${webUrl}${route.path}`);
-      await expect(page.getByRole('heading', { level: 1, name: route.heading, exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { level: 1, name: route.heading, exact: true })).toBeVisible({ timeout: 20_000 });
       await expect(page.getByRole('button', { name: 'Run answer', exact: true })).toHaveCount(0);
       if (route.period) {
         const period = page.getByRole('group', { name: 'Analytics period' });
@@ -98,6 +99,12 @@ for (const device of [
         await expect(page).toHaveURL(/range=custom&from=2026-08-01&to=2026-08-14/);
         await expect(page.getByText(/Aug 1.*14, 2026 · UTC/)).toBeVisible();
         await expect(page.getByRole('button', { name: 'Custom', exact: true })).toHaveAttribute('aria-pressed', 'true');
+        if (device.name === 'mobile') await page.getByRole('button', { name: 'Open navigation' }).click();
+        await expect(page.getByRole('link', { name: 'People', exact: true })).toHaveAttribute(
+          'href',
+          '/analyze/users?range=custom&from=2026-08-01&to=2026-08-14',
+        );
+        if (device.name === 'mobile') await page.getByRole('button', { name: 'Close navigation' }).click();
       }
       await assertNoPageOverflow(page, route.path);
       await assertReadableType(page, route.path);

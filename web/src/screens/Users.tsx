@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ArrowRight, Search } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { DataDetails, EmptyState, ErrorNote, Loading, PageHeading, fmtNum } from
 import { AnswerCanvas } from '@/components/analytics';
 import { AnalyticsDateRange } from '@/components/AnalyticsDateRange';
 import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
+import { analyticsNavigationTarget } from '../analysis/navigation';
 import {
   actorStatusLabel,
   type ActorOrderReason,
@@ -30,6 +31,7 @@ interface InterestingMetricSelection {
 }
 
 export function Users() {
+  const location = useLocation();
   const { client, project, env } = useStore();
   const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const [order, setOrder] = useState<ActorOrder>('last_seen_desc');
@@ -256,7 +258,10 @@ export function Users() {
                         </TableCell>
                         <TableCell className="text-right">
                           <Button asChild variant="ghost" size="icon-sm" className="size-11 md:size-8">
-                            <Link to={`/analyze/users/${encodeURIComponent(actor.distinct_id)}`} aria-label={`Open actor ${actor.distinct_id}`}>
+                            <Link
+                              to={analyticsNavigationTarget(`/analyze/users/${encodeURIComponent(actor.distinct_id)}`, location.search)}
+                              aria-label={`Open actor ${actor.distinct_id}`}
+                            >
                               <ArrowRight className="size-4" />
                             </Link>
                           </Button>

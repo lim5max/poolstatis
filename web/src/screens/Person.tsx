@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { ArrowLeft, Copy } from '@/components/icons';
 import { AnalyticsDateRange } from '@/components/AnalyticsDateRange';
 import { Badge } from '@/components/ui/badge';
@@ -11,10 +11,12 @@ import {
   type PersonResult,
 } from '../analysis/operations';
 import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
+import { analyticsNavigationTarget } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
 import { IdentityBadge } from './Users';
 
 export function Person() {
+  const location = useLocation();
   const { distinctId = '' } = useParams();
   const { client, project, env } = useStore();
   const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
@@ -43,7 +45,10 @@ export function Person() {
     <div className="space-y-5">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <Link to="/analyze/users" className="mb-2 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <Link
+            to={analyticsNavigationTarget('/analyze/users', location.search)}
+            className="mb-2 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
             <ArrowLeft className="size-4" /> People
           </Link>
           <div className="flex min-w-0 items-center gap-2">

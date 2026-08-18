@@ -19,6 +19,17 @@ export interface ProjectNavigation {
   secondary: NavigationItem[];
 }
 
+const RANGE_AWARE_ROUTES = new Set([
+  '/',
+  '/analyze/web',
+  '/analyze/product',
+  '/analyze/funnels',
+  '/analyze/users',
+  '/data',
+  '/experience',
+]);
+const RANGE_PRESETS = new Set(['today', 'yesterday', '7d', '30d', '90d']);
+
 const HOME: NavigationItem = { label: 'Home', to: '/', availability: 'available' };
 const WEB: NavigationItem = { label: 'Web', to: '/analyze/web', availability: 'available' };
 const PRODUCT: NavigationItem = { label: 'Product', to: '/analyze/product', availability: 'available' };
@@ -72,4 +83,46 @@ export function activeNavigationItem(pathname: string): string | null {
     .filter((item) => item.to === '/' ? pathname === '/' : pathname === item.to || pathname.startsWith(`${item.to}/`))
     .sort((a, b) => b.to.length - a.to.length)[0];
   return match?.to ?? null;
+}
+
+export function analyticsNavigationTarget(to: string, currentSearch: string): string {
+  const hashIndex = to.indexOf('#');
+  const hash = hashIndex >= 0 ? to.slice(hashIndex) : '';
+  const pathAndSearch = hashIndex >= 0 ? to.slice(0, hashIndex) : to;
+  const queryIndex = pathAndSearch.indexOf('?');
+  const pathname = queryIndex >= 0 ? pathAndSearch.slice(0, queryIndex) : pathAndSearch;
+  const destinationSearch = queryIndex >= 0 ? pathAndSearch.slice(queryIndex + 1) : '';
+  if (!isRangeAwareRoute(pathname)) return to;
+  const current = new URLSearchParams(currentSearch);
+  const range = current.get('range');
+  const next = new URLSearchParams(destinationSearch);
+  next.delete('range');
+  next.delete('from');
+  next.delete('to');
+  if (range && RANGE_PRESETS.has(range)) {
+    next.set('range', range);
+  } else if (range === 'custom') {
+    const from = current.get('from');
+    const through = current.get('to');
+    if (!isCalendarDate(from) || !isCalendarDate(through) || from > through) return to;
+    next.set('range', 'custom');
+    next.set('from', from);
+    next.set('to', through);
+  } else {
+    return to;
+  }
+  const search = next.toString();
+  return `${pathname}${search ? `?${search}` : ''}${hash}`;
+}
+
+function isRangeAwareRoute(to: string): boolean {
+  return RANGE_AWARE_ROUTES.has(to)
+    || to.startsWith('/analyze/users/')
+    || to.startsWith('/data/person/');
+}
+
+function isCalendarDate(value: string | null): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }

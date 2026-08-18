@@ -297,7 +297,10 @@ describe('Web analytics partial availability', () => {
   it('keeps traffic, UTM source and sessions visible when routes are unavailable', async () => {
     render(
       <TooltipProvider>
-        <MemoryRouter future={routerFuture}>
+        <MemoryRouter
+          initialEntries={['/analyze/web?range=custom&from=2026-08-01&to=2026-08-04']}
+          future={routerFuture}
+        >
           <WebAnalytics />
         </MemoryRouter>
       </TooltipProvider>,
@@ -312,6 +315,10 @@ describe('Web analytics partial availability', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));
     await screen.findByRole('link', { name: 'actor-1' });
     const actorLink = screen.getByRole('link', { name: 'actor-1' });
+    expect(actorLink).toHaveAttribute(
+      'href',
+      '/analyze/users/actor-1?range=custom&from=2026-08-01&to=2026-08-04',
+    );
     expect(actorLink).toHaveClass('text-foreground', 'hover:bg-muted');
     expect(actorLink).not.toHaveClass('text-primary');
 

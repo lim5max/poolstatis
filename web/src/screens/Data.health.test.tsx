@@ -124,6 +124,21 @@ describe('Events data-health control', () => {
   });
 
   it('uses Today and custom exact periods for the event stream', async () => {
+    sample.mockResolvedValue([{
+      id: 'event-1',
+      event: 'page.viewed',
+      timestamp: '2026-08-01T10:00:00.000Z',
+      distinct_id: 'actor-1',
+      session_id: 'session-1',
+      properties: {},
+      registered: true,
+      env: 'prod',
+      revision: 1,
+      origin: 'live',
+      backfill_batch_id: null,
+      ingested_at: '2026-08-01T10:00:01.000Z',
+      editable: true,
+    }]);
     render(<TooltipProvider><MemoryRouter initialEntries={['/data?tab=events']}><Data /></MemoryRouter></TooltipProvider>);
     await screen.findAllByText('Event stream');
 
@@ -137,7 +152,36 @@ describe('Events data-health control', () => {
       from: '2026-08-01T00:00:00.000Z',
       to: '2026-08-03T00:00:00.000Z',
     })));
+    expect(screen.getByRole('link', { name: 'actor-1' })).toHaveAttribute(
+      'href',
+      '/data/person/actor-1?range=custom&from=2026-08-01&to=2026-08-02',
+    );
     expect(screen.queryByText('All time')).not.toBeInTheDocument();
+  });
+
+  it('preserves the selected period when an identity entity opens a person', async () => {
+    mockedStore.mockReturnValue({
+      project: 'alpha', env: 'prod', availableEnvs: ['prod'], setEnv: vi.fn(),
+      client: {
+        schema: vi.fn().mockResolvedValue({
+          project: { slug: 'alpha', name: 'Alpha' }, env: 'prod', metrics: [], metric_categories: [],
+          funnels: [], entity_types: [{ name: 'user' }], observed_events_30d: [], properties: [],
+          identity: { active_links: 1, linked_sources: 1, audit_entries: 0 }, sources: [],
+        }),
+        entities: vi.fn().mockResolvedValue([{
+          entity_id: 'actor-entity',
+          properties: { email: 'person@example.com' },
+          updated_at: '2026-08-01T10:00:00.000Z',
+        }]),
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter initialEntries={['/data?tab=entities&range=today']}><Data /></MemoryRouter></TooltipProvider>);
+
+    expect(await screen.findByRole('link', { name: 'actor-entity' })).toHaveAttribute(
+      'href',
+      '/data/person/actor-entity?range=today',
+    );
   });
 
   it('shows server-owned trend totals before details and separates improvements from proven health', async () => {
