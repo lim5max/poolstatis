@@ -144,7 +144,7 @@ describe('goal-aware Attention', () => {
           id: 'inspect_funnel',
           kind: 'navigate',
           label: 'Inspect funnel',
-          href: '/analyze/funnels',
+          href: '/analyze/funnels?funnel=activation_funnel',
         },
       }],
     });
@@ -178,7 +178,7 @@ describe('goal-aware Attention', () => {
     expect(screen.getByText('Aug 1–3, 2026')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Inspect funnel/ })).toHaveAttribute(
       'href',
-      '/analyze/funnels?range=custom&from=2026-08-01&to=2026-08-03',
+      '/analyze/funnels?funnel=activation_funnel&range=custom&from=2026-08-01&to=2026-08-03',
     );
     expect(view.container.querySelector('.text-xs')).toBeNull();
   });

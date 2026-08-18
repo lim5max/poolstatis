@@ -86,10 +86,19 @@ export function activeNavigationItem(pathname: string): string | null {
 }
 
 export function analyticsNavigationTarget(to: string, currentSearch: string): string {
-  if (!isRangeAwareRoute(to)) return to;
+  const hashIndex = to.indexOf('#');
+  const hash = hashIndex >= 0 ? to.slice(hashIndex) : '';
+  const pathAndSearch = hashIndex >= 0 ? to.slice(0, hashIndex) : to;
+  const queryIndex = pathAndSearch.indexOf('?');
+  const pathname = queryIndex >= 0 ? pathAndSearch.slice(0, queryIndex) : pathAndSearch;
+  const destinationSearch = queryIndex >= 0 ? pathAndSearch.slice(queryIndex + 1) : '';
+  if (!isRangeAwareRoute(pathname)) return to;
   const current = new URLSearchParams(currentSearch);
   const range = current.get('range');
-  const next = new URLSearchParams();
+  const next = new URLSearchParams(destinationSearch);
+  next.delete('range');
+  next.delete('from');
+  next.delete('to');
   if (range && RANGE_PRESETS.has(range)) {
     next.set('range', range);
   } else if (range === 'custom') {
@@ -102,7 +111,8 @@ export function analyticsNavigationTarget(to: string, currentSearch: string): st
   } else {
     return to;
   }
-  return `${to}?${next.toString()}`;
+  const search = next.toString();
+  return `${pathname}${search ? `?${search}` : ''}${hash}`;
 }
 
 function isRangeAwareRoute(to: string): boolean {

@@ -45,5 +45,14 @@ describe('mode-aware navigation contract', () => {
     expect(analyticsNavigationTarget('/analyze/saved', '?range=today')).toBe('/analyze/saved');
     expect(analyticsNavigationTarget('/analyze/web', '?range=custom&from=2026-02-30&to=2026-03-01')).toBe('/analyze/web');
     expect(analyticsNavigationTarget('/analyze/users', '?range=custom&from=2026-08-19&to=2026-08-18')).toBe('/analyze/users');
+    expect(analyticsNavigationTarget('/analyze/product?metric=activation', '?range=today')).toBe(
+      '/analyze/product?metric=activation&range=today',
+    );
+    expect(analyticsNavigationTarget('/analyze/funnels?funnel=activation#steps', '?range=custom&from=2026-08-01&to=2026-08-03')).toBe(
+      '/analyze/funnels?funnel=activation&range=custom&from=2026-08-01&to=2026-08-03#steps',
+    );
+    expect(analyticsNavigationTarget('/data?tab=warnings&env=prod', '?range=90d')).toBe(
+      '/data?tab=warnings&env=prod&range=90d',
+    );
   });
 });
