@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
@@ -30,6 +30,18 @@ const activationMetric = {
   deprecation_reason: null,
   deprecated_at: null,
 } as const;
+
+function openCustomPeriod(period: HTMLElement) {
+  const trigger = within(period).getByRole('button', { name: /^Period:/ });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'Enter', code: 'Enter' });
+  fireEvent.click(screen.getByRole('menuitem', { name: /Custom period…/ }));
+}
+
+function openFilters() {
+  const trigger = screen.getByRole('button', { name: 'Filters' });
+  if (trigger.getAttribute('aria-expanded') === 'false') fireEvent.click(trigger);
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -114,14 +126,18 @@ describe('People list', () => {
     } as never);
   });
 
-  it('shows factual order evidence with its exact evidence window', async () => {
+  it('keeps the people table compact and moves row details to the actor view', async () => {
     render(<MemoryRouter><Users /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'People', level: 1 })).toBeInTheDocument();
-    expect(screen.getByText('Ordered by last seen in this window')).toBeInTheDocument();
-    expect(screen.getByText(/Evidence window:.*Jul 7, 2026.*Aug 6, 2026/)).toBeInTheDocument();
-    expect(screen.getByText(/Stall, risk and segment changes remain unavailable/)).toBeInTheDocument();
-    expect(screen.getByText(/Activity properties remain redacted/)).toBeInTheDocument();
+    expect(await screen.findByText('anon_7')).toBeInTheDocument();
+    expect(screen.getByText(/^Visitor /)).toHaveAttribute('title', 'Stable display alias; not a verified name');
+    expect(screen.getByRole('tab', { name: 'All people' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Groups' })).toBeInTheDocument();
+    expect(screen.queryByText('Ordered by last seen in this window')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Evidence window:/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Registered activity' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Data limits')).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Observed signals first' })).not.toBeInTheDocument();
   });
 
@@ -140,8 +156,11 @@ describe('People list', () => {
     const view = render(<MemoryRouter><Users /></MemoryRouter>);
     await screen.findByText('anon_7');
 
+    const initialResult = await operationalQuery.mock.results[0]!.value;
+    const pending = deferred<typeof initialResult>();
+    operationalQuery.mockImplementationOnce(() => pending.promise);
     const period = screen.getByRole('group', { name: 'Analytics period' });
-    fireEvent.click(period.querySelector('button:last-child')!);
+    openCustomPeriod(period);
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-04' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
@@ -151,28 +170,47 @@ describe('People list', () => {
       from: '2026-08-01T00:00:00.000Z',
       to: '2026-08-05T00:00:00.000Z',
     })));
+    expect(screen.getByRole('status')).toHaveTextContent('Updating');
+    expect(screen.getByText('anon_7')).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Open actor anon_7' })).toHaveAttribute(
+      'href',
+      '/analyze/users/anon_7?range=30d',
+    );
+    expect(screen.queryByRole('columnheader', { name: 'Order evidence' })).not.toBeInTheDocument();
+    expect(view.container.querySelector('.text-xs')).toBeNull();
+
+    await act(async () => { pending.resolve(initialResult); });
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
     expect(screen.getByRole('link', { name: 'Open actor anon_7' })).toHaveAttribute(
       'href',
       '/analyze/users/anon_7?range=custom&from=2026-08-01&to=2026-08-04',
     );
-    expect(screen.queryByRole('columnheader', { name: 'Order evidence' })).not.toBeInTheDocument();
-    expect(view.container.querySelector('.text-xs')).toBeNull();
   });
 
-  it('consolidates missing identity, property and outcome capabilities into one data-health block', async () => {
+  it('does not relabel old rows as a pending search result', async () => {
+    render(<MemoryRouter><Users /></MemoryRouter>);
+    await screen.findByText('anon_7');
+
+    const pending = deferred<never>();
+    operationalQuery.mockImplementationOnce(() => pending.promise);
+    fireEvent.change(screen.getByLabelText('Exact actor ID'), { target: { value: 'raw-actor-7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run exact actor search' }));
+
+    await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      search: { kind: 'exact_id', value: 'raw-actor-7' },
+    })));
+    expect(screen.queryByText('anon_7')).not.toBeInTheDocument();
+    expect(screen.getByText('Exact match:')).toBeInTheDocument();
+    expect(screen.getByText('resolving canonical actors…')).toBeInTheDocument();
+  });
+
+  it('does not place setup capability warnings above the people table', async () => {
     render(<MemoryRouter><Users /></MemoryRouter>);
 
-    const limits = await screen.findByText('Data limits');
-    const details = limits.closest('details');
-    expect(details).not.toHaveAttribute('open');
-    fireEvent.click(limits.closest('summary')!);
-    expect(details).toHaveAttribute('open');
-    expect(screen.getByText(/Identity enrichment is unavailable/)).toBeInTheDocument();
-    expect(screen.getByText(/Canonical actor properties are unavailable/)).toBeInTheDocument();
-    expect(screen.getByText(/Activation, stall, risk and segment-change ranking are unavailable/)).toBeInTheDocument();
-    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
-    expect(screen.queryByText('Not assessed')).not.toBeInTheDocument();
-    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument();
+    expect(await screen.findByText('anon_7')).toBeInTheDocument();
+    expect(screen.queryByText('Data limits')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Identity enrichment is unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Canonical actor properties are unavailable/)).not.toBeInTheDocument();
   });
 
   it('keeps exact-ID lookup in the bounded actors query', async () => {
@@ -201,6 +239,7 @@ describe('People list', () => {
     render(<MemoryRouter><Users /></MemoryRouter>);
     await screen.findByText('anon_7');
 
+    openFilters();
     operationalQuery.mockResolvedValue({
       kind: 'actors',
       actors: [{
@@ -276,9 +315,9 @@ describe('People list', () => {
       order: 'interesting_desc',
       interesting: { reason: 'recently_activated', metric: 'activation_completed' },
     })));
-    expect(await screen.findByText('Recently activated in this window')).toBeInTheDocument();
+    expect(await screen.findByText(/Activation completed ·/)).toBeInTheDocument();
     expect(screen.getByText('Identifies the first meaningful product outcome completed by an actor.')).toBeInTheDocument();
-    expect(screen.getByText(/Stall, risk and segment-change ranking are unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(/Stall, risk and segment-change ranking are unavailable/)).not.toBeInTheDocument();
   });
 
   it('drops a selected queue before querying a new project or environment', async () => {
@@ -289,6 +328,7 @@ describe('People list', () => {
     mockedStore.mockReturnValue({ project: 'alpha', env: 'prod', client: alphaClient } as never);
     const view = render(<MemoryRouter><Users /></MemoryRouter>);
     await screen.findByText('anon_7');
+    openFilters();
     fireEvent.click(screen.getByRole('combobox', { name: 'Queue' }));
     fireEvent.click(await screen.findByRole('option', { name: 'Recently activated · Activation completed' }));
     await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
@@ -328,6 +368,7 @@ describe('People list', () => {
     mockedStore.mockReturnValue({ project: 'alpha', env: 'prod', client: initialClient } as never);
     const view = render(<MemoryRouter><Users /></MemoryRouter>);
     await screen.findByText('anon_7');
+    openFilters();
     fireEvent.click(screen.getByRole('combobox', { name: 'Queue' }));
     fireEvent.click(await screen.findByRole('option', { name: 'Recently activated · Activation completed' }));
     await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
@@ -379,5 +420,41 @@ describe('People list', () => {
     rejectBeta(new Error('beta unavailable'));
     expect(await screen.findByText('beta unavailable')).toBeInTheDocument();
     expect(screen.queryByText('anon_7')).not.toBeInTheDocument();
+  });
+
+  it('lists real registered group entities instead of inventing groups from actor rows', async () => {
+    const schema = vi.fn().mockResolvedValue({
+      entity_types: [
+        { name: 'user', description: 'Person', prop_schema: {} },
+        { name: 'account', description: 'Customer account', prop_schema: {} },
+      ],
+    });
+    const entities = vi.fn().mockResolvedValue([{
+      entity_id: 'acct_7',
+      properties: { name: 'Northstar', plan: 'team' },
+      updated_at: '2026-08-05T00:00:00Z',
+    }]);
+    mockedStore.mockReturnValue({
+      project: 'alpha', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([]),
+        operationalQuery,
+        schema,
+        entities,
+      },
+    } as never);
+
+    render(<MemoryRouter><Users /></MemoryRouter>);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Groups' }), { button: 0, ctrlKey: false });
+
+    expect(await screen.findByText('Northstar')).toBeInTheDocument();
+    expect(screen.getByText('acct_7')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(schema).toHaveBeenCalledWith('alpha', 'prod');
+    expect(entities).toHaveBeenCalledWith('alpha', {
+      entity_type: 'account',
+      env: 'prod',
+      limit: 50,
+    });
   });
 });

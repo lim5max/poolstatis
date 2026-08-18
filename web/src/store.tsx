@@ -285,6 +285,20 @@ function sameAsyncDeps(left: unknown[], right: unknown[]): boolean {
 /** Small async-data hook with loading/error, re-running when deps change. */
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
   data: T | null; error: string | null; loading: boolean; reload: () => void;
+};
+export function useAsync<T>(
+  fn: () => Promise<T>,
+  deps: unknown[],
+  options: { keepPreviousData?: boolean },
+): {
+  data: T | null; error: string | null; loading: boolean; reload: () => void;
+};
+export function useAsync<T>(
+  fn: () => Promise<T>,
+  deps: unknown[],
+  options: { keepPreviousData?: boolean } = {},
+): {
+  data: T | null; error: string | null; loading: boolean; reload: () => void;
 } {
   const [nonce, setNonce] = useState(0);
   const requestDeps = [...deps];
@@ -300,7 +314,12 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
     const effectDeps = [...deps];
     setSnapshot((previous) => sameAsyncDeps(previous.deps, effectDeps)
       ? { ...previous, error: null, loading: true }
-      : { deps: effectDeps, data: null, error: null, loading: true });
+      : {
+        deps: effectDeps,
+        data: options.keepPreviousData ? previous.data : null,
+        error: null,
+        loading: true,
+      });
     fn()
       .then((data) => alive && setSnapshot({ deps: effectDeps, data, error: null, loading: false }))
       .catch((error) => alive && setSnapshot((previous) => ({
@@ -315,7 +334,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
 
   const current = sameAsyncDeps(snapshot.deps, requestDeps);
   return {
-    data: current ? snapshot.data : null,
+    data: current || options.keepPreviousData ? snapshot.data : null,
     error: current ? snapshot.error : null,
     loading: current ? snapshot.loading : true,
     reload: () => setNonce((n) => n + 1),

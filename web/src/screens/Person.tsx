@@ -13,7 +13,6 @@ import {
 import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import { analyticsNavigationTarget } from '../analysis/navigation';
 import { useAsync, useStore } from '../store';
-import { IdentityBadge } from './Users';
 
 export function Person() {
   const location = useLocation();
@@ -53,7 +52,7 @@ export function Person() {
           </Link>
           <div className="flex min-w-0 items-center gap-2">
             <h1 className="serif truncate text-4xl font-normal sm:text-5xl">Actor profile</h1>
-            <IdentityBadge status={data.identity.status} />
+            <span className="text-sm font-medium text-muted-foreground">{actorStatusLabel(data.identity.status)}</span>
           </div>
           <button
             className="mt-2 flex max-w-full items-center gap-1 font-mono text-sm text-muted-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:text-foreground hover:decoration-foreground"

@@ -39,6 +39,7 @@ import { previousPeriodQuery as previousAnalysisPeriodQuery, summarizeAnswer, ty
 import { accountMutationAccess, mutationAllowed } from '../account-capabilities';
 
 interface AnalysisRun {
+  queryScope: string;
   spec: VisualizationSpec;
   result: AnalysisQueryResult;
   previousResult: AnalysisQueryResult | null;
@@ -95,7 +96,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const [running, setRunning] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [officialSaveState, setOfficialSaveState] = useState<'idle' | 'saving' | 'saved' | 'saved_unofficial' | 'error'>('idle');
-  const [savedAnswerId, setSavedAnswerId] = useState<string | null>(null);
+  const [savedAnswer, setSavedAnswer] = useState<{ id: string; queryScope: string; project: string } | null>(null);
   const officialSaveAccess = accountMutationAccess(
     accountMode.data,
     'set_official_answers',
@@ -104,6 +105,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   );
   const officialSaveAllowed = mutationAllowed(officialSaveAccess);
   const runGeneration = useRef(0);
+  const saveGeneration = useRef(0);
   const currentScope = `${project ?? 'none'}:${env}`;
   const scopeRef = useRef(currentScope);
   scopeRef.current = currentScope;
@@ -117,9 +119,11 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunning(false);
     setSaveState('idle');
     setOfficialSaveState('idle');
-    setSavedAnswerId(null);
+    setSavedAnswer(null);
+    saveGeneration.current += 1;
     return () => {
       runGeneration.current += 1;
+      saveGeneration.current += 1;
     };
   }, [project, env, requestedResource]);
 
@@ -133,6 +137,18 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const selectedKey = resourceOptions.some((resource) => resource.key === resourceKey)
     ? resourceKey
     : resourceOptions[0]?.key ?? '';
+  const analysisScopeKey = JSON.stringify([
+    currentScope,
+    template.key,
+    selectedKey,
+    metricView,
+    interval,
+    breakdown,
+    range.from,
+    range.to,
+  ]);
+  const analysisScopeRef = useRef(analysisScopeKey);
+  analysisScopeRef.current = analysisScopeKey;
 
   const selectTemplate = (next: AnalysisTemplate) => {
     if (resolveTemplateCapability(next.key, CORE_ANALYZE_CAPABILITIES).status !== 'available') return;
@@ -148,7 +164,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunning(false);
     setSaveState('idle');
     setOfficialSaveState('idle');
-    setSavedAnswerId(null);
+    setSavedAnswer(null);
+    saveGeneration.current += 1;
   };
 
   const execute = async () => {
@@ -156,14 +173,15 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     const generation = runGeneration.current + 1;
     runGeneration.current = generation;
     const runScope = currentScope;
+    const runQueryScope = analysisScopeKey;
     const runProject = project!;
     const runEnv = env;
     setRunning(true);
     setSaveState('idle');
     setOfficialSaveState('idle');
-    setSavedAnswerId(null);
+    setSavedAnswer(null);
+    saveGeneration.current += 1;
     setRunError(null);
-    setRun(null);
     const dates = { from: range.from, to: range.to };
     const selectedMetric = compatibleMetrics.find((metric) => metric.key === selectedKey);
     const selectedFunnel = registry.data.funnels.find((funnel) => funnel.key === selectedKey);
@@ -200,6 +218,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           : previousResult?.kind === result.kind,
       });
       setRun({
+        queryScope: runQueryScope,
         spec,
         result,
         previousResult,
@@ -227,7 +246,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunning(false);
     setSaveState('idle');
     setOfficialSaveState('idle');
-    setSavedAnswerId(null);
+    setSavedAnswer(null);
+    saveGeneration.current += 1;
   };
 
   useEffect(() => {
@@ -239,6 +259,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   if (registry.error) return <ErrorNote>{registry.error}</ErrorNote>;
 
   const currentRun = run?.spec.project === project && run.spec.env === env ? run : null;
+  const exactCurrentRun = currentRun?.queryScope === analysisScopeKey ? currentRun : null;
   const currentRunError = runError?.scope === currentScope ? runError.message : null;
   const pointCount = currentRun ? countResultPoints(currentRun.result) : 0;
   const renderState = resolveRenderState({
@@ -247,22 +268,37 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     error: currentRunError,
     pointCount,
   });
+  const visibleRenderState = running && currentRun
+    ? pointCount === 0 ? 'empty' : 'ready'
+    : renderState;
 
   const saveAnswer = async (makeOfficial = false) => {
-    if (!currentRun || !client || !project || saveState === 'saving' || officialSaveState === 'saving') return;
+    if (!exactCurrentRun || running || !client || !project || saveState === 'saving' || officialSaveState === 'saving') return;
     if (makeOfficial && (!officialSaveAllowed || officialSaveState === 'saved')) return;
     if (!makeOfficial && saveState === 'saved') return;
 
-    let answerId = savedAnswerId;
+    const generation = saveGeneration.current + 1;
+    saveGeneration.current = generation;
+    const saveQueryScope = exactCurrentRun.queryScope;
+    const saveProject = project;
+    const saveClient = client;
+    const isCurrentSave = () => saveGeneration.current === generation
+      && analysisScopeRef.current === saveQueryScope;
+    let answerId = savedAnswer?.queryScope === saveQueryScope && savedAnswer.project === saveProject
+      ? savedAnswer.id
+      : null;
     if (!answerId) {
       setSaveState('saving');
       if (makeOfficial) setOfficialSaveState('saving');
       try {
-        const saved = await client.createAnalysisView(project, savedAnswerInput(currentRun, template.key));
+        const saved = await saveClient.createAnalysisView(saveProject, savedAnswerInput(exactCurrentRun, template.key));
         answerId = saved.id;
-        setSavedAnswerId(saved.id);
-        setSaveState('saved');
+        if (isCurrentSave()) {
+          setSavedAnswer({ id: saved.id, queryScope: saveQueryScope, project: saveProject });
+          setSaveState('saved');
+        }
       } catch {
+        if (!isCurrentSave()) return;
         setSaveState('error');
         if (makeOfficial) setOfficialSaveState('error');
         return;
@@ -270,11 +306,13 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     }
 
     if (!makeOfficial) return;
-    setOfficialSaveState('saving');
+    if (isCurrentSave()) setOfficialSaveState('saving');
     try {
-      await client.setAnalysisViewOfficial(project, answerId, true);
+      await saveClient.setAnalysisViewOfficial(saveProject, answerId, true);
+      if (!isCurrentSave()) return;
       setOfficialSaveState('saved');
     } catch {
+      if (!isCurrentSave()) return;
       setOfficialSaveState('saved_unofficial');
     }
   };
@@ -284,15 +322,13 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       <PageHeading
         title={funnelSurface ? 'Funnels' : 'Product'}
         lead={funnelSurface ? 'Find the biggest loss.' : 'Start with the outcome.'}
-        meta={`${range.label} · UTC`}
-        actions={<AnalyticsDateRange value={rangeSelection} onChange={(next) => { setRangeSelection(next); resetRun(); }} />}
         help={funnelSurface
           ? 'The screen ranks observed step loss before showing query detail. Open the investigation only when the evidence needs a closer look.'
           : 'Answers use registered metrics and the typed Query DSL. Query controls stay secondary until the result needs a closer look.'}
       />
 
       {!funnelSurface && <section aria-label="Analysis view">
-        <div role="tablist" aria-label="Analysis view" className="flex max-w-full gap-1 overflow-x-auto rounded-full border bg-card p-1 shadow-xs">
+        <div role="group" aria-label="Analysis view" className="flex max-w-full gap-6 overflow-x-auto border-b">
           {ANALYSIS_TEMPLATES.filter((candidate) => ['product-health', 'feature-adoption', 'retention', 'release-impact'].includes(candidate.key)).map((candidate) => {
             const available = resolveTemplateCapability(candidate.key, CORE_ANALYZE_CAPABILITIES).status === 'available';
             const selected = candidate.key === template.key;
@@ -302,11 +338,9 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
                 type="button"
                 disabled={!available}
                 aria-pressed={selected}
-                role="tab"
-                aria-selected={selected}
                 title={available ? candidate.question : 'Not supported by the current server contract.'}
                 onClick={() => selectTemplate(candidate)}
-                className={`min-h-11 shrink-0 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'bg-secondary text-foreground' : available ? 'text-muted-foreground hover:bg-muted hover:text-foreground' : 'cursor-not-allowed text-muted-foreground/55'}`}
+                className={`min-h-11 shrink-0 border-b-2 px-1 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-foreground text-foreground' : available ? 'border-transparent text-muted-foreground hover:text-foreground' : 'cursor-not-allowed border-transparent text-muted-foreground/55'}`}
               >
                 {candidate.title}
               </button>
@@ -315,15 +349,19 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         </div>
       </section>}
 
-      <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between" aria-labelledby="current-analysis-title">
+      <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between" aria-labelledby="current-analysis-title" aria-busy={running}>
         <div className="min-w-0">
           <h2 id="current-analysis-title" className="text-xl font-semibold">{template.title}</h2>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{template.question}</p>
         </div>
-        <Button variant="outline" className="h-11 shrink-0" onClick={execute} disabled={running || !selectedKey || capability.status !== 'available'}>
-          {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
-          Refresh answer
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {running && currentRun && <span className="text-sm text-muted-foreground" role="status">Updating…</span>}
+          <AnalyticsDateRange value={rangeSelection} onChange={setRangeSelection} />
+          <Button variant="outline" className="h-9 shrink-0" onClick={execute} disabled={running || !selectedKey || capability.status !== 'available'}>
+            {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
+            Refresh
+          </Button>
+        </div>
       </section>
 
       {(!selectedKey || capability.status === 'unavailable') && <AnswerCanvas>
@@ -339,8 +377,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         ) : null}
       </AnswerCanvas>}
       {currentRunError && <ErrorNote>{currentRunError}</ErrorNote>}
-      {renderState === 'loading' && <Loading what="executing server query…" />}
-      {renderState === 'empty' && currentRun && (
+      {visibleRenderState === 'loading' && <Loading what="executing server query…" />}
+      {visibleRenderState === 'empty' && currentRun && (
         <AnswerCanvas>
           <div className="px-4 py-8 text-center sm:px-5">
             <div className="text-lg font-semibold">No observations in this exact period</div>
@@ -358,7 +396,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         />
       )}
 
-      {renderState === 'ready' && currentRun && (
+      {visibleRenderState === 'ready' && currentRun && (
         <CanonicalAnswer
           takeaway={currentRun.summary.takeaway}
           comparison={currentRun.summary.comparison}
@@ -369,6 +407,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           followUp={currentRun.summary.followUp}
           followUpTask={followUpAgentTask(currentRun.spec, currentRun.summary)}
           saveState={saveState}
+          saveDisabled={running || !exactCurrentRun}
           officialSaveState={officialSaveAllowed ? officialSaveState : 'hidden'}
           saveVariant={funnelSurface ? 'outline' : 'default'}
           onSave={() => void saveAnswer()}

@@ -40,9 +40,9 @@ describe('page headings', () => {
 });
 
 describe('button contrast', () => {
-  it('uses a full pill shape for every button variant', () => {
+  it('uses the compact field radius for standard button variants', () => {
     render(<Button>Open answer</Button>);
-    expect(screen.getByRole('button', { name: 'Open answer' })).toHaveClass('rounded-full');
+    expect(screen.getByRole('button', { name: 'Open answer' })).toHaveClass('rounded-field');
   });
 
   it('keeps outline hover neutral instead of applying the brand accent', () => {

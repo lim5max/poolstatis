@@ -143,7 +143,10 @@ describe('Events data-health control', () => {
     await screen.findAllByText('Event stream');
 
     const period = screen.getByRole('group', { name: 'Analytics period' });
-    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    const periodTrigger = within(period).getByRole('button', { name: /^Period:/ });
+    periodTrigger.focus();
+    fireEvent.keyDown(periodTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Custom period…/ }));
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-02' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountMode } from '../api/types';
@@ -23,6 +23,12 @@ const metric = {
   category: 'activation', tags: [], type: 'unique_actors', source: { event: 'product.used' }, status: 'active',
   owner: null, deprecation_reason: null, deprecated_at: null,
 } as const;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 function accountMode({
   deployment = 'self_host', kind = 'secret', role = null, official = false,
@@ -137,10 +143,13 @@ describe('Product answer-first surface', () => {
     expect(await screen.findByRole('heading', { name: 'Product' })).toBeInTheDocument();
     await waitFor(() => expect(current.client.query).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'Run answer' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Refresh answer' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument();
 
     const period = screen.getByRole('group', { name: 'Analytics period' });
-    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    const periodTrigger = within(period).getByRole('button', { name: /^Period:/ });
+    periodTrigger.focus();
+    fireEvent.keyDown(periodTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Custom period…/ }));
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-10' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-12' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
@@ -153,14 +162,48 @@ describe('Product answer-first surface', () => {
     expect(current.client.measurementTrust).toHaveBeenCalledWith('alpha', expect.objectContaining({ since_days: 3 }));
   });
 
+  it('keeps the current answer visible while a new period is loading', async () => {
+    const current = productStore() as any;
+    current.client.accountMode.mockResolvedValue(accountMode({ kind: 'personal', official: true }));
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    const answer = await screen.findByRole('region', { name: 'Canonical answer' }, { timeout: 4_000 });
+    const previousResult = await current.client.query.mock.results[0].value;
+    const pending = deferred<typeof previousResult>();
+    current.client.query.mockImplementationOnce(() => pending.promise);
+
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    const periodTrigger = within(period).getByRole('button', { name: /^Period:/ });
+    periodTrigger.focus();
+    fireEvent.keyDown(periodTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Today' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Updating…');
+    expect(answer).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Canonical answer' })).toBeVisible();
+    const save = screen.getByRole('button', { name: 'Save answer' });
+    const official = screen.getByRole('button', { name: 'Save as official' });
+    expect(save).toBeDisabled();
+    expect(official).toBeDisabled();
+    fireEvent.click(save);
+    fireEvent.click(official);
+    expect(current.client.createAnalysisView).not.toHaveBeenCalled();
+
+    await act(async () => { pending.resolve(previousResult); });
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save answer' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save as official' })).toBeEnabled();
+  });
+
   it('puts templates and a real answer before advanced query controls', async () => {
     const current = productStore() as any;
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Product' })).toBeInTheDocument();
-    expect(screen.getByRole('tablist', { name: 'Analysis view' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Product health' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('group', { name: 'Analysis view' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Product health' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Edit analysis').closest('details')).not.toHaveAttribute('open');
 
     await waitFor(() => expect(screen.getByText(/Observed · Trusted · 34 events ·/)).toBeInTheDocument());
@@ -219,6 +262,76 @@ describe('Product answer-first surface', () => {
     await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledWith('alpha', 'view-1', true));
     expect(current.client.createAnalysisView).toHaveBeenCalledOnce();
     expect(screen.getByRole('button', { name: 'Official answer saved' })).toBeDisabled();
+  });
+
+  it('never reuses a saved answer id after its period changed while the save was pending', async () => {
+    const current = productStore() as any;
+    current.client.accountMode.mockResolvedValue(accountMode({ kind: 'personal', official: true }));
+    const staleSave = deferred<{ id: string }>();
+    current.client.createAnalysisView
+      .mockImplementationOnce(() => staleSave.promise)
+      .mockResolvedValueOnce({ id: 'view-current' });
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    const saveButton = await screen.findByRole('button', { name: 'Save answer' });
+    const initialResult = await current.client.query.mock.results[0].value;
+    fireEvent.click(saveButton);
+    expect(screen.getByRole('button', { name: 'Saving answer…' })).toBeDisabled();
+
+    const pendingPeriod = deferred<typeof initialResult>();
+    current.client.query.mockImplementationOnce(() => pendingPeriod.promise);
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    const periodTrigger = within(period).getByRole('button', { name: /^Period:/ });
+    periodTrigger.focus();
+    fireEvent.keyDown(periodTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Today' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Updating…');
+
+    await act(async () => { staleSave.resolve({ id: 'view-stale' }); });
+    expect(current.client.setAnalysisViewOfficial).not.toHaveBeenCalled();
+    await act(async () => { pendingPeriod.resolve(initialResult); });
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save answer' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save as official' }));
+    await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledWith('alpha', 'view-current', true));
+    expect(current.client.setAnalysisViewOfficial).not.toHaveBeenCalledWith('alpha', 'view-stale', true);
+  });
+
+  it('finishes a direct official save on its captured answer without contaminating the next period', async () => {
+    const current = productStore() as any;
+    current.client.accountMode.mockResolvedValue(accountMode({ kind: 'personal', official: true }));
+    const staleOfficial = deferred<{ id: string }>();
+    current.client.createAnalysisView
+      .mockImplementationOnce(() => staleOfficial.promise)
+      .mockResolvedValueOnce({ id: 'view-current' });
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    const officialButton = await screen.findByRole('button', { name: 'Save as official' });
+    const initialResult = await current.client.query.mock.results[0].value;
+    fireEvent.click(officialButton);
+    expect(screen.getByRole('button', { name: 'Saving official answer…' })).toBeDisabled();
+
+    const pendingPeriod = deferred<typeof initialResult>();
+    current.client.query.mockImplementationOnce(() => pendingPeriod.promise);
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    const periodTrigger = within(period).getByRole('button', { name: /^Period:/ });
+    periodTrigger.focus();
+    fireEvent.keyDown(periodTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Today' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Updating…');
+
+    await act(async () => { staleOfficial.resolve({ id: 'view-official-stale' }); });
+    await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledWith('alpha', 'view-official-stale', true));
+    await act(async () => { pendingPeriod.resolve(initialResult); });
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save answer' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save as official' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save as official' }));
+    await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledWith('alpha', 'view-current', true));
   });
 
   it('does not offer official status to a project secret', async () => {
@@ -360,7 +473,7 @@ describe('Product answer-first surface', () => {
     render(<MemoryRouter initialEntries={['/analyze/funnels?funnel=checkout&env=prod&from_step=1&to_step=2']}><ProductAnalytics surface="funnels" /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Funnels' })).toBeInTheDocument();
-    expect(screen.queryByRole('tablist', { name: 'Analysis view' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Analysis view' })).not.toBeInTheDocument();
     expect(screen.getByText('Activation funnel')).toBeInTheDocument();
     expect(screen.getByText('Edit funnel analysis')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Edit funnel analysis'));

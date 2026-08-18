@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,10 +7,9 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EmptyState, ErrorNote, HelpDisclosure, KpiRail, Loading, PageHeading, Panel, fmtNum } from '@/components/ui';
-import { AnswerCanvas, EvidenceLine, type EvidenceTrust } from '@/components/analytics';
+import { AnswerCanvas, type EvidenceTrust } from '@/components/analytics';
 import { AnalyticsDateRange } from '@/components/AnalyticsDateRange';
-import { DisclosureSummary } from '@/components/disclosure';
-import { ManualVisualizationRenderer } from '../analysis/charts';
+import { TrendChart } from '../analysis/charts';
 import {
   WEB_PAGE_VIEW_METRIC,
   engagementLabel,
@@ -24,11 +23,11 @@ import {
   type WebSessionsResult,
   type WebWorkspaceResult,
 } from '../analysis/operations';
-import { previousAnalyticsRange, type AnalyticsRangeSelection, type ResolvedAnalyticsRange } from '../analysis/ranges';
+import { previousAnalyticsRange, rangeSearchParams, type AnalyticsRangeSelection, type ResolvedAnalyticsRange } from '../analysis/ranges';
 import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import { analyticsNavigationTarget } from '../analysis/navigation';
-import type { FunnelQueryResult, TrendQueryResult, VisualizationSpec } from '../analysis/visualization';
-import type { MeasurementAnswerDependency, MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
+import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
+import type { MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 import { useAsync, useStore } from '../store';
 import { AcquisitionPanel } from './Measurement';
 
@@ -53,14 +52,11 @@ interface WebRegistryRead {
   metrics: Metric[];
 }
 
-interface WebReadinessRead {
-  scope: string;
-  result: MeasurementReadiness | null;
-}
-
 interface WebPrimaryRead {
   scope: string;
   metric: Metric;
+  range: ResolvedAnalyticsRange;
+  selection: AnalyticsRangeSelection;
   overview: WebAnalyticsResult;
 }
 
@@ -150,7 +146,6 @@ export function parseWebRouteKeys(value: string): string[] {
 }
 
 export function WebAnalytics() {
-  const location = useLocation();
   const { client, project, env } = useStore();
   const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const [dimension, setDimension] = useState<BreakdownView>('source');
@@ -171,18 +166,10 @@ export function WebAnalytics() {
     };
   }, [project, env]);
   const registryData = registry.data?.scope === registryScope ? registry.data : null;
-  const readiness = useAsync<WebReadinessRead>(async () => ({
-    scope: registryScope,
-    result: typeof client!.measurementReadiness === 'function'
-      ? await client!.measurementReadiness(project!, env).catch(() => null)
-      : null,
-  }), [project, env]);
-  const readinessData = readiness.data?.scope === registryScope ? readiness.data.result : null;
   const metric = registryData?.metric ?? null;
   const outcomeMetric = registryData ? webOutcomeMetric(registryData.metrics) : null;
   const conversionMetric = webConversionMetric(registryData?.metrics ?? []);
   const primaryScope = `${registryScope}\u0000${range.from}\u0000${range.to}\u0000${metric?.key ?? ''}`;
-  const outcomeScope = `${registryScope}\u0000${range.from}\u0000${range.to}\u0000${outcomeMetric?.key ?? ''}`;
   const primary = useAsync<WebPrimaryRead | null>(async () => {
     if (!metric) return null;
     const base = {
@@ -197,43 +184,60 @@ export function WebAnalytics() {
       ...base,
       dimensions: [],
     });
-    return { scope: primaryScope, metric, overview };
-  }, [project, env, range.from, range.to, metric?.key]);
-  const primaryData = primary.data?.scope === primaryScope ? primary.data : null;
+    return { scope: primaryScope, metric, range, selection: rangeSelection, overview };
+  }, [project, env, range.from, range.to, metric?.key], { keepPreviousData: true });
+  const exactPrimaryData = primary.data?.scope === primaryScope ? primary.data : null;
+  const primaryData = exactPrimaryData ?? (
+    primary.loading
+      && primary.data !== null
+      && primary.data?.metric.key === metric?.key
+      && primary.data.scope.startsWith(`${registryScope}\u0000`)
+      ? primary.data
+      : null
+  );
+  const primaryRefreshing = primary.loading && !exactPrimaryData && Boolean(primaryData);
+  const dataRange = primaryData?.range ?? range;
+  const dataSelection = primaryData?.selection ?? rangeSelection;
+  const dataRangeSearch = `?${rangeSearchParams(dataSelection).toString()}`;
+  const dataPrimaryScope = primaryData?.scope ?? primaryScope;
+  const outcomeScope = `${registryScope}\u0000${dataRange.from}\u0000${dataRange.to}\u0000${outcomeMetric?.key ?? ''}`;
   const comparison = useAsync<WebComparisonRead | null>(async () => {
     if (!metric || !primaryData) return null;
-    const previous = previousAnalyticsRange(range);
+    const previous = previousAnalyticsRange(dataRange);
     const result = await client!.operationalQuery<WebAnalyticsResult>(project!, {
       kind: 'web_analytics', metric: metric.key, date_from: previous.from, date_to: previous.to,
       filters: [], env, dimensions: [],
     });
-    return { scope: primaryScope, result };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at]);
-  const comparisonData = comparison.data?.scope === primaryScope ? comparison.data.result : null;
+    return { scope: dataPrimaryScope, result };
+  }, [project, env, dataRange.from, dataRange.to, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at]);
+  const comparisonData = comparison.data?.scope === dataPrimaryScope ? comparison.data.result : null;
   const trendRead = useAsync<WebTrendRead | null>(async () => {
     if (!metric || !primaryData) return null;
     const result = await client!.query(project!, {
-      kind: 'trend', metric: metric.key, date_from: range.from, date_to: range.to,
+      kind: 'trend', metric: metric.key, date_from: dataRange.from, date_to: dataRange.to,
       interval: 'day', filters: [], env,
     });
     if (result.kind !== 'trend') throw new Error('Trend query returned an unexpected result kind');
-    return { scope: primaryScope, result };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at]);
-  const trendData = trendRead.data?.scope === primaryScope ? trendRead.data.result : null;
+    return { scope: dataPrimaryScope, result };
+  }, [project, env, dataRange.from, dataRange.to, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at]);
+  const trendData = trendRead.data?.scope === dataPrimaryScope ? trendRead.data.result : null;
   const trustRead = useAsync<WebTrustScopedRead | null>(async () => {
     if (!metric || !primaryData) return null;
-    return { scope: primaryScope, result: await readWebTrust(client!, project!, env, metric.key, range.days) };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at]);
-  const trustData = trustRead.data?.scope === primaryScope ? trustRead.data.result : null;
+    return { scope: dataPrimaryScope, result: await readWebTrust(client!, project!, env, metric.key, dataRange.days) };
+  }, [project, env, dataRange.from, dataRange.to, dataRange.days, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at]);
+  const trustData = trustRead.data?.scope === dataPrimaryScope ? trustRead.data.result : null;
   const outcomeRead = useAsync<WebOutcomeRead | null>(async () => {
-    if (!outcomeMetric || outcomeMetric.type === 'conversion') return null;
+    if (!primaryData || !outcomeMetric || outcomeMetric.type === 'conversion') return null;
     const result = await client!.query(project!, {
-      kind: 'trend', metric: outcomeMetric.key, date_from: range.from, date_to: range.to,
+      kind: 'trend', metric: outcomeMetric.key, date_from: dataRange.from, date_to: dataRange.to,
       interval: 'day', filters: [], env,
     });
     if (result.kind !== 'trend') throw new Error('Outcome query returned an unexpected result kind');
     return { scope: outcomeScope, metric: outcomeMetric, result };
-  }, [project, env, range.from, range.to, outcomeMetric?.key, outcomeMetric?.type]);
+  }, [
+    project, env, dataRange.from, dataRange.to, dataPrimaryScope, outcomeMetric?.key, outcomeMetric?.type,
+    primaryData?.overview.meta.computed_at,
+  ]);
   const outcomeData = outcomeRead.data?.scope === outcomeScope ? outcomeRead.data : null;
   const outcomeComparison = useAsync<WebOutcomeComparisonRead | null>(async () => {
     if (!outcomeMetric || !outcomeData) return null;
@@ -247,7 +251,7 @@ export function WebAnalytics() {
     if (result.kind !== 'trend') throw new Error('Outcome comparison returned an unexpected result kind');
     return { scope: outcomeScope, result };
   }, [
-    project, env, range.from, range.to, outcomeMetric?.key, outcomeData?.result.meta.computed_at,
+    project, env, dataRange.from, dataRange.to, dataPrimaryScope, outcomeMetric?.key, outcomeData?.result.meta.computed_at,
     outcomeData?.result.meta.date_range?.from, outcomeData?.result.meta.date_range?.to,
   ]);
   const outcomeComparisonData = outcomeComparison.data?.scope === outcomeScope
@@ -259,19 +263,19 @@ export function WebAnalytics() {
     const result = await client!.operationalQuery<WebAnalyticsResult>(project!, {
       kind: 'web_analytics',
       metric: metric.key,
-      date_from: range.from,
-      date_to: range.to,
+      date_from: dataRange.from,
+      date_to: dataRange.to,
       filters: [],
       env,
       dimensions: [operationalDimension],
     });
-    return { scope: primaryScope, dimension: operationalDimension, result };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension]);
-  const secondaryData = secondary.data?.scope === primaryScope
+    return { scope: dataPrimaryScope, dimension: operationalDimension, result };
+  }, [project, env, dataRange.from, dataRange.to, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension]);
+  const secondaryData = secondary.data?.scope === dataPrimaryScope
     && secondary.data.dimension === operationalDimension ? secondary.data.result : null;
   const conversionFrom = primaryData?.overview.meta.date_range.from ?? '';
   const conversionTo = primaryData?.overview.meta.date_range.to ?? '';
-  const conversionScope = `${primaryScope}\u0000${conversionMetric?.key ?? ''}\u0000${conversionFrom}\u0000${conversionTo}`;
+  const conversionScope = `${dataPrimaryScope}\u0000${conversionMetric?.key ?? ''}\u0000${conversionFrom}\u0000${conversionTo}`;
   const conversion = useAsync<WebConversionRead | null>(async () => {
     if (!primaryData || dimension !== 'conversion' || !conversionMetric) return null;
     const result = await client!.query(project!, {
@@ -288,12 +292,12 @@ export function WebAnalytics() {
   const sessions = useAsync<WebSessionsRead | null>(async () => {
     if (!metric || !primaryData || !sessionsRequested) return null;
     const result = await client!.operationalQuery<WebSessionsResult>(project!, {
-      kind: 'web_sessions', metric: metric.key, date_from: range.from, date_to: range.to, filters: [], env, limit: 50,
+      kind: 'web_sessions', metric: metric.key, date_from: dataRange.from, date_to: dataRange.to, filters: [], env, limit: 50,
     });
-    return { scope: primaryScope, result };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at, sessionsRequested]);
-  const sessionsData = sessions.data?.scope === primaryScope ? sessions.data.result : null;
-  const currentSession = selectedSession?.scope === primaryScope ? selectedSession.session : null;
+    return { scope: dataPrimaryScope, result };
+  }, [project, env, dataRange.from, dataRange.to, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at, sessionsRequested]);
+  const sessionsData = sessions.data?.scope === dataPrimaryScope ? sessions.data.result : null;
+  const currentSession = selectedSession?.scope === dataPrimaryScope ? selectedSession.session : null;
 
   useEffect(() => {
     setSelectedSession(null);
@@ -305,27 +309,21 @@ export function WebAnalytics() {
   if (!registryData) return null;
   if (!metric) {
     const setupData = registryData;
-    const acquisitionTrusted = UTM_PROPERTY_KEYS.every((key) => setupData.properties.some(
-      (property) => property.key === key && property.scope === 'event' && property.status === 'trusted',
-    ));
-    const outcomeReady = hasWebOutcome(setupData.metrics);
-    const affectedAnswerIds = webAffectedAnswerIds(readinessData, setupData.metrics);
     return (
       <div className="space-y-5">
-        <ScreenHeader range={range} selection={rangeSelection} onRange={setRangeSelection} showRange={false} />
-        <WebSetupOrder canonicalReady={false} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} answerDependencies={readinessData?.answer_dependencies ?? []} />
+        <ScreenHeader />
         <WebSetup metric={setupData.proposedMetric} onReady={registry.reload} />
       </div>
     );
   }
-  if (primary.loading || (!primaryData && !primary.error)) return <WebAnalyticsSkeleton />;
+  if (primary.loading && !primaryData) return <WebAnalyticsSkeleton />;
+  if (!primaryData && !primary.error) return <WebAnalyticsSkeleton />;
   if (primary.error) return <ErrorNote>{primary.error}</ErrorNote>;
   if (!primaryData) return null;
 
   const { overview } = primaryData;
   const { properties, metrics } = registryData;
   const trust = trustData ?? { result: null, unavailable: true };
-  const spec = trendData ? webTrendSpec(project!, env, metric.name, metric.purpose, overview, trendData, trust) : null;
   const breakdownResponse = secondaryData;
   const breakdown = operationalDimension ? breakdownResponse?.breakdowns[operationalDimension] ?? [] : [];
   const unavailableDimensions = breakdownResponse?.meta.unavailable_dimensions ?? {};
@@ -337,43 +335,27 @@ export function WebAnalytics() {
   ));
   const canonicalReady = hasAcceptedCanonicalPageViews(overview.summary.page_views);
   const outcomeReady = hasWebOutcome(metrics);
-  const affectedAnswerIds = webAffectedAnswerIds(readinessData, metrics);
 
   return (
     <div className="space-y-5">
-      <ScreenHeader range={range} selection={rangeSelection} onRange={(value) => { setRangeSelection(value); setSelectedSession(null); }} />
+      <ScreenHeader />
 
-      {(!canonicalReady || !acquisitionTrusted || !outcomeReady) && (
-        <WebSetupOrder canonicalReady={canonicalReady} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} answerDependencies={readinessData?.answer_dependencies ?? []} />
-      )}
-
-      <KpiRail items={[
-        { label: 'Visitors', value: fmtNum(overview.summary.visitors), detail: 'resolved actors' },
-        { label: 'Sessions', value: fmtNum(overview.summary.sessions), detail: 'actor + session ID' },
-        { label: 'Page views', value: fmtNum(overview.summary.page_views), detail: 'accepted canonical views' },
-        { label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? 'Unavailable' : formatDurationMs(overview.summary.average_session_duration_ms), detail: 'complete sessions only' },
-      ]} />
-
-      <EvidenceLine
-        trust={webEvidenceTrust(trust)}
-        eventCount={trust.result?.primary_metric.observed_events ?? overview.summary.page_views}
+      <WebTrafficOverview
+        overview={overview}
+        trend={trendData}
+        trendError={trendRead.error}
+        onRetryTrend={trendRead.reload}
+        trust={trust}
         env={env}
-      >
-        The active <code>{metric.key}</code> definition counts accepted canonical page views. Visitors and sessions use the server's actor-safe web response for this exact period.
-      </EvidenceLine>
+        metric={metric}
+        range={dataRange}
+        selection={rangeSelection}
+        onRange={(value) => { setRangeSelection(value); setSelectedSession(null); }}
+        refreshing={primaryRefreshing}
+      />
 
       {repairState.kind !== 'ready' && <WebRepair state={repairState} />}
       {repairState.kind === 'ready' && !outcomeReady && <WebOutcomeSetup />}
-
-      <div className="grid gap-3 border-y bg-card/45 px-4 py-3 text-sm sm:grid-cols-3">
-        <Rate label="Measured coverage" value={overview.engagement.measured_session_coverage} />
-        <Rate label="Engaged rate" value={overview.engagement.engaged_rate} />
-        <Rate label="Bounce rate" value={overview.engagement.bounce_rate} />
-      </div>
-
-      {trendData && spec ? <ManualVisualizationRenderer spec={spec} result={trendData} />
-        : trendRead.error ? <div><ErrorNote>{trendRead.error}</ErrorNote><Button variant="outline" className="mt-3 h-11" onClick={trendRead.reload}>Retry trend</Button></div>
-          : <Loading what="Loading traffic trend…" />}
 
       {(canonicalReady && acquisitionTrusted && outcomeReady) || outcomeMetric ? (
         <div className="grid gap-4 xl:grid-cols-2">
@@ -382,7 +364,7 @@ export function WebAnalytics() {
               current={overview}
               previous={comparisonData}
               comparisonState={comparisonData ? 'ready' : comparison.error ? 'unavailable' : 'loading'}
-              range={range}
+              range={dataRange}
               trust={trust}
               trustLoading={!trustData && !trustRead.error}
               env={env}
@@ -408,7 +390,7 @@ export function WebAnalytics() {
                   : outcomeData
                     ? 'loading'
                     : 'unavailable'}
-              range={range}
+              range={dataRange}
               env={env}
               onRetry={outcomeRead.reload}
             />
@@ -525,7 +507,7 @@ export function WebAnalytics() {
                   <TableRow key={`${session.actor_id}:${session.session_id}`}>
                     <TableCell>
                       <Link
-                        to={analyticsNavigationTarget(`/analyze/users/${encodeURIComponent(session.actor_id)}`, location.search)}
+                        to={analyticsNavigationTarget(`/analyze/users/${encodeURIComponent(session.actor_id)}`, dataRangeSearch)}
                         className="inline-flex max-w-full break-all rounded-control px-1 py-0.5 font-mono text-xs text-foreground underline-offset-4 hover:bg-muted hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {session.actor_id}
@@ -544,7 +526,7 @@ export function WebAnalytics() {
                           size="icon-sm"
                           className="size-11 md:size-8"
                           aria-label={`Open session ${session.session_id}`}
-                          onClick={() => setSelectedSession({ scope: primaryScope, session })}
+                          onClick={() => setSelectedSession({ scope: dataPrimaryScope, session })}
                         >
                           <ArrowRight className="size-4" />
                         </Button>
@@ -567,12 +549,12 @@ export function WebAnalytics() {
         <SessionDetail
           session={currentSession}
           metric={metric.key}
-          range={range}
+          range={dataRange}
           onClose={() => setSelectedSession(null)}
         />
       )}
 
-      <AcquisitionPanel metrics={metrics} env={env} trusted={acquisitionTrusted} range={range} />
+      <AcquisitionPanel metrics={metrics} env={env} trusted={acquisitionTrusted} range={dataRange} />
     </div>
   );
 }
@@ -835,68 +817,6 @@ function routeDefinitionsReady(properties: PropertyDefinition[]) {
   return route?.status === 'trusted' && (route.enum_values?.length ?? 0) > 0;
 }
 
-function WebSetupOrder({ canonicalReady, acquisitionReady, outcomeReady, affectedAnswerIds = [], answerDependencies = [] }: {
-  canonicalReady: boolean;
-  acquisitionReady: boolean;
-  outcomeReady: boolean;
-  affectedAnswerIds?: string[];
-  answerDependencies?: MeasurementAnswerDependency[];
-}) {
-  const steps = [
-    { title: 'Canonical page views', ready: canonicalReady, description: 'Active web_page_views metric and accepted browser events in this period.' },
-    { title: 'Trusted acquisition properties', ready: acquisitionReady, description: 'Reviewed source, medium, campaign, term, and content definitions.' },
-    { title: 'Outcome', ready: outcomeReady, description: 'One active non-page-view metric tagged surface:web for conversion or product value.' },
-  ];
-  const current = steps.findIndex((step) => !step.ready);
-  const next = current >= 0 ? steps[current] : null;
-  return (
-    <details className="rounded-panel border bg-card" aria-labelledby="web-setup-order-title">
-      <DisclosureSummary className="flex min-h-14 cursor-pointer items-center justify-between gap-3 px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
-        <span id="web-setup-order-title" className="font-semibold">Setup order</span>
-        <span className="text-muted-foreground">{next ? `Next: ${next.title}` : 'Ready'}</span>
-      </DisclosureSummary>
-      <ol className="grid gap-3 border-t p-4 sm:p-5 lg:grid-cols-3">
-        {steps.map((step, index) => (
-          <li key={step.title} className={`rounded-control border p-3 ${current === index ? 'border-primary/50 bg-primary/10' : step.ready ? 'bg-muted/30' : 'border-dashed'}`}>
-            <div className="flex items-center justify-between gap-3 text-sm"><span className="font-medium">{index + 1}. {step.title}</span><span className="text-muted-foreground">{step.ready ? 'Ready' : current === index ? 'Next' : 'Pending'}</span></div>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{step.description}</p>
-          </li>
-        ))}
-      </ol>
-      {affectedAnswerIds.length > 0 && (
-        <div className="border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
-          <span className="font-medium text-foreground">Affected saved answers:</span>{' '}
-          <span className="inline-flex flex-wrap gap-x-2 gap-y-1">
-            {affectedAnswerIds.map((answerId) => {
-              const dependency = answerDependencies.find((candidate) => candidate.answer_id === answerId);
-              return (
-                <Link key={answerId} className="font-mono text-foreground underline decoration-muted-foreground/60 underline-offset-4" to={dependency?.href ?? `/analyze/saved?answer=${encodeURIComponent(answerId)}`}>
-                  {dependency?.label ?? answerId}
-                </Link>
-              );
-            })}
-          </span>
-        </div>
-      )}
-    </details>
-  );
-}
-
-function webAffectedAnswerIds(readiness: MeasurementReadiness | null, metrics: Metric[]): string[] {
-  if (!readiness) return [];
-  const webRefs = new Set<string>([
-    WEB_PAGE_VIEW_METRIC,
-    ...BROWSER_PROPERTY_KEYS,
-    ...UTM_PROPERTY_KEYS,
-    ...metrics.filter((metric) => metric.tags.includes('surface:web')).map((metric) => metric.key),
-  ]);
-  return [...new Set(readiness.groups.flatMap((group) => group.gaps.flatMap((gap) => {
-    const affectsWeb = group.key === 'data_sources'
-      || (gap.definition_ref !== null && webRefs.has(gap.definition_ref));
-    return affectsWeb ? gap.affected_answer_ids : [];
-  })))].sort();
-}
-
 function WebOutcomeSetup() {
   return (
     <AnswerCanvas>
@@ -1043,29 +963,87 @@ function WebRepair({ state }: { state: Exclude<WebDefinitionRepairState, { kind:
   );
 }
 
-function ScreenHeader({ range, selection, onRange, showRange = true }: {
+function WebTrafficOverview({
+  overview,
+  trend,
+  trendError,
+  onRetryTrend,
+  trust,
+  env,
+  metric,
+  range,
+  selection,
+  onRange,
+  refreshing,
+}: {
+  overview: WebAnalyticsResult;
+  trend: TrendQueryResult | null;
+  trendError: string | null;
+  onRetryTrend: () => void;
+  trust: WebTrustRead;
+  env: string;
+  metric: Metric;
   range: ResolvedAnalyticsRange;
   selection: AnalyticsRangeSelection;
   onRange: (range: AnalyticsRangeSelection) => void;
-  showRange?: boolean;
+  refreshing: boolean;
 }) {
+  const evidence = webEvidenceTrust(trust);
+  const evidenceLabel = evidence === 'trusted' ? 'Trusted' : evidence === 'partial' ? 'Partial' : 'Unavailable';
+  const eventCount = trust.result?.primary_metric.observed_events ?? overview.summary.page_views;
+  return (
+    <AnswerCanvas>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5" aria-busy={refreshing}>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-semibold">Traffic overview</h2>
+            <HelpDisclosure
+              ariaLabel="How traffic is calculated"
+              label={<>The active <code>{metric.key}</code> definition counts accepted canonical page views. Visitors and sessions use actor-safe server aggregates for the selected UTC period.</>}
+            />
+          </div>
+          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+            <span className={`size-2 shrink-0 rounded-full ${evidence === 'trusted' ? 'bg-success' : evidence === 'partial' ? 'bg-warning' : 'bg-muted-foreground/60'}`} aria-hidden="true" />
+            <span>{evidenceLabel} · {eventCount.toLocaleString()} events · <code>{env}</code></span>
+            {refreshing && <span role="status">Updating…</span>}
+          </div>
+        </div>
+        <AnalyticsDateRange value={selection} onChange={onRange} />
+      </div>
+      <KpiRail
+        className="rounded-none border-0 shadow-none"
+        items={[
+          { label: 'Visitors', value: fmtNum(overview.summary.visitors), detail: 'resolved actors' },
+          { label: 'Sessions', value: fmtNum(overview.summary.sessions), detail: 'canonical sessions' },
+          { label: 'Page views', value: fmtNum(overview.summary.page_views), detail: 'accepted views' },
+          { label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? 'Unavailable' : formatDurationMs(overview.summary.average_session_duration_ms), detail: 'complete sessions' },
+          { label: 'Measured coverage', value: formatPercent(overview.engagement.measured_session_coverage), detail: 'eligible sessions' },
+          { label: 'Engaged rate', value: formatPercent(overview.engagement.engaged_rate), detail: 'measured sessions' },
+          { label: 'Bounce rate', value: formatPercent(overview.engagement.bounce_rate), detail: 'measured sessions' },
+        ]}
+      />
+      <div className="border-t p-4 sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold">Page views over time</h3>
+          <span className="text-xs text-muted-foreground">{range.label}</span>
+        </div>
+        {trend
+          ? <TrendChart result={trend} label="Page views over time" />
+          : trendError
+            ? <div><ErrorNote>{trendError}</ErrorNote><Button variant="outline" className="mt-3" onClick={onRetryTrend}>Retry trend</Button></div>
+            : <Loading what="Loading traffic trend…" />}
+      </div>
+    </AnswerCanvas>
+  );
+}
+
+function ScreenHeader() {
   return (
     <PageHeading
       title="Web"
       lead="Traffic, engagement, and outcomes."
-      meta={`${range.label} · UTC`}
       help="Traffic uses canonical browser events. Outcomes appear only when a purpose-backed metric is registered and the exact query is supported."
-      actions={showRange ? <AnalyticsDateRange value={selection} onChange={onRange} /> : undefined}
     />
-  );
-}
-
-function Rate({ label, value }: { label: string; value: number | null }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-mono font-medium tabular-nums">{formatPercent(value)}</span>
-    </div>
   );
 }
 
@@ -1163,65 +1141,6 @@ function WebAnalyticsSkeleton() {
       <div className="h-80 animate-pulse rounded-dialog border bg-muted/60 motion-reduce:animate-none" />
     </div>
   );
-}
-
-function webTrendSpec(
-  project: string,
-  env: string,
-  metricName: string,
-  purpose: string,
-  overview: WebAnalyticsResult,
-  trend: WebWorkspaceResult['trend'],
-  trust: WebTrustRead,
-): VisualizationSpec {
-  const query = {
-    kind: 'trend' as const,
-    metric: WEB_PAGE_VIEW_METRIC,
-    date_from: overview.meta.date_range.from,
-    date_to: overview.meta.date_range.to,
-    interval: 'day' as const,
-    filters: [],
-    env,
-  };
-  return {
-    schemaVersion: 1,
-    id: 'web-page-views-trend',
-    kind: 'trend',
-    title: metricName,
-    question: 'How is canonical web traffic changing over this exact period?',
-    purpose,
-    project,
-    env,
-    range: { ...overview.meta.date_range, timezone: 'UTC' },
-    source: { kind: 'metric', key: WEB_PAGE_VIEW_METRIC, query },
-    trust: {
-      status: trust.unavailable ? 'unavailable' : trust.result?.status === 'trusted' ? 'trusted' : 'partial',
-      reason: trust.unavailable
-        ? 'Measurement trust is unavailable for this exact project and environment.'
-        : trust.result?.status === 'trusted'
-          ? 'The server trust check passed for the canonical browser metric.'
-          : trust.result?.blockers[0]?.message ?? 'The canonical browser metric has partial trust evidence.',
-      blockers: trust.result?.blockers.map((blocker) => ({ code: blocker.code, message: blocker.message, nextAction: blocker.next_action })) ?? [],
-    },
-    evidence: {
-      aggregation: 'count by day',
-      denominator: null,
-      sampleSize: overview.summary.page_views,
-      coverage: overview.engagement.timed_page_coverage === null
-        ? 'timing unavailable'
-        : `${formatPercent(overview.engagement.timed_page_coverage)} timed pages`,
-      source: 'native',
-      computedAt: trend.meta.computed_at,
-      comparisonBasis: 'none',
-    },
-    display: {
-      valueFormat: 'number',
-      granularity: 'day',
-      compare: 'none',
-      series: [{ key: 'value', label: 'Page views', colorToken: '--chart-1' }],
-    },
-    actions: [{ kind: 'open_metric', key: WEB_PAGE_VIEW_METRIC }, { kind: 'open_query', query }],
-  };
 }
 
 interface WebTrustRead {

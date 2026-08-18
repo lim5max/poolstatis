@@ -224,8 +224,8 @@ function MobileNavDrawer({ onNavigate, navigation, signals }: { onNavigate: () =
   return (
     <DialogContent
       showCloseButton={false}
-      overlayClassName="bg-background/80 backdrop-blur-sm md:hidden"
-      className="top-0 left-0 flex h-dvh max-h-dvh w-80 max-w-full translate-x-0 translate-y-0 flex-col gap-0 overflow-y-auto rounded-none border-y-0 border-l-0 border-r bg-sidebar p-0 shadow-xl sm:max-w-none md:hidden data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left data-[state=closed]:zoom-out-100 data-[state=open]:zoom-in-100"
+      overlayClassName="bg-sidebar md:hidden"
+      className="!inset-0 flex !h-dvh max-h-dvh !w-screen !max-w-none !translate-x-0 !translate-y-0 flex-col gap-0 overflow-y-auto !rounded-none !border-0 bg-sidebar p-0 shadow-none md:hidden data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left data-[state=closed]:zoom-out-100 data-[state=open]:zoom-in-100"
     >
       <DialogTitle className="sr-only">Navigation</DialogTitle>
       <DialogDescription className="sr-only">Navigate between Poolstatis admin sections.</DialogDescription>

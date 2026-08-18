@@ -339,6 +339,8 @@ describe('customer admin shell', () => {
     const trigger = screen.getByRole('button', { name: 'Open navigation' });
     fireEvent.click(trigger);
     const dialog = await screen.findByRole('dialog', { name: 'Navigation' });
+    expect(dialog).toHaveClass('!inset-0', '!h-dvh', '!w-screen', '!max-w-none', '!translate-x-0', '!translate-y-0', 'bg-sidebar');
+    expect(dialog).not.toHaveClass('w-80', 'shadow-xl');
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument());
     expect(trigger).toHaveFocus();

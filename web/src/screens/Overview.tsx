@@ -54,6 +54,7 @@ interface WebsiteAnswer {
 export function Overview() {
   const { account, client, project, env } = useStore();
   const { selection, resolved: range, setSelection } = useAnalyticsRange();
+  const homeIdentity = `${project ?? ''}\u0000${env}`;
   const homeScope = `${project ?? ''}\u0000${env}\u0000${range.from}\u0000${range.to}`;
   const home = useAsync(async () => {
     try {
@@ -86,6 +87,8 @@ export function Overview() {
       ]);
       return {
         scope: homeScope,
+        identity: homeIdentity,
+        range,
         value: {
           intent,
           product,
@@ -96,12 +99,17 @@ export function Overview() {
         error: null as string | null,
       };
     } catch (caught) {
-      return { scope: homeScope, value: null, error: (caught as Error).message };
+      return { scope: homeScope, identity: homeIdentity, range, value: null, error: (caught as Error).message };
     }
-  }, [project, env, range.from, range.to]);
+  }, [project, env, range.from, range.to], { keepPreviousData: true });
 
-  const scopedHome = home.data?.scope === homeScope ? home.data : null;
-  const homeData = scopedHome?.value ?? null;
+  const exactHome = home.data?.scope === homeScope ? home.data : null;
+  const renderedHome = exactHome ?? (
+    home.loading && home.data?.identity === homeIdentity ? home.data : null
+  );
+  const homeData = renderedHome?.value ?? null;
+  const renderedRange = renderedHome?.range ?? range;
+  const refreshing = home.loading && !exactHome && Boolean(homeData);
   const answerTelemetry = homeData ? homeAnswerTelemetry(homeData) : null;
   useEffect(() => {
     if (!answerTelemetry || !project) return;
@@ -113,18 +121,18 @@ export function Overview() {
     }, { distinctId: account?.user?.id });
   }, [account?.user?.id, answerTelemetry?.templateId, answerTelemetry?.trust, env, project]);
 
-  if (home.loading) return <Loading what="reading current answers…" />;
-  if (scopedHome?.error) return <ErrorNote>{scopedHome.error}</ErrorNote>;
+  if (home.loading && !homeData) return <Loading what="reading current answers…" />;
+  if (exactHome?.error) return <ErrorNote>{exactHome.error}</ErrorNote>;
   if (!homeData) return <Loading what="reading current answers…" />;
 
   const { intent, product, website, schema, controlTower } = homeData;
   const mode = intent?.project_mode ?? null;
   const attention = controlTower.attention;
-  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} range={range} selection={selection} onSelectionChange={setSelection} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
-  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} range={range} selection={selection} onSelectionChange={setSelection} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} range={renderedRange} selection={selection} onSelectionChange={setSelection} refreshing={refreshing} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} range={renderedRange} selection={selection} onSelectionChange={setSelection} refreshing={refreshing} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   if (mode === 'both' && intent) {
     const websiteFirst = controlTower.home_answer_surface === 'website';
-    return <BothHome answer={websiteFirst ? website : product} product={product} websiteFirst={websiteFirst} schema={schema} env={env} range={range} selection={selection} onSelectionChange={setSelection} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+    return <BothHome answer={websiteFirst ? website : product} product={product} websiteFirst={websiteFirst} schema={schema} env={env} range={renderedRange} selection={selection} onSelectionChange={setSelection} refreshing={refreshing} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   }
 
   // A missing intent row is legacy/unset. Keep the project useful and never
@@ -133,9 +141,6 @@ export function Overview() {
     <div className="space-y-5">
       <PageHeader
         title="Home"
-        range={range}
-        selection={selection}
-        onSelectionChange={setSelection}
         answer={website.overview
           ? websiteLead(website)
           : product.metric
@@ -143,16 +148,8 @@ export function Overview() {
             : controlTower.answer.takeaway}
       />
       {website.overview
-        ? <WebsiteAnswerCanvas answer={website} product={product} schema={schema} env={env} range={range} onRetry={home.reload} />
-        : <ProductAnswerCanvas answer={product} schema={schema} env={env} range={range} />}
-      <details className="rounded-panel border bg-card">
-        <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-4 py-3 text-sm font-medium">
-          Project settings
-        </DisclosureSummary>
-        <p className="border-t px-4 py-3 text-sm text-muted-foreground">
-          Project mode is not set. Choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
-        </p>
-      </details>
+        ? <WebsiteAnswerCanvas answer={website} product={product} schema={schema} env={env} range={renderedRange} selection={selection} onSelectionChange={setSelection} refreshing={refreshing} onRetry={home.reload} />
+        : <ProductAnswerCanvas answer={product} schema={schema} env={env} range={renderedRange} selection={selection} onSelectionChange={setSelection} refreshing={refreshing} />}
       <AttentionQueue result={controlTower} items={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />
     </div>
   );
@@ -283,25 +280,25 @@ function actionTelemetry(href: string): TelemetryHomeAction {
   return 'open_current_answer';
 }
 
-function WebsiteHome({ answer, product, schema, env, range, selection, onSelectionChange, controlTower, attention, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
+function WebsiteHome({ answer, product, schema, env, range, selection, onSelectionChange, refreshing, controlTower, attention, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void; refreshing: boolean; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = websiteLead(answer);
   return (
     <div className="space-y-5">
-      <PageHeader title="Home" answer={lead} range={range} selection={selection} onSelectionChange={onSelectionChange} />
-      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} range={range} onRetry={onRetry} />
+      <PageHeader title="Home" answer={lead} />
+      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} range={range} selection={selection} onSelectionChange={onSelectionChange} refreshing={refreshing} onRetry={onRetry} />
       <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
     </div>
   );
 }
 
-function ProductHome({ answer, schema, env, range, selection, onSelectionChange, controlTower, attention, telemetryUserId, onRetry }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
+function ProductHome({ answer, schema, env, range, selection, onSelectionChange, refreshing, controlTower, attention, telemetryUserId, onRetry }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void; refreshing: boolean; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = answer.metric
     ? `${answer.metric.name} is the clearest active outcome available for this project.`
     : 'Events may be arriving, but no active outcome is defined yet.';
   return (
     <div className="space-y-5">
-      <PageHeader title="Home" answer={lead} range={range} selection={selection} onSelectionChange={onSelectionChange} />
-      <ProductAnswerCanvas answer={answer} schema={schema} env={env} range={range} />
+      <PageHeader title="Home" answer={lead} />
+      <ProductAnswerCanvas answer={answer} schema={schema} env={env} range={range} selection={selection} onSelectionChange={onSelectionChange} refreshing={refreshing} />
       <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
     </div>
   );
@@ -316,6 +313,7 @@ function BothHome({
   range,
   selection,
   onSelectionChange,
+  refreshing,
   controlTower,
   telemetryUserId,
   attention,
@@ -329,6 +327,7 @@ function BothHome({
   range: ResolvedAnalyticsRange;
   selection: AnalyticsRangeSelection;
   onSelectionChange: (selection: AnalyticsRangeSelection) => void;
+  refreshing: boolean;
   controlTower: ControlTowerResult;
   telemetryUserId?: string | null;
   attention: AttentionItem[];
@@ -345,9 +344,6 @@ function BothHome({
     <div className="space-y-5">
       <PageHeader
         title="Home"
-        range={range}
-        selection={selection}
-        onSelectionChange={onSelectionChange}
         answer={identityState === 'unavailable'
           ? 'Identity evidence is unavailable right now, so Poolstatis will not claim a cross-surface path.'
           : identityLinked
@@ -367,8 +363,8 @@ function BothHome({
             : 'Add stable identity evidence before comparing acquisition with product outcomes.'}
       </div>
       {websiteFirst
-        ? <WebsiteAnswerCanvas answer={answer as WebsiteAnswer} product={product} schema={schema} env={env} range={range} onRetry={onRetry} />
-        : <ProductAnswerCanvas answer={answer as ProductAnswer} schema={schema} env={env} range={range} />}
+        ? <WebsiteAnswerCanvas answer={answer as WebsiteAnswer} product={product} schema={schema} env={env} range={range} selection={selection} onSelectionChange={onSelectionChange} refreshing={refreshing} onRetry={onRetry} />
+        : <ProductAnswerCanvas answer={answer as ProductAnswer} schema={schema} env={env} range={range} selection={selection} onSelectionChange={onSelectionChange} refreshing={refreshing} />}
       <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
     </div>
   );
@@ -397,7 +393,7 @@ function productDashboardDefinitions(answer: ProductAnswer) {
   return answer.revenueMetric ? [...PRODUCT_KPIS, REVENUE_KPI] : PRODUCT_KPIS;
 }
 
-function WebsiteAnswerCanvas({ answer, product, schema, env, range, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; onRetry: () => void }) {
+function WebsiteAnswerCanvas({ answer, product, schema, env, range, selection, onSelectionChange, refreshing, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void; refreshing: boolean; onRetry: () => void }) {
   const activity = recentObservedEvents(schema);
   const lastEvent = activity?.[0] ?? null;
   const answerUnavailable = Boolean(answer.metric && !answer.overview);
@@ -410,8 +406,7 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, range, onRetry }: {
   if (!answer.metric || !answer.overview) {
     return (
       <>
-        <HomeKpiStrip items={emptyItems.slice(0, 4)} />
-        <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} range={range} />
+        <HomeKpiStrip title="Website overview" items={emptyItems.slice(0, 4)} selection={selection} onSelectionChange={onSelectionChange} refreshing={refreshing} trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} />
         <HomeSummary
           funnel={product.funnel}
           funnelResult={product.funnelResult}
@@ -424,7 +419,7 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, range, onRetry }: {
   const { overview } = answer;
   return (
     <>
-      <HomeKpiStrip items={[
+      <HomeKpiStrip title="Website overview" selection={selection} onSelectionChange={onSelectionChange} refreshing={refreshing} trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? overview.summary.page_views} env={env} items={[
         { id: 'visitors', label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved people' },
         { id: 'sessions', label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'canonical sessions' },
         { id: 'page_views', label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted views' },
@@ -436,7 +431,6 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, range, onRetry }: {
       {answer.trend && (
         <HomeTrend result={answer.trend} title="Website traffic" label="Website traffic trend" range={range} />
       )}
-      <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? overview.summary.page_views} env={env} range={range} />
       <HomeSummary
         funnel={product.funnel}
         funnelResult={product.funnelResult}
@@ -446,20 +440,19 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, range, onRetry }: {
   );
 }
 
-function ProductAnswerCanvas({ answer, schema, env, range }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange }) {
+function ProductAnswerCanvas({ answer, schema, env, range, selection, onSelectionChange, refreshing }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void; refreshing: boolean }) {
   const activity = recentObservedEvents(schema);
   const lastEvent = activity?.[0] ?? null;
   const definitions = productDashboardDefinitions(answer);
   if (!answer.metric) {
     return (
       <>
-        <HomeKpiStrip items={definitions.map((item) => ({
+        <HomeKpiStrip title="Product overview" selection={selection} onSelectionChange={onSelectionChange} refreshing={refreshing} trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} items={definitions.map((item) => ({
           ...item,
           value: item.id === 'last_event' && lastEvent ? fmtRelative(lastEvent.last_seen) : null,
           fallback: item.id === 'last_event' ? activityFallback(activity) : 'Not configured',
           note: item.id === 'last_event' ? lastEvent?.event ?? activityNote(activity) : 'Define a measurable outcome',
         })).slice(0, 4)} />
-        <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} range={range} />
         <HomeSummary
           funnel={answer.funnel}
           funnelResult={answer.funnelResult}
@@ -475,7 +468,7 @@ function ProductAnswerCanvas({ answer, schema, env, range }: { answer: ProductAn
   const finalStep = answer.funnelResult?.steps.at(-1) ?? null;
   return (
     <>
-      <HomeKpiStrip items={[
+      <HomeKpiStrip title={answer.metric.name} selection={selection} onSelectionChange={onSelectionChange} refreshing={refreshing} trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? null} env={env} items={[
         { id: 'outcome', label: answer.metric.name, value: metricValue, note: `${range.label} outcome` },
         { id: 'people', label: 'Observed people', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_actors) : null, note: 'resolved actors' },
         { id: 'activation', label: 'Activation', value: finalStep?.conversion_from_start === null || finalStep?.conversion_from_start === undefined ? null : `${Math.round(finalStep.conversion_from_start * 100)}%`, note: answer.funnel?.name ?? 'saved funnel required' },
@@ -486,7 +479,6 @@ function ProductAnswerCanvas({ answer, schema, env, range }: { answer: ProductAn
       {answer.trend && (
         <HomeTrend result={answer.trend} title={answer.metric.name} label={`${answer.metric.name} trend`} range={range} />
       )}
-      <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? null} env={env} range={range} />
       <HomeSummary
         funnel={answer.funnel}
         funnelResult={answer.funnelResult}
@@ -496,12 +488,35 @@ function ProductAnswerCanvas({ answer, schema, env, range }: { answer: ProductAn
   );
 }
 
-function HomeKpiStrip({ items }: { items: KpiItem[] }) {
-  return <KpiRail items={items.map((item) => ({
-    label: item.label,
-    value: item.value ?? item.fallback ?? 'Unavailable',
-    detail: item.note,
-  }))} />;
+function HomeKpiStrip({ title, items, selection, onSelectionChange, refreshing, trust, eventCount, env }: {
+  title: string;
+  items: KpiItem[];
+  selection: AnalyticsRangeSelection;
+  onSelectionChange: (selection: AnalyticsRangeSelection) => void;
+  refreshing: boolean;
+  trust: EvidenceTrust;
+  eventCount: number | null;
+  env: string;
+}) {
+  const trustLabel = trust === 'trusted' ? 'Trusted' : trust === 'partial' ? 'Partial' : 'Unavailable';
+  return <section className="overflow-hidden rounded-panel border bg-card" aria-busy={refreshing}>
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
+      <div className="min-w-0">
+        <h2 className="text-base font-semibold">{title}</h2>
+        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+          <span className={`size-2 shrink-0 rounded-full ${trust === 'trusted' ? 'bg-success' : trust === 'partial' ? 'bg-warning' : 'bg-muted-foreground/60'}`} aria-hidden="true" />
+          <span>{trustLabel} · {eventCount === null ? 'event count unavailable' : `${eventCount.toLocaleString()} events`} · <code>{env}</code></span>
+          {refreshing && <span role="status">Updating…</span>}
+        </div>
+      </div>
+      <AnalyticsDateRange value={selection} onChange={onSelectionChange} />
+    </div>
+    <KpiRail className="rounded-none border-0 shadow-none" items={items.map((item) => ({
+      label: item.label,
+      value: item.value ?? item.fallback ?? 'Unavailable',
+      detail: item.note,
+    }))} />
+  </section>;
 }
 
 function HomeTrend({ result, title, label, range }: { result: TrendQueryResult; title: string; label: string; range: ResolvedAnalyticsRange }) {
@@ -515,15 +530,6 @@ function HomeTrend({ result, title, label, range }: { result: TrendQueryResult; 
         <TrendChart result={result} label={label} />
       </div>
     </AnswerCanvas>
-  );
-}
-
-function HomeEvidence({ trust, eventCount, env, range }: { trust: EvidenceTrust; eventCount: number | null; env: string; range: ResolvedAnalyticsRange }) {
-  const trustLabel = trust === 'trusted' ? 'Trusted' : trust === 'partial' ? 'Partial' : 'Unavailable';
-  return (
-    <div className="mt-3 text-sm text-muted-foreground">
-      Observed · {range.label} · {trustLabel} · {eventCount === null ? 'event count unavailable' : `${eventCount.toLocaleString()} events`} · <code>{env}</code>
-    </div>
   );
 }
 
@@ -614,12 +620,10 @@ function funnelStepValue(actors: number, conversionFromStart: number | null) {
   return `${Math.round(conversionFromStart * 1_000) / 10}% from start`;
 }
 
-function PageHeader({ title, answer, range, selection, onSelectionChange }: { title: string; answer: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void }) {
+function PageHeader({ title, answer }: { title: string; answer: string }) {
   return <PageHeading
     title={title}
     lead={answer}
-    meta={`${range.label} · UTC`}
-    actions={<AnalyticsDateRange value={selection} onChange={onSelectionChange} />}
   />;
 }
 

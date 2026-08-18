@@ -21,6 +21,14 @@ vi.mock('../analysis/charts', () => ({
 }));
 
 const mockedStore = vi.mocked(useStore);
+
+function openCustomPeriod(period: HTMLElement) {
+  const trigger = within(period).getByRole('button', { name: /^Period:/ });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'Enter', code: 'Enter' });
+  fireEvent.click(screen.getByRole('menuitem', { name: /Custom period…/ }));
+}
+
 const webMetric = {
   id: 'web', key: 'web_page_views', name: 'Web page views', purpose: 'Count accepted canonical browser page views.',
   category: 'acquisition', tags: [], type: 'count', source: { event: 'page.viewed' }, status: 'active',
@@ -149,19 +157,18 @@ describe('goal-aware Attention', () => {
       }],
     });
     setStore(client);
-    const view = render(<MemoryRouter><Overview /></MemoryRouter>);
+    render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     const period = screen.getByRole('group', { name: 'Analytics period' });
-    expect(within(period).getByRole('button', { name: 'Today' })).toBeInTheDocument();
-    expect(within(period).getByRole('button', { name: 'Custom' })).toBeInTheDocument();
+    expect(within(period).getByRole('button', { name: 'Period: Last 30 days' })).toBeInTheDocument();
 
     const metrics = screen.getByRole('list', { name: 'Key metrics' });
     const attention = screen.getByRole('region', { name: 'Needs attention' });
     expect(metrics.compareDocumentPosition(attention) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole('img', { name: 'Website traffic trend' })).toBeInTheDocument();
 
-    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    openCustomPeriod(period);
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-03' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
@@ -175,12 +182,12 @@ describe('goal-aware Attention', () => {
       date_from: '2026-08-01T00:00:00.000Z',
       date_to: '2026-08-04T00:00:00.000Z',
     }));
-    expect(screen.getByText('Aug 1–3, 2026')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Period: Aug 1–3, 2026' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Inspect funnel/ })).toHaveAttribute(
       'href',
       '/analyze/funnels?funnel=activation_funnel&range=custom&from=2026-08-01&to=2026-08-03',
     );
-    expect(view.container.querySelector('.text-xs')).toBeNull();
+    expect(screen.queryByText(/Observed ·/)).not.toBeInTheDocument();
   });
 
   it('renders the server-owned attention order instead of recomputing it in React', async () => {
@@ -321,7 +328,7 @@ describe('goal-aware Attention', () => {
     expect(within(outcomes).getByText('8')).toBeInTheDocument();
     expect(within(outcomes).getByText('Last event · 30d')).toBeInTheDocument();
     expect(within(outcomes).getByText('page.viewed')).toBeInTheDocument();
-    expect(screen.getByText(/Observed · Last 30 days · Trusted · 20 events ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Trusted · 20 events ·/)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Funnel snapshot' })).toBeInTheDocument();
     expect(screen.getByText('Visit to signup')).toBeInTheDocument();
     expect(screen.getByText('8 people')).toBeInTheDocument();
@@ -332,7 +339,7 @@ describe('goal-aware Attention', () => {
     expect(screen.getByRole('img', { name: 'Website traffic trend' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Top sources' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Top pages' })).not.toBeInTheDocument();
-    expect(view.container.querySelector('.text-xs')).toBeNull();
+    expect(within(outcomes).queryByText(/Observed/)).not.toBeInTheDocument();
     expect(client.query).toHaveBeenCalledTimes(2);
     expect(client.query).toHaveBeenCalledWith('alpha', expect.objectContaining({
       kind: 'funnel',
@@ -450,11 +457,9 @@ describe('goal-aware Attention', () => {
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.queryByText(/Project mode is not set/)).not.toBeVisible();
-    expect(screen.queryByText(/Nothing has been inferred/)).not.toBeVisible();
-    fireEvent.click(screen.getByText('Project settings'));
-    expect(screen.getByText(/Project mode is not set/)).toBeVisible();
-    expect(screen.getByText(/Nothing has been inferred/)).toBeVisible();
+    expect(screen.queryByText('Project settings')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Project mode is not set/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nothing has been inferred/)).not.toBeInTheDocument();
   });
 
   it('does not claim a cross-surface path without identity evidence', async () => {
@@ -483,7 +488,7 @@ describe('goal-aware Attention', () => {
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.getByText(/Observed · Last 30 days · Unavailable · event count unavailable ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Unavailable · event count unavailable ·/)).toBeInTheDocument();
     expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0);
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
 
