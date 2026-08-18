@@ -16,6 +16,8 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { DataHealthControl } from '../components/data-health-control';
+import { AnalyticsDateRange } from '../components/AnalyticsDateRange';
+import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import type {
   BackfillPreview, DataQualityIssue, EntityRow, EventRevisionPatch, EventRevisionPreview, FilterOp,
   ObservedEvent, SampleEvent, SampleFilter,
@@ -171,18 +173,15 @@ function DataQualityPanel({
   );
 }
 
-const DATE_PRESETS: Array<{ v: string; label: string }> = [
-  { v: '', label: 'All time' }, { v: '-24h', label: 'Last 24h' }, { v: '-7d', label: 'Last 7d' }, { v: '-30d', label: 'Last 30d' },
-];
 const OPS: FilterOp[] = ['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte', 'is_set', 'is_not_set'];
 const OP_LABEL: Record<FilterOp, string> = { eq: 'is', ne: 'is not', contains: 'contains', gt: '>', gte: '≥', lt: '<', lte: '≤', in: 'is any of', is_set: 'is set', is_not_set: 'is not set' };
 
 function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: string; initialActor?: string; observed: ObservedEvent[] }) {
   const { client, project, env } = useStore();
+  const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const [eventFilter, setEventFilter] = useState<string>(initialEvent ?? '');
   const [actorFilter, setActorFilter] = useState<string | undefined>(initialActor);
   const [props, setProps] = useState<SampleFilter[]>([]);
-  const [range, setRange] = useState('');
   const [registered, setRegistered] = useState<'all' | 'reg' | 'wild'>('all');
   const [search, setSearch] = useState('');
   const [adding, setAdding] = useState(false);
@@ -194,18 +193,19 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
       ...(eventFilter && { event: eventFilter }),
       ...(actorFilter && { distinct_id: actorFilter }),
       ...(registered !== 'all' && { registered: registered === 'reg' }),
-      ...(range && { from: range }),
+      from: range.from,
+      to: range.to,
       ...(props.length > 0 && { filters: props }),
     }),
-    [project, env, eventFilter, actorFilter, registered, range, JSON.stringify(props)],
+    [project, env, eventFilter, actorFilter, registered, range.from, range.to, JSON.stringify(props)],
   );
 
   const q = search.trim().toLowerCase();
   const rows = (data ?? []).filter((e) => !q || `${e.event} ${e.distinct_id} ${JSON.stringify(e.properties)}`.toLowerCase().includes(q));
-  const hasFilters = Boolean(eventFilter || actorFilter || props.length || range);
+  const hasFilters = Boolean(eventFilter || actorFilter || props.length);
 
   return (
-    <Panel title="Event stream">
+    <Panel title="Event stream" right={<AnalyticsDateRange value={rangeSelection} onChange={setRangeSelection} />}>
       <Toolbar
         left={<SearchInput value={search} onChange={setSearch} placeholder="Search loaded events…" />}
         center={
@@ -216,10 +216,6 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
                 <SelectItem value="__all">All events</SelectItem>
                 {observed.map((o) => <SelectItem key={o.event} value={o.event}>{o.event}</SelectItem>)}
               </SelectContent>
-            </Select>
-            <Select value={range || '__all'} onValueChange={(v) => setRange(v === '__all' ? '' : v)}>
-              <SelectTrigger size="sm" className="w-32"><SelectValue /></SelectTrigger>
-              <SelectContent>{DATE_PRESETS.map((d) => <SelectItem key={d.v || '__all'} value={d.v || '__all'}>{d.label}</SelectItem>)}</SelectContent>
             </Select>
             <Button variant="outline" size="sm" onClick={() => setAdding((a) => !a)}><Plus className="size-3.5" /> Property</Button>
           </>
@@ -242,9 +238,8 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
         <div className="flex flex-wrap items-center gap-2 px-5 py-2.5 border-b">
           {eventFilter && <Chip label={`event: ${eventFilter}`} onRemove={() => setEventFilter('')} />}
           {actorFilter && <Chip label={`actor: ${actorFilter}`} onRemove={() => setActorFilter(undefined)} />}
-          {range && <Chip label={DATE_PRESETS.find((d) => d.v === range)?.label ?? range} onRemove={() => setRange('')} />}
           {props.map((p, i) => <Chip key={i} label={`${p.property} ${OP_LABEL[p.op]}${p.value !== undefined ? ` ${p.value}` : ''}`} onRemove={() => setProps((arr) => arr.filter((_, j) => j !== i))} />)}
-          <button className="text-sm text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground" onClick={() => { setEventFilter(''); setActorFilter(undefined); setRange(''); setProps([]); }}>clear all</button>
+          <button className="text-sm text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground" onClick={() => { setEventFilter(''); setActorFilter(undefined); setProps([]); }}>clear all</button>
         </div>
       )}
 

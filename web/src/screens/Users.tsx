@@ -6,17 +6,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { EmptyState, ErrorNote, Loading, PageHeading, fmtNum } from '@/components/ui';
+import { DataDetails, EmptyState, ErrorNote, Loading, PageHeading, fmtNum } from '@/components/ui';
 import { AnswerCanvas } from '@/components/analytics';
-import { DisclosureSummary } from '@/components/disclosure';
+import { AnalyticsDateRange } from '@/components/AnalyticsDateRange';
+import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import {
   actorStatusLabel,
   type ActorOrderReason,
-  rangeDateFrom,
   type ActorIdentityStatus,
   type ActorOrder,
   type ActorsResult,
-  type AnalyticsRange,
 } from '../analysis/operations';
 import type { Metric } from '../api/types';
 import { useAsync, useStore } from '../store';
@@ -32,7 +31,7 @@ interface InterestingMetricSelection {
 
 export function Users() {
   const { client, project, env } = useStore();
-  const [range, setRange] = useState<AnalyticsRange>('30d');
+  const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const [order, setOrder] = useState<ActorOrder>('last_seen_desc');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
@@ -54,7 +53,7 @@ export function Users() {
     : '';
   const queryOrder: ActorOrder = interestingMetric ? 'interesting_desc' : order;
   const actorScopeKey = JSON.stringify([
-    project, env, range, queryOrder, search, activityMetric, interestingMetric, cursor ?? null,
+    project, env, range.from, range.to, queryOrder, search, activityMetric, interestingMetric, cursor ?? null,
   ]);
   const actorScope = useMemo(() => ({ client, key: actorScopeKey }), [client, actorScopeKey]);
   const actors = useAsync<{ scope: typeof actorScope; result: ActorsResult }>(async () => ({
@@ -62,7 +61,8 @@ export function Users() {
     result: await client!.operationalQuery<ActorsResult>(project!, {
       kind: 'actors',
       env,
-      from: rangeDateFrom(range),
+      from: range.from,
+      to: range.to,
       limit: PAGE_LIMIT,
       order: queryOrder,
       ...(cursor ? { cursor } : {}),
@@ -77,7 +77,7 @@ export function Users() {
 
   useEffect(() => {
     setCursorStack([null]);
-  }, [project, env, range, queryOrder, search, activityMetric, interestingMetric]);
+  }, [project, env, range.from, range.to, queryOrder, search, activityMetric, interestingMetric]);
 
   const registryMetrics = !metrics.loading
     && !metrics.error
@@ -122,12 +122,12 @@ export function Users() {
         title="People"
         lead="Find observed people and activity."
         help="Rows are bounded actor aggregates from immutable events and explicit identity links. Poolstatis does not infer profiles or risk scores without supporting data."
+        meta={`${range.label} · UTC`}
+        actions={<AnalyticsDateRange value={rangeSelection} onChange={setRangeSelection} />}
       />
 
-      <AnswerCanvas>
-        <div className="border-b px-4 py-3 sm:px-5"><h2 className="text-sm font-semibold">Find people</h2></div>
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5 sm:p-5">
-          <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+      <div className="flex flex-wrap items-end gap-3 rounded-panel border bg-card p-3 shadow-xs sm:p-4">
+          <label className="grid min-w-64 flex-1 gap-1.5 text-sm font-medium text-muted-foreground">
             Exact actor ID
             <form className="flex gap-2" onSubmit={applySearch}>
               <Input
@@ -143,16 +143,6 @@ export function Users() {
               </Button>
             </form>
           </label>
-          <Control label="Period">
-            <Select value={range} onValueChange={(value) => setRange(value as AnalyticsRange)}>
-              <SelectTrigger className="!h-11"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem className="min-h-11" value="7d">Last 7 days</SelectItem>
-                <SelectItem className="min-h-11" value="30d">Last 30 days</SelectItem>
-                <SelectItem className="min-h-11" value="90d">Last 90 days</SelectItem>
-              </SelectContent>
-            </Select>
-          </Control>
           <Control label="Queue">
             <Select
               value={interestingMetric || '__all'}
@@ -193,23 +183,27 @@ export function Users() {
             </Select>
           </Control>
         {search && (
-          <div className="col-span-full flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="basis-full flex items-center gap-2 text-sm text-muted-foreground">
             Exact match: <code>{search}</code>
             <button className="text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground" onClick={() => { setSearch(''); setSearchInput(''); }}>Clear</button>
           </div>
         )}
-        </div>
-      </AnswerCanvas>
+      </div>
 
       {actors.loading && <Loading what="resolving canonical actors…" />}
       {actors.error && <ErrorNote>{actors.error}</ErrorNote>}
       {actorData && (
         <>
-          <PeopleDataHealth capabilities={actorData.meta.capabilities} />
           <AnswerCanvas>
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
             <h2 className="text-sm font-semibold">People</h2>
-            <span className="text-xs text-muted-foreground">Bounded observed activity only · page {page + 1}</span>
+            <span className="text-sm text-muted-foreground">
+              <span>{actorData.actors[0] ? ORDER_REASON_LABELS[actorData.actors[0].order_reason] : 'Selected order'}</span>
+              {' · '}page {page + 1}
+            </span>
+          </div>
+          <div className="border-b px-4 py-3 text-sm text-muted-foreground sm:px-5">
+            Evidence window: {formatDate(actorData.meta.date_range.from)}–{formatDate(actorData.meta.date_range.to)}
           </div>
           {actorData.actors.length === 0 ? (
             <EmptyState
@@ -223,7 +217,6 @@ export function Users() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Person</TableHead>
-                      <TableHead>Order evidence</TableHead>
                       <TableHead>First seen</TableHead>
                       <TableHead>Last seen</TableHead>
                       {actorData.meta.capabilities.session_count.project_capability
@@ -236,22 +229,19 @@ export function Users() {
                     {actorData.actors.map((actor) => (
                       <TableRow key={actor.distinct_id}>
                         <TableCell>
-                          <div className="max-w-56 truncate font-mono text-xs" title={actor.distinct_id}>{actor.distinct_id}</div>
-                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                          <div className="max-w-56 truncate font-mono text-sm" title={actor.distinct_id}>{actor.distinct_id}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
                             <span>{fmtNum(actor.total_events)} events · {actor.active_days} active days</span>
                             {(actor.identity_status === 'linked' || actor.identity_status === 'ambiguous')
                               && <IdentityBadge status={actor.identity_status} />}
                           </div>
+                          {actor.rank_reason && <div className="mt-2 max-w-md text-sm">
+                            <span className="font-medium">{actor.rank_reason.metric_name} · {formatDateTime(actor.rank_reason.observed_at)}</span>
+                            <p className="mt-1 whitespace-normal leading-relaxed text-muted-foreground">{actor.rank_reason.metric_purpose}</p>
+                          </div>}
                         </TableCell>
-                        <TableCell>
-                          <OrderEvidence
-                            reason={actor.order_reason}
-                            rankReason={actor.rank_reason}
-                            window={actor.rank_evidence_window ?? actorData.meta.date_range}
-                          />
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(actor.first_seen)}</TableCell>
-                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(actor.last_seen)}</TableCell>
+                        <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{formatDateTime(actor.first_seen)}</TableCell>
+                        <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{formatDateTime(actor.last_seen)}</TableCell>
                         {actorData.meta.capabilities.session_count.project_capability
                           && <TableCell className="text-right tabular-nums">{actor.session_count ?? '—'}</TableCell>}
                         <TableCell>
@@ -261,7 +251,7 @@ export function Users() {
                                 {event.event} · {event.count}
                               </Badge>
                             ))}
-                            {actor.top_events.length === 0 && <span className="text-xs text-muted-foreground">None</span>}
+                            {actor.top_events.length === 0 && <span className="text-sm text-muted-foreground">None</span>}
                           </div>
                         </TableCell>
                         <TableCell className="text-right">
@@ -299,12 +289,8 @@ export function Users() {
               </div>
             </>
           )}
-          <details className="group/disclosure border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
-            <DisclosureSummary className="inline-flex min-h-11 cursor-pointer items-center py-3 font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">How people are resolved</DisclosureSummary>
-            Activity properties remain redacted. Exact-ID lookup accepts a canonical or raw actor ID and returns only its canonical bounded aggregate.
-            Rows use factual ordering or the explicitly selected activation metric and its registry purpose. Stall, risk and segment changes remain unavailable until a typed semantic source exists.
-          </details>
           </AnswerCanvas>
+          <PeopleDataHealth capabilities={actorData.meta.capabilities} />
         </>
       )}
     </div>
@@ -318,56 +304,38 @@ const ORDER_REASON_LABELS: Record<ActorOrderReason, string> = {
   recent_activation_in_window: 'Recently activated in this window',
 };
 
-function OrderEvidence({ reason, rankReason, window }: {
-  reason: ActorOrderReason;
-  rankReason: ActorsResult['actors'][number]['rank_reason'];
-  window: { from: string; to: string };
-}) {
-  return <div className="max-w-sm">
-    <Badge variant="outline" className="whitespace-normal text-left font-normal">{ORDER_REASON_LABELS[reason]}</Badge>
-    {rankReason && <>
-      <div className="mt-1.5 text-xs font-medium">{rankReason.metric_name} · {formatDateTime(rankReason.observed_at)}</div>
-      <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{rankReason.metric_purpose}</div>
-    </>}
-    <div className="mt-1.5 whitespace-nowrap text-xs text-muted-foreground">
-      Evidence window: {formatDate(window.from)}–{formatDate(window.to)}
-    </div>
-  </div>;
-}
-
 function PeopleDataHealth({ capabilities }: { capabilities: ActorsResult['meta']['capabilities'] }) {
-  return <details className="rounded-panel border bg-card">
-    <DisclosureSummary className="flex min-h-14 cursor-pointer items-center justify-between gap-3 px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
-      <span className="font-semibold">Data limits</span>
-      <Badge variant="secondary">Observed activity only</Badge>
-    </DisclosureSummary>
-    <ul className="grid gap-3 border-t p-4 text-sm sm:p-5 lg:grid-cols-3">
-      <li className="rounded-control border p-3">
+  return <DataDetails summary={<span className="flex w-full items-center justify-between gap-3"><span className="font-semibold">Data limits</span><Badge variant="secondary">Observed activity only</Badge></span>}>
+    <ul className="grid gap-3 text-sm lg:grid-cols-2">
+      <li>
         <span className="font-medium">Identity enrichment is unavailable.</span>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{capabilities.identity_profile.reason}</p>
+        <p className="mt-1 leading-relaxed">{capabilities.identity_profile.reason}</p>
       </li>
-      <li className="rounded-control border p-3">
+      <li>
         <span className="font-medium">Canonical actor properties are unavailable.</span>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{capabilities.property_filters.reason}</p>
+        <p className="mt-1 leading-relaxed">{capabilities.property_filters.reason}</p>
       </li>
-      <li className="rounded-control border p-3">
+      <li>
         <span className="font-medium">
           {capabilities.interesting_categories.recently_activated.available
             ? 'Stall, risk and segment-change ranking are unavailable.'
             : 'Activation, stall, risk and segment-change ranking are unavailable.'}
         </span>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+        <p className="mt-1 leading-relaxed">
           {capabilities.interesting_categories.recently_activated.available
             ? 'Recently activated is available from active native metrics in the activation category.'
             : capabilities.outcome_rank.reason}
         </p>
       </li>
-      {!capabilities.session_count.project_capability && <li className="rounded-control border p-3 lg:col-span-3">
+      {!capabilities.session_count.project_capability && <li>
         <span className="font-medium">Session counts are hidden.</span>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Canonical Browser session evidence is not available for this project.</p>
+        <p className="mt-1 leading-relaxed">Canonical Browser session evidence is not available for this project.</p>
       </li>}
     </ul>
-  </details>;
+    <p className="mt-4 border-t pt-4">
+      Activity properties remain redacted. Exact-ID lookup returns only a canonical bounded aggregate. Rows use factual ordering or the selected activation metric and its registry purpose. Stall, risk and segment changes remain unavailable until a typed semantic source exists.
+    </p>
+  </DataDetails>;
 }
 
 export function IdentityBadge({ status }: { status: ActorIdentityStatus }) {
@@ -376,7 +344,7 @@ export function IdentityBadge({ status }: { status: ActorIdentityStatus }) {
 }
 
 function Control({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">{label}{children}</label>;
+  return <label className="grid min-w-44 gap-1.5 text-sm font-medium text-muted-foreground">{label}{children}</label>;
 }
 
 function isNativeEventMetric(metric: Metric): boolean {

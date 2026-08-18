@@ -261,6 +261,39 @@ describe('Web analytics partial availability', () => {
     expect(previousExactRange({ from: 'invalid', to: '2026-07-31T00:00:00.000Z' })).toBeNull();
   });
 
+  it('uses the shared custom period and loads the default traffic breakdown without an extra gate', async () => {
+    render(
+      <TooltipProvider>
+        <MemoryRouter future={routerFuture}>
+          <WebAnalytics />
+        </MemoryRouter>
+      </TooltipProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Web' })).toBeInTheDocument();
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    expect(await screen.findByText('telegram')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load traffic breakdown' })).not.toBeInTheDocument();
+
+    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-02' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
+
+    await waitFor(() => expect(operationalQuery).toHaveBeenCalledWith('y1blin-com', expect.objectContaining({
+      kind: 'web_analytics',
+      date_from: '2026-08-01T00:00:00.000Z',
+      date_to: '2026-08-03T00:00:00.000Z',
+    })));
+    expect(screen.queryByRole('combobox', { name: 'Acquisition period' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Run UTM report' }));
+    await waitFor(() => expect(trend).toHaveBeenCalledWith('y1blin-com', expect.objectContaining({
+      date_from: '2026-08-01T00:00:00.000Z',
+      date_to: '2026-08-03T00:00:00.000Z',
+      breakdown: { property: '$utm_source' },
+    })));
+  });
+
   it('keeps traffic, UTM source and sessions visible when routes are unavailable', async () => {
     render(
       <TooltipProvider>
@@ -274,8 +307,6 @@ describe('Web analytics partial availability', () => {
     expect(within(screen.getByText('resolved actors').parentElement!).getByText('8')).toBeInTheDocument();
     expect(within(screen.getByText('actor + session ID').parentElement!).getByText('11')).toBeInTheDocument();
     expect(within(screen.getByText('accepted canonical views').parentElement!).getByText('20')).toBeInTheDocument();
-    expect(screen.queryByText('telegram')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Load traffic breakdown' }));
     expect(await screen.findByText('telegram')).toBeInTheDocument();
     expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_sessions')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));
@@ -312,11 +343,12 @@ describe('Web analytics partial availability', () => {
   });
 
   it('leads a ready Web workspace with a trusted answer and previous-period delta before the chart', async () => {
+    let outcomeReads = 0;
     const query = vi.fn().mockImplementation((_project, input) => {
       if (input.metric !== webOutcome.key) {
         return Promise.resolve({ kind: 'trend', series: [], meta: { computed_at: '2026-07-31T00:00:00.000Z', sampling: null } });
       }
-      const value = input.date_to === '2026-07-01T00:00:00.000Z' ? 8 : 12;
+      const value = outcomeReads++ === 0 ? 12 : 8;
       return Promise.resolve({
         kind: 'trend',
         series: [{ bucket: input.date_to ?? '2026-07-31', value }],
@@ -331,10 +363,8 @@ describe('Web analytics partial availability', () => {
           aggregation: 'count of accepted events', warnings: [], unavailable_reasons: [],
         },
         meta: {
-          computed_at: input.date_to ? '2026-07-31T00:00:01.000Z' : '2026-07-31T00:00:00.000Z',
-          date_range: input.date_to
-            ? { from: '2026-06-01T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' }
-            : { from: '2026-07-01T00:00:00.000Z', to: '2026-07-31T00:00:00.000Z' },
+          computed_at: outcomeReads === 1 ? '2026-07-31T00:00:00.000Z' : '2026-07-31T00:00:01.000Z',
+          date_range: { from: input.date_from, to: input.date_to },
           sampling: null,
         },
       });
@@ -363,20 +393,18 @@ describe('Web analytics partial availability', () => {
     expect(outcomeEvidence).not.toBeVisible();
     fireEvent.click(screen.getByLabelText('About web outcome evidence'));
     expect(outcomeEvidence).toBeVisible();
-    expect(query.mock.calls.filter(([, input]) => input.metric === webOutcome.key)).toEqual([
-      expect.arrayContaining([expect.objectContaining({ date_from: '-30d', date_to: null, env: 'prod' })]),
-      expect.arrayContaining([expect.objectContaining({
-        date_from: '2026-06-01T00:00:00.000Z', date_to: '2026-07-01T00:00:00.000Z', env: 'prod',
-      })]),
-    ]);
-    const chart = await screen.findByTestId('web-trend');
-    expect(answer.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_analytics')).toEqual(
-      expect.arrayContaining([
-        expect.arrayContaining([expect.objectContaining({ date_from: '-30d' })]),
-        expect.arrayContaining([expect.objectContaining({ date_from: '-60d', date_to: '-30d' })]),
-      ]),
+    const outcomeCalls = query.mock.calls.filter(([, input]) => input.metric === webOutcome.key);
+    expect(outcomeCalls).toHaveLength(2);
+    expect(outcomeCalls[0]?.[1]).toEqual(expect.objectContaining({ env: 'prod' }));
+    expect(outcomeCalls[1]?.[1].date_to).toBe(outcomeCalls[0]?.[1].date_from);
+    expect(Date.parse(outcomeCalls[0]?.[1].date_to) - Date.parse(outcomeCalls[0]?.[1].date_from)).toBe(
+      Date.parse(outcomeCalls[1]?.[1].date_to) - Date.parse(outcomeCalls[1]?.[1].date_from),
     );
+    const chart = await screen.findByTestId('web-trend');
+    expect(chart.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const trafficCalls = operationalQuery.mock.calls.filter(([, input]) => input.kind === 'web_analytics' && input.dimensions?.length === 0);
+    expect(trafficCalls).toHaveLength(2);
+    expect(trafficCalls[1]?.[1].date_to).toBe(trafficCalls[0]?.[1].date_from);
   });
 
   it('keeps traffic readable and never turns an unavailable outcome query into zero', async () => {
@@ -496,7 +524,7 @@ describe('Web analytics partial availability', () => {
     const scopedOperationalQuery = vi.fn(async (project, input) => {
       const result = await operationalQuery(project, input);
       if (input.kind !== 'web_analytics') return result;
-      const exactRange = input.date_from === '-7d' ? sevenDayRange : thirtyDayRange;
+      const exactRange = input.date_from === sevenDayRange.from ? sevenDayRange : thirtyDayRange;
       return {
         ...result,
         meta: { ...result.meta, computed_at: sameComputedAt, date_range: exactRange },
@@ -539,9 +567,11 @@ describe('Web analytics partial availability', () => {
       date_to: thirtyDayRange.to,
     })));
 
-    const period = screen.getByRole('combobox', { name: 'Period' });
-    fireEvent.keyDown(period, { key: 'ArrowDown' });
-    fireEvent.click(await screen.findByRole('option', { name: 'Last 7 days' }));
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-07-24' } });
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-07-30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
     await waitFor(() => expect(query).toHaveBeenCalledWith('y1blin-com', expect.objectContaining({
       kind: 'funnel',
       date_from: sevenDayRange.from,
@@ -604,8 +634,9 @@ describe('Web analytics partial availability', () => {
   });
 
   it('keeps the current Web health answer when the previous-period comparison is unavailable', async () => {
+    let primaryReads = 0;
     const partialOperationalQuery = vi.fn((project, query) => {
-      if (query.kind === 'web_analytics' && query.date_to === '-30d') return Promise.reject(new Error('previous unavailable'));
+      if (query.kind === 'web_analytics' && query.dimensions?.length === 0 && primaryReads++ === 1) return Promise.reject(new Error('previous unavailable'));
       return operationalQuery(project, query);
     });
     mockedStore.mockReturnValue({
@@ -625,7 +656,7 @@ describe('Web analytics partial availability', () => {
     expect(await screen.findByTestId('web-trend')).toBeInTheDocument();
   });
 
-  it('renders the current headline before slow secondary reads and loads source only on request', async () => {
+  it('renders the current headline while automatic secondary reads stay slow', async () => {
     const overview = await operationalQuery('y1blin-com', {
       kind: 'web_analytics',
       metric: metric.key,
@@ -635,9 +666,12 @@ describe('Web analytics partial availability', () => {
       dimensions: [],
     });
     operationalQuery.mockClear();
+    let primaryReads = 0;
     const isolatedOperationalQuery = vi.fn((_project, query) => {
-      if (query.kind === 'web_analytics' && query.date_to === '-30d') return new Promise(() => undefined);
       if (query.kind === 'web_analytics' && query.dimensions?.includes('source')) return new Promise(() => undefined);
+      if (query.kind === 'web_analytics' && query.dimensions?.length === 0) {
+        return primaryReads++ === 0 ? Promise.resolve(overview) : new Promise(() => undefined);
+      }
       if (query.kind === 'web_analytics') return Promise.resolve(overview);
       throw new Error(`Unexpected query kind: ${query.kind}`);
     });
@@ -661,11 +695,8 @@ describe('Web analytics partial availability', () => {
 
     expect(await screen.findByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
     expect(screen.getByText('Previous-period comparison is loading.')).toBeInTheDocument();
-    expect(isolatedOperationalQuery.mock.calls.filter(([, query]) => query.dimensions?.includes('source'))).toHaveLength(0);
+    expect(isolatedOperationalQuery.mock.calls.filter(([, query]) => query.dimensions?.includes('source'))).toHaveLength(1);
     expect(screen.queryByText('telegram')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Load traffic breakdown' }));
-    await waitFor(() => expect(isolatedOperationalQuery.mock.calls.filter(([, query]) => query.dimensions?.includes('source'))).toHaveLength(1));
     expect(screen.getByText('Loading Sources breakdown…')).toBeInTheDocument();
     expect(screen.getByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
   });
@@ -675,7 +706,6 @@ describe('Web analytics partial availability', () => {
       <TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load traffic breakdown' }));
     await screen.findByText('telegram');
     mockedStore.mockReturnValue({
       project: 'beta',

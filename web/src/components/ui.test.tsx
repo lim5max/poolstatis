@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { ErrorNote, Meter, PageHeading, WarningNote } from './ui';
+import { DataDetails, ErrorNote, KpiRail, Meter, PageHeading, WarningNote } from './ui';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Table, TableBody, TableRow } from './ui/table';
@@ -40,6 +40,11 @@ describe('page headings', () => {
 });
 
 describe('button contrast', () => {
+  it('uses a full pill shape for every button variant', () => {
+    render(<Button>Open answer</Button>);
+    expect(screen.getByRole('button', { name: 'Open answer' })).toHaveClass('rounded-full');
+  });
+
   it('keeps outline hover neutral instead of applying the brand accent', () => {
     render(<Button variant="outline">Open definition</Button>);
     const button = screen.getByRole('button', { name: 'Open definition' });
@@ -60,6 +65,28 @@ describe('button contrast', () => {
       expect(action).toHaveClass('text-foreground', 'underline', 'decoration-muted-foreground/60');
       expect(action.className).not.toMatch(/text-(?:brand|success)(?:\s|$|\/)/);
     }
+  });
+});
+
+describe('analytics composition', () => {
+  it('groups headline metrics into one divided rail instead of separate cards', () => {
+    render(<KpiRail items={[
+      { label: 'Visitors', value: '612', detail: 'resolved people' },
+      { label: 'Sessions', value: '979', detail: 'canonical sessions' },
+    ]} />);
+
+    const rail = screen.getByRole('list', { name: 'Key metrics' });
+    expect(rail).toHaveClass('rounded-panel');
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.getByText('612')).toHaveClass('tabular-nums');
+  });
+
+  it('keeps secondary evidence collapsed in one concise disclosure', () => {
+    render(<DataDetails summary="Data details">Exact UTC window and privacy limits.</DataDetails>);
+    const details = screen.getByText('Data details').closest('details');
+    expect(details).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Data details'));
+    expect(screen.getByText('Exact UTC window and privacy limits.')).toBeVisible();
   });
 });
 

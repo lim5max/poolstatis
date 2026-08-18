@@ -178,7 +178,7 @@ describe('owner UI feedback regressions', () => {
 
   it('shows a mobile capture at its viewport width inside a scrollable evidence frame', async () => {
     mockedStore.mockReturnValue(experienceStore() as never);
-    render(<Experience />);
+    render(<MemoryRouter><Experience /></MemoryRouter>);
 
     await screen.findByRole('img', { name: /mobile/ });
     const viewport = screen.getByTestId('visual-snapshot-viewport');
@@ -217,7 +217,7 @@ describe('owner UI feedback regressions', () => {
       .mockImplementationOnce(() => mobileRequest.promise)
       .mockImplementationOnce(() => desktopRequest.promise);
     mockedStore.mockReturnValue(experienceStore({ visualExperience }) as never);
-    render(<Experience />);
+    render(<MemoryRouter><Experience /></MemoryRouter>);
 
     await waitFor(() => expect(visualExperience).toHaveBeenCalledTimes(1));
     const deviceSelect = screen.getAllByRole('combobox')[4]!;
@@ -271,7 +271,7 @@ describe('owner UI feedback regressions', () => {
       .mockResolvedValueOnce(desktopResult);
     const compareVisualExperience = vi.fn(() => comparisonRequest.promise);
     mockedStore.mockReturnValue(experienceStore({ visualExperience, compareVisualExperience }) as never);
-    render(<Experience />);
+    render(<MemoryRouter><Experience /></MemoryRouter>);
 
     await screen.findByText('Mobile viewport · 390 × 844');
     fireEvent.click(screen.getByRole('button', { name: 'Compare with desktop' }));
@@ -306,7 +306,7 @@ describe('owner UI feedback regressions', () => {
 
   it('keeps evidence notes below the screenshot and names the exact comparison target', async () => {
     mockedStore.mockReturnValue(experienceStore() as never);
-    render(<Experience />);
+    render(<MemoryRouter><Experience /></MemoryRouter>);
 
     const viewport = await screen.findByTestId('visual-snapshot-viewport');
     const notes = screen.getByTestId('visual-evidence-notes');

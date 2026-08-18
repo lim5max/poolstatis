@@ -12,6 +12,7 @@ vi.mock('../store', async (importOriginal) => ({
 
 const mockedStore = vi.mocked(useStore);
 const verify = vi.fn();
+const sample = vi.fn();
 
 const health = {
   schema_version: 1 as const,
@@ -94,6 +95,7 @@ const health = {
 
 describe('Events data-health control', () => {
   beforeEach(() => {
+    sample.mockReset().mockResolvedValue([]);
     const watermark = health.issue_signatures[0]!.watermark;
     verify.mockReset().mockResolvedValue({
       schema_version: 1,
@@ -116,8 +118,26 @@ describe('Events data-health control', () => {
         verifyDataHealthFix: verify,
         dataQuality: vi.fn().mockResolvedValue({ issues: [], checked: { terminal_event_specs: 0, evidence_rows: 0 } }),
         ingestWarnings: vi.fn().mockResolvedValue([]),
+        sample,
       },
     } as never);
+  });
+
+  it('uses Today and custom exact periods for the event stream', async () => {
+    render(<TooltipProvider><MemoryRouter initialEntries={['/data?tab=events']}><Data /></MemoryRouter></TooltipProvider>);
+    await screen.findAllByText('Event stream');
+
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-02' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
+
+    await waitFor(() => expect(sample).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      from: '2026-08-01T00:00:00.000Z',
+      to: '2026-08-03T00:00:00.000Z',
+    })));
+    expect(screen.queryByText('All time')).not.toBeInTheDocument();
   });
 
   it('shows server-owned trend totals before details and separates improvements from proven health', async () => {

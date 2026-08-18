@@ -2,10 +2,14 @@ import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Button } from '@/components/ui/button';
-import { ErrorNote, Loading, fmtNum, fmtRelative } from '@/components/ui';
+import { ErrorNote, KpiRail, Loading, PageHeading, fmtNum, fmtRelative } from '@/components/ui';
 import { AnswerCanvas, type EvidenceTrust, type KpiItem } from '@/components/analytics';
+import { AnalyticsDateRange } from '@/components/AnalyticsDateRange';
 import { DisclosureSummary } from '@/components/disclosure';
+import { TrendChart } from '../analysis/charts';
 import { formatDurationMs, webPageMetric, type WebAnalyticsResult } from '../analysis/operations';
+import type { AnalyticsRangeSelection, ResolvedAnalyticsRange } from '../analysis/ranges';
+import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import type { AttentionItem, ControlTowerAction, ControlTowerResult, Funnel, MeasurementTrust, Metric, ObservedEvent, ProjectSchema } from '../api/types';
 import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
 import type { ProjectMode } from '../analysis/navigation';
@@ -41,6 +45,7 @@ interface ProductAnswer {
 interface WebsiteAnswer {
   metric: Metric | null;
   overview: WebAnalyticsResult | null;
+  trend: TrendQueryResult | null;
   overviewUnavailable: boolean;
   trust: MeasurementTrust | null;
   trustUnavailable: boolean;
@@ -48,7 +53,8 @@ interface WebsiteAnswer {
 
 export function Overview() {
   const { account, client, project, env } = useStore();
-  const homeScope = `${project ?? ''}\u0000${env}`;
+  const { selection, resolved: range, setSelection } = useAnalyticsRange();
+  const homeScope = `${project ?? ''}\u0000${env}\u0000${range.from}\u0000${range.to}`;
   const home = useAsync(async () => {
     try {
       const [controlTower, intent, metrics, funnels, schema] = await Promise.all([
@@ -74,8 +80,9 @@ export function Overview() {
           productAnswersEnabled ? primaryMetric : null,
           productAnswersEnabled ? revenueMetric : null,
           homeFunnel,
+          range,
         ),
-        readWebsiteAnswer(client!, project!, env, websiteAnswersEnabled ? pageMetric : null),
+        readWebsiteAnswer(client!, project!, env, websiteAnswersEnabled ? pageMetric : null, range),
       ]);
       return {
         scope: homeScope,
@@ -91,7 +98,7 @@ export function Overview() {
     } catch (caught) {
       return { scope: homeScope, value: null, error: (caught as Error).message };
     }
-  }, [project, env]);
+  }, [project, env, range.from, range.to]);
 
   const scopedHome = home.data?.scope === homeScope ? home.data : null;
   const homeData = scopedHome?.value ?? null;
@@ -113,11 +120,11 @@ export function Overview() {
   const { intent, product, website, schema, controlTower } = homeData;
   const mode = intent?.project_mode ?? null;
   const attention = controlTower.attention;
-  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
-  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+  if (mode === 'website') return <WebsiteHome key={`${project}:${env}:website`} answer={website} product={product} schema={schema} env={env} range={range} selection={selection} onSelectionChange={setSelection} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+  if (mode === 'product') return <ProductHome key={`${project}:${env}:product`} answer={product} schema={schema} env={env} range={range} selection={selection} onSelectionChange={setSelection} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   if (mode === 'both' && intent) {
     const websiteFirst = controlTower.home_answer_surface === 'website';
-    return <BothHome answer={websiteFirst ? website : product} product={product} websiteFirst={websiteFirst} schema={schema} env={env} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
+    return <BothHome answer={websiteFirst ? website : product} product={product} websiteFirst={websiteFirst} schema={schema} env={env} range={range} selection={selection} onSelectionChange={setSelection} controlTower={controlTower} attention={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />;
   }
 
   // A missing intent row is legacy/unset. Keep the project useful and never
@@ -126,13 +133,18 @@ export function Overview() {
     <div className="space-y-5">
       <PageHeader
         title="Home"
+        range={range}
+        selection={selection}
+        onSelectionChange={setSelection}
         answer={website.overview
           ? websiteLead(website)
           : product.metric
             ? `${product.metric.name} is the clearest active outcome available for this project.`
             : controlTower.answer.takeaway}
       />
-      <AttentionQueue result={controlTower} items={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />
+      {website.overview
+        ? <WebsiteAnswerCanvas answer={website} product={product} schema={schema} env={env} range={range} onRetry={home.reload} />
+        : <ProductAnswerCanvas answer={product} schema={schema} env={env} range={range} />}
       <details className="rounded-panel border bg-card">
         <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-4 py-3 text-sm font-medium">
           Project settings
@@ -141,9 +153,7 @@ export function Overview() {
           Project mode is not set. Choose Website, Product, or Both later in Setup. Nothing has been inferred from historical data.
         </p>
       </details>
-      {website.overview
-        ? <WebsiteAnswerCanvas answer={website} product={product} schema={schema} env={env} onRetry={home.reload} />
-        : <ProductAnswerCanvas answer={product} schema={schema} env={env} />}
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={account?.user?.id} onRetry={home.reload} />
     </div>
   );
 }
@@ -157,26 +167,23 @@ function AttentionQueue({ result, items, telemetryUserId, onRetry }: {
   const visibleItems = items.length > 0 ? items.slice(0, 3) : [guardrailItem(result)];
   const remainingItems = items.slice(3);
   return (
-    <section aria-labelledby="attention-title">
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <div>
-          <h2 id="attention-title" className="text-sm font-semibold">Needs attention</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Highest-impact server-backed signal first.</p>
-        </div>
-        <span className="font-mono text-sm text-muted-foreground">{items.length}</span>
+    <section aria-labelledby="attention-title" className="overflow-hidden rounded-panel border bg-card">
+      <div className="flex items-center justify-between gap-3 px-5 py-4">
+        <h2 id="attention-title" className="text-base font-semibold">Needs attention</h2>
+        <span className="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">{items.length}</span>
       </div>
-      <div className="grid gap-3 lg:grid-cols-3">
+      <div className="divide-y border-t">
         {visibleItems.map((item, index) => (
           <AttentionCard key={item.id} item={item} primary={index === 0} telemetryUserId={telemetryUserId} onRetry={onRetry} />
         ))}
       </div>
       {remainingItems.length > 0 && (
-        <details className="mt-3 rounded-panel border bg-card">
+        <details className="border-t">
           <DisclosureSummary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-medium">
             <span>View all {items.length} signals</span>
             <span className="font-mono text-muted-foreground">+{remainingItems.length}</span>
           </DisclosureSummary>
-          <div className="grid gap-3 border-t p-3 lg:grid-cols-3">
+          <div className="divide-y border-t">
             {remainingItems.map((item) => (
               <AttentionCard key={item.id} item={item} primary={false} telemetryUserId={telemetryUserId} onRetry={onRetry} />
             ))}
@@ -194,20 +201,22 @@ function AttentionCard({ item, primary, telemetryUserId, onRetry }: {
   onRetry: () => void;
 }) {
   return (
-    <article className={`min-w-0 rounded-panel border bg-card p-4 ${item.severity === 'critical' || item.severity === 'high' ? 'border-destructive/45' : item.severity === 'medium' ? 'border-warning/45' : ''}`}>
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <span className="font-medium">{severityLabel(item.severity)}</span>
-        <span className="text-muted-foreground">{item.evidence.freshness === 'fresh' ? fmtRelative(item.evidence.as_of) : item.evidence.freshness}</span>
+    <article className={`grid min-w-0 gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center ${item.severity === 'critical' || item.severity === 'high' ? 'border-l-4 border-l-destructive' : item.severity === 'medium' ? 'border-l-4 border-l-warning' : ''}`}>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">{severityLabel(item.severity)}</span>
+          <span aria-hidden="true">·</span>
+          <span>{item.evidence.freshness === 'fresh' ? fmtRelative(item.evidence.as_of) : item.evidence.freshness}</span>
+        </div>
+        <h3 className="mt-2 text-lg font-semibold">{item.title}</h3>
+        <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
+        {item.delta && (
+          <p className="mt-2 text-sm">
+            <span className="font-medium">{item.rule_id === 'funnel.biggest_loss' ? 'Overall funnel conversion:' : 'Change:'}</span>{' '}
+            <span className="text-muted-foreground">{attentionDeltaLabel(item.delta)}</span>
+          </p>
+        )}
       </div>
-      <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
-      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.reason}</p>
-      {item.delta && (
-        <p className="mt-3 text-sm">
-          <span className="font-medium">{item.rule_id === 'funnel.biggest_loss' ? 'Overall funnel conversion:' : 'Change:'}</span>{' '}
-          <span className="text-muted-foreground">{attentionDeltaLabel(item.delta)}</span>
-        </p>
-      )}
-      <p className="mt-3 border-t pt-3 text-sm"><span className="font-medium">Impact:</span> <span className="text-muted-foreground">{item.impact}</span></p>
       <AttentionAction action={item.primary_action} primary={primary} telemetryUserId={telemetryUserId} onRetry={onRetry} />
     </article>
   );
@@ -245,7 +254,7 @@ function AttentionAction({ action, primary, telemetryUserId, onRetry }: {
 }) {
   if (action.kind === 'navigate') {
     return (
-      <Button asChild variant={primary ? 'default' : 'outline'} className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto">
+      <Button asChild variant={primary ? 'default' : 'outline'} className="h-auto min-h-11 w-full whitespace-normal py-2 lg:w-auto">
         <Link to={action.href} onClick={() => trackHomeAction(actionTelemetry(action.href), telemetryUserId)}>
           {action.label} <ArrowRight className="size-4" />
         </Link>
@@ -253,9 +262,9 @@ function AttentionAction({ action, primary, telemetryUserId, onRetry }: {
     );
   }
   if (action.kind === 'retry') {
-    return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto" onClick={onRetry}>{action.label}</Button>;
+    return <Button variant={primary ? 'default' : 'outline'} className="h-auto min-h-11 w-full whitespace-normal py-2 lg:w-auto" onClick={onRetry}>{action.label}</Button>;
   }
-  return <Button variant={primary ? 'default' : 'outline'} className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto" disabled>{action.label}</Button>;
+  return <Button variant={primary ? 'default' : 'outline'} className="h-auto min-h-11 w-full whitespace-normal py-2 lg:w-auto" disabled>{action.label}</Button>;
 }
 
 function severityLabel(severity: AttentionItem['severity']) {
@@ -273,26 +282,26 @@ function actionTelemetry(href: string): TelemetryHomeAction {
   return 'open_current_answer';
 }
 
-function WebsiteHome({ answer, product, schema, env, controlTower, attention, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
+function WebsiteHome({ answer, product, schema, env, range, selection, onSelectionChange, controlTower, attention, telemetryUserId, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = websiteLead(answer);
   return (
     <div className="space-y-5">
-      <PageHeader title="Home" answer={lead} />
+      <PageHeader title="Home" answer={lead} range={range} selection={selection} onSelectionChange={onSelectionChange} />
+      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} range={range} onRetry={onRetry} />
       <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
-      <WebsiteAnswerCanvas answer={answer} product={product} schema={schema} env={env} onRetry={onRetry} />
     </div>
   );
 }
 
-function ProductHome({ answer, schema, env, controlTower, attention, telemetryUserId, onRetry }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
+function ProductHome({ answer, schema, env, range, selection, onSelectionChange, controlTower, attention, telemetryUserId, onRetry }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void; controlTower: ControlTowerResult; attention: AttentionItem[]; telemetryUserId?: string | null; onRetry: () => void }) {
   const lead = answer.metric
     ? `${answer.metric.name} is the clearest active outcome available for this project.`
     : 'Events may be arriving, but no active outcome is defined yet.';
   return (
     <div className="space-y-5">
-      <PageHeader title="Home" answer={lead} />
+      <PageHeader title="Home" answer={lead} range={range} selection={selection} onSelectionChange={onSelectionChange} />
+      <ProductAnswerCanvas answer={answer} schema={schema} env={env} range={range} />
       <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
-      <ProductAnswerCanvas answer={answer} schema={schema} env={env} />
     </div>
   );
 }
@@ -303,6 +312,9 @@ function BothHome({
   websiteFirst,
   schema,
   env,
+  range,
+  selection,
+  onSelectionChange,
   controlTower,
   telemetryUserId,
   attention,
@@ -313,6 +325,9 @@ function BothHome({
   websiteFirst: boolean;
   schema: ProjectSchema | null;
   env: string;
+  range: ResolvedAnalyticsRange;
+  selection: AnalyticsRangeSelection;
+  onSelectionChange: (selection: AnalyticsRangeSelection) => void;
   controlTower: ControlTowerResult;
   telemetryUserId?: string | null;
   attention: AttentionItem[];
@@ -328,13 +343,15 @@ function BothHome({
     <div className="space-y-5">
       <PageHeader
         title="Home"
+        range={range}
+        selection={selection}
+        onSelectionChange={onSelectionChange}
         answer={identityState === 'unavailable'
           ? 'Identity evidence is unavailable right now, so Poolstatis will not claim a cross-surface path.'
           : identityLinked
             ? 'Identity evidence exists. Poolstatis still requires a registered cross-surface funnel before claiming an acquisition-to-activation path.'
             : 'Website and product activity are not linked yet.'}
       />
-      <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
       <div className="flex max-w-full gap-1 overflow-x-auto rounded-control border bg-card p-1" aria-label="Both mode surfaces">
         <span className="flex min-h-11 items-center rounded-control bg-secondary px-4 text-sm font-medium">All</span>
         <Link className="flex min-h-11 items-center rounded-control px-4 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" to="/analyze/web">Website</Link>
@@ -348,8 +365,9 @@ function BothHome({
             : 'Add stable identity evidence before comparing acquisition with product outcomes.'}
       </div>
       {websiteFirst
-        ? <WebsiteAnswerCanvas answer={answer as WebsiteAnswer} product={product} schema={schema} env={env} onRetry={onRetry} />
-        : <ProductAnswerCanvas answer={answer as ProductAnswer} schema={schema} env={env} />}
+        ? <WebsiteAnswerCanvas answer={answer as WebsiteAnswer} product={product} schema={schema} env={env} range={range} onRetry={onRetry} />
+        : <ProductAnswerCanvas answer={answer as ProductAnswer} schema={schema} env={env} range={range} />}
+      <AttentionQueue result={controlTower} items={attention} telemetryUserId={telemetryUserId} onRetry={onRetry} />
     </div>
   );
 }
@@ -358,7 +376,7 @@ const WEBSITE_KPIS = [
   { id: 'visitors', label: 'Visitors' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'page_views', label: 'Page views' },
-  { id: 'last_event', label: 'Last event' },
+  { id: 'last_event', label: 'Last event · 30d' },
   { id: 'average_duration', label: 'Average duration' },
   { id: 'engaged_rate', label: 'Engagement rate' },
   { id: 'bounce_rate', label: 'Bounce rate' },
@@ -368,7 +386,7 @@ const PRODUCT_KPIS = [
   { id: 'outcome', label: 'Primary outcome' },
   { id: 'people', label: 'Observed people' },
   { id: 'activation', label: 'Activation' },
-  { id: 'last_event', label: 'Last event' },
+  { id: 'last_event', label: 'Last event · 30d' },
   { id: 'events', label: 'Event volume' },
 ] as const;
 const REVENUE_KPI = { id: 'revenue', label: 'Revenue' } as const;
@@ -377,7 +395,7 @@ function productDashboardDefinitions(answer: ProductAnswer) {
   return answer.revenueMetric ? [...PRODUCT_KPIS, REVENUE_KPI] : PRODUCT_KPIS;
 }
 
-function WebsiteAnswerCanvas({ answer, product, schema, env, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; onRetry: () => void }) {
+function WebsiteAnswerCanvas({ answer, product, schema, env, range, onRetry }: { answer: WebsiteAnswer; product: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange; onRetry: () => void }) {
   const activity = recentObservedEvents(schema);
   const lastEvent = activity?.[0] ?? null;
   const answerUnavailable = Boolean(answer.metric && !answer.overview);
@@ -391,7 +409,7 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, onRetry }: { answer
     return (
       <>
         <HomeKpiStrip items={emptyItems.slice(0, 4)} />
-        <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} />
+        <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} range={range} />
         <HomeSummary
           funnel={product.funnel}
           funnelResult={product.funnelResult}
@@ -408,12 +426,15 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, onRetry }: { answer
         { id: 'visitors', label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved people' },
         { id: 'sessions', label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'canonical sessions' },
         { id: 'page_views', label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted views' },
-        { id: 'last_event', label: 'Last event', value: lastEvent ? fmtRelative(lastEvent.last_seen) : null, fallback: activityFallback(activity), note: lastEvent?.event ?? activityNote(activity) },
+        { id: 'last_event', label: 'Last event · 30d', value: lastEvent ? fmtRelative(lastEvent.last_seen) : null, fallback: activityFallback(activity), note: lastEvent?.event ?? activityNote(activity) },
         { id: 'average_duration', label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? null : formatDurationMs(overview.summary.average_session_duration_ms), note: 'complete sessions' },
         { id: 'engaged_rate', label: 'Engagement rate', value: answer.overview.engagement.engaged_rate == null ? null : `${Math.round(answer.overview.engagement.engaged_rate * 100)}%`, note: 'measured sessions' },
         { id: 'bounce_rate', label: 'Bounce rate', value: answer.overview.engagement.bounce_rate == null ? null : `${Math.round(answer.overview.engagement.bounce_rate * 100)}%`, note: 'measured sessions' },
       ].slice(0, 4)} />
-      <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? overview.summary.page_views} env={env} />
+      {answer.trend && (
+        <HomeTrend result={answer.trend} title="Website traffic" label="Website traffic trend" range={range} />
+      )}
+      <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? overview.summary.page_views} env={env} range={range} />
       <HomeSummary
         funnel={product.funnel}
         funnelResult={product.funnelResult}
@@ -423,7 +444,7 @@ function WebsiteAnswerCanvas({ answer, product, schema, env, onRetry }: { answer
   );
 }
 
-function ProductAnswerCanvas({ answer, schema, env }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string }) {
+function ProductAnswerCanvas({ answer, schema, env, range }: { answer: ProductAnswer; schema: ProjectSchema | null; env: string; range: ResolvedAnalyticsRange }) {
   const activity = recentObservedEvents(schema);
   const lastEvent = activity?.[0] ?? null;
   const definitions = productDashboardDefinitions(answer);
@@ -436,7 +457,7 @@ function ProductAnswerCanvas({ answer, schema, env }: { answer: ProductAnswer; s
           fallback: item.id === 'last_event' ? activityFallback(activity) : 'Not configured',
           note: item.id === 'last_event' ? lastEvent?.event ?? activityNote(activity) : 'Define a measurable outcome',
         })).slice(0, 4)} />
-        <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} />
+        <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={null} env={env} range={range} />
         <HomeSummary
           funnel={answer.funnel}
           funnelResult={answer.funnelResult}
@@ -453,14 +474,17 @@ function ProductAnswerCanvas({ answer, schema, env }: { answer: ProductAnswer; s
   return (
     <>
       <HomeKpiStrip items={[
-        { id: 'outcome', label: answer.metric.name, value: metricValue, note: 'current 30-day outcome' },
+        { id: 'outcome', label: answer.metric.name, value: metricValue, note: `${range.label} outcome` },
         { id: 'people', label: 'Observed people', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_actors) : null, note: 'resolved actors' },
         { id: 'activation', label: 'Activation', value: finalStep?.conversion_from_start === null || finalStep?.conversion_from_start === undefined ? null : `${Math.round(finalStep.conversion_from_start * 100)}%`, note: answer.funnel?.name ?? 'saved funnel required' },
-        { id: 'last_event', label: 'Last event', value: lastEvent ? fmtRelative(lastEvent.last_seen) : null, fallback: activityFallback(activity), note: lastEvent?.event ?? activityNote(activity) },
+        { id: 'last_event', label: 'Last event · 30d', value: lastEvent ? fmtRelative(lastEvent.last_seen) : null, fallback: activityFallback(activity), note: lastEvent?.event ?? activityNote(activity) },
         { id: 'events', label: 'Event volume', value: answer.trust ? fmtNum(answer.trust.primary_metric.observed_events) : null, note: 'accepted observations' },
         ...(answer.revenueMetric ? [{ id: 'revenue', label: answer.revenueMetric.name, value: revenueValue, fallback: 'Unavailable', note: 'active revenue outcome' }] : []),
       ].slice(0, 4)} />
-      <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? null} env={env} />
+      {answer.trend && (
+        <HomeTrend result={answer.trend} title={answer.metric.name} label={`${answer.metric.name} trend`} range={range} />
+      )}
+      <HomeEvidence trust={evidenceTrust(answer.trust, answer.trustUnavailable)} eventCount={answer.trust?.primary_metric.observed_events ?? null} env={env} range={range} />
       <HomeSummary
         funnel={answer.funnel}
         funnelResult={answer.funnelResult}
@@ -471,29 +495,32 @@ function ProductAnswerCanvas({ answer, schema, env }: { answer: ProductAnswer; s
 }
 
 function HomeKpiStrip({ items }: { items: KpiItem[] }) {
+  return <KpiRail items={items.map((item) => ({
+    label: item.label,
+    value: item.value ?? item.fallback ?? 'Unavailable',
+    detail: item.note,
+  }))} />;
+}
+
+function HomeTrend({ result, title, label, range }: { result: TrendQueryResult; title: string; label: string; range: ResolvedAnalyticsRange }) {
   return (
-    <dl className="grid grid-cols-2 overflow-hidden rounded-panel border bg-card lg:grid-cols-4" aria-label="Key outcomes" role="group">
-      {items.map((item, index) => (
-        <div
-          key={`${item.label}:${index}`}
-          className={`min-w-0 p-4 ${index % 2 === 1 ? 'border-l' : ''} ${index < 2 ? 'border-b' : ''} ${index > 0 ? 'lg:border-l' : 'lg:border-l-0'} lg:border-b-0`}
-        >
-          <dt className="text-sm font-medium text-muted-foreground">{item.label}</dt>
-          <dd className={`mt-1 min-w-0 truncate text-2xl font-semibold tabular-nums sm:text-3xl ${item.value === null ? 'text-muted-foreground' : ''}`}>
-            {item.value ?? item.fallback ?? 'Unavailable'}
-          </dd>
-          {item.note && <div className="mt-1 min-w-0 truncate text-sm text-muted-foreground" title={item.note}>{item.note}</div>}
-        </div>
-      ))}
-    </dl>
+    <AnswerCanvas className="mt-5">
+      <div className="flex items-center justify-between gap-4 px-5 pt-5">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <span className="text-sm text-muted-foreground">{range.label}</span>
+      </div>
+      <div className="p-5 pt-3">
+        <TrendChart result={result} label={label} />
+      </div>
+    </AnswerCanvas>
   );
 }
 
-function HomeEvidence({ trust, eventCount, env }: { trust: EvidenceTrust; eventCount: number | null; env: string }) {
+function HomeEvidence({ trust, eventCount, env, range }: { trust: EvidenceTrust; eventCount: number | null; env: string; range: ResolvedAnalyticsRange }) {
   const trustLabel = trust === 'trusted' ? 'Trusted' : trust === 'partial' ? 'Partial' : 'Unavailable';
   return (
     <div className="mt-3 text-sm text-muted-foreground">
-      Observed · Last 30 days · {trustLabel} · {eventCount === null ? 'event count unavailable' : `${eventCount.toLocaleString()} events`} · <code>{env}</code>
+      Observed · {range.label} · {trustLabel} · {eventCount === null ? 'event count unavailable' : `${eventCount.toLocaleString()} events`} · <code>{env}</code>
     </div>
   );
 }
@@ -536,7 +563,10 @@ function HomeSummary({ funnel, funnelResult, activity }: {
         </section>
 
         <section className="min-w-0 border-t p-4 sm:p-5 lg:border-l lg:border-t-0" aria-labelledby="home-activity-title">
-          <h2 id="home-activity-title" className="text-sm font-semibold">Recent activity</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 id="home-activity-title" className="text-sm font-semibold">Recent activity</h2>
+            <span className="text-sm text-muted-foreground">Last 30 days</span>
+          </div>
           {activity === null ? (
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">Event activity is unavailable right now.</p>
           ) : activity.length === 0 ? (
@@ -582,15 +612,13 @@ function funnelStepValue(actors: number, conversionFromStart: number | null) {
   return `${Math.round(conversionFromStart * 1_000) / 10}% from start`;
 }
 
-function PageHeader({ title, answer }: { title: string; answer: string }) {
-  return (
-    <header>
-      <div className="max-w-3xl">
-        <h1 className="serif text-3xl sm:text-4xl">{title}</h1>
-        <p className="mt-2 text-base leading-relaxed text-muted-foreground">{answer}</p>
-      </div>
-    </header>
-  );
+function PageHeader({ title, answer, range, selection, onSelectionChange }: { title: string; answer: string; range: ResolvedAnalyticsRange; selection: AnalyticsRangeSelection; onSelectionChange: (selection: AnalyticsRangeSelection) => void }) {
+  return <PageHeading
+    title={title}
+    lead={answer}
+    meta={`${range.label} · UTC`}
+    actions={<AnalyticsDateRange value={selection} onChange={onSelectionChange} />}
+  />;
 }
 
 function homeAnswerTelemetry(data: {
@@ -631,20 +659,24 @@ async function readWebsiteAnswer(
   project: string,
   env: string,
   metric: Metric | null,
+  range: ResolvedAnalyticsRange,
 ): Promise<WebsiteAnswer> {
-  if (!metric) return { metric: null, overview: null, overviewUnavailable: false, trust: null, trustUnavailable: false };
-  const base = { metric: metric.key, date_from: '-30d', filters: [], env };
-  const [overviewResult, trustResult] = await Promise.all([
+  if (!metric) return { metric: null, overview: null, trend: null, overviewUnavailable: false, trust: null, trustUnavailable: false };
+  const base = { metric: metric.key, date_from: range.from, date_to: range.to, filters: [], env };
+  const [overviewResult, trend, trustResult] = await Promise.all([
     client.operationalQuery<WebAnalyticsResult>(project, { kind: 'web_analytics', ...base, dimensions: ['source', 'route', 'campaign'] })
       .then((overview) => ({ overview, unavailable: false }))
       .catch(() => ({ overview: null, unavailable: true })),
-    client.measurementTrust(project, { metric_key: metric.key, env, since_days: 30, target_filters: [] })
+    client.query(project, { kind: 'trend', metric: metric.key, date_from: range.from, date_to: range.to, interval: 'day', filters: [], env })
+      .then((result) => result.kind === 'trend' ? result : null).catch(() => null),
+    client.measurementTrust(project, { metric_key: metric.key, env, since_days: Math.min(range.days, 365), target_filters: [] })
       .then((trust) => ({ trust, unavailable: false }))
       .catch(() => ({ trust: null, unavailable: true })),
   ]);
   return {
     metric,
     overview: overviewResult.overview,
+    trend,
     overviewUnavailable: overviewResult.unavailable,
     trust: trustResult.trust,
     trustUnavailable: trustResult.unavailable,
@@ -658,23 +690,24 @@ async function readProductAnswer(
   metric: Metric | null,
   revenueMetric: Metric | null,
   funnel: Funnel | null,
+  range: ResolvedAnalyticsRange,
 ): Promise<ProductAnswer> {
   const [trend, revenueTrend, trustResult, funnelResult] = await Promise.all([
     metric
-      ? client.query(project, { kind: 'trend', metric: metric.key, date_from: '-30d', date_to: null, interval: 'day', filters: [], env })
+      ? client.query(project, { kind: 'trend', metric: metric.key, date_from: range.from, date_to: range.to, interval: 'day', filters: [], env })
         .then((result) => result.kind === 'trend' ? result : null).catch(() => null)
       : Promise.resolve(null),
     revenueMetric
-      ? client.query(project, { kind: 'trend', metric: revenueMetric.key, date_from: '-30d', date_to: null, interval: 'day', filters: [], env })
+      ? client.query(project, { kind: 'trend', metric: revenueMetric.key, date_from: range.from, date_to: range.to, interval: 'day', filters: [], env })
         .then((result) => result.kind === 'trend' ? result : null).catch(() => null)
       : Promise.resolve(null),
     metric
-      ? client.measurementTrust(project, { metric_key: metric.key, env, since_days: 30, target_filters: [] })
+      ? client.measurementTrust(project, { metric_key: metric.key, env, since_days: Math.min(range.days, 365), target_filters: [] })
         .then((trust) => ({ trust, unavailable: false }))
         .catch(() => ({ trust: null, unavailable: true }))
       : Promise.resolve({ trust: null, unavailable: false }),
     funnel
-      ? client.query(project, { kind: 'funnel', funnel: funnel.key, date_from: '-30d', date_to: null, env })
+      ? client.query(project, { kind: 'funnel', funnel: funnel.key, date_from: range.from, date_to: range.to, env })
         .then((result) => result.kind === 'funnel' ? result : null).catch(() => null)
       : Promise.resolve(null),
   ]);

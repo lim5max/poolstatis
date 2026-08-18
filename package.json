@@ -18,6 +18,7 @@
     "mcp": "tsx src/cli/mcp.ts",
     "mcp:smoke": "tsx src/cli/mcpSmoke.ts",
     "mcp:package:test": "vitest run test/mcp-package.test.ts test/mcp-runner-preset.test.ts",
+    "test:e2e:analytics": "playwright test e2e/analytics-ui.spec.ts",
     "load:smoke": "tsx src/cli/loadSmoke.ts",
     "retention:run": "tsx src/cli/retention.ts",
     "preflight:migration-023": "node dist/cli/preflightMigration023.js",

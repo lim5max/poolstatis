@@ -4,11 +4,11 @@ import { ArrowRight } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { EmptyState, ErrorNote, HelpDisclosure, Loading, PageHeading, Panel, fmtNum } from '@/components/ui';
-import { AnswerCanvas, EvidenceLine, KpiStrip, type EvidenceTrust } from '@/components/analytics';
+import { EmptyState, ErrorNote, HelpDisclosure, KpiRail, Loading, PageHeading, Panel, fmtNum } from '@/components/ui';
+import { AnswerCanvas, EvidenceLine, type EvidenceTrust } from '@/components/analytics';
+import { AnalyticsDateRange } from '@/components/AnalyticsDateRange';
 import { DisclosureSummary } from '@/components/disclosure';
 import { ManualVisualizationRenderer } from '../analysis/charts';
 import {
@@ -16,9 +16,7 @@ import {
   engagementLabel,
   formatDurationMs,
   formatPercent,
-  rangeDateFrom,
   webPageMetric,
-  type AnalyticsRange,
   type WebAnalyticsResult,
   type WebDimension,
   type WebSessionResult,
@@ -26,16 +24,13 @@ import {
   type WebSessionsResult,
   type WebWorkspaceResult,
 } from '../analysis/operations';
+import { previousAnalyticsRange, type AnalyticsRangeSelection, type ResolvedAnalyticsRange } from '../analysis/ranges';
+import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import type { FunnelQueryResult, TrendQueryResult, VisualizationSpec } from '../analysis/visualization';
 import type { MeasurementAnswerDependency, MeasurementReadiness, MeasurementTrust, Metric, PropertyDefinition } from '../api/types';
 import { useAsync, useStore } from '../store';
 import { AcquisitionPanel } from './Measurement';
 
-const RANGE_OPTIONS: Array<{ value: AnalyticsRange; label: string }> = [
-  { value: '7d', label: 'Last 7 days' },
-  { value: '30d', label: 'Last 30 days' },
-  { value: '90d', label: 'Last 90 days' },
-];
 type BreakdownView = WebDimension | 'conversion';
 const DIMENSIONS: Array<{ value: BreakdownView; label: string }> = [
   { value: 'source', label: 'Sources' },
@@ -155,11 +150,10 @@ export function parseWebRouteKeys(value: string): string[] {
 
 export function WebAnalytics() {
   const { client, project, env } = useStore();
-  const [range, setRange] = useState<AnalyticsRange>('30d');
+  const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const [dimension, setDimension] = useState<BreakdownView>('source');
   const [selectedSession, setSelectedSession] = useState<{ scope: string; session: WebSessionSummary } | null>(null);
   const [sessionsRequested, setSessionsRequested] = useState(false);
-  const [breakdownRequested, setBreakdownRequested] = useState(false);
   const registryScope = `${project ?? ''}\u0000${env}`;
   const registry = useAsync<WebRegistryRead>(async () => {
     const [metrics, properties] = await Promise.all([
@@ -185,13 +179,14 @@ export function WebAnalytics() {
   const metric = registryData?.metric ?? null;
   const outcomeMetric = registryData ? webOutcomeMetric(registryData.metrics) : null;
   const conversionMetric = webConversionMetric(registryData?.metrics ?? []);
-  const primaryScope = `${registryScope}\u0000${range}\u0000${metric?.key ?? ''}`;
-  const outcomeScope = `${registryScope}\u0000${range}\u0000${outcomeMetric?.key ?? ''}`;
+  const primaryScope = `${registryScope}\u0000${range.from}\u0000${range.to}\u0000${metric?.key ?? ''}`;
+  const outcomeScope = `${registryScope}\u0000${range.from}\u0000${range.to}\u0000${outcomeMetric?.key ?? ''}`;
   const primary = useAsync<WebPrimaryRead | null>(async () => {
     if (!metric) return null;
     const base = {
       metric: metric.key,
-      date_from: rangeDateFrom(range),
+      date_from: range.from,
+      date_to: range.to,
       filters: [],
       env,
     };
@@ -201,42 +196,42 @@ export function WebAnalytics() {
       dimensions: [],
     });
     return { scope: primaryScope, metric, overview };
-  }, [project, env, range, metric?.key]);
+  }, [project, env, range.from, range.to, metric?.key]);
   const primaryData = primary.data?.scope === primaryScope ? primary.data : null;
   const comparison = useAsync<WebComparisonRead | null>(async () => {
     if (!metric || !primaryData) return null;
-    const days = Number.parseInt(range, 10);
+    const previous = previousAnalyticsRange(range);
     const result = await client!.operationalQuery<WebAnalyticsResult>(project!, {
-      kind: 'web_analytics', metric: metric.key, date_from: `-${days * 2}d`, date_to: `-${days}d`,
+      kind: 'web_analytics', metric: metric.key, date_from: previous.from, date_to: previous.to,
       filters: [], env, dimensions: [],
     });
     return { scope: primaryScope, result };
-  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at]);
+  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at]);
   const comparisonData = comparison.data?.scope === primaryScope ? comparison.data.result : null;
   const trendRead = useAsync<WebTrendRead | null>(async () => {
     if (!metric || !primaryData) return null;
     const result = await client!.query(project!, {
-      kind: 'trend', metric: metric.key, date_from: rangeDateFrom(range), date_to: null,
+      kind: 'trend', metric: metric.key, date_from: range.from, date_to: range.to,
       interval: 'day', filters: [], env,
     });
     if (result.kind !== 'trend') throw new Error('Trend query returned an unexpected result kind');
     return { scope: primaryScope, result };
-  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at]);
+  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at]);
   const trendData = trendRead.data?.scope === primaryScope ? trendRead.data.result : null;
   const trustRead = useAsync<WebTrustScopedRead | null>(async () => {
     if (!metric || !primaryData) return null;
-    return { scope: primaryScope, result: await readWebTrust(client!, project!, env, metric.key) };
-  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at]);
+    return { scope: primaryScope, result: await readWebTrust(client!, project!, env, metric.key, range.days) };
+  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at]);
   const trustData = trustRead.data?.scope === primaryScope ? trustRead.data.result : null;
   const outcomeRead = useAsync<WebOutcomeRead | null>(async () => {
     if (!outcomeMetric || outcomeMetric.type === 'conversion') return null;
     const result = await client!.query(project!, {
-      kind: 'trend', metric: outcomeMetric.key, date_from: rangeDateFrom(range), date_to: null,
+      kind: 'trend', metric: outcomeMetric.key, date_from: range.from, date_to: range.to,
       interval: 'day', filters: [], env,
     });
     if (result.kind !== 'trend') throw new Error('Outcome query returned an unexpected result kind');
     return { scope: outcomeScope, metric: outcomeMetric, result };
-  }, [project, env, range, outcomeMetric?.key, outcomeMetric?.type]);
+  }, [project, env, range.from, range.to, outcomeMetric?.key, outcomeMetric?.type]);
   const outcomeData = outcomeRead.data?.scope === outcomeScope ? outcomeRead.data : null;
   const outcomeComparison = useAsync<WebOutcomeComparisonRead | null>(async () => {
     if (!outcomeMetric || !outcomeData) return null;
@@ -250,7 +245,7 @@ export function WebAnalytics() {
     if (result.kind !== 'trend') throw new Error('Outcome comparison returned an unexpected result kind');
     return { scope: outcomeScope, result };
   }, [
-    project, env, range, outcomeMetric?.key, outcomeData?.result.meta.computed_at,
+    project, env, range.from, range.to, outcomeMetric?.key, outcomeData?.result.meta.computed_at,
     outcomeData?.result.meta.date_range?.from, outcomeData?.result.meta.date_range?.to,
   ]);
   const outcomeComparisonData = outcomeComparison.data?.scope === outcomeScope
@@ -258,17 +253,18 @@ export function WebAnalytics() {
     : null;
   const operationalDimension = dimension !== 'conversion' ? dimension : null;
   const secondary = useAsync<WebSecondaryRead | null>(async () => {
-    if (!metric || !primaryData || !breakdownRequested || !operationalDimension) return null;
+    if (!metric || !primaryData || !operationalDimension) return null;
     const result = await client!.operationalQuery<WebAnalyticsResult>(project!, {
       kind: 'web_analytics',
       metric: metric.key,
-      date_from: rangeDateFrom(range),
+      date_from: range.from,
+      date_to: range.to,
       filters: [],
       env,
       dimensions: [operationalDimension],
     });
     return { scope: primaryScope, dimension: operationalDimension, result };
-  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension, breakdownRequested]);
+  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension]);
   const secondaryData = secondary.data?.scope === primaryScope
     && secondary.data.dimension === operationalDimension ? secondary.data.result : null;
   const conversionFrom = primaryData?.overview.meta.date_range.from ?? '';
@@ -290,18 +286,17 @@ export function WebAnalytics() {
   const sessions = useAsync<WebSessionsRead | null>(async () => {
     if (!metric || !primaryData || !sessionsRequested) return null;
     const result = await client!.operationalQuery<WebSessionsResult>(project!, {
-      kind: 'web_sessions', metric: metric.key, date_from: rangeDateFrom(range), filters: [], env, limit: 50,
+      kind: 'web_sessions', metric: metric.key, date_from: range.from, date_to: range.to, filters: [], env, limit: 50,
     });
     return { scope: primaryScope, result };
-  }, [project, env, range, metric?.key, primaryData?.overview.meta.computed_at, sessionsRequested]);
+  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at, sessionsRequested]);
   const sessionsData = sessions.data?.scope === primaryScope ? sessions.data.result : null;
   const currentSession = selectedSession?.scope === primaryScope ? selectedSession.session : null;
 
   useEffect(() => {
     setSelectedSession(null);
     setSessionsRequested(false);
-    setBreakdownRequested(false);
-  }, [project, env, range]);
+  }, [project, env, range.from, range.to]);
 
   if (registry.loading || (!registryData && !registry.error)) return <WebAnalyticsSkeleton />;
   if (registry.error) return <ErrorNote>{registry.error}</ErrorNote>;
@@ -315,7 +310,7 @@ export function WebAnalytics() {
     const affectedAnswerIds = webAffectedAnswerIds(readinessData, setupData.metrics);
     return (
       <div className="space-y-5">
-        <ScreenHeader range={range} onRange={setRange} showRange={false} />
+        <ScreenHeader range={range} selection={rangeSelection} onRange={setRangeSelection} showRange={false} />
         <WebSetupOrder canonicalReady={false} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} answerDependencies={readinessData?.answer_dependencies ?? []} />
         <WebSetup metric={setupData.proposedMetric} onReady={registry.reload} />
       </div>
@@ -344,55 +339,17 @@ export function WebAnalytics() {
 
   return (
     <div className="space-y-5">
-      <ScreenHeader range={range} onRange={(value) => { setRange(value); setSelectedSession(null); }} />
+      <ScreenHeader range={range} selection={rangeSelection} onRange={(value) => { setRangeSelection(value); setSelectedSession(null); }} />
 
       {(!canonicalReady || !acquisitionTrusted || !outcomeReady) && (
         <WebSetupOrder canonicalReady={canonicalReady} acquisitionReady={acquisitionTrusted} outcomeReady={outcomeReady} affectedAnswerIds={affectedAnswerIds} answerDependencies={readinessData?.answer_dependencies ?? []} />
       )}
 
-      {canonicalReady && acquisitionTrusted && outcomeReady && (
-        <WebHealthAnswer
-          current={overview}
-          previous={comparisonData}
-          comparisonState={comparisonData ? 'ready' : comparison.error ? 'unavailable' : 'loading'}
-          range={range}
-          trust={trust}
-          trustLoading={!trustData && !trustRead.error}
-          env={env}
-        />
-      )}
-
-      {outcomeMetric && (
-        <WebOutcomeAnswer
-          metric={outcomeMetric}
-          current={outcomeData?.result ?? null}
-          currentState={outcomeMetric.type === 'conversion'
-            ? 'unsupported'
-            : outcomeRead.error
-              ? 'unavailable'
-              : outcomeData
-                ? 'ready'
-                : 'loading'}
-          currentError={outcomeRead.error}
-          previous={outcomeComparisonData}
-          comparisonState={outcomeComparisonData
-            ? 'ready'
-            : outcomeComparison.error
-              ? 'unavailable'
-              : outcomeData
-                ? 'loading'
-                : 'unavailable'}
-          range={range}
-          env={env}
-          onRetry={outcomeRead.reload}
-        />
-      )}
-
-      <KpiStrip items={[
-        { label: 'Visitors', value: fmtNum(overview.summary.visitors), note: 'resolved actors' },
-        { label: 'Sessions', value: fmtNum(overview.summary.sessions), note: 'actor + session ID' },
-        { label: 'Page views', value: fmtNum(overview.summary.page_views), note: 'accepted canonical views' },
-        { label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? null : formatDurationMs(overview.summary.average_session_duration_ms), note: 'complete sessions only' },
+      <KpiRail items={[
+        { label: 'Visitors', value: fmtNum(overview.summary.visitors), detail: 'resolved actors' },
+        { label: 'Sessions', value: fmtNum(overview.summary.sessions), detail: 'actor + session ID' },
+        { label: 'Page views', value: fmtNum(overview.summary.page_views), detail: 'accepted canonical views' },
+        { label: 'Average duration', value: overview.summary.average_session_duration_ms === null ? 'Unavailable' : formatDurationMs(overview.summary.average_session_duration_ms), detail: 'complete sessions only' },
       ]} />
 
       <EvidenceLine
@@ -416,12 +373,51 @@ export function WebAnalytics() {
         : trendRead.error ? <div><ErrorNote>{trendRead.error}</ErrorNote><Button variant="outline" className="mt-3 h-11" onClick={trendRead.reload}>Retry trend</Button></div>
           : <Loading what="Loading traffic trend…" />}
 
+      {(canonicalReady && acquisitionTrusted && outcomeReady) || outcomeMetric ? (
+        <div className="grid gap-4 xl:grid-cols-2">
+          {canonicalReady && acquisitionTrusted && outcomeReady && (
+            <WebHealthAnswer
+              current={overview}
+              previous={comparisonData}
+              comparisonState={comparisonData ? 'ready' : comparison.error ? 'unavailable' : 'loading'}
+              range={range}
+              trust={trust}
+              trustLoading={!trustData && !trustRead.error}
+              env={env}
+            />
+          )}
+          {outcomeMetric && (
+            <WebOutcomeAnswer
+              metric={outcomeMetric}
+              current={outcomeData?.result ?? null}
+              currentState={outcomeMetric.type === 'conversion'
+                ? 'unsupported'
+                : outcomeRead.error
+                  ? 'unavailable'
+                  : outcomeData
+                    ? 'ready'
+                    : 'loading'}
+              currentError={outcomeRead.error}
+              previous={outcomeComparisonData}
+              comparisonState={outcomeComparisonData
+                ? 'ready'
+                : outcomeComparison.error
+                  ? 'unavailable'
+                  : outcomeData
+                    ? 'loading'
+                    : 'unavailable'}
+              range={range}
+              env={env}
+              onRetry={outcomeRead.reload}
+            />
+          )}
+        </div>
+      ) : null}
+
       <AnswerCanvas>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
           <h2 className="text-sm font-semibold">Traffic breakdown</h2>
-          {!breakdownRequested
-            ? <Badge variant="outline">Load on request</Badge>
-            : !breakdownResponse && operationalDimension !== null
+          {!breakdownResponse && operationalDimension !== null
             ? <Badge variant="outline">Loading selected view</Badge>
             : breakdownResponse && breakdownResponse.meta.truncated_dimensions.length > 0
             ? <Badge variant="outline">Top values · truncated</Badge>
@@ -431,7 +427,7 @@ export function WebAnalytics() {
         </div>
         <div className="p-4 sm:p-5">
         <div className="mb-4 max-w-full overflow-x-auto">
-          <Tabs value={dimension} onValueChange={(value) => { setDimension(value as BreakdownView); setBreakdownRequested(value !== 'conversion'); }}>
+          <Tabs value={dimension} onValueChange={(value) => setDimension(value as BreakdownView)}>
             <TabsList className="w-max">
               {DIMENSIONS.map((item) => <TabsTrigger key={item.value} value={item.value}>{item.label}</TabsTrigger>)}
             </TabsList>
@@ -454,12 +450,6 @@ export function WebAnalytics() {
                 : 'No active non-page-view metric is mapped to surface:web, so Poolstatis will not display a zero.'}
             </p>
             <Button asChild variant="outline" className="mt-4 h-11"><Link to={outcomeMetric ? '/analyze' : '/registry'}>{outcomeMetric ? 'Analyze outcome' : 'Review outcomes'}</Link></Button>
-          </div>
-        ) : !breakdownRequested ? (
-          <div className="flex flex-col items-start gap-3 border-y border-dashed px-4 py-7">
-            <div className="text-lg font-semibold">Traffic dimensions load when requested</div>
-            <p className="max-w-2xl text-sm text-muted-foreground">The current Web answer stays visible while sources, pages and campaign dimensions load independently.</p>
-            <Button variant="outline" className="h-11" onClick={() => setBreakdownRequested(true)}>Load traffic breakdown</Button>
           </div>
         ) : secondary.loading ? (
           <Loading what={`Loading ${DIMENSIONS.find((item) => item.value === dimension)?.label ?? dimension} breakdown…`} />
@@ -580,7 +570,7 @@ export function WebAnalytics() {
         />
       )}
 
-      <AcquisitionPanel metrics={metrics} env={env} trusted={acquisitionTrusted} />
+      <AcquisitionPanel metrics={metrics} env={env} trusted={acquisitionTrusted} range={range} />
     </div>
   );
 }
@@ -589,7 +579,7 @@ function WebHealthAnswer({ current, previous, comparisonState, range, trust, tru
   current: WebAnalyticsResult;
   previous: WebAnalyticsResult | null;
   comparisonState: 'loading' | 'ready' | 'unavailable';
-  range: AnalyticsRange;
+  range: ResolvedAnalyticsRange;
   trust: WebTrustRead;
   trustLoading: boolean;
   env: string;
@@ -598,7 +588,7 @@ function WebHealthAnswer({ current, previous, comparisonState, range, trust, tru
   const previousViews = previous?.summary.page_views ?? null;
   const delta = previousViews === null ? null : currentViews - previousViews;
   const deltaRate = previousViews === null || previousViews === 0 || delta === null ? null : delta / previousViews;
-  const days = Number.parseInt(range, 10);
+  const days = range.days;
   const comparison = comparisonState === 'loading'
     ? 'Previous-period comparison is loading.'
     : delta === null
@@ -642,7 +632,7 @@ function WebOutcomeAnswer({ metric, current, currentState, currentError, previou
   currentError: string | null;
   previous: TrendQueryResult | null;
   comparisonState: 'loading' | 'ready' | 'unavailable';
-  range: AnalyticsRange;
+  range: ResolvedAnalyticsRange;
   env: string;
   onRetry: () => void;
 }) {
@@ -684,7 +674,7 @@ function WebOutcomeAnswer({ metric, current, currentState, currentError, previou
   const deltaRate = delta !== null && previousValue !== null && previousValue !== 0
     ? delta / Math.abs(previousValue)
     : null;
-  const days = Number.parseInt(range, 10);
+  const days = range.days;
   const comparison = comparisonState === 'loading'
     ? 'Previous exact-period comparison is loading.'
     : comparisonState === 'unavailable' || delta === null
@@ -940,11 +930,11 @@ function WebSetup({ metric, onReady }: { metric: Metric | null; onReady: () => v
 
   return (
     <>
-      <KpiStrip items={[
-        { label: 'Visitors', value: null, fallback: '—' },
-        { label: 'Sessions', value: null, fallback: '—' },
-        { label: 'Sources & UTM', value: null, fallback: '—' },
-        { label: 'Top pages', value: null, fallback: '—' },
+      <KpiRail items={[
+        { label: 'Visitors', value: '—' },
+        { label: 'Sessions', value: '—' },
+        { label: 'Sources & UTM', value: '—' },
+        { label: 'Top pages', value: '—' },
       ]} />
       <AnswerCanvas>
         {metric ? (
@@ -1051,25 +1041,19 @@ function WebRepair({ state }: { state: Exclude<WebDefinitionRepairState, { kind:
   );
 }
 
-function ScreenHeader({ range, onRange, showRange = true }: {
-  range: AnalyticsRange;
-  onRange: (range: AnalyticsRange) => void;
+function ScreenHeader({ range, selection, onRange, showRange = true }: {
+  range: ResolvedAnalyticsRange;
+  selection: AnalyticsRangeSelection;
+  onRange: (range: AnalyticsRangeSelection) => void;
   showRange?: boolean;
 }) {
   return (
     <PageHeading
       title="Web"
       lead="Traffic, engagement, and outcomes."
+      meta={`${range.label} · UTC`}
       help="Traffic uses canonical browser events. Outcomes appear only when a purpose-backed metric is registered and the exact query is supported."
-      actions={showRange ? <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
-          Period
-          <Select value={range} onValueChange={(value) => onRange(value as AnalyticsRange)}>
-            <SelectTrigger className="!h-11 w-40"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {RANGE_OPTIONS.map((item) => <SelectItem className="min-h-11" key={item.value} value={item.value}>{item.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </label> : undefined}
+      actions={showRange ? <AnalyticsDateRange value={selection} onChange={onRange} /> : undefined}
     />
   );
 }
@@ -1107,7 +1091,7 @@ function UnavailableDimension({ label, unavailable }: {
 function SessionDetail({ session, metric, range, onClose }: {
   session: WebSessionSummary;
   metric: string;
-  range: AnalyticsRange;
+  range: ResolvedAnalyticsRange;
   onClose: () => void;
 }) {
   const { client, project, env } = useStore();
@@ -1116,11 +1100,12 @@ function SessionDetail({ session, metric, range, onClose }: {
     metric,
     session_id: session.session_id,
     actor_id: session.actor_id,
-    date_from: rangeDateFrom(range),
+    date_from: range.from,
+    date_to: range.to,
     filters: [],
     page_limit: 100,
     env,
-  }), [project, env, metric, session.session_id, session.actor_id, range]);
+  }), [project, env, metric, session.session_id, session.actor_id, range.from, range.to]);
 
   return (
     <section className="overflow-hidden rounded-dialog border bg-card" aria-labelledby="web-session-title">
@@ -1247,10 +1232,11 @@ async function readWebTrust(
   project: string,
   env: string,
   metric: string,
+  days: number,
 ): Promise<WebTrustRead> {
   if (typeof client.measurementTrust !== 'function') return { result: null, unavailable: true };
   try {
-    return { result: await client.measurementTrust(project, { metric_key: metric, env, since_days: 30, target_filters: [] }), unavailable: false };
+    return { result: await client.measurementTrust(project, { metric_key: metric, env, since_days: Math.min(days, 365), target_filters: [] }), unavailable: false };
   } catch {
     return { result: null, unavailable: true };
   }

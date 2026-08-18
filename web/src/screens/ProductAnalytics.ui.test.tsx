@@ -129,17 +129,40 @@ describe('Product answer-first surface', () => {
     mockedStore.mockReturnValue(productStore());
   });
 
+  it('runs the default answer automatically and applies a custom period without a Run answer gate', async () => {
+    const current = productStore() as any;
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    expect(await screen.findByRole('heading', { name: 'Product' })).toBeInTheDocument();
+    await waitFor(() => expect(current.client.query).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: 'Run answer' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh answer' })).toBeInTheDocument();
+
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-10' } });
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-12' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
+
+    await waitFor(() => expect(current.client.query).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      kind: 'trend',
+      date_from: '2026-08-10T00:00:00.000Z',
+      date_to: '2026-08-13T00:00:00.000Z',
+    })));
+    expect(current.client.measurementTrust).toHaveBeenCalledWith('alpha', expect.objectContaining({ since_days: 3 }));
+  });
+
   it('puts templates and a real answer before advanced query controls', async () => {
     const current = productStore() as any;
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Product' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Answer templates' })).toBeInTheDocument();
-    expect(screen.getByText('Current answer')).toBeInTheDocument();
+    expect(screen.getByRole('tablist', { name: 'Analysis view' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Product health' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Edit analysis').closest('details')).not.toHaveAttribute('open');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
     await waitFor(() => expect(screen.getByText(/Observed · Trusted · 34 events ·/)).toBeInTheDocument());
     const answer = screen.getByRole('region', { name: 'Canonical answer' });
     expect(within(answer).getByText('Takeaway')).toBeInTheDocument();
@@ -189,7 +212,6 @@ describe('Product answer-first surface', () => {
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
     const official = await screen.findByRole('button', { name: 'Save as official' });
     expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
     fireEvent.click(official);
@@ -204,7 +226,6 @@ describe('Product answer-first surface', () => {
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
     expect(await screen.findByRole('button', { name: 'Save answer' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save as official' })).not.toBeInTheDocument();
   });
@@ -215,7 +236,6 @@ describe('Product answer-first surface', () => {
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
     expect(await screen.findByRole('button', { name: 'Save answer' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save as official' })).not.toBeInTheDocument();
     expect(current.client.setAnalysisViewOfficial).not.toHaveBeenCalled();
@@ -230,7 +250,6 @@ describe('Product answer-first surface', () => {
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Save as official' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The answer was saved, but official status was not applied.');
@@ -256,8 +275,6 @@ describe('Product answer-first surface', () => {
 
     render(<MemoryRouter initialEntries={['/analyze/product?metric=activation_completed']}><ProductAnalytics /></MemoryRouter>);
 
-    expect(await screen.findByText(/Run the prebuilt answer for/)).toHaveTextContent('activation_completed');
-    fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
     await waitFor(() => expect(current.client.query).toHaveBeenCalled());
     expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({
       kind: 'trend',
@@ -295,7 +312,6 @@ describe('Product answer-first surface', () => {
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Run answer' }));
     expect(await screen.findByText('Partial evidence')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
     await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
@@ -344,13 +360,12 @@ describe('Product answer-first surface', () => {
     render(<MemoryRouter initialEntries={['/analyze/funnels?funnel=checkout&env=prod&from_step=1&to_step=2']}><ProductAnalytics surface="funnels" /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Funnels' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Answer templates' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tablist', { name: 'Analysis view' })).not.toBeInTheDocument();
     expect(screen.getByText('Activation funnel')).toBeInTheDocument();
     expect(screen.getByText('Edit funnel analysis')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Edit funnel analysis'));
     expect(screen.getByRole('combobox', { name: 'Saved funnel' })).toHaveTextContent('Checkout · checkout');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run answer' }));
     expect(await screen.findByText('Biggest loss')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Started → Completed' })).toBeInTheDocument();
     expect(screen.getByText(/30 actors lost · 50% drop/)).toBeInTheDocument();
