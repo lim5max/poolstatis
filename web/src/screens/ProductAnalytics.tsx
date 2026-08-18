@@ -96,7 +96,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const [running, setRunning] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [officialSaveState, setOfficialSaveState] = useState<'idle' | 'saving' | 'saved' | 'saved_unofficial' | 'error'>('idle');
-  const [savedAnswerId, setSavedAnswerId] = useState<string | null>(null);
+  const [savedAnswer, setSavedAnswer] = useState<{ id: string; queryScope: string; project: string } | null>(null);
   const officialSaveAccess = accountMutationAccess(
     accountMode.data,
     'set_official_answers',
@@ -105,6 +105,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   );
   const officialSaveAllowed = mutationAllowed(officialSaveAccess);
   const runGeneration = useRef(0);
+  const saveGeneration = useRef(0);
   const currentScope = `${project ?? 'none'}:${env}`;
   const scopeRef = useRef(currentScope);
   scopeRef.current = currentScope;
@@ -118,9 +119,11 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunning(false);
     setSaveState('idle');
     setOfficialSaveState('idle');
-    setSavedAnswerId(null);
+    setSavedAnswer(null);
+    saveGeneration.current += 1;
     return () => {
       runGeneration.current += 1;
+      saveGeneration.current += 1;
     };
   }, [project, env, requestedResource]);
 
@@ -144,6 +147,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     range.from,
     range.to,
   ]);
+  const analysisScopeRef = useRef(analysisScopeKey);
+  analysisScopeRef.current = analysisScopeKey;
 
   const selectTemplate = (next: AnalysisTemplate) => {
     if (resolveTemplateCapability(next.key, CORE_ANALYZE_CAPABILITIES).status !== 'available') return;
@@ -159,7 +164,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunning(false);
     setSaveState('idle');
     setOfficialSaveState('idle');
-    setSavedAnswerId(null);
+    setSavedAnswer(null);
+    saveGeneration.current += 1;
   };
 
   const execute = async () => {
@@ -173,7 +179,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunning(true);
     setSaveState('idle');
     setOfficialSaveState('idle');
-    setSavedAnswerId(null);
+    setSavedAnswer(null);
+    saveGeneration.current += 1;
     setRunError(null);
     const dates = { from: range.from, to: range.to };
     const selectedMetric = compatibleMetrics.find((metric) => metric.key === selectedKey);
@@ -239,7 +246,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setRunning(false);
     setSaveState('idle');
     setOfficialSaveState('idle');
-    setSavedAnswerId(null);
+    setSavedAnswer(null);
+    saveGeneration.current += 1;
   };
 
   useEffect(() => {
@@ -269,16 +277,27 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     if (makeOfficial && (!officialSaveAllowed || officialSaveState === 'saved')) return;
     if (!makeOfficial && saveState === 'saved') return;
 
-    let answerId = savedAnswerId;
+    const generation = saveGeneration.current + 1;
+    saveGeneration.current = generation;
+    const saveQueryScope = exactCurrentRun.queryScope;
+    const saveProject = project;
+    const saveClient = client;
+    const isCurrentSave = () => saveGeneration.current === generation
+      && analysisScopeRef.current === saveQueryScope;
+    let answerId = savedAnswer?.queryScope === saveQueryScope && savedAnswer.project === saveProject
+      ? savedAnswer.id
+      : null;
     if (!answerId) {
       setSaveState('saving');
       if (makeOfficial) setOfficialSaveState('saving');
       try {
-        const saved = await client.createAnalysisView(project, savedAnswerInput(exactCurrentRun, template.key));
+        const saved = await saveClient.createAnalysisView(saveProject, savedAnswerInput(exactCurrentRun, template.key));
+        if (!isCurrentSave()) return;
         answerId = saved.id;
-        setSavedAnswerId(saved.id);
+        setSavedAnswer({ id: saved.id, queryScope: saveQueryScope, project: saveProject });
         setSaveState('saved');
       } catch {
+        if (!isCurrentSave()) return;
         setSaveState('error');
         if (makeOfficial) setOfficialSaveState('error');
         return;
@@ -288,9 +307,11 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     if (!makeOfficial) return;
     setOfficialSaveState('saving');
     try {
-      await client.setAnalysisViewOfficial(project, answerId, true);
+      await saveClient.setAnalysisViewOfficial(saveProject, answerId, true);
+      if (!isCurrentSave()) return;
       setOfficialSaveState('saved');
     } catch {
+      if (!isCurrentSave()) return;
       setOfficialSaveState('saved_unofficial');
     }
   };
