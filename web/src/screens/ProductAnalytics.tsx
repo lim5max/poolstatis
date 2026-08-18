@@ -292,10 +292,11 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       if (makeOfficial) setOfficialSaveState('saving');
       try {
         const saved = await saveClient.createAnalysisView(saveProject, savedAnswerInput(exactCurrentRun, template.key));
-        if (!isCurrentSave()) return;
         answerId = saved.id;
-        setSavedAnswer({ id: saved.id, queryScope: saveQueryScope, project: saveProject });
-        setSaveState('saved');
+        if (isCurrentSave()) {
+          setSavedAnswer({ id: saved.id, queryScope: saveQueryScope, project: saveProject });
+          setSaveState('saved');
+        }
       } catch {
         if (!isCurrentSave()) return;
         setSaveState('error');
@@ -305,7 +306,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     }
 
     if (!makeOfficial) return;
-    setOfficialSaveState('saving');
+    if (isCurrentSave()) setOfficialSaveState('saving');
     try {
       await saveClient.setAnalysisViewOfficial(saveProject, answerId, true);
       if (!isCurrentSave()) return;

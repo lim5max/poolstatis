@@ -299,6 +299,41 @@ describe('Product answer-first surface', () => {
     expect(current.client.setAnalysisViewOfficial).not.toHaveBeenCalledWith('alpha', 'view-stale', true);
   });
 
+  it('finishes a direct official save on its captured answer without contaminating the next period', async () => {
+    const current = productStore() as any;
+    current.client.accountMode.mockResolvedValue(accountMode({ kind: 'personal', official: true }));
+    const staleOfficial = deferred<{ id: string }>();
+    current.client.createAnalysisView
+      .mockImplementationOnce(() => staleOfficial.promise)
+      .mockResolvedValueOnce({ id: 'view-current' });
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    const officialButton = await screen.findByRole('button', { name: 'Save as official' });
+    const initialResult = await current.client.query.mock.results[0].value;
+    fireEvent.click(officialButton);
+    expect(screen.getByRole('button', { name: 'Saving official answer…' })).toBeDisabled();
+
+    const pendingPeriod = deferred<typeof initialResult>();
+    current.client.query.mockImplementationOnce(() => pendingPeriod.promise);
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    const periodTrigger = within(period).getByRole('button', { name: /^Period:/ });
+    periodTrigger.focus();
+    fireEvent.keyDown(periodTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Today' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Updating…');
+
+    await act(async () => { staleOfficial.resolve({ id: 'view-official-stale' }); });
+    await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledWith('alpha', 'view-official-stale', true));
+    await act(async () => { pendingPeriod.resolve(initialResult); });
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save answer' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save as official' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save as official' }));
+    await waitFor(() => expect(current.client.setAnalysisViewOfficial).toHaveBeenCalledWith('alpha', 'view-current', true));
+  });
+
   it('does not offer official status to a project secret', async () => {
     const current = productStore() as any;
     mockedStore.mockReturnValue(current);
