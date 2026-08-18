@@ -32,11 +32,11 @@ describe('Core light-first visual system', () => {
     expect(existsSync(resolve(process.cwd(), 'public/fonts/google-sans-flex-latin.woff2'))).toBe(true);
     expect(css).toContain('--text-xs: 0.9375rem');
     expect(css).toContain('--text-sm: 1rem');
-    expect(css).toContain('--radius-control: 9999px');
-    expect(css).toContain('--radius-panel: 1.5rem');
-    expect(button).toContain('rounded-full');
-    expect(input).toContain('rounded-full');
-    expect(select).toContain('rounded-full');
+    expect(css).toContain('--radius-control: 0.625rem');
+    expect(css).toContain('--radius-panel: 0.75rem');
+    expect(button).toContain('rounded-field');
+    expect(input).toContain('rounded-field');
+    expect(select).toContain('rounded-field');
     expect(card).toContain('bg-card');
     expect(dropdown).toContain('bg-popover');
     expect(select).toContain('bg-popover');

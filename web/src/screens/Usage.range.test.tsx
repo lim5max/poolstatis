@@ -118,8 +118,8 @@ describe('Usage month range', () => {
     expect(screen.getByText('accepted events')).toBeInTheDocument();
     expect(screen.getByText('62 / day')).toBeInTheDocument();
     expect(screen.getByText('7-day moving average')).toBeInTheDocument();
-    expect(screen.getByText(/As of Aug 10, 2026/)).toBeInTheDocument();
-    expect(screen.getByText(/3 of 7 calendar days with accepted events/)).toBeInTheDocument();
+    expect(screen.queryByText('Forecast evidence')).not.toBeInTheDocument();
+    expect(screen.queryByText(/3 of 7 calendar days with accepted events/)).not.toBeInTheDocument();
     expect(screen.getByText('1,922')).toBeInTheDocument();
     expect(screen.getByText('+25%')).toBeInTheDocument();
     expect(screen.getAllByText('Projected Aug 17, 2026')).toHaveLength(2);

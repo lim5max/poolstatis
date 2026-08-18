@@ -312,7 +312,7 @@ function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure, o
       <div className="mt-4" {...(capped ? { role: 'img', 'aria-label': `${Math.round(progress! * 100)} percent of the configured hard limit used` } : {})}>
         {progress !== null && <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all motion-reduce:transition-none" style={{ width: `${progress * 100}%` }} /></div>}
       </div>
-      <dl className="mt-5 grid divide-y rounded-control border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+      <dl className="mt-5 grid divide-y border-y sm:grid-cols-3 sm:divide-x sm:divide-y-0">
         <UsageFact label="Current pace" value={usage.pace.events_per_day_7d === null ? 'Unavailable' : `${whole(Math.round(usage.pace.events_per_day_7d))} / day`} note="7-day moving average" />
         <UsageFact label="Cycle forecast" value={usage.pace.projected_cycle_end === null ? 'Unavailable' : whole(Math.round(usage.pace.projected_cycle_end))} note={forecastNote} />
         <UsageFact
@@ -336,15 +336,6 @@ function UsageHero({ usage, planName, mode, onReviewContributors, onConfigure, o
             <Button variant="outline" className="h-11" onClick={onConfigure}>Configure cap</Button>
           )}
       </div>
-      <details className="mt-4 border-t pt-1">
-        <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Forecast evidence</DisclosureSummary>
-        <div className="space-y-1 px-3 pb-3 text-sm text-muted-foreground">
-          <p>As of {formatForecastDate(usage.evidence.as_of) ?? 'Unavailable'} · {usage.pace.observed_days} of {usage.evidence.sample?.eligible ?? 7} calendar days with accepted events</p>
-          <p>{usage.evidence.aggregation ?? 'Accepted events are measured from the immutable usage ledger in UTC.'}</p>
-          {usage.evidence.warnings.map((warning) => <p key={warning.code}>{warning.message}</p>)}
-          {usage.evidence.unavailable_reasons.map((reason) => <p key={reason.code}>{reason.message}</p>)}
-        </div>
-      </details>
     </Panel>
   );
 }
@@ -624,7 +615,7 @@ export function Usage() {
     <div className="space-y-4">
       <PageHeading
         title="Usage"
-        lead="Usage, forecast, and limits."
+        lead="Current volume and limit."
         help="Usage counts accepted events from the immutable UTC ledger. Forecasts are estimates; plan changes and delivered alerts remain outside Core."
       />
       {result.loading || (!usage && !result.error) ? <Loading what="Loading usage ledger…" /> : result.error ? <RecoverableError onRetry={result.reload}>{result.error}</RecoverableError> : usage && (

@@ -250,7 +250,10 @@ describe('Experience answer-first control surface', () => {
     await screen.findByRole('region', { name: 'Aggregate friction answer' });
 
     const period = screen.getByRole('group', { name: 'Analytics period' });
-    fireEvent.click(period.querySelector('button:last-child')!);
+    const periodTrigger = within(period).getByRole('button', { name: /^Period:/ });
+    periodTrigger.focus();
+    fireEvent.keyDown(periodTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Custom period…/ }));
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-04' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));

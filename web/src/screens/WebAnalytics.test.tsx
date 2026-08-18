@@ -13,10 +13,18 @@ vi.mock('../store', async (importOriginal) => ({
 
 vi.mock('../analysis/charts', () => ({
   ManualVisualizationRenderer: () => <div data-testid="web-trend" />,
+  TrendChart: () => <div data-testid="web-trend" />,
 }));
 
 const mockedStore = vi.mocked(useStore);
 const routerFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
+
+function openCustomPeriod(period: HTMLElement) {
+  const trigger = within(period).getByRole('button', { name: /^Period:/ });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'Enter', code: 'Enter' });
+  fireEvent.click(screen.getByRole('menuitem', { name: /Custom period…/ }));
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -275,7 +283,7 @@ describe('Web analytics partial availability', () => {
     expect(await screen.findByText('telegram')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load traffic breakdown' })).not.toBeInTheDocument();
 
-    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    openCustomPeriod(period);
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-02' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
@@ -308,8 +316,8 @@ describe('Web analytics partial availability', () => {
 
     expect((await screen.findAllByText('Visitors')).length).toBeGreaterThan(0);
     expect(within(screen.getByText('resolved actors').parentElement!).getByText('8')).toBeInTheDocument();
-    expect(within(screen.getByText('actor + session ID').parentElement!).getByText('11')).toBeInTheDocument();
-    expect(within(screen.getByText('accepted canonical views').parentElement!).getByText('20')).toBeInTheDocument();
+    expect(within(screen.getByText('canonical sessions').parentElement!).getByText('11')).toBeInTheDocument();
+    expect(within(screen.getByText('accepted views').parentElement!).getByText('20')).toBeInTheDocument();
     expect(await screen.findByText('telegram')).toBeInTheDocument();
     expect(operationalQuery.mock.calls.filter(([, query]) => query.kind === 'web_sessions')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Load recent sessions' }));
@@ -322,7 +330,7 @@ describe('Web analytics partial availability', () => {
     expect(actorLink).toHaveClass('text-foreground', 'hover:bg-muted');
     expect(actorLink).not.toHaveClass('text-primary');
 
-    expect(screen.getByText(/Observed · Unavailable · 20 events ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Unavailable · 20 events ·/)).toBeInTheDocument();
 
     await act(async () => {
       fireEvent.mouseDown(screen.getByRole('tab', { name: 'Pages' }), { button: 0, ctrlKey: false });
@@ -575,7 +583,7 @@ describe('Web analytics partial availability', () => {
     })));
 
     const period = screen.getByRole('group', { name: 'Analytics period' });
-    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    openCustomPeriod(period);
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-07-24' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-07-30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
@@ -817,7 +825,7 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByRole('link', { name: 'Review and activate' })).toHaveAttribute('href', '/registry');
   });
 
-  it('keeps acquisition secondary until canonical page views are activated', async () => {
+  it('keeps setup guidance focused until canonical page views are activated', async () => {
     const acquisitionMetric = {
       ...metric,
       id: 'landing-visits',
@@ -839,35 +847,29 @@ describe('Web analytics partial availability', () => {
     render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
     expect(await screen.findByText('Add website analytics')).toBeInTheDocument();
-    const setupOrder = screen.getByText('Setup order');
-    expect(setupOrder.closest('details')).not.toHaveAttribute('open');
-    expect(screen.getByText('1. Canonical page views')).toBeInTheDocument();
+    expect(screen.queryByText('Setup order')).not.toBeInTheDocument();
+    expect(screen.queryByText('1. Canonical page views')).not.toBeInTheDocument();
     expect(screen.queryByText('Acquisition / UTM')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run UTM report' })).not.toBeInTheDocument();
   });
 
-  it('links missing web definitions to the exact affected saved answer', async () => {
+  it('does not mix registry readiness diagnostics into the analytics overview', async () => {
+    const measurementReadiness = vi.fn().mockResolvedValue({ groups: [] });
     mockedStore.mockReturnValue({
       project: 'alpha',
       env: 'prod',
       client: {
         metrics: vi.fn().mockResolvedValue([]),
         properties: vi.fn().mockResolvedValue([]),
-        measurementReadiness: vi.fn().mockResolvedValue({
-          groups: [{
-            key: 'properties',
-            gaps: [{ definition_ref: '$utm_source', affected_answer_ids: ['answer-web-conversion'] }],
-          }],
-        }),
+        measurementReadiness,
       },
     } as never);
 
     render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
 
-    expect(await screen.findByRole('link', { name: 'answer-web-conversion' })).toHaveAttribute(
-      'href',
-      '/analyze/saved?answer=answer-web-conversion',
-    );
+    expect(await screen.findByText('Add website analytics')).toBeInTheDocument();
+    expect(measurementReadiness).not.toHaveBeenCalled();
+    expect(screen.queryByText('Affected saved answers')).not.toBeInTheDocument();
   });
 });
 

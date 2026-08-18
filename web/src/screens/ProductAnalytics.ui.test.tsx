@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountMode } from '../api/types';
@@ -23,6 +23,12 @@ const metric = {
   category: 'activation', tags: [], type: 'unique_actors', source: { event: 'product.used' }, status: 'active',
   owner: null, deprecation_reason: null, deprecated_at: null,
 } as const;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 function accountMode({
   deployment = 'self_host', kind = 'secret', role = null, official = false,
@@ -137,10 +143,13 @@ describe('Product answer-first surface', () => {
     expect(await screen.findByRole('heading', { name: 'Product' })).toBeInTheDocument();
     await waitFor(() => expect(current.client.query).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'Run answer' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Refresh answer' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument();
 
     const period = screen.getByRole('group', { name: 'Analytics period' });
-    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    const periodTrigger = within(period).getByRole('button', { name: /^Period:/ });
+    periodTrigger.focus();
+    fireEvent.keyDown(periodTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Custom period…/ }));
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-10' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-12' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
@@ -151,6 +160,30 @@ describe('Product answer-first surface', () => {
       date_to: '2026-08-13T00:00:00.000Z',
     })));
     expect(current.client.measurementTrust).toHaveBeenCalledWith('alpha', expect.objectContaining({ since_days: 3 }));
+  });
+
+  it('keeps the current answer visible while a new period is loading', async () => {
+    const current = productStore() as any;
+    mockedStore.mockReturnValue(current);
+    render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
+
+    const answer = await screen.findByRole('region', { name: 'Canonical answer' }, { timeout: 4_000 });
+    const previousResult = await current.client.query.mock.results[0].value;
+    const pending = deferred<typeof previousResult>();
+    current.client.query.mockImplementationOnce(() => pending.promise);
+
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    const periodTrigger = within(period).getByRole('button', { name: /^Period:/ });
+    periodTrigger.focus();
+    fireEvent.keyDown(periodTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Today' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Updating…');
+    expect(answer).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Canonical answer' })).toBeVisible();
+
+    await act(async () => { pending.resolve(previousResult); });
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
   });
 
   it('puts templates and a real answer before advanced query controls', async () => {

@@ -163,7 +163,6 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setOfficialSaveState('idle');
     setSavedAnswerId(null);
     setRunError(null);
-    setRun(null);
     const dates = { from: range.from, to: range.to };
     const selectedMetric = compatibleMetrics.find((metric) => metric.key === selectedKey);
     const selectedFunnel = registry.data.funnels.find((funnel) => funnel.key === selectedKey);
@@ -247,6 +246,9 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     error: currentRunError,
     pointCount,
   });
+  const visibleRenderState = running && currentRun
+    ? pointCount === 0 ? 'empty' : 'ready'
+    : renderState;
 
   const saveAnswer = async (makeOfficial = false) => {
     if (!currentRun || !client || !project || saveState === 'saving' || officialSaveState === 'saving') return;
@@ -284,15 +286,13 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       <PageHeading
         title={funnelSurface ? 'Funnels' : 'Product'}
         lead={funnelSurface ? 'Find the biggest loss.' : 'Start with the outcome.'}
-        meta={`${range.label} · UTC`}
-        actions={<AnalyticsDateRange value={rangeSelection} onChange={(next) => { setRangeSelection(next); resetRun(); }} />}
         help={funnelSurface
           ? 'The screen ranks observed step loss before showing query detail. Open the investigation only when the evidence needs a closer look.'
           : 'Answers use registered metrics and the typed Query DSL. Query controls stay secondary until the result needs a closer look.'}
       />
 
       {!funnelSurface && <section aria-label="Analysis view">
-        <div role="tablist" aria-label="Analysis view" className="flex max-w-full gap-1 overflow-x-auto rounded-full border bg-card p-1 shadow-xs">
+        <div role="tablist" aria-label="Analysis view" className="flex max-w-full gap-6 overflow-x-auto border-b">
           {ANALYSIS_TEMPLATES.filter((candidate) => ['product-health', 'feature-adoption', 'retention', 'release-impact'].includes(candidate.key)).map((candidate) => {
             const available = resolveTemplateCapability(candidate.key, CORE_ANALYZE_CAPABILITIES).status === 'available';
             const selected = candidate.key === template.key;
@@ -306,7 +306,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
                 aria-selected={selected}
                 title={available ? candidate.question : 'Not supported by the current server contract.'}
                 onClick={() => selectTemplate(candidate)}
-                className={`min-h-11 shrink-0 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'bg-secondary text-foreground' : available ? 'text-muted-foreground hover:bg-muted hover:text-foreground' : 'cursor-not-allowed text-muted-foreground/55'}`}
+                className={`min-h-11 shrink-0 border-b-2 px-1 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-foreground text-foreground' : available ? 'border-transparent text-muted-foreground hover:text-foreground' : 'cursor-not-allowed border-transparent text-muted-foreground/55'}`}
               >
                 {candidate.title}
               </button>
@@ -315,15 +315,19 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         </div>
       </section>}
 
-      <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between" aria-labelledby="current-analysis-title">
+      <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between" aria-labelledby="current-analysis-title" aria-busy={running}>
         <div className="min-w-0">
           <h2 id="current-analysis-title" className="text-xl font-semibold">{template.title}</h2>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{template.question}</p>
         </div>
-        <Button variant="outline" className="h-11 shrink-0" onClick={execute} disabled={running || !selectedKey || capability.status !== 'available'}>
-          {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
-          Refresh answer
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {running && currentRun && <span className="text-sm text-muted-foreground" role="status">Updating…</span>}
+          <AnalyticsDateRange value={rangeSelection} onChange={setRangeSelection} />
+          <Button variant="outline" className="h-9 shrink-0" onClick={execute} disabled={running || !selectedKey || capability.status !== 'available'}>
+            {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
+            Refresh
+          </Button>
+        </div>
       </section>
 
       {(!selectedKey || capability.status === 'unavailable') && <AnswerCanvas>
@@ -339,8 +343,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         ) : null}
       </AnswerCanvas>}
       {currentRunError && <ErrorNote>{currentRunError}</ErrorNote>}
-      {renderState === 'loading' && <Loading what="executing server query…" />}
-      {renderState === 'empty' && currentRun && (
+      {visibleRenderState === 'loading' && <Loading what="executing server query…" />}
+      {visibleRenderState === 'empty' && currentRun && (
         <AnswerCanvas>
           <div className="px-4 py-8 text-center sm:px-5">
             <div className="text-lg font-semibold">No observations in this exact period</div>
@@ -358,7 +362,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         />
       )}
 
-      {renderState === 'ready' && currentRun && (
+      {visibleRenderState === 'ready' && currentRun && (
         <CanonicalAnswer
           takeaway={currentRun.summary.takeaway}
           comparison={currentRun.summary.comparison}

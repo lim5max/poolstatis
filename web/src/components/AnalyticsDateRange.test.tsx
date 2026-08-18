@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AnalyticsDateRange } from './AnalyticsDateRange';
 
 describe('AnalyticsDateRange', () => {
-  it('keeps quick periods visible and reports preset changes immediately', () => {
+  it('keeps the current period compact and exposes presets from its menu', () => {
     const onChange = vi.fn();
     render(
       <AnalyticsDateRange
@@ -13,14 +13,14 @@ describe('AnalyticsDateRange', () => {
     );
 
     expect(screen.getByRole('group', { name: 'Analytics period' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Today' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Yesterday' })).toBeVisible();
-    expect(screen.getByRole('button', { name: '7 days' })).toBeVisible();
-    expect(screen.getByRole('button', { name: '30 days' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: '90 days' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Custom' })).toBeVisible();
+    const trigger = screen.getByRole('button', { name: 'Period: Last 30 days' });
+    expect(trigger).toBeVisible();
+    expect(screen.queryByText('Today')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter', code: 'Enter' });
+    expect(screen.getByRole('menuitemcheckbox', { name: '30 days' })).toHaveAttribute('data-state', 'checked');
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Today' }));
     expect(onChange).toHaveBeenCalledWith({ kind: 'preset', preset: 'today' });
   });
 
@@ -33,7 +33,10 @@ describe('AnalyticsDateRange', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Custom' }));
+    const initialTrigger = screen.getByRole('button', { name: 'Period: Last 30 days' });
+    initialTrigger.focus();
+    fireEvent.keyDown(initialTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Custom period…' }));
     expect(screen.getByRole('dialog', { name: 'Custom period' })).toBeVisible();
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-03' } });
@@ -46,7 +49,10 @@ describe('AnalyticsDateRange', () => {
         onChange={onChange}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Custom' }));
+    const customTrigger = screen.getByRole('button', { name: /Period: Aug 1.*3, 2026/ });
+    customTrigger.focus();
+    fireEvent.keyDown(customTrigger, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change custom period…' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog', { name: 'Custom period' })).not.toBeInTheDocument();
   });

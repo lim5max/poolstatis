@@ -11,6 +11,14 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { resolveAnalyticsRange, type AnalyticsRangePreset, type AnalyticsRangeSelection } from '../analysis/ranges';
 
@@ -39,6 +47,7 @@ export function AnalyticsDateRange({
   const [from, setFrom] = useState(value.kind === 'custom' ? value.from : '');
   const [to, setTo] = useState(value.kind === 'custom' ? value.to : '');
   const [error, setError] = useState<string | null>(null);
+  const label = resolveAnalyticsRange(value).label;
 
   useEffect(() => {
     if (value.kind !== 'custom') return;
@@ -69,45 +78,35 @@ export function AnalyticsDateRange({
 
   return (
     <>
-      <div className={cn('flex w-full min-w-0 max-w-full items-center gap-2 sm:w-auto', className)}>
-        <div
-          role="group"
-          aria-label="Analytics period"
-          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-full border bg-card p-1 shadow-xs sm:flex-none"
-        >
-          {QUICK_RANGES.map((item) => {
-            const selected = value.kind === 'preset' && value.preset === item.preset;
-            return (
-              <Button
+      <div role="group" aria-label="Analytics period" className={cn('flex min-w-0 items-center gap-2', className)}>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" size="sm" variant="outline" className="h-9 max-w-full px-3" aria-label={`Period: ${label}`}>
+              <span className="truncate">{label}</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-44">
+            {QUICK_RANGES.map((item) => (
+              <DropdownMenuCheckboxItem
                 key={item.preset}
-                type="button"
-                size="sm"
-                variant={selected ? 'secondary' : 'ghost'}
-                className="h-9 rounded-full px-3"
-                aria-pressed={selected}
-                onClick={() => onChange({ kind: 'preset', preset: item.preset })}
+                checked={value.kind === 'preset' && value.preset === item.preset}
+                onSelect={() => onChange({ kind: 'preset', preset: item.preset })}
               >
                 {item.label}
-              </Button>
-            );
-          })}
-          <Button
-            type="button"
-            size="sm"
-            variant={value.kind === 'custom' ? 'secondary' : 'ghost'}
-            className="h-9 rounded-full px-3"
-            aria-pressed={value.kind === 'custom'}
-            onClick={openCustom}
-          >
-            Custom
-          </Button>
-        </div>
+              </DropdownMenuCheckboxItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={openCustom}>
+              {value.kind === 'custom' ? 'Change custom period…' : 'Custom period…'}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {onCompareChange && (
           <Button
             type="button"
             size="sm"
             variant={compare ? 'secondary' : 'outline'}
-            className="h-11 rounded-full px-4"
+            className="h-9 px-3"
             aria-label="Compare to previous period"
             aria-pressed={Boolean(compare)}
             onClick={() => onCompareChange(!compare)}
@@ -119,7 +118,7 @@ export function AnalyticsDateRange({
       </div>
 
       <Dialog open={customOpen} onOpenChange={setCustomOpen}>
-        <DialogContent aria-label="Custom period" className="rounded-3xl sm:max-w-md">
+        <DialogContent aria-label="Custom period" className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="serif text-2xl font-normal">Custom period</DialogTitle>
             <DialogDescription>Choose inclusive calendar dates. Analytics uses UTC boundaries.</DialogDescription>

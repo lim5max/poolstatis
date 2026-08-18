@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { test, expect, chromium, type Browser, type Page } from '@playwright/test';
 import setupDatabase from '../test/globalSetup.js';
 import { analysisViewInput } from '../test/analysis-view-fixtures.js';
@@ -11,6 +12,7 @@ let vite: ChildProcess;
 let browser: Browser;
 let webUrl: string;
 let releaseDatabase: void | (() => Promise<void>);
+const screenshotDir = process.env.POOLSTATIS_E2E_SCREENSHOT_DIR;
 
 test.beforeAll(async () => {
   if (process.env.POOLSTATIS_E2E_DISPOSABLE_DB !== 'true'
@@ -72,6 +74,7 @@ for (const device of [
       localStorage.setItem(`poolstatis.env.${projectSlug}`, 'prod');
     }, { adminToken: env.personalToken, projectSlug: env.projectSlug });
     const page = await context.newPage();
+    if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
     const browserErrors: string[] = [];
     page.on('console', (message) => {
       if (message.type() === 'error' && !message.location().url.includes('/@vite/client')) {
@@ -87,29 +90,46 @@ for (const device of [
       if (route.period) {
         const period = page.getByRole('group', { name: 'Analytics period' });
         await expect(period).toBeVisible();
-        await expect(period.getByRole('button', { name: 'Today', exact: true })).toBeVisible();
-        await expect(period.getByRole('button', { name: 'Custom', exact: true })).toBeVisible();
+        await expect(period.getByRole('button', { name: /^Period:/ })).toBeVisible();
       }
       if (route.path === '/analyze/product') {
-        await page.getByRole('button', { name: 'Custom', exact: true }).click();
+        await page.getByRole('button', { name: /^Period:/ }).click();
+        await page.getByRole('menuitem', { name: 'Custom period…', exact: true }).click();
         const dateInputs = page.locator('input[type="date"]');
         await dateInputs.nth(0).fill('2026-08-01');
         await dateInputs.nth(1).fill('2026-08-14');
         await page.getByRole('button', { name: 'Apply period', exact: true }).click();
         await expect(page).toHaveURL(/range=custom&from=2026-08-01&to=2026-08-14/);
-        await expect(page.getByText(/Aug 1.*14, 2026 · UTC/)).toBeVisible();
-        await expect(page.getByRole('button', { name: 'Custom', exact: true })).toHaveAttribute('aria-pressed', 'true');
-        if (device.name === 'mobile') await page.getByRole('button', { name: 'Open navigation' }).click();
+        await expect(page.getByRole('button', { name: /Period: Aug 1.*14, 2026/ })).toBeVisible();
+        if (device.name === 'mobile') {
+          await page.getByRole('button', { name: 'Open navigation' }).click();
+          const navigation = page.getByRole('dialog', { name: 'Navigation' });
+          await expect(navigation).toHaveCSS('width', `${device.viewport.width}px`);
+          await expect(navigation).toHaveCSS('height', `${device.viewport.height}px`);
+          await expect(navigation).toHaveCSS('background-color', 'rgb(240, 243, 239)');
+          await expect.poll(() => navigation.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+          })).toEqual({ left: 0, top: 0, right: device.viewport.width, bottom: device.viewport.height });
+          if (screenshotDir) await page.screenshot({ path: join(screenshotDir, 'mobile-navigation.png'), fullPage: false });
+        }
         await expect(page.getByRole('link', { name: 'People', exact: true })).toHaveAttribute(
           'href',
           '/analyze/users?range=custom&from=2026-08-01&to=2026-08-14',
         );
-        if (device.name === 'mobile') await page.getByRole('button', { name: 'Close navigation' }).click();
+        if (device.name === 'mobile') {
+          await page.getByRole('button', { name: 'Close navigation' }).click();
+          await expect(page.getByRole('dialog', { name: 'Navigation' })).toBeHidden();
+        }
       }
       await assertNoPageOverflow(page, route.path);
       await assertReadableType(page, route.path);
-      await assertPillButtons(page, route.path);
-      await assertRoundedCards(page, route.path);
+      await assertCompactControlRadii(page, route.path);
+      await assertCompactCardRadii(page, route.path);
+      if (screenshotDir) {
+        const slug = route.path === '/' ? 'home' : route.path.replace(/^\//, '').replaceAll('/', '-');
+        await page.screenshot({ path: join(screenshotDir, `${device.name}-${slug}.png`), fullPage: true });
+      }
     }
 
     expect(browserErrors).toEqual([]);
@@ -236,29 +256,31 @@ async function assertReadableType(page: Page, route: string): Promise<void> {
   expect(offenders, `${route} contains text smaller than 15px`).toEqual([]);
 }
 
-async function assertPillButtons(page: Page, route: string): Promise<void> {
+async function assertCompactControlRadii(page: Page, route: string): Promise<void> {
   const offenders = await page.locator('button:visible').evaluateAll((buttons) => (
     buttons.flatMap((button) => {
       const rect = button.getBoundingClientRect();
       if (rect.width <= 2 || rect.height <= 2) return [];
+      const text = button.textContent?.trim() ?? '';
+      const iconOnly = text.length === 0 && Math.abs(rect.width - rect.height) <= 4;
+      if (iconOnly) return [];
       const radius = Number.parseFloat(getComputedStyle(button).borderTopLeftRadius);
-      const required = Math.min(rect.width, rect.height) / 2 - 1;
-      return radius < required
-        ? [{ label: button.getAttribute('aria-label') ?? button.textContent?.trim().slice(0, 80), radius, required }]
+      return radius > 12
+        ? [{ label: button.getAttribute('aria-label') ?? text.slice(0, 80), radius }]
         : [];
     })
   ));
-  expect(offenders, `${route} contains a non-pill button`).toEqual([]);
+  expect(offenders, `${route} contains an excessively rounded text button`).toEqual([]);
 }
 
-async function assertRoundedCards(page: Page, route: string): Promise<void> {
+async function assertCompactCardRadii(page: Page, route: string): Promise<void> {
   const offenders = await page.locator('[data-slot="card"]:visible').evaluateAll((cards) => (
     cards.flatMap((card) => {
       const radius = Number.parseFloat(getComputedStyle(card).borderTopLeftRadius);
-      return radius < 24 ? [{ text: card.textContent?.trim().slice(0, 80), radius }] : [];
+      return radius > 16 ? [{ text: card.textContent?.trim().slice(0, 80), radius }] : [];
     })
   ));
-  expect(offenders, `${route} contains a card with radius below 24px`).toEqual([]);
+  expect(offenders, `${route} contains a card with excessive rounding`).toEqual([]);
 }
 
 async function freePort(): Promise<number> {
