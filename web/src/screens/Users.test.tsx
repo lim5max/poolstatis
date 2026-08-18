@@ -136,6 +136,25 @@ describe('People list', () => {
     }));
   });
 
+  it('applies a custom period and keeps ordering evidence out of every table row', async () => {
+    const view = render(<MemoryRouter><Users /></MemoryRouter>);
+    await screen.findByText('anon_7');
+
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    fireEvent.click(period.querySelector('button:last-child')!);
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-04' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
+
+    await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      kind: 'actors',
+      from: '2026-08-01T00:00:00.000Z',
+      to: '2026-08-05T00:00:00.000Z',
+    })));
+    expect(screen.queryByRole('columnheader', { name: 'Order evidence' })).not.toBeInTheDocument();
+    expect(view.container.querySelector('.text-xs')).toBeNull();
+  });
+
   it('consolidates missing identity, property and outcome capabilities into one data-health block', async () => {
     render(<MemoryRouter><Users /></MemoryRouter>);
 
@@ -246,7 +265,7 @@ describe('People list', () => {
       },
     });
 
-    fireEvent.click(screen.getAllByRole('combobox')[1]!);
+    fireEvent.click(screen.getByRole('combobox', { name: 'Queue' }));
     fireEvent.click(await screen.findByRole('option', { name: 'Recently activated · Activation completed' }));
 
     await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
@@ -266,7 +285,7 @@ describe('People list', () => {
     mockedStore.mockReturnValue({ project: 'alpha', env: 'prod', client: alphaClient } as never);
     const view = render(<MemoryRouter><Users /></MemoryRouter>);
     await screen.findByText('anon_7');
-    fireEvent.click(screen.getAllByRole('combobox')[1]!);
+    fireEvent.click(screen.getByRole('combobox', { name: 'Queue' }));
     fireEvent.click(await screen.findByRole('option', { name: 'Recently activated · Activation completed' }));
     await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
       order: 'interesting_desc',
@@ -305,7 +324,7 @@ describe('People list', () => {
     mockedStore.mockReturnValue({ project: 'alpha', env: 'prod', client: initialClient } as never);
     const view = render(<MemoryRouter><Users /></MemoryRouter>);
     await screen.findByText('anon_7');
-    fireEvent.click(screen.getAllByRole('combobox')[1]!);
+    fireEvent.click(screen.getByRole('combobox', { name: 'Queue' }));
     fireEvent.click(await screen.findByRole('option', { name: 'Recently activated · Activation completed' }));
     await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
       order: 'interesting_desc',

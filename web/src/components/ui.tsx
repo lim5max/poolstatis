@@ -35,7 +35,7 @@ export function HelpHint({ label, ariaLabel }: { label: ReactNode; ariaLabel: st
       <button
         type="button"
         aria-label={ariaLabel}
-        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full border text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         ?
       </button>
@@ -50,11 +50,11 @@ export function HelpDisclosure({ label, ariaLabel }: { label: ReactNode; ariaLab
       <DisclosureSummary
         chevron={false}
         aria-label={ariaLabel}
-        className="inline-flex size-5 cursor-pointer list-none items-center justify-center rounded-full border text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
+        className="inline-flex size-6 cursor-pointer list-none items-center justify-center rounded-full border text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
       >
         ?
       </DisclosureSummary>
-      <div className="absolute left-0 top-7 z-50 w-72 rounded-control border bg-popover p-3 text-left text-xs font-normal leading-relaxed text-popover-foreground shadow-md">
+      <div className="absolute left-0 top-8 z-50 w-72 rounded-control border bg-popover p-3 text-left text-sm font-normal leading-relaxed text-popover-foreground shadow-md">
         {label}
       </div>
     </details>
@@ -73,14 +73,14 @@ export function PageHeading({ title, lead, help, meta, actions, className }: {
   return (
     <header className={cn('flex flex-wrap items-end justify-between gap-3', className)}>
       <div className="min-w-0 max-w-3xl">
-        {meta && <div className="mb-1 text-xs text-muted-foreground">{meta}</div>}
+        {meta && <div className="mb-1 text-sm text-muted-foreground">{meta}</div>}
         <div className="flex min-w-0 items-center gap-2">
-          <h1 className="serif min-w-0 text-balance text-3xl font-normal sm:text-4xl">{title}</h1>
+          <h1 className="serif min-w-0 text-balance text-4xl font-normal sm:text-5xl">{title}</h1>
           {help && <HelpDisclosure label={help} ariaLabel={`About ${typeof title === 'string' ? title : 'this page'}`} />}
         </div>
-        {lead && <p className="mt-1 max-w-2xl text-pretty text-sm text-muted-foreground">{lead}</p>}
+        {lead && <p className="mt-2 max-w-2xl text-pretty text-base text-muted-foreground">{lead}</p>}
       </div>
-      {actions && <div className="flex shrink-0 flex-wrap items-end gap-2">{actions}</div>}
+      {actions && <div className="flex w-full min-w-0 flex-wrap items-end gap-2 sm:w-auto sm:shrink-0">{actions}</div>}
     </header>
   );
 }
@@ -119,7 +119,7 @@ export function Panel({ title, right, children }: { title?: ReactNode; right?: R
   return (
     <Card className="gap-0 py-0 overflow-hidden">
       {(title || right) && (
-        <CardHeader className="flex flex-row items-center justify-between border-b py-3.5 px-5 [.border-b]:pb-3.5">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 border-b py-3.5 px-5 [.border-b]:pb-3.5">
           {/* Heading is serif; any inline subtitle inside should pass font-sans. */}
           {title ? <CardTitle className="serif text-lg font-normal">{title}</CardTitle> : <span />}
           {right}
@@ -132,18 +132,63 @@ export function Panel({ title, right, children }: { title?: ReactNode; right?: R
 
 /** Small muted label (replaces the old all-caps eyebrow). */
 export function FieldLabel({ children, className }: { children: ReactNode; className?: string }) {
-  return <span className={cn('text-xs font-medium text-muted-foreground', className)}>{children}</span>;
+  return <span className={cn('text-sm font-medium text-muted-foreground', className)}>{children}</span>;
 }
 
 export function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
   return (
     <Card className="py-0">
       <CardContent className="p-4">
-        <div className="text-xs font-medium text-muted-foreground">{label}</div>
+        <div className="text-sm font-medium text-muted-foreground">{label}</div>
         <div className="serif text-3xl mt-1 tabular-nums">{value}</div>
-        {sub && <div className="text-xs text-muted-foreground mt-1">{sub}</div>}
+        {sub && <div className="text-sm text-muted-foreground mt-1">{sub}</div>}
       </CardContent>
     </Card>
+  );
+}
+
+export interface KpiRailItem {
+  label: ReactNode;
+  value: ReactNode;
+  detail?: ReactNode;
+  delta?: ReactNode;
+}
+
+export function KpiRail({ items, className }: { items: KpiRailItem[]; className?: string }) {
+  return (
+    <Card className={cn('gap-0 overflow-hidden py-0', className)}>
+      <ul
+        role="list"
+        aria-label="Key metrics"
+        className="grid rounded-panel divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4"
+      >
+        {items.map((item, index) => (
+          <li key={index} className="min-w-0 p-5">
+            <div className="flex items-center justify-between gap-3 text-sm font-medium text-muted-foreground">
+              <span className="truncate">{item.label}</span>
+              {item.delta && <span className="shrink-0 text-foreground">{item.delta}</span>}
+            </div>
+            <div className="mt-2 text-3xl font-semibold tabular-nums sm:text-4xl">{item.value}</div>
+            {item.detail && <div className="mt-1 text-sm text-muted-foreground">{item.detail}</div>}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+export function DataDetails({ summary = 'Data details', children, className }: {
+  summary?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <details className={cn('group/disclosure rounded-panel border bg-card', className)}>
+      <DisclosureSummary className="flex min-h-12 cursor-pointer items-center px-5 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        {summary}
+      </DisclosureSummary>
+      <div className="border-t px-5 py-4 text-sm leading-relaxed text-muted-foreground">{children}</div>
+    </details>
   );
 }
 

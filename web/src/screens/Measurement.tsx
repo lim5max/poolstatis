@@ -14,6 +14,7 @@ import { DisclosureSummary } from '@/components/disclosure';
 import { isRedundantKey } from '@/lib/utils';
 import type { MeasurementAnswerDependency, MeasurementContract, MeasurementReadiness, MeasurementReadinessGroup, MeasurementTrust, Metric, PropertyDefinition, TrendResponse, WebAnalyticsDimension, WebAnalyticsResponse, WebSessionResponse, WebSessionsResponse } from '../api/types';
 import { buildMeasurementReadiness, type ReadinessGroup } from '../analysis/semanticHealth';
+import type { ResolvedAnalyticsRange } from '../analysis/ranges';
 
 interface MetricTrustRow {
   metric: Metric;
@@ -811,7 +812,7 @@ function TrustOverview({ rows, properties, activeLinks, onRefresh }: {
 type AcquisitionDimension = '$utm_source' | '$utm_medium' | '$utm_campaign' | '$utm_term' | '$utm_content';
 type AcquisitionResult = Record<AcquisitionDimension, TrendResponse>;
 
-export function AcquisitionPanel({ metrics, env, trusted = true }: { metrics: Metric[]; env: string; trusted?: boolean }) {
+export function AcquisitionPanel({ metrics, env, trusted = true, range }: { metrics: Metric[]; env: string; trusted?: boolean; range?: ResolvedAnalyticsRange }) {
   const { client, project } = useStore();
   const eligible = useMemo(() => metrics.filter((metric) => metric.status === 'active' && metric.type === 'count'), [metrics]);
   const preferred = eligible.find((metric) => metric.category === 'acquisition') ?? eligible[0];
@@ -822,8 +823,10 @@ export function AcquisitionPanel({ metrics, env, trusted = true }: { metrics: Me
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selected = eligible.find((metric) => metric.key === metricKey) ?? preferred;
+  const dateFrom = range?.from ?? `-${period}d`;
+  const dateTo = range?.to;
   const requestVersion = useRef(0);
-  const scopeSignature = `${project ?? ''}:${env}:${selected?.key ?? ''}:${period}:${details ? 'extended' : 'core'}`;
+  const scopeSignature = `${project ?? ''}:${env}:${selected?.key ?? ''}:${dateFrom}:${dateTo ?? ''}:${details ? 'extended' : 'core'}`;
   const scopeRef = useRef(scopeSignature);
   scopeRef.current = scopeSignature;
   useEffect(() => {
@@ -839,7 +842,7 @@ export function AcquisitionPanel({ metrics, env, trusted = true }: { metrics: Me
     const isCurrent = () => requestVersion.current === version && scopeRef.current === requestedScope;
     setBusy(true); setError(null); setResult(null);
     try {
-      const base = { metric: selected.key, date_from: `-${period}d`, interval: 'day' as const, env };
+      const base = { metric: selected.key, date_from: dateFrom, ...(dateTo ? { date_to: dateTo } : {}), interval: 'day' as const, env };
       const dimensions: AcquisitionDimension[] = details
         ? ['$utm_source', '$utm_medium', '$utm_campaign', '$utm_term', '$utm_content']
         : ['$utm_source', '$utm_medium', '$utm_campaign'];
@@ -857,7 +860,7 @@ export function AcquisitionPanel({ metrics, env, trusted = true }: { metrics: Me
   return <Panel title="Acquisition / UTM" right={<span className="text-xs text-muted-foreground">registered metric query · {env}</span>}>
     <div className="flex flex-wrap items-end gap-2">
       <div className="min-w-52 flex-1 space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Count metric</label><Select value={selected?.key ?? ''} onValueChange={(value) => { setMetricKey(value); setResult(null); }} disabled={eligible.length === 0 || busy}><SelectTrigger aria-label="Acquisition metric"><SelectValue placeholder="Choose an active count metric" /></SelectTrigger><SelectContent>{eligible.map((metric) => <SelectItem key={metric.key} value={metric.key}>{metric.name} · {metric.key}</SelectItem>)}</SelectContent></Select></div>
-      <div className="space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Period</label><Select value={period} onValueChange={(value) => { setPeriod(value); setResult(null); }} disabled={busy}><SelectTrigger aria-label="Acquisition period" className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent></Select></div>
+      {!range && <div className="space-y-1.5"><label className="text-xs font-medium text-muted-foreground">Period</label><Select value={period} onValueChange={(value) => { setPeriod(value); setResult(null); }} disabled={busy}><SelectTrigger aria-label="Acquisition period" className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent></Select></div>}
       <Button onClick={run} disabled={!selected || !trusted || busy}>{busy && <Loader2 className="size-4 animate-spin" />}Run UTM report</Button>
     </div>
     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">

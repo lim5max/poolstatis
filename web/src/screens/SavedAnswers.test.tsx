@@ -105,6 +105,18 @@ describe('SavedAnswers route-ready screen', () => {
     expect(analysisViews).toHaveBeenCalledWith('alpha', { env: 'prod', status: 'active' });
   });
 
+  it('renders saved answers as one divided list instead of a grid of cards', async () => {
+    analysisViews.mockResolvedValueOnce([
+      savedAnswer,
+      { ...savedAnswer, id: 'answer-2', title: 'Retention signal', official: false },
+    ]);
+    const view = renderScreen();
+
+    await screen.findByRole('heading', { name: 'Retention signal', level: 2 });
+    expect(view.container.querySelectorAll('[data-slot="card"]')).toHaveLength(1);
+    expect(screen.getByRole('list', { name: 'Saved answers' })).toBeInTheDocument();
+  });
+
   it('uses server mutations for official and archive actions, then reads the list back', async () => {
     renderScreen();
     await screen.findByText('Activation completion');

@@ -72,6 +72,14 @@ jobs:
           pnpm --dir web test --run
           pnpm --dir web build
 
+      - name: Install analytics browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Test analytics workspace in a real browser
+        env:
+          POOLSTATIS_E2E_DISPOSABLE_DB: "true"
+        run: pnpm test:e2e:analytics
+
       - name: Test and build SDK
         run: |
           pnpm --dir sdk test

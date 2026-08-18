@@ -43,8 +43,10 @@ const CHART_COLORS = [
 const AXIS = {
   tickLine: false,
   axisLine: false,
-  tick: { fill: 'var(--muted-foreground)', fontSize: 12 },
+  tick: { fill: 'var(--muted-foreground)', fontSize: 'var(--text-xs)' },
 } as const;
+
+const LEGEND_STYLE = { fontSize: 'var(--text-xs)' } as const;
 
 function ChartFrame({ children, label }: { children: ReactNode; label: string }) {
   return (
@@ -65,7 +67,7 @@ function ChartTooltip() {
         borderRadius: 'var(--radius-panel)',
         background: 'var(--popover)',
         color: 'var(--popover-foreground)',
-        fontSize: 12,
+        fontSize: 'var(--text-xs)',
       }}
       labelStyle={{ color: 'var(--foreground)', fontWeight: 600 }}
     />
@@ -120,7 +122,7 @@ export function BreakdownBars({ result }: { result: TrendQueryResult }) {
         <XAxis {...AXIS} dataKey="bucket" tickFormatter={shortDate} minTickGap={28} tickMargin={10} />
         <YAxis {...AXIS} width={44} allowDecimals={false} />
         <ChartTooltip />
-        <Legend />
+        <Legend wrapperStyle={LEGEND_STYLE} />
         {seriesKeys.map((key, index) => (
           <Bar
             key={key}
@@ -235,7 +237,7 @@ export function LifecycleChart({ result }: { result: LifecycleQueryResult }) {
         <XAxis {...AXIS} dataKey="bucket" tickFormatter={shortDate} minTickGap={28} tickMargin={10} />
         <YAxis {...AXIS} width={44} allowDecimals={false} />
         <ChartTooltip />
-        <Legend />
+        <Legend wrapperStyle={LEGEND_STYLE} />
         <Bar dataKey="new" name="New" stackId="lifecycle" fill="var(--chart-1)" stroke="var(--chart-1-stroke)" strokeWidth={1.5} />
         <Bar dataKey="returning" name="Returning" stackId="lifecycle" fill="var(--chart-2)" />
         <Bar dataKey="resurrecting" name="Resurrecting" stackId="lifecycle" fill="var(--chart-3)" />

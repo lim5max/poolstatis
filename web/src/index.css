@@ -13,14 +13,14 @@
 
 @theme inline {
   --radius-xs: 0.25rem;
-  --radius-sm: 0.5rem;
-  --radius-md: 0.625rem;
-  --radius-lg: 0.75rem;
-  --radius-xl: 1rem;
-  --radius-control: 0.5rem;
-  --radius-field: 0.625rem;
-  --radius-panel: 0.75rem;
-  --radius-dialog: 1rem;
+  --radius-sm: 0.75rem;
+  --radius-md: 1rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.5rem;
+  --radius-control: 9999px;
+  --radius-field: 9999px;
+  --radius-panel: 1.5rem;
+  --radius-dialog: 1.75rem;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -65,8 +65,10 @@
   --font-sans: "Geist", system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, monospace;
   --font-serif: "STIX Two Text", Georgia, serif;
-  --text-xs: 0.875rem;
-  --text-xs--line-height: 1.25rem;
+  --text-xs: 0.9375rem;
+  --text-xs--line-height: 1.375rem;
+  --text-sm: 1rem;
+  --text-sm--line-height: 1.5rem;
 }
 
 :root {
@@ -178,6 +180,9 @@
     min-width: 20rem;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
+  }
+  button {
+    border-radius: var(--radius-control);
   }
   /* STIX Two Text is for headings only; data/code uses Geist Mono. */
   .brand-wordmark {

@@ -917,7 +917,7 @@ describe('live customer screen UX', () => {
         labels: [{ label: 'checkout.submit', count: 4, actors: 3 }],
       }),
     }));
-    render(<Experience />);
+    render(<MemoryRouter><Experience /></MemoryRouter>);
     expect(await screen.findByText(/Last accepted capture/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'View click details' })).toHaveAttribute('href', '#experience-evidence');
     expect(screen.getByText(/aggregate maps · separate from DOM replay/)).toBeInTheDocument();
@@ -956,7 +956,7 @@ describe('live customer screen UX', () => {
       visualExperience: vi.fn().mockRejectedValue(new Error('not needed for readiness test')),
     }));
 
-    render(<Experience />);
+    render(<MemoryRouter><Experience /></MemoryRouter>);
 
     expect(await screen.findByText('Complete aggregate friction readiness')).toBeInTheDocument();
     expect(screen.getByText('3/4 ready')).toBeInTheDocument();
@@ -972,7 +972,7 @@ describe('live customer screen UX', () => {
       experienceSnapshots: vi.fn().mockResolvedValue([]),
     }));
 
-    render(<Experience />);
+    render(<MemoryRouter><Experience /></MemoryRouter>);
 
     expect(await screen.findByText('Set up Browser Experience')).toBeInTheDocument();
     expect(screen.queryByText('No active surface')).not.toBeInTheDocument();

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { MemoryRouter } from 'react-router-dom';
 import { useStore } from '../store';
 import { Experience } from './Experience';
 
@@ -10,6 +11,10 @@ vi.mock('../store', async (importOriginal) => ({
 }));
 
 const mockedStore = vi.mocked(useStore);
+
+function renderExperience() {
+  return render(<MemoryRouter><TooltipProvider><Experience /></TooltipProvider></MemoryRouter>);
+}
 
 function store(client: Record<string, unknown>) {
   return {
@@ -161,7 +166,7 @@ describe('Experience answer-first control surface', () => {
       experienceSnapshots: vi.fn().mockResolvedValue([]),
     }));
 
-    render(<TooltipProvider><Experience /></TooltipProvider>);
+    renderExperience();
 
     expect(await screen.findByText('Set up Browser Experience')).toBeInTheDocument();
     expect(screen.getByText(/Illustrative/)).toBeInTheDocument();
@@ -193,7 +198,7 @@ describe('Experience answer-first control surface', () => {
       experienceSnapshots: vi.fn().mockResolvedValue([]),
     }));
 
-    render(<TooltipProvider><Experience /></TooltipProvider>);
+    renderExperience();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Set up manually' }));
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
@@ -211,7 +216,7 @@ describe('Experience answer-first control surface', () => {
       interactionMap: vi.fn(),
     }));
 
-    render(<TooltipProvider><Experience /></TooltipProvider>);
+    renderExperience();
 
     const answer = await screen.findByRole('region', { name: 'Aggregate friction answer' });
     expect(await within(answer).findByText(/^The largest observed adjacent reach decrease is pricing → payment/)).toHaveTextContent('21 fewer sessions (34 pp)');
@@ -224,5 +229,39 @@ describe('Experience answer-first control surface', () => {
     const mapHeading = screen.getByText('Page evidence');
     expect(answer.compareDocumentPosition(mapHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await waitFor(() => expect(screen.getByRole('img', { name: /Checkout, payment, release-42, desktop/ })).toBeInTheDocument());
+  });
+
+  it('uses one custom period for the versioned and aggregate experience queries', async () => {
+    const visualQuery = vi.fn().mockResolvedValue(visualExperience);
+    const aggregateQuery = vi.fn().mockResolvedValue({
+      kind: 'interaction_map', surface, grid: 16, cells: [], labels: [],
+    });
+    mockedStore.mockReturnValue(store({
+      experienceSurfaces: vi.fn().mockResolvedValue([surface]),
+      experienceRoutes: vi.fn().mockResolvedValue([route]),
+      experienceSnapshots: vi.fn().mockResolvedValue([snapshot]),
+      visualExperience: visualQuery,
+      experienceSnapshotImage: vi.fn().mockResolvedValue('blob:checkout-snapshot'),
+      experienceSession: vi.fn().mockResolvedValue({ events: [], summary: { events: 0, sessions: 0, actors: 0 } }),
+      compareVisualExperience: vi.fn(),
+      interactionMap: aggregateQuery,
+    }));
+    renderExperience();
+    await screen.findByRole('region', { name: 'Aggregate friction answer' });
+
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    fireEvent.click(period.querySelector('button:last-child')!);
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-04' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
+
+    await waitFor(() => expect(visualQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      date_from: '2026-08-01T00:00:00.000Z', date_to: '2026-08-05T00:00:00.000Z',
+    })));
+    fireEvent.click(screen.getByRole('button', { name: 'Load aggregate clicks' }));
+    await waitFor(() => expect(aggregateQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      date_from: '2026-08-01T00:00:00.000Z', date_to: '2026-08-05T00:00:00.000Z',
+    })));
+    expect(screen.queryByRole('combobox', { name: 'Aggregate click period' })).not.toBeInTheDocument();
   });
 });

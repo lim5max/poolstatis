@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Loader2 } from '@/components/icons';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ErrorNote, Loading, PageHeading } from '@/components/ui';
 import { AnswerCanvas, CanonicalAnswer, type EvidenceTrust } from '@/components/analytics';
+import { AnalyticsDateRange } from '@/components/AnalyticsDateRange';
 import { DisclosureSummary } from '@/components/disclosure';
 import type { CreateSavedAnswerInput, Funnel, FunnelInvestigation, MeasurementTrust, Metric } from '../api/types';
 import { useAsync, useStore } from '../store';
@@ -14,8 +14,9 @@ import {
   CORE_ANALYZE_CAPABILITIES,
   resolveTemplateCapability,
   type AnalysisTemplate,
-  type TimeRangePreset,
 } from '../analysis/templates';
+import { selectionFromLegacyRange } from '../analysis/ranges';
+import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import { ManualVisualizationRenderer } from '../analysis/charts';
 import {
   countResultPoints,
@@ -68,6 +69,8 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       ?? ANALYSIS_TEMPLATES[0]!;
   const [templateKey, setTemplateKey] = useState(initialTemplate.key);
   const template = ANALYSIS_TEMPLATES.find((candidate) => candidate.key === templateKey) ?? ANALYSIS_TEMPLATES[0]!;
+  const defaultRangeSelection = useMemo(() => selectionFromLegacyRange(template.defaultRange), [template.defaultRange]);
+  const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange(defaultRangeSelection);
   const capability = resolveTemplateCapability(template.key, CORE_ANALYZE_CAPABILITIES);
   const scenarioOptions = scenarioPickerOptions(ANALYSIS_TEMPLATES, CORE_ANALYZE_CAPABILITIES);
   const registry = useAsync(async () => {
@@ -84,7 +87,6 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   }, [project, env]);
   const accountMode = useAsync(() => client!.accountMode(), [client]);
   const [resourceKey, setResourceKey] = useState(requestedResource);
-  const [range, setRange] = useState<TimeRangePreset>(template.defaultRange);
   const [interval, setInterval] = useState<QueryInterval>('day');
   const [metricView, setMetricView] = useState<MetricView>('trend');
   const [breakdown, setBreakdown] = useState('none');
@@ -136,7 +138,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     if (resolveTemplateCapability(next.key, CORE_ANALYZE_CAPABILITIES).status !== 'available') return;
     runGeneration.current += 1;
     setTemplateKey(next.key);
-    setRange(next.defaultRange);
+    setRangeSelection(selectionFromLegacyRange(next.defaultRange));
     setResourceKey('');
     setMetricView('trend');
     setInterval('day');
@@ -162,7 +164,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setSavedAnswerId(null);
     setRunError(null);
     setRun(null);
-    const dates = exactRange(range);
+    const dates = { from: range.from, to: range.to };
     const selectedMetric = compatibleMetrics.find((metric) => metric.key === selectedKey);
     const selectedFunnel = registry.data.funnels.find((funnel) => funnel.key === selectedKey);
     const query = buildProductQuery({
@@ -182,7 +184,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         : await client!.query(runProject, previousAnalysisPeriodQuery(query)).catch(() => null);
       if (generation !== runGeneration.current || scopeRef.current !== runScope) return;
       const metricKeys = queryMetricKeys(query, selectedFunnel);
-      const trust = await readTrust(client!, runProject, runEnv, metricKeys, rangeDays(range));
+      const trust = await readTrust(client!, runProject, runEnv, metricKeys, Math.min(range.days, 365));
       if (generation !== runGeneration.current || scopeRef.current !== runScope) return;
       const spec = createVisualizationSpec({
         project: runProject,
@@ -227,6 +229,11 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     setOfficialSaveState('idle');
     setSavedAnswerId(null);
   };
+
+  useEffect(() => {
+    if (!registry.data || !selectedKey || capability.status !== 'available') return;
+    void execute();
+  }, [breakdown, env, interval, metricView, project, range.from, range.to, registry.data, selectedKey, template.key]);
 
   if (registry.loading) return <Loading what="reading registry capabilities…" />;
   if (registry.error) return <ErrorNote>{registry.error}</ErrorNote>;
@@ -277,20 +284,15 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       <PageHeading
         title={funnelSurface ? 'Funnels' : 'Product'}
         lead={funnelSurface ? 'Find the biggest loss.' : 'Start with the outcome.'}
+        meta={`${range.label} · UTC`}
+        actions={<AnalyticsDateRange value={rangeSelection} onChange={(next) => { setRangeSelection(next); resetRun(); }} />}
         help={funnelSurface
           ? 'The screen ranks observed step loss before showing query detail. Open the investigation only when the evidence needs a closer look.'
           : 'Answers use registered metrics and the typed Query DSL. Query controls stay secondary until the result needs a closer look.'}
       />
 
-      {!funnelSurface && <section aria-labelledby="product-templates-title">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 id="product-templates-title" className="text-sm font-semibold">Answer templates</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Choose the question.</p>
-          </div>
-          <Badge variant="outline">schema v1</Badge>
-        </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+      {!funnelSurface && <section aria-label="Analysis view">
+        <div role="tablist" aria-label="Analysis view" className="flex max-w-full gap-1 overflow-x-auto rounded-full border bg-card p-1 shadow-xs">
           {ANALYSIS_TEMPLATES.filter((candidate) => ['product-health', 'feature-adoption', 'retention', 'release-impact'].includes(candidate.key)).map((candidate) => {
             const available = resolveTemplateCapability(candidate.key, CORE_ANALYZE_CAPABILITIES).status === 'available';
             const selected = candidate.key === template.key;
@@ -300,29 +302,31 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
                 type="button"
                 disabled={!available}
                 aria-pressed={selected}
+                role="tab"
+                aria-selected={selected}
+                title={available ? candidate.question : 'Not supported by the current server contract.'}
                 onClick={() => selectTemplate(candidate)}
-                className={`min-h-24 rounded-panel border p-3 text-left text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-brand-strong bg-primary/10' : available ? 'bg-card/55 hover:border-primary/60 hover:bg-primary/5' : 'cursor-not-allowed border-dashed bg-muted/25 text-muted-foreground'}`}
+                className={`min-h-11 shrink-0 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'bg-secondary text-foreground' : available ? 'text-muted-foreground hover:bg-muted hover:text-foreground' : 'cursor-not-allowed text-muted-foreground/55'}`}
               >
-                <span className="text-sm font-semibold">{candidate.title}</span>
-                <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">{available ? candidate.question : 'Not supported by the current server contract.'}</span>
+                {candidate.title}
               </button>
             );
           })}
         </div>
       </section>}
 
-      <AnswerCanvas>
-        <div className="flex flex-col gap-4 border-b px-4 py-4 sm:flex-row sm:items-end sm:justify-between sm:px-5">
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-muted-foreground">{funnelSurface ? 'Funnel answer' : 'Current answer'}</div>
-            <h2 className="mt-1 text-xl font-semibold">{template.title}</h2>
-            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{template.question}</p>
-          </div>
-          <Button variant={currentRun ? 'outline' : 'default'} className="h-11 shrink-0" onClick={execute} disabled={running || !selectedKey || capability.status !== 'available'}>
-            {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
-            {currentRun ? 'Refresh answer' : 'Run answer'}
-          </Button>
+      <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between" aria-labelledby="current-analysis-title">
+        <div className="min-w-0">
+          <h2 id="current-analysis-title" className="text-xl font-semibold">{template.title}</h2>
+          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{template.question}</p>
         </div>
+        <Button variant="outline" className="h-11 shrink-0" onClick={execute} disabled={running || !selectedKey || capability.status !== 'available'}>
+          {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
+          Refresh answer
+        </Button>
+      </section>
+
+      {(!selectedKey || capability.status === 'unavailable') && <AnswerCanvas>
         {!selectedKey || capability.status === 'unavailable' ? (
           <div className="px-4 py-8 text-center sm:px-5">
             <div className="text-lg font-semibold">{capability.status === 'unavailable' ? 'This answer is not available yet' : 'Choose a registered outcome'}</div>
@@ -332,21 +336,18 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
                 : isFunnel ? 'Save a funnel with a goal and active metric steps.' : 'Activate a metric with a concrete purpose.'}
             </p>
           </div>
-        ) : !currentRun && !currentRunError && !running ? (
-          <div className="px-4 py-8 text-center sm:px-5">
-            <div className="text-lg font-semibold">Ready to read real data</div>
-            <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">Run the prebuilt answer for <code>{selectedKey}</code>. Poolstatis will not substitute demo values.</p>
-          </div>
         ) : null}
-        {currentRunError && <div className="p-4 sm:p-5"><ErrorNote>{currentRunError}</ErrorNote></div>}
-        {renderState === 'loading' && <Loading what="executing server query…" />}
-        {renderState === 'empty' && currentRun && (
+      </AnswerCanvas>}
+      {currentRunError && <ErrorNote>{currentRunError}</ErrorNote>}
+      {renderState === 'loading' && <Loading what="executing server query…" />}
+      {renderState === 'empty' && currentRun && (
+        <AnswerCanvas>
           <div className="px-4 py-8 text-center sm:px-5">
             <div className="text-lg font-semibold">No observations in this exact period</div>
             <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">Change the range or inspect the outcome definition.</p>
           </div>
-        )}
-      </AnswerCanvas>
+        </AnswerCanvas>
+      )}
 
       {funnelSurface && currentRun?.result.kind === 'funnel' && (
         <FunnelBiggestLoss
@@ -381,7 +382,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
         <DisclosureSummary className="flex min-h-14 cursor-pointer items-center gap-3 px-4 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
           {funnelSurface ? 'Edit funnel analysis' : 'Edit analysis'}
           <span className="ml-auto text-sm font-normal text-muted-foreground group-open:hidden">
-            {funnelSurface ? 'Saved funnel and exact range' : 'Range, metric, view and breakdown'}
+            {funnelSurface ? 'Saved funnel and query settings' : 'Metric, view and breakdown'}
           </span>
         </DisclosureSummary>
         <div className="border-t p-4 sm:p-5">
@@ -436,22 +437,12 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           </div>
         ) : (
           <div className="mt-5 flex flex-col gap-4 lg:flex-row lg:items-end">
-            <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
               <Control label={isFunnel ? 'Saved funnel' : 'Registry metric'}>
                 <Select value={selectedKey} onValueChange={(value) => { setResourceKey(value); resetRun(); }}>
                   <SelectTrigger className="!h-11 w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {resourceOptions.map((resource) => <SelectItem className={OPTION_TARGET} key={resource.key} value={resource.key}>{resource.name} · {resource.key}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </Control>
-              <Control label="Exact range">
-                <Select value={range} onValueChange={(value) => { setRange(value as TimeRangePreset); resetRun(); }}>
-                  <SelectTrigger className="!h-11 w-full"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem className={OPTION_TARGET} value="7d">Last 7 days</SelectItem>
-                    <SelectItem className={OPTION_TARGET} value="30d">Last 30 days</SelectItem>
-                    <SelectItem className={OPTION_TARGET} value="90d">Last 90 days</SelectItem>
                   </SelectContent>
                 </Select>
               </Control>
@@ -508,10 +499,6 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
                 )}
               </Control>
             </div>
-            <Button variant="outline" className="h-11 w-full lg:w-auto" onClick={execute} disabled={running || !selectedKey}>
-              {running ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
-              Run typed query
-            </Button>
           </div>
         )}
         </div>
@@ -1014,17 +1001,6 @@ async function readTrust(
       },
     };
   }
-}
-
-function exactRange(preset: TimeRangePreset) {
-  const to = new Date();
-  const from = new Date(to);
-  from.setUTCDate(from.getUTCDate() - rangeDays(preset));
-  return { from: from.toISOString(), to: to.toISOString() };
-}
-
-function rangeDays(preset: TimeRangePreset) {
-  return preset === '7d' ? 7 : preset === '90d' ? 90 : 30;
 }
 
 function metricKey(query: AnalysisQueryInput) {

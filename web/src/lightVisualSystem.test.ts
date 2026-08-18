@@ -8,6 +8,8 @@ describe('Core light-first visual system', () => {
     const card = readFileSync(resolve(process.cwd(), 'src/components/ui/card.tsx'), 'utf8');
     const dropdown = readFileSync(resolve(process.cwd(), 'src/components/ui/dropdown-menu.tsx'), 'utf8');
     const select = readFileSync(resolve(process.cwd(), 'src/components/ui/select.tsx'), 'utf8');
+    const button = readFileSync(resolve(process.cwd(), 'src/components/ui/button.tsx'), 'utf8');
+    const input = readFileSync(resolve(process.cwd(), 'src/components/ui/input.tsx'), 'utf8');
 
     expect(css).toContain('color-scheme: light');
     expect(css).toContain('--background: #f6f8f5');
@@ -28,8 +30,13 @@ describe('Core light-first visual system', () => {
     expect(css).toContain('letter-spacing: var(--auth-display-tracking)');
     expect(css).toContain('line-height: var(--auth-display-leading)');
     expect(existsSync(resolve(process.cwd(), 'public/fonts/google-sans-flex-latin.woff2'))).toBe(true);
-    expect(css).toContain('--text-xs: 0.875rem');
-    expect(css).toContain('--text-xs--line-height: 1.25rem');
+    expect(css).toContain('--text-xs: 0.9375rem');
+    expect(css).toContain('--text-sm: 1rem');
+    expect(css).toContain('--radius-control: 9999px');
+    expect(css).toContain('--radius-panel: 1.5rem');
+    expect(button).toContain('rounded-full');
+    expect(input).toContain('rounded-full');
+    expect(select).toContain('rounded-full');
     expect(card).toContain('bg-card');
     expect(dropdown).toContain('bg-popover');
     expect(select).toContain('bg-popover');

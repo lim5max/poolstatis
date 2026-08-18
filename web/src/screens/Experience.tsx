@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Add, GridView, Loader2 } from '@/components/icons';
+import { AnalyticsDateRange } from '@/components/AnalyticsDateRange';
 import { Badge } from '@/components/ui/badge';
 import { useAsync, useStore } from '../store';
-import { EmptyState, ErrorNote, Loading, Panel, RecoverableError, Stat, fmtNum } from '../components/ui';
+import { EmptyState, ErrorNote, Loading, PageHeading, Panel, RecoverableError, Stat, fmtNum } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -22,9 +23,12 @@ import type {
   VisualExperienceResponse,
 } from '../api/types';
 import { ReplayPanel } from './ReplayPanel';
+import type { ResolvedAnalyticsRange } from '../analysis/ranges';
+import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 
 export function Experience() {
   const { client, project, env, availableEnvs, setEnv } = useStore();
+  const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const configurationRef = useRef<HTMLDetailsElement>(null);
   const snapshotRef = useRef<HTMLDivElement>(null);
   const { data, error, loading, reload } = useAsync(
@@ -53,8 +57,15 @@ export function Experience() {
 
   return (
     <div className="space-y-4">
+      <PageHeading
+        title="Experience"
+        lead="See where consented sessions click, scroll, and stop."
+        help="Aggregate maps and explicit opt-in session replay are separate evidence sources. The selected period applies to aggregate experience evidence."
+        meta={`${range.label} · UTC`}
+        actions={<AnalyticsDateRange value={rangeSelection} onChange={setRangeSelection} />}
+      />
       <Panel
-        title="Visual Experience"
+        title="Capture scope"
         right={<span className="text-sm text-muted-foreground">aggregate maps · separate from DOM replay</span>}
       >
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -94,6 +105,7 @@ export function Experience() {
             routes={data.routes}
             snapshots={data.snapshots}
             env={env}
+            range={range}
           />
         ) : null}
 
@@ -108,7 +120,7 @@ export function Experience() {
         </div>
       )}
 
-      {setupReady && <AggregateClickEvidence surfaces={activeSurfaces} env={env} />}
+      {setupReady && <AggregateClickEvidence surfaces={activeSurfaces} env={env} range={range} />}
 
       <details ref={configurationRef} className="group scroll-mt-4">
         <DisclosureSummary className="cursor-pointer rounded-md border bg-card px-5 py-4 text-sm font-medium outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring">
@@ -121,7 +133,7 @@ export function Experience() {
           <SurfaceForm onCreated={reload} />
           {activeSurfaces.length > 0 && <RouteForm surfaces={activeSurfaces} onCreated={reload} />}
           {data.surfaces.length > 0 && <SurfacesTable surfaces={data.surfaces} routes={data.routes} onChanged={reload} />}
-          {activeSurfaces.length > 0 && <SessionTimeline surfaces={activeSurfaces} env={env} />}
+          {activeSurfaces.length > 0 && <SessionTimeline surfaces={activeSurfaces} env={env} range={range} />}
         </div>
       </details>
     </div>
@@ -252,11 +264,13 @@ function VisualExplorer({
   routes,
   snapshots,
   env,
+  range,
 }: {
   surfaces: ExperienceSurface[];
   routes: ExperienceRoute[];
   snapshots: ExperienceSnapshot[];
   env: string;
+  range: ResolvedAnalyticsRange;
 }) {
   const { client, project } = useStore();
   const [surface, setSurface] = useState(snapshots[0]?.surface_key ?? '');
@@ -271,7 +285,6 @@ function VisualExplorer({
   );
   const [version, setVersion] = useState(routeSnapshots[0]?.version ?? '');
   const [device, setDevice] = useState<'desktop' | 'mobile'>(routeSnapshots[0]?.device ?? 'desktop');
-  const [period, setPeriod] = useState('-30d');
   const [mode, setMode] = useState<'clicks' | 'scroll'>('clicks');
   const [result, setResult] = useState<VisualExperienceResponse | null>(null);
   const [comparison, setComparison] = useState<VisualExperienceCompareResponse | null>(null);
@@ -286,7 +299,7 @@ function VisualExplorer({
   const routeOptions = routes.filter((item) => item.surface_key === surface);
   const comparisonTarget = routeSnapshots.find((item) => item.version === version && item.device !== device)
     ?? routeSnapshots.find((item) => item.version !== version);
-  const evidenceIdentity = `${surface}\u0000${route}\u0000${version}\u0000${device}\u0000${period}\u0000${env}`;
+  const evidenceIdentity = `${surface}\u0000${route}\u0000${version}\u0000${device}\u0000${range.from}\u0000${range.to}\u0000${env}`;
   const evidenceIdentityRef = useRef(evidenceIdentity);
   evidenceIdentityRef.current = evidenceIdentity;
 
@@ -327,7 +340,8 @@ function VisualExplorer({
         route,
         version,
         device,
-        date_from: period,
+        date_from: range.from,
+        date_to: range.to,
         env,
         grid: 24,
       });
@@ -354,7 +368,7 @@ function VisualExplorer({
     };
     // The selected evidence tuple is the request identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surface, route, version, device, period, env]);
+  }, [surface, route, version, device, range.from, range.to, env]);
 
   const compare = async () => {
     if (!comparisonTarget) return;
@@ -368,11 +382,12 @@ function VisualExplorer({
         route,
         env,
         grid: 24,
-        baseline: { version, device, date_from: period },
+        baseline: { version, device, date_from: range.from, date_to: range.to },
         comparison: {
           version: comparisonTarget.version,
           device: comparisonTarget.device,
-          date_from: period,
+          date_from: range.from,
+          date_to: range.to,
         },
       });
       if (compareRequestRef.current === requestId && evidenceIdentityRef.current === requestIdentity) {
@@ -400,7 +415,7 @@ function VisualExplorer({
             ? <span className="text-sm text-amber-700">Snapshot may be stale</span>
             : <span className="text-sm text-muted-foreground">Exact version + layout</span>}
         >
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         <Filter label="Surface">
           <Select value={surface} onValueChange={setSurface}>
             <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
@@ -423,16 +438,6 @@ function VisualExplorer({
           <Select value={device} onValueChange={(value) => setDevice(value as 'desktop' | 'mobile')}>
             <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
             <SelectContent>{devices.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent>
-          </Select>
-        </Filter>
-        <Filter label="Period">
-          <Select value={period} onValueChange={setPeriod}>
-            <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="-7d">Last 7 days</SelectItem>
-              <SelectItem value="-30d">Last 30 days</SelectItem>
-              <SelectItem value="-90d">Last 90 days</SelectItem>
-            </SelectContent>
           </Select>
         </Filter>
           </div>
@@ -1128,10 +1133,9 @@ function SurfacesTable({
   );
 }
 
-function AggregateClickEvidence({ surfaces, env }: { surfaces: ExperienceSurface[]; env: string }) {
+function AggregateClickEvidence({ surfaces, env, range }: { surfaces: ExperienceSurface[]; env: string; range: ResolvedAnalyticsRange }) {
   const { client, project } = useStore();
   const [surface, setSurface] = useState(surfaces[0]?.key ?? '');
-  const [period, setPeriod] = useState('7');
   const [grid, setGrid] = useState('16');
   const [result, setResult] = useState<InteractionMapResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1140,6 +1144,10 @@ function AggregateClickEvidence({ surfaces, env }: { surfaces: ExperienceSurface
   useEffect(() => {
     if (!surfaces.some((item) => item.key === surface)) setSurface(surfaces[0]?.key ?? '');
   }, [surface, surfaces]);
+
+  useEffect(() => {
+    reset();
+  }, [range.from, range.to]);
 
   const reset = () => {
     setResult(null);
@@ -1152,7 +1160,8 @@ function AggregateClickEvidence({ surfaces, env }: { surfaces: ExperienceSurface
     try {
       setResult(await client!.interactionMap(project!, {
         surface,
-        date_from: `-${period}d`,
+        date_from: range.from,
+        date_to: range.to,
         env,
         grid: Number(grid),
       }));
@@ -1181,10 +1190,6 @@ function AggregateClickEvidence({ surfaces, env }: { surfaces: ExperienceSurface
             <SelectTrigger aria-label="Aggregate click surface" className="h-9 min-w-44"><SelectValue placeholder="Choose surface" /></SelectTrigger>
             <SelectContent>{surfaces.map((item) => <SelectItem key={item.key} value={item.key}>{item.name}</SelectItem>)}</SelectContent>
           </Select>
-          <Select value={period} onValueChange={(value) => { setPeriod(value); reset(); }}>
-            <SelectTrigger aria-label="Aggregate click period" className="h-9 w-28"><SelectValue /></SelectTrigger>
-            <SelectContent>{['7', '30', '90'].map((days) => <SelectItem key={days} value={days}>{days} days</SelectItem>)}</SelectContent>
-          </Select>
           <Select value={grid} onValueChange={(value) => { setGrid(value); reset(); }}>
             <SelectTrigger aria-label="Aggregate click grid" className="h-9 w-24"><SelectValue /></SelectTrigger>
             <SelectContent>{['8', '16', '32'].map((value) => <SelectItem key={value} value={value}>{value} × {value}</SelectItem>)}</SelectContent>
@@ -1196,7 +1201,7 @@ function AggregateClickEvidence({ surfaces, env }: { surfaces: ExperienceSurface
         </div>
         {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
         {result && result.cells.length === 0 && result.labels.length === 0 && (
-          <div className="mt-4"><EmptyState headline="No captured clicks" lead={`No accepted labelled click events in the last ${period} days.`} /></div>
+          <div className="mt-4"><EmptyState headline="No captured clicks" lead={`No accepted labelled click events in ${range.label.toLowerCase()}.`} /></div>
         )}
         {result && (result.cells.length > 0 || result.labels.length > 0) && (
           <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
@@ -1239,7 +1244,7 @@ function AggregateClickEvidence({ surfaces, env }: { surfaces: ExperienceSurface
   );
 }
 
-function SessionTimeline({ surfaces, env }: { surfaces: ExperienceSurface[]; env: string }) {
+function SessionTimeline({ surfaces, env, range }: { surfaces: ExperienceSurface[]; env: string; range: ResolvedAnalyticsRange }) {
   const { client, project } = useStore();
   const [surface, setSurface] = useState(surfaces[0]?.key ?? '');
   const [sessionId, setSessionId] = useState('');
@@ -1255,7 +1260,8 @@ function SessionTimeline({ surfaces, env }: { surfaces: ExperienceSurface[]; env
       setResult(await client!.experienceSession(project!, {
         surface,
         session_id: sessionId.trim(),
-        date_from: '-7d',
+        date_from: range.from,
+        date_to: range.to,
         env,
       }));
     } catch (caught) {

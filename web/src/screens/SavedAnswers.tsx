@@ -108,18 +108,20 @@ export function SavedAnswers() {
         </Panel>
       )}
       {!saved.loading && !saved.error && saved.data && saved.data.length > 0 && (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {saved.data.map((answer) => (
-            <SavedAnswerCard
-              key={answer.id}
-              answer={answer}
-              focused={answer.id === focusedAnswer}
-              officialAllowed={officialAllowed}
-              onOfficial={() => changeOfficial(answer)}
-              onArchive={() => setArchiveTarget(answer)}
-            />
-          ))}
-        </div>
+        <Panel>
+          <div role="list" aria-label="Saved answers" className="-m-5 divide-y">
+            {saved.data.map((answer) => (
+              <SavedAnswerCard
+                key={answer.id}
+                answer={answer}
+                focused={answer.id === focusedAnswer}
+                officialAllowed={officialAllowed}
+                onOfficial={() => changeOfficial(answer)}
+                onArchive={() => setArchiveTarget(answer)}
+              />
+            ))}
+          </div>
+        </Panel>
       )}
 
       {archiveTarget && (
@@ -154,31 +156,32 @@ export function SavedAnswerCard({
     ? 'Trusted evidence'
     : `${answer.evidence.state.replaceAll('_', ' ')} evidence`;
   return (
-    <div
+    <article
+      role="listitem"
       id={`saved-answer-${encodeURIComponent(answer.id)}`}
       data-testid={`saved-answer-${answer.id}`}
       data-focused={focused ? 'true' : 'false'}
       tabIndex={focused ? -1 : undefined}
-      className={focused ? 'rounded-panel ring-2 ring-ring ring-offset-2' : undefined}
+      className={`p-5 outline-none ${focused ? 'relative z-10 rounded-panel ring-2 ring-ring ring-offset-2' : ''}`}
     >
-    <Panel
-      title={<h2 className="serif text-lg font-normal">{answer.title}</h2>}
-      right={answer.official ? <Badge>Official</Badge> : <Badge variant="outline">Saved</Badge>}
-    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h2 className="serif text-2xl font-normal">{answer.title}</h2>
+        {answer.official ? <Badge>Official</Badge> : <Badge variant="outline">Saved</Badge>}
+      </div>
       <div className="space-y-4">
-        <div>
+        <div className="mt-3">
           <p className="text-sm font-medium">{answer.answer.headline}</p>
           <p className="mt-1 text-sm text-muted-foreground">{answer.answer.takeaway}</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <Badge variant="outline" className="font-normal">{trustLabel}</Badge>
           <span>{answer.evidence.freshness}</span>
           <code>{answer.env}</code>
           <span>Updated {fmtRelative(answer.updated_at)}</span>
         </div>
-        <details className="rounded-md border bg-muted/10 px-3 py-2">
+        <details className="rounded-control border bg-muted/10 px-4 py-2">
           <DisclosureSummary className="cursor-pointer text-sm font-medium">Evidence and provenance</DisclosureSummary>
-          <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+          <div className="mt-2 space-y-1 text-sm text-muted-foreground">
             <p>Schema v{answer.schema_version} · {answer.visualization_spec.kind.replaceAll('_', ' ')}</p>
             <p>As of {new Date(answer.evidence.as_of).toLocaleString()}</p>
             <p>{answer.answer.why_it_matters}</p>
@@ -192,7 +195,7 @@ export function SavedAnswerCard({
                 {answer.official ? 'Remove official status' : 'Mark official'}
               </Button>
             ) : (
-              <p className="text-xs text-muted-foreground">Only a workspace owner or admin can change official status.</p>
+              <p className="text-sm text-muted-foreground">Only a workspace owner or admin can change official status.</p>
             )}
             <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={onArchive}>
               Archive saved answer
@@ -200,7 +203,6 @@ export function SavedAnswerCard({
           </div>
         )}
       </div>
-    </Panel>
-    </div>
+    </article>
   );
 }

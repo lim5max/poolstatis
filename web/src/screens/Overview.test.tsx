@@ -17,7 +17,7 @@ vi.mock('../productTelemetry', async (importOriginal) => ({
 }));
 
 vi.mock('../analysis/charts', () => ({
-  TrendChart: () => <div role="img" aria-label="Trend chart"><span>Day 1: 4</span><span>Day 2: 6</span></div>,
+  TrendChart: ({ label }: { label: string }) => <div role="img" aria-label={label}><span>Day 1: 4</span><span>Day 2: 6</span></div>,
 }));
 
 const mockedStore = vi.mocked(useStore);
@@ -131,6 +131,39 @@ describe('goal-aware Attention', () => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
     window.localStorage.clear();
+  });
+
+  it('shows the answer before attention and applies a custom period to every Home answer query', async () => {
+    const client = websiteClient() as Record<string, any>;
+    setStore(client);
+    const view = render(<MemoryRouter><Overview /></MemoryRouter>);
+
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    expect(within(period).getByRole('button', { name: 'Today' })).toBeInTheDocument();
+    expect(within(period).getByRole('button', { name: 'Custom' })).toBeInTheDocument();
+
+    const metrics = screen.getByRole('list', { name: 'Key metrics' });
+    const attention = screen.getByRole('region', { name: 'Needs attention' });
+    expect(metrics.compareDocumentPosition(attention) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Website traffic trend' })).toBeInTheDocument();
+
+    fireEvent.click(within(period).getByRole('button', { name: 'Custom' }));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-03' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
+
+    await waitFor(() => expect(client.operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      date_from: '2026-08-01T00:00:00.000Z',
+      date_to: '2026-08-04T00:00:00.000Z',
+    })));
+    expect(client.query).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      kind: 'trend',
+      date_from: '2026-08-01T00:00:00.000Z',
+      date_to: '2026-08-04T00:00:00.000Z',
+    }));
+    expect(screen.getByText('Aug 1–3, 2026')).toBeInTheDocument();
+    expect(view.container.querySelector('.text-xs')).toBeNull();
   });
 
   it('renders the server-owned attention order instead of recomputing it in React', async () => {
@@ -265,11 +298,11 @@ describe('goal-aware Attention', () => {
     expect(screen.queryByRole('button', { name: 'Customize dashboard' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Biggest loss: Visited → Started signup' })).toBeInTheDocument();
     expect(screen.getByText('Overall funnel conversion:')).toBeInTheDocument();
-    const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
-    expect(outcomes).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
+    const outcomes = screen.getByRole('list', { name: 'Key metrics' });
+    expect(outcomes).toHaveClass('sm:grid-cols-2', 'xl:grid-cols-4');
     expect(outcomes.children).toHaveLength(4);
     expect(within(outcomes).getByText('8')).toBeInTheDocument();
-    expect(within(outcomes).getByText('Last event')).toBeInTheDocument();
+    expect(within(outcomes).getByText('Last event · 30d')).toBeInTheDocument();
     expect(within(outcomes).getByText('page.viewed')).toBeInTheDocument();
     expect(screen.getByText(/Observed · Last 30 days · Trusted · 20 events ·/)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Funnel snapshot' })).toBeInTheDocument();
@@ -279,11 +312,11 @@ describe('goal-aware Attention', () => {
     expect(screen.getByRole('heading', { name: 'Recent activity' })).toBeInTheDocument();
     expect(screen.getByText('20 events')).toBeInTheDocument();
     expect(screen.queryByText('Next action')).not.toBeInTheDocument();
-    expect(screen.queryByRole('img', { name: 'Trend chart' })).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Website traffic trend' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Top sources' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Top pages' })).not.toBeInTheDocument();
     expect(view.container.querySelector('.text-xs')).toBeNull();
-    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(client.query).toHaveBeenCalledTimes(2);
     expect(client.query).toHaveBeenCalledWith('alpha', expect.objectContaining({
       kind: 'funnel',
       funnel: 'website_signup',
@@ -336,11 +369,11 @@ describe('goal-aware Attention', () => {
     render(<MemoryRouter><Overview /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
-    const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
+    const outcomes = screen.getByRole('list', { name: 'Key metrics' });
     expect(within(outcomes).getByText('Visitors')).toBeInTheDocument();
     expect(within(outcomes).getByText('Sessions')).toBeInTheDocument();
     expect(within(outcomes).getByText('Page views')).toBeInTheDocument();
-    expect(within(outcomes).getByText('Last event')).toBeInTheDocument();
+    expect(within(outcomes).getByText('Last event · 30d')).toBeInTheDocument();
     expect(within(outcomes).getAllByText('Not configured')).toHaveLength(3);
     expect(within(outcomes).getByText('No events')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Customize dashboard' })).not.toBeInTheDocument();
@@ -356,7 +389,7 @@ describe('goal-aware Attention', () => {
 
     expect(await screen.findByText('Website answers are temporarily unavailable.')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Set up Web/ })).not.toBeInTheDocument();
-    const outcomes = screen.getByRole('group', { name: 'Key outcomes' });
+    const outcomes = screen.getByRole('list', { name: 'Key metrics' });
     expect(within(outcomes).getAllByText('Unavailable').length).toBeGreaterThan(0);
     expect(within(outcomes).queryByText('Not configured')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry website answers' }));
