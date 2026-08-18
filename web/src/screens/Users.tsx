@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { ArrowRight, Funnel, Search, UserCircle, UserGroup } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EmptyState, ErrorNote, Loading, PageHeading, fmtNum } from '@/components/ui';
 import { AnswerCanvas } from '@/components/analytics';
 import { AnalyticsDateRange } from '@/components/AnalyticsDateRange';
 import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import { analyticsNavigationTarget } from '../analysis/navigation';
+import { rangeSearchParams, type AnalyticsRangeSelection, type ResolvedAnalyticsRange } from '../analysis/ranges';
 import {
   type ActorOrder,
   type ActorsResult,
@@ -27,7 +29,6 @@ interface InterestingMetricSelection {
 }
 
 export function Users() {
-  const location = useLocation();
   const { client, project, env } = useStore();
   const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const [surface, setSurface] = useState<'people' | 'groups'>('people');
@@ -53,13 +54,27 @@ export function Users() {
     ? interestingSelection.metric
     : '';
   const queryOrder: ActorOrder = interestingMetric ? 'interesting_desc' : order;
-  const actorScopeKey = JSON.stringify([
-    project, env, range.from, range.to, queryOrder, search, activityMetric, interestingMetric, cursor ?? null,
+  const actorIdentityKey = JSON.stringify([
+    project, env, queryOrder, search, activityMetric, interestingMetric, cursor ?? null,
   ]);
-  const actorScope = useMemo(() => ({ client, key: actorScopeKey }), [client, actorScopeKey]);
-  const actors = useAsync<{ scope: typeof actorScope; identity: typeof registryScope; result: ActorsResult }>(async () => ({
-    scope: actorScope,
-    identity: registryScope,
+  const actorScopeKey = JSON.stringify([actorIdentityKey, range.from, range.to]);
+  const actors = useAsync<{
+    scope: string;
+    identity: string;
+    client: typeof client;
+    selection: AnalyticsRangeSelection;
+    range: ResolvedAnalyticsRange;
+    page: number;
+    search: string;
+    result: ActorsResult;
+  }>(async () => ({
+    scope: actorScopeKey,
+    identity: actorIdentityKey,
+    client,
+    selection: rangeSelection,
+    range,
+    page,
+    search,
     result: await client!.operationalQuery<ActorsResult>(project!, {
       kind: 'actors',
       env,
@@ -75,7 +90,7 @@ export function Users() {
         ? { interesting: { reason: 'recently_activated' as const, metric: interestingMetric } }
         : {}),
     }),
-  }), [actorScope], { keepPreviousData: true });
+  }), [client, actorScopeKey], { keepPreviousData: true });
   const groupRegistryScope = useMemo(() => ({ client, project, env, surface }), [client, project, env, surface]);
   const entityTypes = useAsync<{ scope: typeof groupRegistryScope; result: EntityType[] }>(async () => ({
     scope: groupRegistryScope,
@@ -136,10 +151,20 @@ export function Users() {
       setInterestingSelection(null);
     }
   }, [activationMetrics, client, env, interestingSelection, project, registryMetrics]);
-  const exactActorData = !actors.error && actors.data?.scope === actorScope ? actors.data.result : null;
-  const actorData = exactActorData ?? (
-    actors.loading && actors.data?.identity === registryScope ? actors.data.result : null
+  const exactActorRead = !actors.error
+    && actors.data?.client === client
+    && actors.data.scope === actorScopeKey
+    ? actors.data
+    : null;
+  const actorRead = exactActorRead ?? (
+    actors.loading
+      && actors.data?.client === client
+      && actors.data.identity === actorIdentityKey
+      ? actors.data
+      : null
   );
+  const actorData = actorRead?.result ?? null;
+  const actorRangeSearch = actorRead ? `?${rangeSearchParams(actorRead.selection).toString()}` : '';
   const groupData = !groups.error && groups.data?.scope === groupScope ? groups.data.result : null;
 
   const applySearch = (event: FormEvent) => {
@@ -155,14 +180,13 @@ export function Users() {
         help="Rows are bounded actor aggregates from immutable events and explicit identity links. Poolstatis does not infer profiles or risk scores without supporting data."
       />
 
-      <div className="border-b">
-        <div role="tablist" aria-label="People view" className="flex gap-6">
-          <ViewTab active={surface === 'people'} onClick={() => setSurface('people')} icon={<UserCircle className="size-4" />}>All people</ViewTab>
-          <ViewTab active={surface === 'groups'} onClick={() => setSurface('groups')} icon={<UserGroup className="size-4" />}>Groups</ViewTab>
-        </div>
-      </div>
+      <Tabs value={surface} onValueChange={(value) => setSurface(value as 'people' | 'groups')} className="gap-5">
+        <TabsList variant="line" aria-label="People view" className="w-full justify-start gap-6 overflow-x-auto border-b p-0">
+          <TabsTrigger value="people" className="min-h-11 flex-none rounded-none px-1 data-[state=active]:border-transparent data-[state=active]:bg-transparent"><UserCircle className="size-4" />All people</TabsTrigger>
+          <TabsTrigger value="groups" className="min-h-11 flex-none rounded-none px-1 data-[state=active]:border-transparent data-[state=active]:bg-transparent"><UserGroup className="size-4" />Groups</TabsTrigger>
+        </TabsList>
 
-      {surface === 'people' && <>
+      <TabsContent value="people" className="mt-0 space-y-5">
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}>
             <Funnel className="size-4" /> Filters
@@ -239,13 +263,13 @@ export function Users() {
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
             <h2 className="text-sm font-semibold">People</h2>
             <span className="text-sm text-muted-foreground">
-              {actors.loading && <span role="status">Updating · </span>}{range.label} · page {page + 1}
+              {actors.loading && <span role="status">Updating · </span>}{actorRead?.range.label} · page {(actorRead?.page ?? 0) + 1}
             </span>
           </div>
           {actorData.actors.length === 0 ? (
             <EmptyState
               headline="No actors"
-              lead={search ? 'No canonical population contains this exact ID in the selected period.' : 'No events matched this scope.'}
+              lead={actorRead?.search ? 'No canonical population contains this exact ID in the selected period.' : 'No events matched this scope.'}
             />
           ) : (
             <>
@@ -286,7 +310,7 @@ export function Users() {
                         <TableCell className="text-right">
                           <Button asChild variant="ghost" size="icon-sm" className="size-11 md:size-8">
                             <Link
-                              to={analyticsNavigationTarget(`/analyze/users/${encodeURIComponent(actor.distinct_id)}`, location.search)}
+                              to={analyticsNavigationTarget(`/analyze/users/${encodeURIComponent(actor.distinct_id)}`, actorRangeSearch)}
                               aria-label={`Open actor ${actor.distinct_id}`}
                             >
                               <ArrowRight className="size-4" />
@@ -302,7 +326,7 @@ export function Users() {
                 <Button
                   variant="outline"
                   className="h-11 md:h-9"
-                  disabled={page === 0}
+                  disabled={actors.loading || page === 0}
                   onClick={() => setCursorStack((current) => current.slice(0, -1))}
                 >
                   Previous
@@ -310,7 +334,7 @@ export function Users() {
                 <Button
                   variant="outline"
                   className="h-11 md:h-9"
-                  disabled={!actorData.meta.next_cursor}
+                  disabled={actors.loading || !actorData.meta.next_cursor}
                   onClick={() => {
                     const next = actorData.meta.next_cursor;
                     if (next) setCursorStack((current) => [...current, next]);
@@ -324,9 +348,9 @@ export function Users() {
           </AnswerCanvas>
         </>
         )}
-      </>}
+      </TabsContent>
 
-      {surface === 'groups' && <>
+      <TabsContent value="groups" className="mt-0 space-y-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           {visibleEntityTypes && visibleEntityTypes.length > 0 && <Control label="Group type">
             <Select value={groupType} onValueChange={setGroupType}>
@@ -342,27 +366,9 @@ export function Users() {
         {(entityTypes.error || groups.error) && <ErrorNote>{entityTypes.error ?? groups.error}</ErrorNote>}
         {visibleEntityTypes?.length === 0 && <EmptyState headline="No groups registered" lead="Register an account, team, or workspace entity type before groups can be listed." />}
         {visibleEntityTypes && visibleEntityTypes.length > 0 && groupData && <GroupsTable type={groupType} groups={groupData} updating={groups.loading} />}
-      </>}
+      </TabsContent>
+      </Tabs>
     </div>
-  );
-}
-
-function ViewTab({ active, onClick, icon, children }: {
-  active: boolean;
-  onClick: () => void;
-  icon: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={`flex min-h-11 items-center gap-2 border-b-2 px-1 text-sm font-medium ${active ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-    >
-      {icon}{children}
-    </button>
   );
 }
 
@@ -374,8 +380,14 @@ const AVATARS = [
   { glyph: '🐱', tone: 'bg-rose-100 text-rose-900' },
   { glyph: '🐻', tone: 'bg-amber-100 text-amber-900' },
 ] as const;
-const ALIAS_ADJECTIVES = ['Bright', 'Calm', 'Clever', 'Curious', 'Gentle', 'Quick', 'Quiet', 'Sunny'] as const;
-const ALIAS_NOUNS = ['Badger', 'Finch', 'Fox', 'Heron', 'Otter', 'Panda', 'Robin', 'Turtle'] as const;
+const ALIAS_ADJECTIVES = [
+  'Bright', 'Calm', 'Clever', 'Curious', 'Gentle', 'Jolly', 'Lucky', 'Mellow',
+  'Nimble', 'Quick', 'Quiet', 'Sunny', 'Swift', 'Witty', 'Warm', 'Zen',
+] as const;
+const ALIAS_NOUNS = [
+  'Badger', 'Finch', 'Fox', 'Gecko', 'Heron', 'Koala', 'Lynx', 'Otter',
+  'Panda', 'Robin', 'Seal', 'Sparrow', 'Tiger', 'Turtle', 'Walrus', 'Wren',
+] as const;
 
 function stableHash(value: string): number {
   let hash = 2166136261;

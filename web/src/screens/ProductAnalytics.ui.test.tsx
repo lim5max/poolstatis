@@ -164,6 +164,7 @@ describe('Product answer-first surface', () => {
 
   it('keeps the current answer visible while a new period is loading', async () => {
     const current = productStore() as any;
+    current.client.accountMode.mockResolvedValue(accountMode({ kind: 'personal', official: true }));
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
@@ -181,9 +182,18 @@ describe('Product answer-first surface', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Updating…');
     expect(answer).toBeVisible();
     expect(screen.getByRole('region', { name: 'Canonical answer' })).toBeVisible();
+    const save = screen.getByRole('button', { name: 'Save answer' });
+    const official = screen.getByRole('button', { name: 'Save as official' });
+    expect(save).toBeDisabled();
+    expect(official).toBeDisabled();
+    fireEvent.click(save);
+    fireEvent.click(official);
+    expect(current.client.createAnalysisView).not.toHaveBeenCalled();
 
     await act(async () => { pending.resolve(previousResult); });
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save answer' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save as official' })).toBeEnabled();
   });
 
   it('puts templates and a real answer before advanced query controls', async () => {
@@ -192,8 +202,8 @@ describe('Product answer-first surface', () => {
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Product' })).toBeInTheDocument();
-    expect(screen.getByRole('tablist', { name: 'Analysis view' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Product health' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('group', { name: 'Analysis view' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Product health' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Edit analysis').closest('details')).not.toHaveAttribute('open');
 
     await waitFor(() => expect(screen.getByText(/Observed · Trusted · 34 events ·/)).toBeInTheDocument());
@@ -393,7 +403,7 @@ describe('Product answer-first surface', () => {
     render(<MemoryRouter initialEntries={['/analyze/funnels?funnel=checkout&env=prod&from_step=1&to_step=2']}><ProductAnalytics surface="funnels" /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Funnels' })).toBeInTheDocument();
-    expect(screen.queryByRole('tablist', { name: 'Analysis view' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Analysis view' })).not.toBeInTheDocument();
     expect(screen.getByText('Activation funnel')).toBeInTheDocument();
     expect(screen.getByText('Edit funnel analysis')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Edit funnel analysis'));

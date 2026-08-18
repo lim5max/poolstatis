@@ -716,6 +716,71 @@ describe('Web analytics partial availability', () => {
     expect(screen.getByText('20 canonical page views across 11 sessions')).toBeInTheDocument();
   });
 
+  it('keeps every visible Web module on the prior range until the new primary read resolves', async () => {
+    const overview = await operationalQuery('y1blin-com', {
+      kind: 'web_analytics', metric: metric.key, date_from: '-30d', filters: [], env: 'prod', dimensions: [],
+    });
+    const pendingPrimary = deferred<typeof overview>();
+    const scopedOperationalQuery = vi.fn((project, input) => {
+      if (input.kind === 'web_analytics'
+        && input.dimensions?.length === 0
+        && input.date_from === '2026-08-01T00:00:00.000Z') {
+        return pendingPrimary.promise;
+      }
+      return operationalQuery(project, input);
+    });
+    const query = vi.fn().mockResolvedValue({
+      kind: 'trend', series: [],
+      meta: {
+        computed_at: '2026-07-31T00:00:00.000Z',
+        date_range: overview.meta.date_range,
+        sampling: null,
+        source: 'native',
+      },
+    });
+    mockedStore.mockReturnValue({
+      project: 'y1blin-com', env: 'prod',
+      client: {
+        metrics: vi.fn().mockResolvedValue([metric]), properties,
+        operationalQuery: scopedOperationalQuery,
+        query,
+      },
+    } as never);
+
+    render(<TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>);
+    expect(await screen.findAllByText('Last 30 days')).toHaveLength(2);
+    await screen.findByText('telegram');
+    scopedOperationalQuery.mockClear();
+    query.mockClear();
+
+    const period = screen.getByRole('group', { name: 'Analytics period' });
+    openCustomPeriod(period);
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-04' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply period' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Updating…');
+    expect(screen.getAllByText('Last 30 days')).toHaveLength(1);
+    expect(screen.getByText('telegram')).toBeInTheDocument();
+    expect(scopedOperationalQuery.mock.calls.filter(([, input]) => input.date_from === '2026-08-01T00:00:00.000Z')).toHaveLength(1);
+    expect(query.mock.calls.some(([, input]) => input.date_from === '2026-08-01T00:00:00.000Z')).toBe(false);
+
+    await act(async () => {
+      pendingPrimary.resolve({
+        ...overview,
+        summary: { ...overview.summary, visitors: 99 },
+        meta: {
+          ...overview.meta,
+          computed_at: '2026-08-05T00:00:00.000Z',
+          date_range: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-05T00:00:00.000Z' },
+        },
+      });
+    });
+    expect(await screen.findAllByText('Aug 1–4, 2026')).toHaveLength(2);
+    expect(screen.getByText('99')).toBeInTheDocument();
+    await waitFor(() => expect(query.mock.calls.some(([, input]) => input.date_from === '2026-08-01T00:00:00.000Z')).toBe(true));
+  });
+
   it('does not keep prior-scope KPI data visible while a new project registry is loading', async () => {
     const view = render(
       <TooltipProvider><MemoryRouter future={routerFuture}><WebAnalytics /></MemoryRouter></TooltipProvider>,

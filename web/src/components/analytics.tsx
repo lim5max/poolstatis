@@ -119,6 +119,7 @@ export function CanonicalAnswer({
   followUp,
   followUpTask,
   saveState,
+  saveDisabled = false,
   officialSaveState = 'hidden',
   saveVariant = 'default',
   onSave,
@@ -135,6 +136,7 @@ export function CanonicalAnswer({
   followUp: string;
   followUpTask: string;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
+  saveDisabled?: boolean;
   officialSaveState?: 'hidden' | 'idle' | 'saving' | 'saved' | 'saved_unofficial' | 'error';
   saveVariant?: 'default' | 'outline';
   onSave: () => void;
@@ -171,7 +173,7 @@ export function CanonicalAnswer({
                   type="button"
                   className="h-11"
                   onClick={onSaveOfficial}
-                  disabled={saveState === 'saving' || officialSaveState === 'saving' || officialSaveState === 'saved'}
+                  disabled={saveDisabled || saveState === 'saving' || officialSaveState === 'saving' || officialSaveState === 'saved'}
                 >
                   {officialSaveState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
                   {officialSaveState === 'saved'
@@ -183,7 +185,7 @@ export function CanonicalAnswer({
                         : 'Save as official'}
                 </Button>
               ) : null}
-              <Button type="button" variant={officialSaveState === 'hidden' ? saveVariant : 'outline'} className="h-11" onClick={onSave} disabled={saveState === 'saving' || saveState === 'saved' || officialSaveState === 'saving'}>
+              <Button type="button" variant={officialSaveState === 'hidden' ? saveVariant : 'outline'} className="h-11" onClick={onSave} disabled={saveDisabled || saveState === 'saving' || saveState === 'saved' || officialSaveState === 'saving'}>
                 {saveState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
                 {saveState === 'saved' ? 'Answer saved' : saveState === 'saving' ? 'Saving answer…' : 'Save answer'}
               </Button>

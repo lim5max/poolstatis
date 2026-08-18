@@ -156,7 +156,8 @@ describe('People list', () => {
     const view = render(<MemoryRouter><Users /></MemoryRouter>);
     await screen.findByText('anon_7');
 
-    const pending = deferred<never>();
+    const initialResult = await operationalQuery.mock.results[0]!.value;
+    const pending = deferred<typeof initialResult>();
     operationalQuery.mockImplementationOnce(() => pending.promise);
     const period = screen.getByRole('group', { name: 'Analytics period' });
     openCustomPeriod(period);
@@ -173,10 +174,34 @@ describe('People list', () => {
     expect(screen.getByText('anon_7')).toBeVisible();
     expect(screen.getByRole('link', { name: 'Open actor anon_7' })).toHaveAttribute(
       'href',
-      '/analyze/users/anon_7?range=custom&from=2026-08-01&to=2026-08-04',
+      '/analyze/users/anon_7?range=30d',
     );
     expect(screen.queryByRole('columnheader', { name: 'Order evidence' })).not.toBeInTheDocument();
     expect(view.container.querySelector('.text-xs')).toBeNull();
+
+    await act(async () => { pending.resolve(initialResult); });
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.getByRole('link', { name: 'Open actor anon_7' })).toHaveAttribute(
+      'href',
+      '/analyze/users/anon_7?range=custom&from=2026-08-01&to=2026-08-04',
+    );
+  });
+
+  it('does not relabel old rows as a pending search result', async () => {
+    render(<MemoryRouter><Users /></MemoryRouter>);
+    await screen.findByText('anon_7');
+
+    const pending = deferred<never>();
+    operationalQuery.mockImplementationOnce(() => pending.promise);
+    fireEvent.change(screen.getByLabelText('Exact actor ID'), { target: { value: 'raw-actor-7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run exact actor search' }));
+
+    await waitFor(() => expect(operationalQuery).toHaveBeenLastCalledWith('alpha', expect.objectContaining({
+      search: { kind: 'exact_id', value: 'raw-actor-7' },
+    })));
+    expect(screen.queryByText('anon_7')).not.toBeInTheDocument();
+    expect(screen.getByText('Exact match:')).toBeInTheDocument();
+    expect(screen.getByText('resolving canonical actors…')).toBeInTheDocument();
   });
 
   it('does not place setup capability warnings above the people table', async () => {
@@ -420,7 +445,7 @@ describe('People list', () => {
     } as never);
 
     render(<MemoryRouter><Users /></MemoryRouter>);
-    fireEvent.click(screen.getByRole('tab', { name: 'Groups' }));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Groups' }), { button: 0, ctrlKey: false });
 
     expect(await screen.findByText('Northstar')).toBeInTheDocument();
     expect(screen.getByText('acct_7')).toBeInTheDocument();

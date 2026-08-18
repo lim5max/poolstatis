@@ -39,6 +39,7 @@ import { previousPeriodQuery as previousAnalysisPeriodQuery, summarizeAnswer, ty
 import { accountMutationAccess, mutationAllowed } from '../account-capabilities';
 
 interface AnalysisRun {
+  queryScope: string;
   spec: VisualizationSpec;
   result: AnalysisQueryResult;
   previousResult: AnalysisQueryResult | null;
@@ -133,6 +134,16 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   const selectedKey = resourceOptions.some((resource) => resource.key === resourceKey)
     ? resourceKey
     : resourceOptions[0]?.key ?? '';
+  const analysisScopeKey = JSON.stringify([
+    currentScope,
+    template.key,
+    selectedKey,
+    metricView,
+    interval,
+    breakdown,
+    range.from,
+    range.to,
+  ]);
 
   const selectTemplate = (next: AnalysisTemplate) => {
     if (resolveTemplateCapability(next.key, CORE_ANALYZE_CAPABILITIES).status !== 'available') return;
@@ -156,6 +167,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     const generation = runGeneration.current + 1;
     runGeneration.current = generation;
     const runScope = currentScope;
+    const runQueryScope = analysisScopeKey;
     const runProject = project!;
     const runEnv = env;
     setRunning(true);
@@ -199,6 +211,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           : previousResult?.kind === result.kind,
       });
       setRun({
+        queryScope: runQueryScope,
         spec,
         result,
         previousResult,
@@ -238,6 +251,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
   if (registry.error) return <ErrorNote>{registry.error}</ErrorNote>;
 
   const currentRun = run?.spec.project === project && run.spec.env === env ? run : null;
+  const exactCurrentRun = currentRun?.queryScope === analysisScopeKey ? currentRun : null;
   const currentRunError = runError?.scope === currentScope ? runError.message : null;
   const pointCount = currentRun ? countResultPoints(currentRun.result) : 0;
   const renderState = resolveRenderState({
@@ -251,7 +265,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
     : renderState;
 
   const saveAnswer = async (makeOfficial = false) => {
-    if (!currentRun || !client || !project || saveState === 'saving' || officialSaveState === 'saving') return;
+    if (!exactCurrentRun || running || !client || !project || saveState === 'saving' || officialSaveState === 'saving') return;
     if (makeOfficial && (!officialSaveAllowed || officialSaveState === 'saved')) return;
     if (!makeOfficial && saveState === 'saved') return;
 
@@ -260,7 +274,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       setSaveState('saving');
       if (makeOfficial) setOfficialSaveState('saving');
       try {
-        const saved = await client.createAnalysisView(project, savedAnswerInput(currentRun, template.key));
+        const saved = await client.createAnalysisView(project, savedAnswerInput(exactCurrentRun, template.key));
         answerId = saved.id;
         setSavedAnswerId(saved.id);
         setSaveState('saved');
@@ -292,7 +306,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
       />
 
       {!funnelSurface && <section aria-label="Analysis view">
-        <div role="tablist" aria-label="Analysis view" className="flex max-w-full gap-6 overflow-x-auto border-b">
+        <div role="group" aria-label="Analysis view" className="flex max-w-full gap-6 overflow-x-auto border-b">
           {ANALYSIS_TEMPLATES.filter((candidate) => ['product-health', 'feature-adoption', 'retention', 'release-impact'].includes(candidate.key)).map((candidate) => {
             const available = resolveTemplateCapability(candidate.key, CORE_ANALYZE_CAPABILITIES).status === 'available';
             const selected = candidate.key === template.key;
@@ -302,8 +316,6 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
                 type="button"
                 disabled={!available}
                 aria-pressed={selected}
-                role="tab"
-                aria-selected={selected}
                 title={available ? candidate.question : 'Not supported by the current server contract.'}
                 onClick={() => selectTemplate(candidate)}
                 className={`min-h-11 shrink-0 border-b-2 px-1 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-foreground text-foreground' : available ? 'border-transparent text-muted-foreground hover:text-foreground' : 'cursor-not-allowed border-transparent text-muted-foreground/55'}`}
@@ -373,6 +385,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
           followUp={currentRun.summary.followUp}
           followUpTask={followUpAgentTask(currentRun.spec, currentRun.summary)}
           saveState={saveState}
+          saveDisabled={running || !exactCurrentRun}
           officialSaveState={officialSaveAllowed ? officialSaveState : 'hidden'}
           saveVariant={funnelSurface ? 'outline' : 'default'}
           onSave={() => void saveAnswer()}

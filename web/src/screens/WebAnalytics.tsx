@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { ArrowRight } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -23,7 +23,7 @@ import {
   type WebSessionsResult,
   type WebWorkspaceResult,
 } from '../analysis/operations';
-import { previousAnalyticsRange, type AnalyticsRangeSelection, type ResolvedAnalyticsRange } from '../analysis/ranges';
+import { previousAnalyticsRange, rangeSearchParams, type AnalyticsRangeSelection, type ResolvedAnalyticsRange } from '../analysis/ranges';
 import { useAnalyticsRange } from '../analysis/useAnalyticsRange';
 import { analyticsNavigationTarget } from '../analysis/navigation';
 import type { FunnelQueryResult, TrendQueryResult } from '../analysis/visualization';
@@ -55,6 +55,8 @@ interface WebRegistryRead {
 interface WebPrimaryRead {
   scope: string;
   metric: Metric;
+  range: ResolvedAnalyticsRange;
+  selection: AnalyticsRangeSelection;
   overview: WebAnalyticsResult;
 }
 
@@ -144,7 +146,6 @@ export function parseWebRouteKeys(value: string): string[] {
 }
 
 export function WebAnalytics() {
-  const location = useLocation();
   const { client, project, env } = useStore();
   const { selection: rangeSelection, resolved: range, setSelection: setRangeSelection } = useAnalyticsRange();
   const [dimension, setDimension] = useState<BreakdownView>('source');
@@ -169,7 +170,6 @@ export function WebAnalytics() {
   const outcomeMetric = registryData ? webOutcomeMetric(registryData.metrics) : null;
   const conversionMetric = webConversionMetric(registryData?.metrics ?? []);
   const primaryScope = `${registryScope}\u0000${range.from}\u0000${range.to}\u0000${metric?.key ?? ''}`;
-  const outcomeScope = `${registryScope}\u0000${range.from}\u0000${range.to}\u0000${outcomeMetric?.key ?? ''}`;
   const primary = useAsync<WebPrimaryRead | null>(async () => {
     if (!metric) return null;
     const base = {
@@ -184,7 +184,7 @@ export function WebAnalytics() {
       ...base,
       dimensions: [],
     });
-    return { scope: primaryScope, metric, overview };
+    return { scope: primaryScope, metric, range, selection: rangeSelection, overview };
   }, [project, env, range.from, range.to, metric?.key], { keepPreviousData: true });
   const exactPrimaryData = primary.data?.scope === primaryScope ? primary.data : null;
   const primaryData = exactPrimaryData ?? (
@@ -196,44 +196,48 @@ export function WebAnalytics() {
       : null
   );
   const primaryRefreshing = primary.loading && !exactPrimaryData && Boolean(primaryData);
+  const dataRange = primaryData?.range ?? range;
+  const dataSelection = primaryData?.selection ?? rangeSelection;
+  const dataRangeSearch = `?${rangeSearchParams(dataSelection).toString()}`;
+  const dataPrimaryScope = primaryData?.scope ?? primaryScope;
+  const outcomeScope = `${registryScope}\u0000${dataRange.from}\u0000${dataRange.to}\u0000${outcomeMetric?.key ?? ''}`;
   const comparison = useAsync<WebComparisonRead | null>(async () => {
     if (!metric || !primaryData) return null;
-    const previous = previousAnalyticsRange(range);
+    const previous = previousAnalyticsRange(dataRange);
     const result = await client!.operationalQuery<WebAnalyticsResult>(project!, {
       kind: 'web_analytics', metric: metric.key, date_from: previous.from, date_to: previous.to,
       filters: [], env, dimensions: [],
     });
-    return { scope: primaryScope, result };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at]);
-  const comparisonData = comparison.data?.scope === primaryScope ? comparison.data.result : null;
+    return { scope: dataPrimaryScope, result };
+  }, [project, env, dataRange.from, dataRange.to, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at]);
+  const comparisonData = comparison.data?.scope === dataPrimaryScope ? comparison.data.result : null;
   const trendRead = useAsync<WebTrendRead | null>(async () => {
     if (!metric || !primaryData) return null;
     const result = await client!.query(project!, {
-      kind: 'trend', metric: metric.key, date_from: range.from, date_to: range.to,
+      kind: 'trend', metric: metric.key, date_from: dataRange.from, date_to: dataRange.to,
       interval: 'day', filters: [], env,
     });
     if (result.kind !== 'trend') throw new Error('Trend query returned an unexpected result kind');
-    return { scope: primaryScope, result };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at], { keepPreviousData: true });
-  const trendData = trendRead.data?.scope === primaryScope
-    ? trendRead.data.result
-    : trendRead.loading && trendRead.data?.scope.startsWith(`${registryScope}\u0000`)
-      ? trendRead.data.result
-      : null;
+    return { scope: dataPrimaryScope, result };
+  }, [project, env, dataRange.from, dataRange.to, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at]);
+  const trendData = trendRead.data?.scope === dataPrimaryScope ? trendRead.data.result : null;
   const trustRead = useAsync<WebTrustScopedRead | null>(async () => {
     if (!metric || !primaryData) return null;
-    return { scope: primaryScope, result: await readWebTrust(client!, project!, env, metric.key, range.days) };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at]);
-  const trustData = trustRead.data?.scope === primaryScope ? trustRead.data.result : null;
+    return { scope: dataPrimaryScope, result: await readWebTrust(client!, project!, env, metric.key, dataRange.days) };
+  }, [project, env, dataRange.from, dataRange.to, dataRange.days, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at]);
+  const trustData = trustRead.data?.scope === dataPrimaryScope ? trustRead.data.result : null;
   const outcomeRead = useAsync<WebOutcomeRead | null>(async () => {
-    if (!outcomeMetric || outcomeMetric.type === 'conversion') return null;
+    if (!primaryData || !outcomeMetric || outcomeMetric.type === 'conversion') return null;
     const result = await client!.query(project!, {
-      kind: 'trend', metric: outcomeMetric.key, date_from: range.from, date_to: range.to,
+      kind: 'trend', metric: outcomeMetric.key, date_from: dataRange.from, date_to: dataRange.to,
       interval: 'day', filters: [], env,
     });
     if (result.kind !== 'trend') throw new Error('Outcome query returned an unexpected result kind');
     return { scope: outcomeScope, metric: outcomeMetric, result };
-  }, [project, env, range.from, range.to, outcomeMetric?.key, outcomeMetric?.type]);
+  }, [
+    project, env, dataRange.from, dataRange.to, dataPrimaryScope, outcomeMetric?.key, outcomeMetric?.type,
+    primaryData?.overview.meta.computed_at,
+  ]);
   const outcomeData = outcomeRead.data?.scope === outcomeScope ? outcomeRead.data : null;
   const outcomeComparison = useAsync<WebOutcomeComparisonRead | null>(async () => {
     if (!outcomeMetric || !outcomeData) return null;
@@ -247,7 +251,7 @@ export function WebAnalytics() {
     if (result.kind !== 'trend') throw new Error('Outcome comparison returned an unexpected result kind');
     return { scope: outcomeScope, result };
   }, [
-    project, env, range.from, range.to, outcomeMetric?.key, outcomeData?.result.meta.computed_at,
+    project, env, dataRange.from, dataRange.to, dataPrimaryScope, outcomeMetric?.key, outcomeData?.result.meta.computed_at,
     outcomeData?.result.meta.date_range?.from, outcomeData?.result.meta.date_range?.to,
   ]);
   const outcomeComparisonData = outcomeComparison.data?.scope === outcomeScope
@@ -259,19 +263,19 @@ export function WebAnalytics() {
     const result = await client!.operationalQuery<WebAnalyticsResult>(project!, {
       kind: 'web_analytics',
       metric: metric.key,
-      date_from: range.from,
-      date_to: range.to,
+      date_from: dataRange.from,
+      date_to: dataRange.to,
       filters: [],
       env,
       dimensions: [operationalDimension],
     });
-    return { scope: primaryScope, dimension: operationalDimension, result };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension]);
-  const secondaryData = secondary.data?.scope === primaryScope
+    return { scope: dataPrimaryScope, dimension: operationalDimension, result };
+  }, [project, env, dataRange.from, dataRange.to, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at, operationalDimension]);
+  const secondaryData = secondary.data?.scope === dataPrimaryScope
     && secondary.data.dimension === operationalDimension ? secondary.data.result : null;
   const conversionFrom = primaryData?.overview.meta.date_range.from ?? '';
   const conversionTo = primaryData?.overview.meta.date_range.to ?? '';
-  const conversionScope = `${primaryScope}\u0000${conversionMetric?.key ?? ''}\u0000${conversionFrom}\u0000${conversionTo}`;
+  const conversionScope = `${dataPrimaryScope}\u0000${conversionMetric?.key ?? ''}\u0000${conversionFrom}\u0000${conversionTo}`;
   const conversion = useAsync<WebConversionRead | null>(async () => {
     if (!primaryData || dimension !== 'conversion' || !conversionMetric) return null;
     const result = await client!.query(project!, {
@@ -288,12 +292,12 @@ export function WebAnalytics() {
   const sessions = useAsync<WebSessionsRead | null>(async () => {
     if (!metric || !primaryData || !sessionsRequested) return null;
     const result = await client!.operationalQuery<WebSessionsResult>(project!, {
-      kind: 'web_sessions', metric: metric.key, date_from: range.from, date_to: range.to, filters: [], env, limit: 50,
+      kind: 'web_sessions', metric: metric.key, date_from: dataRange.from, date_to: dataRange.to, filters: [], env, limit: 50,
     });
-    return { scope: primaryScope, result };
-  }, [project, env, range.from, range.to, metric?.key, primaryData?.overview.meta.computed_at, sessionsRequested]);
-  const sessionsData = sessions.data?.scope === primaryScope ? sessions.data.result : null;
-  const currentSession = selectedSession?.scope === primaryScope ? selectedSession.session : null;
+    return { scope: dataPrimaryScope, result };
+  }, [project, env, dataRange.from, dataRange.to, dataPrimaryScope, metric?.key, primaryData?.overview.meta.computed_at, sessionsRequested]);
+  const sessionsData = sessions.data?.scope === dataPrimaryScope ? sessions.data.result : null;
+  const currentSession = selectedSession?.scope === dataPrimaryScope ? selectedSession.session : null;
 
   useEffect(() => {
     setSelectedSession(null);
@@ -344,7 +348,7 @@ export function WebAnalytics() {
         trust={trust}
         env={env}
         metric={metric}
-        range={range}
+        range={dataRange}
         selection={rangeSelection}
         onRange={(value) => { setRangeSelection(value); setSelectedSession(null); }}
         refreshing={primaryRefreshing}
@@ -360,7 +364,7 @@ export function WebAnalytics() {
               current={overview}
               previous={comparisonData}
               comparisonState={comparisonData ? 'ready' : comparison.error ? 'unavailable' : 'loading'}
-              range={range}
+              range={dataRange}
               trust={trust}
               trustLoading={!trustData && !trustRead.error}
               env={env}
@@ -386,7 +390,7 @@ export function WebAnalytics() {
                   : outcomeData
                     ? 'loading'
                     : 'unavailable'}
-              range={range}
+              range={dataRange}
               env={env}
               onRetry={outcomeRead.reload}
             />
@@ -503,7 +507,7 @@ export function WebAnalytics() {
                   <TableRow key={`${session.actor_id}:${session.session_id}`}>
                     <TableCell>
                       <Link
-                        to={analyticsNavigationTarget(`/analyze/users/${encodeURIComponent(session.actor_id)}`, location.search)}
+                        to={analyticsNavigationTarget(`/analyze/users/${encodeURIComponent(session.actor_id)}`, dataRangeSearch)}
                         className="inline-flex max-w-full break-all rounded-control px-1 py-0.5 font-mono text-xs text-foreground underline-offset-4 hover:bg-muted hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {session.actor_id}
@@ -522,7 +526,7 @@ export function WebAnalytics() {
                           size="icon-sm"
                           className="size-11 md:size-8"
                           aria-label={`Open session ${session.session_id}`}
-                          onClick={() => setSelectedSession({ scope: primaryScope, session })}
+                          onClick={() => setSelectedSession({ scope: dataPrimaryScope, session })}
                         >
                           <ArrowRight className="size-4" />
                         </Button>
@@ -545,12 +549,12 @@ export function WebAnalytics() {
         <SessionDetail
           session={currentSession}
           metric={metric.key}
-          range={range}
+          range={dataRange}
           onClose={() => setSelectedSession(null)}
         />
       )}
 
-      <AcquisitionPanel metrics={metrics} env={env} trusted={acquisitionTrusted} range={range} />
+      <AcquisitionPanel metrics={metrics} env={env} trusted={acquisitionTrusted} range={dataRange} />
     </div>
   );
 }
