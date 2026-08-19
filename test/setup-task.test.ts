@@ -89,6 +89,26 @@ describe('deterministic setup task', () => {
     expect(response.body.task).not.toContain('No real product observation');
   });
 
+  it('builds a server-derived fix task for a legacy project without saved intent', async () => {
+    const response = await api(
+      beta,
+      beta.secretToken,
+      'POST',
+      `/api/v1/projects/${beta.projectSlug}/setup-task`,
+      { agent_id: 'codex', kind: 'fix', env: 'prod' },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      source: 'deterministic',
+      blocker: 'first_event_observed',
+      plan: null,
+    });
+    expect(response.body.task).toContain('Current server-verified blocker: first_event_observed');
+    expect(response.body.task).toContain('install exactly @poolstatis/sdk@0.3.0');
+    expect(response.body.task).not.toContain('choose a project mode');
+  });
+
   it.each(['codex', 'claude-code', 'cursor', 'other'])('supports agent %s', async (agent_id) => {
     const response = await api(
       alpha,

@@ -1884,7 +1884,7 @@ export interface ProjectIntent extends ProjectIntentInput {
 export interface SetupTaskResponse {
   task: string;
   source: SetupTaskSource;
-  plan: SetupTaskPlan;
+  plan: SetupTaskPlan | null;
   blocker: OnboardingGateKey | null;
 }
 

@@ -563,6 +563,7 @@ function SetupPrimaryAction({ step, project, env, client, telemetryUserId, conne
   if (step.kind === 'fix' && step.blocker && client && typeof client.setupTaskFeedback === 'function') {
     return (
       <FixTaskAction
+        key={`${project}:${env}:${step.blocker}`}
         projectSlug={project}
         env={env}
         client={client}
@@ -638,7 +639,7 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId, label = 'Cop
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [fallbackTask, setFallbackTask] = useState<{ task: string; blocker: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; destructive: boolean } | null>(null);
   const copyTracked = useRef(false);
   const mounted = useRef(true);
 
@@ -699,11 +700,14 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId, label = 'Cop
         }, { distinctId: telemetryUserId });
       }
       if (!mounted.current) return;
-      await recordFeedback(responseBlocker);
-      if (!mounted.current) return;
       setCopied(true);
+      try {
+        await recordFeedback(responseBlocker);
+      } catch (caught) {
+        if (mounted.current) setError(fixTaskActionError(caught, 'Task copied, but progress could not be recorded. Refresh Setup.'));
+      }
     } catch (caught) {
-      if (mounted.current) setError(caught instanceof Error ? caught.message : 'Could not prepare the fix task.');
+      if (mounted.current) setError(fixTaskActionError(caught, 'Could not prepare the task. Try again.'));
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -727,7 +731,7 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId, label = 'Cop
       setFallbackTask(null);
       setCopied(true);
     } catch (caught) {
-      if (mounted.current) setError(caught instanceof Error ? caught.message : 'Could not record the copied task.');
+      if (mounted.current) setError(fixTaskActionError(caught, 'Task copied, but progress could not be recorded. Refresh Setup.'));
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -746,9 +750,19 @@ function FixTaskAction({ projectSlug, env, client, telemetryUserId, label = 'Cop
           <Button size="sm" variant="outline" onClick={() => void confirmManualCopy()} disabled={busy}>I copied it</Button>
         </div>
       )}
-      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      {error && (
+        <p role="alert" className={cn('text-xs', error.destructive ? 'text-destructive' : 'text-muted-foreground')}>
+          {error.message}
+        </p>
+      )}
     </div>
   );
+}
+
+function fixTaskActionError(caught: unknown, fallback: string): { message: string; destructive: boolean } {
+  const message = caught instanceof Error ? caught.message : String(caught);
+  if (/credential-like text/i.test(message)) return { message, destructive: true };
+  return { message: fallback, destructive: false };
 }
 
 function containsCredentialValue(value: string): boolean {
