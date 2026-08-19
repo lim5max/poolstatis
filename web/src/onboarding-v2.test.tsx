@@ -875,6 +875,34 @@ describe('condensed Setup', () => {
     ]);
   });
 
+  it('does not expose the legacy setup-intent error when a decision task cannot be prepared', async () => {
+    mockedStore.mockReturnValue({
+      client: {
+        onboardingStatus: vi.fn().mockResolvedValue({
+          ...connectedProof,
+          next_blocker: {
+            key: 'first_decision_saved', complete: false, required: true, evidence: {},
+            blocker: 'No decision has been saved.', next_action: 'Save the first decision.',
+          },
+        }),
+        projectIntent: vi.fn().mockResolvedValue({ intent: null }),
+        setupTask: vi.fn().mockRejectedValue(new Error('choose a project mode and at least one goal before generating a setup task')),
+        setupTaskFeedback: vi.fn(),
+      },
+      baseUrl: 'https://api.poolstatis.test', token: 'sk_private', tokenKind: 'secret',
+      projects: [{ slug: 'alpha', name: 'Alpha', timezone: 'UTC', active_metrics: 1, funnels: 1, events_30d: 1 }],
+      project: 'alpha', env: 'prod',
+    } as never);
+
+    render(<MemoryRouter><Setup /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy decision task' }));
+
+    const message = await screen.findByRole('alert');
+    expect(message).toHaveTextContent('Could not prepare the task. Try again.');
+    expect(message).not.toHaveTextContent('choose a project mode');
+    expect(message).toHaveClass('text-muted-foreground');
+  });
+
   it('never renders or copies a credential-like server task', async () => {
     const feedback = vi.fn();
     mockedStore.mockReturnValue({
