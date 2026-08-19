@@ -7,7 +7,7 @@ describe('CanonicalAnswer', () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
-  it('keeps the answer, comparison, trust and purpose before the chart and provenance in Evidence', () => {
+  it('keeps one answer and one next step above the chart and moves supporting context into Details', () => {
     render(
       <CanonicalAnswer
         takeaway="Weekly active users rose by 12%."
@@ -27,17 +27,21 @@ describe('CanonicalAnswer', () => {
 
     const answer = screen.getByRole('region', { name: 'Canonical answer' });
     const takeaway = within(answer).getByText('Weekly active users rose by 12%.');
-    const comparison = within(answer).getByText('Previous exact period');
-    const trust = within(answer).getByText(/Observed · Trusted · 34 events ·/);
-    const purpose = within(answer).getByText(/Count people who reach a meaningful product outcome/);
+    const next = within(answer).getByText(/Next: Break this movement down/);
     const chart = within(answer).getByRole('img', { name: 'Canonical chart' });
-    for (const beforeChart of [takeaway, comparison, trust, purpose]) {
+    for (const beforeChart of [takeaway, next]) {
       expect(beforeChart.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
+    expect(within(answer).queryByText('Takeaway')).not.toBeInTheDocument();
+    expect(within(answer).getByText('Trusted')).toBeInTheDocument();
+    expect(within(answer).getByText('Previous exact period')).not.toBeVisible();
+    expect(within(answer).getByText(/Count people who reach a meaningful product outcome/)).not.toBeVisible();
+    expect(within(answer).getByText(/Observed · Trusted · 34 events ·/)).not.toBeVisible();
     expect(within(answer).getByText(/Aggregation: unique actors/)).not.toBeVisible();
-    fireEvent.click(within(answer).getByText('Evidence'));
+    fireEvent.click(within(answer).getByText('Details'));
     expect(within(answer).getByText(/Aggregation: unique actors/)).toBeVisible();
-    expect(within(answer).getByText(/Next question: Break this movement down/)).toBeInTheDocument();
+    expect(within(answer).getByText('Previous exact period')).toBeVisible();
+    expect(within(answer).getByText(/Count people who reach a meaningful product outcome/)).toBeVisible();
     expect(within(answer).getByRole('button', { name: 'Copy follow-up task' })).toBeInTheDocument();
   });
 

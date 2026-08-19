@@ -340,7 +340,7 @@ export function ProductAnalytics({ surface = 'product' }: { surface?: 'product' 
                 aria-pressed={selected}
                 title={available ? candidate.question : 'Not supported by the current server contract.'}
                 onClick={() => selectTemplate(candidate)}
-                className={`min-h-11 shrink-0 border-b-2 px-1 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-foreground text-foreground' : available ? 'border-transparent text-muted-foreground hover:text-foreground' : 'cursor-not-allowed border-transparent text-muted-foreground/55'}`}
+                className={`min-h-11 shrink-0 border-b-2 px-1 text-sm font-medium transition-colors focus-visible:border-ring focus-visible:text-foreground focus-visible:outline-none ${selected ? 'border-foreground text-foreground' : available ? 'border-transparent text-muted-foreground hover:text-foreground' : 'cursor-not-allowed border-transparent text-muted-foreground/55'}`}
               >
                 {candidate.title}
               </button>

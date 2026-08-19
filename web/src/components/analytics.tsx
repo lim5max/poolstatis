@@ -156,17 +156,12 @@ export function CanonicalAnswer({
     }
   };
   return (
-    <AnswerCanvas className="border-l-4 border-l-primary">
+    <AnswerCanvas>
       <section aria-label="Canonical answer">
-        <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:p-5">
+        <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:p-5">
           <div className="min-w-0">
-            <div className="text-sm font-medium text-muted-foreground">Takeaway</div>
-            <p className="mt-1 text-lg font-semibold leading-snug">{takeaway}</p>
-            <p className="mt-3 text-sm"><span className="font-medium">Purpose:</span> <span className="text-muted-foreground">{purpose}</span></p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Observed · {evidenceTrustLabel(trust)} · {eventCount === null ? 'event count unavailable' : `${eventCount.toLocaleString()} events`} · <code>{env}</code>
-            </p>
-            <p className="mt-2 text-sm text-muted-foreground">Next question: {followUp}</p>
+            <p className="text-lg font-semibold leading-snug">{takeaway}</p>
+            <p className="mt-2 text-sm text-muted-foreground">Next: {followUp}</p>
             <div className="mt-3 flex flex-wrap gap-2">
               {officialSaveState !== 'hidden' && onSaveOfficial ? (
                 <Button
@@ -198,18 +193,27 @@ export function CanonicalAnswer({
             {officialSaveState === 'error' && saveState !== 'error' && <p role="alert" className="mt-2 text-sm text-destructive">Official status could not be applied. Check owner or admin access and try again.</p>}
           </div>
           <div className="flex flex-wrap gap-2 sm:justify-end">
-            <Badge variant={trust === 'trusted' ? 'default' : trust === 'blocked' ? 'destructive' : 'outline'}>
-              {trust === 'trusted' ? 'Trusted evidence' : trust === 'partial' ? 'Partial evidence' : trust === 'blocked' ? 'Blocked evidence' : 'Evidence unavailable'}
+            <Badge
+              variant={trust === 'blocked' ? 'destructive' : trust === 'unavailable' ? 'outline' : 'secondary'}
+              className="text-xs"
+            >
+              {evidenceTrustLabel(trust)}
             </Badge>
-            <Badge variant="outline">{comparison}</Badge>
           </div>
         </div>
         <div className="border-t">{chart}</div>
         <details className="border-t">
           <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-4 py-3 text-sm font-medium sm:px-5">
-            Evidence
+            Details
           </DisclosureSummary>
-          <div className="border-t px-4 py-3 text-sm leading-relaxed text-muted-foreground sm:px-5">{evidence}</div>
+          <div className="space-y-2 border-t px-4 py-3 text-sm leading-relaxed text-muted-foreground sm:px-5">
+            <p><span className="font-medium text-foreground">Purpose:</span> {purpose}</p>
+            <p><span className="font-medium text-foreground">Comparison:</span> {comparison}</p>
+            <p>
+              Observed · {evidenceTrustLabel(trust)} · {eventCount === null ? 'event count unavailable' : `${eventCount.toLocaleString()} events`} · <code>{env}</code>
+            </p>
+            <div>{evidence}</div>
+          </div>
         </details>
         {manualCopy && (
           <div className="border-t p-4 sm:p-5">
