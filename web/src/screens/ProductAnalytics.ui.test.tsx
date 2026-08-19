@@ -202,20 +202,26 @@ describe('Product answer-first surface', () => {
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: 'Product' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Analysis view' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Product health' })).toHaveAttribute('aria-pressed', 'true');
+    const tabs = screen.getByRole('group', { name: 'Analysis view' });
+    const selectedTab = within(tabs).getByRole('button', { name: 'Product health' });
+    expect(selectedTab).toHaveAttribute('aria-pressed', 'true');
+    expect(selectedTab).toHaveClass('border-b-2');
+    expect(selectedTab).not.toHaveClass('focus-visible:ring-2');
     expect(screen.getByText('Edit analysis').closest('details')).not.toHaveAttribute('open');
 
-    await waitFor(() => expect(screen.getByText(/Observed · Trusted · 34 events ·/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Trusted')).toBeInTheDocument());
     const answer = screen.getByRole('region', { name: 'Canonical answer' });
-    expect(within(answer).getByText('Takeaway')).toBeInTheDocument();
-    expect(within(answer).getByText('No safely comparable period headline')).toBeInTheDocument();
-    expect(within(answer).getByText(metric.purpose)).toBeInTheDocument();
+    expect(within(answer).queryByText('Takeaway')).not.toBeInTheDocument();
+    expect(answer.parentElement).not.toHaveClass('border-l-4');
+    expect(within(answer).getByText('No safely comparable period headline')).not.toBeVisible();
+    expect(within(answer).getByText(metric.purpose)).not.toBeVisible();
     expect(within(answer).getByRole('img', { name: 'Product answer chart' })).toHaveTextContent('table fallback');
     expect(within(answer).getByRole('img', { name: 'Product answer chart' })).toHaveAttribute('data-evidence-summary', 'false');
     expect(within(answer).getByText(/Aggregation:/)).not.toBeVisible();
-    fireEvent.click(within(answer).getByText('Evidence'));
+    fireEvent.click(within(answer).getByText('Details'));
     expect(within(answer).getByText(/Aggregation:/)).toBeVisible();
+    expect(within(answer).getByText('No safely comparable period headline')).toBeVisible();
+    expect(within(answer).getByText(metric.purpose)).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Copy follow-up task' }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledOnce());
     const task = vi.mocked(navigator.clipboard.writeText).mock.calls[0]?.[0] as string;
@@ -425,7 +431,7 @@ describe('Product answer-first surface', () => {
     mockedStore.mockReturnValue(current);
     render(<MemoryRouter><ProductAnalytics /></MemoryRouter>);
 
-    expect(await screen.findByText('Partial evidence')).toBeInTheDocument();
+    expect(await screen.findByText('Partial')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
     await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
 
