@@ -230,9 +230,6 @@ function AuthShell({ children }: { children: ReactNode }) {
         <main className="grid flex-1 place-items-center px-6 py-10 lg:px-8">
           <div className="w-full max-w-sm">
             {children}
-            <p className="mt-7 text-xs leading-5 text-muted-foreground">
-              Your password stays with the Poolstatis identity service.
-            </p>
           </div>
         </main>
       </div>
@@ -313,14 +310,10 @@ function AuthCard({
 }) {
   return (
     <section>
-      <p className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
-        <span aria-hidden="true" className="size-2 rounded-full bg-brand" />
-        Poolstatis Cloud · beta
-      </p>
       <h1
         ref={titleRef}
         tabIndex={titleRef ? -1 : undefined}
-        className="auth-display mt-3 text-4xl outline-none sm:text-5xl"
+        className="auth-display text-4xl outline-none sm:text-5xl"
       >
         {title}
       </h1>
@@ -567,10 +560,6 @@ function Login() {
           <AuthMethodDivider />
         </>
       )}
-      <div className="mb-3 flex items-center justify-between gap-3 text-sm font-medium">
-        <span>Email and password</span>
-        {lastMethod === 'email' && <LastUsed />}
-      </div>
       <form className="grid gap-4" onSubmit={submit}>
         <Field id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />
         <Field id="password" label="Password" type="password" autoComplete="current-password" value={password} onChange={setPassword} minLength={8} />
@@ -662,10 +651,6 @@ function Signup() {
           <AuthMethodDivider />
         </>
       )}
-      <div className="mb-3 flex items-center justify-between gap-3 text-sm font-medium">
-        <span>Email and password</span>
-        {lastMethod === 'email' && <LastUsed />}
-      </div>
       <form className="grid gap-4" onSubmit={submit}>
         <Field id="name" label="Name" autoComplete="name" value={name} onChange={setName} />
         <Field id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} />

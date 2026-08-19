@@ -79,10 +79,9 @@ describe('Better Auth portal', () => {
 
     expect(screen.getByRole('region', { name: 'Why Poolstatis' })).toHaveClass('bg-primary', 'text-primary-foreground');
     expect(screen.getByText('See the signals behind every product decision.')).toBeInTheDocument();
-    const cloudBeta = screen.getByText('Poolstatis Cloud · beta');
-    expect(cloudBeta).toHaveClass('text-foreground');
-    expect(cloudBeta).not.toHaveClass('text-brand-strong');
-    expect(cloudBeta.querySelector('.bg-brand')).not.toBeNull();
+    expect(screen.queryByText('Poolstatis Cloud · beta')).not.toBeInTheDocument();
+    expect(screen.queryByText('Email and password')).not.toBeInTheDocument();
+    expect(screen.queryByText('Your password stays with the Poolstatis identity service.')).not.toBeInTheDocument();
     expect(screen.getByText('See the signals behind every product decision.')).toHaveClass('auth-display');
     expect(screen.getByRole('heading', { name: 'Create your account' })).toHaveClass('auth-display');
     expect(screen.getByRole('heading', { name: 'Create your account' })).not.toHaveClass('serif');
@@ -117,10 +116,10 @@ describe('Better Auth portal', () => {
     const email = screen.getByLabelText('Email');
     expect(google.compareDocumentPosition(email) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('Last used')).toBeInTheDocument();
-    expect(screen.getByText('Email and password')).toBeInTheDocument();
+    expect(screen.queryByText('Email and password')).not.toBeInTheDocument();
   });
 
-  it('marks email and password when that was the last successful method', async () => {
+  it('keeps the email form concise when email was the last successful method', async () => {
     document.cookie = 'poolstatis.last_sign_in_method=email; path=/';
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ user: null, session: null }), {
@@ -132,8 +131,9 @@ describe('Better Auth portal', () => {
     renderPortal('/login');
 
     await screen.findByRole('button', { name: 'Continue with Google' });
-    const emailMethod = screen.getByText('Email and password').parentElement;
-    expect(emailMethod).toHaveTextContent('Email and passwordLast used');
+    expect(screen.getByLabelText('Email')).toBeInTheDocument();
+    expect(screen.queryByText('Email and password')).not.toBeInTheDocument();
+    expect(screen.queryByText('Last used')).not.toBeInTheDocument();
   });
 
   it('shows the last successful method on account creation too', () => {
@@ -143,7 +143,7 @@ describe('Better Auth portal', () => {
     expect(screen.getByRole('button', {
       name: 'Continue with Google, last used',
     })).toBeInTheDocument();
-    expect(screen.getByText('Email and password')).toBeInTheDocument();
+    expect(screen.queryByText('Email and password')).not.toBeInTheDocument();
   });
 
   it('keeps provider failures neutral, keyboard reachable, and out of browser history', async () => {
