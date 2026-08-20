@@ -489,8 +489,8 @@ function setupGateLabel(gate: DecisionLoopOnboardingStatus['gates'][number]): st
 function SetupEvidenceLedger({ status }: { status: DecisionLoopOnboardingStatus }) {
   return (
     <details className="overflow-hidden rounded-panel border bg-card">
-      <DisclosureSummary className="flex min-h-14 cursor-pointer items-center justify-between gap-3 px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
-        <span className="font-medium">Server evidence</span>
+      <DisclosureSummary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5">
+        <span data-slot="setup-evidence-title" className="min-w-0 flex-1 text-left font-medium">Server evidence</span>
         <Badge variant="outline">{status.gates.filter((gate) => gate.complete).length}/{status.gates.length} verified</Badge>
       </DisclosureSummary>
       <ol className="divide-y border-t" aria-label="Setup gate evidence">
@@ -498,7 +498,7 @@ function SetupEvidenceLedger({ status }: { status: DecisionLoopOnboardingStatus 
           const timestamp = latestEvidenceTimestamp(gate.evidence);
           const entries = Object.entries(gate.evidence);
           return (
-            <li key={gate.key} className="grid min-w-0 gap-3 px-4 py-3 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)] sm:px-5">
+            <li key={gate.key} className="grid min-w-0 gap-3 px-4 py-3 sm:px-5 md:grid-cols-3 lg:grid-cols-4">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{setupGateLabel(gate)}</span>
@@ -508,13 +508,13 @@ function SetupEvidenceLedger({ status }: { status: DecisionLoopOnboardingStatus 
                   {timestamp ? <>Evidence as of <time dateTime={timestamp}>{formatTimestamp(timestamp)}</time></> : 'Evidence freshness unavailable · no timestamp returned'}
                 </p>
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 md:col-span-2 lg:col-span-3">
                 {entries.length > 0 ? (
-                  <dl className="grid min-w-0 gap-x-3 gap-y-1 text-xs sm:grid-cols-[minmax(8rem,auto)_minmax(0,1fr)]">
+                  <dl className="grid min-w-0 gap-x-3 gap-y-1 text-xs sm:grid-cols-4">
                     {entries.map(([key, value]) => (
                       <div key={key} className="contents">
                         <dt className="font-mono text-muted-foreground">{key}</dt>
-                        <dd className="break-words font-mono">{safeEvidenceValue(value)}</dd>
+                        <dd className="break-words font-mono sm:col-span-3">{safeEvidenceValue(value)}</dd>
                       </div>
                     ))}
                   </dl>

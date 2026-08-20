@@ -149,7 +149,7 @@ function FlowStat({ label, value, note, danger = false }: { label: string; value
   </div>;
 }
 
-function DataFlowChart({ window, label }: { window: DataHealthWindow; label: string }) {
+export function DataFlowChart({ window, label }: { window: DataHealthWindow; label: string }) {
   const width = 720;
   const height = 220;
   const inset = 22;
@@ -162,6 +162,7 @@ function DataFlowChart({ window, label }: { window: DataHealthWindow; label: str
   const yRejected = (value: number) => inset + chartHeight - (value / maxRejected) * chartHeight;
   const acceptedPath = window.points.map((point, index) => `${x(index)},${yAccepted(point.accepted)}`).join(' ');
   const rejectedPath = window.points.map((point, index) => `${x(index)},${yRejected(point.rejected)}`).join(' ');
+  const hasRejected = window.points.some((point) => point.rejected > 0);
   return <div className="min-w-0">
     <div className="mb-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
       <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 bg-brand-strong" />Accepted</span>
@@ -175,8 +176,8 @@ function DataFlowChart({ window, label }: { window: DataHealthWindow; label: str
     >
       {[0, 0.5, 1].map((part) => <line key={part} x1={inset} x2={width - inset} y1={inset + part * chartHeight} y2={inset + part * chartHeight} className="stroke-border" />)}
       {window.points.length > 0 && <>
-        <polyline points={acceptedPath} fill="none" className="stroke-brand-strong" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-        <polyline points={rejectedPath} fill="none" className="stroke-destructive" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        <polyline data-series="accepted" points={acceptedPath} fill="none" className="stroke-brand-strong" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+        {hasRejected && <polyline data-series="rejected" points={rejectedPath} fill="none" className="stroke-destructive" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />}
         {window.points.map((point, index) => point.rejected > 0 && <circle key={point.bucket} cx={x(index)} cy={yRejected(point.rejected)} r="4" className="fill-destructive" />)}
       </>}
     </svg>
