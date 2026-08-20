@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useStore } from '../store';
+import { DataFlowChart } from '../components/data-health-control';
 import { Data } from './Data';
 
 vi.mock('../store', async (importOriginal) => ({
@@ -121,6 +122,21 @@ describe('Events data-health control', () => {
         sample,
       },
     } as never);
+  });
+
+  it('does not blend an empty rejected series into the accepted baseline', () => {
+    const emptyRejectedWindow = {
+      ...health.windows.last_24h,
+      rejected_total: 0,
+      points: health.windows.last_24h.points.map((point) => ({ ...point, rejected: 0 })),
+    };
+
+    render(<DataFlowChart window={emptyRejectedWindow} label="24 hours" />);
+
+    const chart = screen.getByRole('img', { name: /Accepted and rejected observations for 24 hours/ });
+    expect(chart.querySelector('[data-series="accepted"]')).toHaveClass('stroke-brand-strong');
+    expect(chart.querySelector('[data-series="rejected"]')).not.toBeInTheDocument();
+    expect(within(chart.previousElementSibling as HTMLElement).getByText('Rejected')).toBeInTheDocument();
   });
 
   it('uses Today and custom exact periods for the event stream', async () => {

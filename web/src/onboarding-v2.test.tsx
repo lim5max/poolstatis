@@ -760,6 +760,11 @@ describe('condensed Setup', () => {
     expect(within(evidence).getByText('native_key_created_at')).toBeInTheDocument();
     expect(within(evidence).getByText('2026-08-11T09:58:00.000Z')).toBeInTheDocument();
     expect(within(evidence).getAllByText(/Evidence as of/).length).toBeGreaterThan(0);
+    const summary = screen.getByText('Server evidence').closest('summary')!;
+    expect(summary).toHaveClass('flex', 'items-center');
+    expect(summary.querySelector('[data-slot="disclosure-chevron"]')?.nextElementSibling)
+      .toHaveAttribute('data-slot', 'setup-evidence-title');
+    expect(screen.getByText('native_key_created_at').nextElementSibling).toHaveClass('sm:col-span-3');
   });
 
   it('keeps copied MCP config unverified until the server reports a real agent tool call', async () => {
