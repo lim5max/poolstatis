@@ -485,17 +485,30 @@ describe('Product answer-first surface', () => {
     fireEvent.click(screen.getByText('Edit funnel analysis'));
     expect(screen.getByRole('combobox', { name: 'Saved funnel' })).toHaveTextContent('Checkout · checkout');
 
-    expect(await screen.findByText('Biggest loss')).toBeInTheDocument();
+    expect(await screen.findByText('Biggest drop-off')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Started → Completed' })).toBeInTheDocument();
     expect(screen.getByText(/30 actors lost · 50% drop/)).toBeInTheDocument();
-    expect(screen.getByText('Biggest absolute')).toHaveTextContent('Visited → Started');
-    expect(screen.getByText('Biggest percentage')).toHaveTextContent('Started → Completed');
+    const steps = screen.getByRole('list', { name: 'Funnel steps' });
+    expect(within(steps).getByText('Visited')).toBeInTheDocument();
+    expect(within(steps).getByText('Started')).toBeInTheDocument();
+    expect(within(steps).getByText('Completed')).toBeInTheDocument();
+    expect(within(steps).getByText('30% from start')).toBeInTheDocument();
+    expect(screen.queryByText('Previous conversion')).not.toBeInTheDocument();
+    expect(screen.queryByText('Biggest absolute')).not.toBeInTheDocument();
+    expect(screen.queryByText('Biggest percentage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Affected goal')).not.toBeInTheDocument();
+    const evidenceNotes = screen.getByText('Evidence notes').closest('details');
+    expect(evidenceNotes).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Evidence notes'));
+    expect(evidenceNotes).toHaveAttribute('open');
     expect(screen.getByText(/Stable step order resolved an equal loss/)).toBeInTheDocument();
     expect(current.client.releases).not.toHaveBeenCalled();
     expect(current.client.experiments).not.toHaveBeenCalled();
     expect(screen.queryByText('Related change evidence')).not.toBeInTheDocument();
-    expect(screen.getByText(/does not infer a release or experiment/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Investigate Started → Completed' })).toHaveAttribute('data-variant', 'default');
+    expect(screen.queryByText(/does not infer a release or experiment/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Immutable investigation evidence')).not.toBeInTheDocument();
+    expect(screen.queryByText('Explicit Ship handoff')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save investigation' })).toHaveAttribute('data-variant', 'outline');
     expect(screen.getByRole('button', { name: 'Save answer' })).toHaveAttribute('data-variant', 'outline');
     fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
     await waitFor(() => expect(current.client.createAnalysisView).toHaveBeenCalledOnce());
@@ -504,16 +517,16 @@ describe('Product answer-first surface', () => {
       primary_value: { value: 30, unit: 'percent', formatted: '30%' },
       delta: { value: -15, unit: 'percentage_point', direction: 'down' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Investigate Started → Completed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save investigation' }));
     await waitFor(() => expect(current.client.createFunnelInvestigation).toHaveBeenCalledWith('alpha', expect.objectContaining({
       funnel: 'checkout', env: 'prod', from_step: 1, to_step: 2,
       date_from: '2026-07-07T00:00:00Z', date_to: '2026-08-06T00:00:00Z',
     })));
-    expect(screen.getByText(/Saved artifact/)).toHaveTextContent('11111111-1111-4111-8111-111111111111');
-    expect(screen.getByRole('link', { name: /Continue through Ship with artifact/ })).toHaveAttribute('href', '/changes?investigation=11111111-1111-4111-8111-111111111111');
+    expect(screen.getByRole('status')).toHaveTextContent('Investigation 11111111 saved');
+    expect(screen.getByRole('link', { name: 'Open in Ship' })).toHaveAttribute('href', '/changes?investigation=11111111-1111-4111-8111-111111111111');
     expect(screen.queryByRole('button', { name: 'Save proposal to Decisions' })).not.toBeInTheDocument();
     expect(current.client.evaluateRelease).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy bounded task' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy task' }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('Poolstatis investigation: 11111111-1111-4111-8111-111111111111')));
     expect(current.client.query).toHaveBeenCalledTimes(1);
     expect(current.client.query).toHaveBeenNthCalledWith(1, 'alpha', expect.objectContaining({ kind: 'funnel', funnel: 'checkout', env: 'prod' }));

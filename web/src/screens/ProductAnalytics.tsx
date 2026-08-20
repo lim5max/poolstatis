@@ -761,7 +761,7 @@ function FunnelBiggestLoss({
     return (
       <AnswerCanvas>
         <div className="p-4 sm:p-5">
-          <div className="text-sm font-medium text-muted-foreground">Biggest loss</div>
+          <div className="text-sm font-medium text-muted-foreground">Biggest drop-off</div>
           <h2 className="mt-1 text-xl font-semibold">Requested transition is unavailable</h2>
           <p className="mt-2 text-sm text-muted-foreground">
             The server summary does not contain this transition. Open the funnel without step parameters or rerun it after checking the saved definition.
@@ -771,10 +771,8 @@ function FunnelBiggestLoss({
     );
   }
   if (summary.lostActors === 0) {
-    return <AnswerCanvas><div className="p-4 sm:p-5"><div className="text-sm font-medium text-muted-foreground">Biggest loss</div><h2 className="mt-1 text-xl font-semibold">No measured loss in this period</h2><p className="mt-2 text-sm text-muted-foreground">Every measured actor reached each saved funnel step. No loss or investigate action is implied.</p></div></AnswerCanvas>;
+    return <AnswerCanvas><div className="p-4 sm:p-5"><div className="text-sm font-medium text-muted-foreground">Biggest drop-off</div><h2 className="mt-1 text-xl font-semibold">No measured loss in this period</h2><p className="mt-2 text-sm text-muted-foreground">Every measured actor reached each saved funnel step. No loss or investigate action is implied.</p></div></AnswerCanvas>;
   }
-  const absoluteLabel = funnelLossLabel(result, result.summary?.biggest_absolute_loss ?? null);
-  const percentageLabel = funnelLossLabel(result, result.summary?.biggest_percentage_loss ?? null);
   const task = investigationId
     ? `Investigate one measured transition without changing its definition.\n\nPoolstatis investigation: ${investigationId}\nProject: ${project}\nSaved funnel: ${funnel.key}\nGoal: ${funnel.goal}\nEnvironment: ${env}\nExact UTC range: ${result.meta.date_range.from} to ${result.meta.date_range.to}\nTransition: ${summary.fromLabel} (${summary.fromMetric}) -> ${summary.toLabel} (${summary.toMetric})\nObserved loss: ${summary.lostActors} actors${summary.dropRate === null ? '' : ` (${percent(summary.dropRate)})`}\n\nRead the immutable artifact with get_funnel_investigation from @poolstatis/mcp@0.7.0 or GET /api/v1/projects/${project}/funnel-investigations/${investigationId}. Use registered metrics and trusted properties only. Report sample and data-quality limits. Treat every result as descriptive, not causal, and cite the investigation id in any later release work.`
     : '';
@@ -808,63 +806,66 @@ function FunnelBiggestLoss({
   };
   return (
     <AnswerCanvas>
-      <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-        <div className="min-w-0">
-          <div className="text-sm font-medium text-muted-foreground">Biggest loss</div>
-          <h2 className="mt-1 text-xl font-semibold">{summary.fromLabel} → {summary.toLabel}</h2>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            {fmtActors(summary.lostActors)} lost · {summary.dropRate === null ? 'drop rate unavailable' : `${percent(summary.dropRate)} drop`}
-            {summary.deltaPercentagePoints === null ? ' · previous-period comparison unavailable' : ` · overall ${signedPercentagePoints(summary.deltaPercentagePoints)} vs previous exact period`}.
-          </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            <FunnelFact label="Overall conversion" value={summary.overallConversion === null ? 'Unavailable' : percent(summary.overallConversion)} />
-            <FunnelFact label="Previous conversion" value={summary.previousOverallConversion === null ? 'Unavailable' : percent(summary.previousOverallConversion)} />
-            <FunnelTransitionFact label="Biggest absolute" value={absoluteLabel} />
-            <FunnelTransitionFact label="Biggest percentage" value={percentageLabel} />
-            <FunnelFact label="Affected goal" value={funnel.goal} />
+      <div className="p-4 sm:p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-muted-foreground">Biggest drop-off</div>
+            <h2 className="mt-1 text-xl font-semibold">{summary.fromLabel} → {summary.toLabel}</h2>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              {fmtActors(summary.lostActors)} lost
+              {summary.dropRate === null ? '' : ` · ${percent(summary.dropRate)} drop`}
+              {summary.overallConversion === null ? '' : ` · ${percent(summary.overallConversion)} complete`}
+              {summary.deltaPercentagePoints === null ? '' : ` · ${signedPercentagePoints(summary.deltaPercentagePoints)} vs previous period`}
+            </p>
+          </div>
+          <div className="shrink-0">
+            <Button variant="outline" className="h-9 w-full sm:w-auto" onClick={() => void saveInvestigation()} disabled={!idempotencyKey || investigationState === 'saving' || investigationState === 'saved'}>
+              {investigationState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
+              {investigationState === 'saving' ? 'Saving…' : investigationState === 'saved' ? 'Saved' : 'Save investigation'}
+            </Button>
+            {investigationState === 'error' ? <p role="alert" className="mt-2 text-sm text-destructive">Could not save. Try again.</p> : null}
           </div>
         </div>
-        <div className="flex w-full flex-col gap-2 lg:w-auto">
-          <Button className="h-11 w-full" onClick={() => void saveInvestigation()} disabled={!idempotencyKey || investigationState === 'saving' || investigationState === 'saved'}>
-            {investigationState === 'saving' ? <Loader2 className="size-4 animate-spin" /> : null}
-            {investigationState === 'saving' ? 'Saving evidence…' : investigationState === 'saved' ? 'Investigation saved' : `Investigate ${summary.fromLabel} → ${summary.toLabel}`}
-          </Button>
-          {investigationId ? <Button className="h-11 w-full" variant="outline" onClick={() => void copyTask()}>{copied ? 'Task copied' : 'Copy bounded task'}</Button> : null}
-        </div>
+        <FunnelSteps result={result} highlightedStep={summary.toStep} />
       </div>
       {result.evidence?.warnings.length ? (
-        <div className="border-t px-4 py-3 text-sm sm:px-5">
-          <div className="font-medium">Evidence notes</div>
-          {result.evidence.warnings.map((warning) => <p key={`${warning.code}:${warning.message}`} className="mt-1 text-muted-foreground">{warning.message}</p>)}
+        <details className="group border-t">
+          <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-4 py-3 text-sm font-medium sm:px-5">Evidence notes</DisclosureSummary>
+          <div className="border-t px-4 py-3 text-sm text-muted-foreground sm:px-5">
+            {result.evidence.warnings.map((warning) => <p key={`${warning.code}:${warning.message}`}>{warning.message}</p>)}
+          </div>
+        </details>
+      ) : null}
+      {investigationId ? (
+        <div className="flex flex-col gap-3 border-t px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <p role="status" className="min-w-0 text-muted-foreground">Investigation <code>{investigationId.slice(0, 8)}</code> saved</p>
+          <div className="flex flex-wrap gap-2">
+            <Button className="h-9" variant="outline" onClick={() => void copyTask()}>{copied ? 'Task copied' : 'Copy task'}</Button>
+            <Button asChild className="h-9" variant="outline">
+              <Link to={`/changes?investigation=${encodeURIComponent(investigationId)}`}>Open in Ship</Link>
+            </Button>
+          </div>
         </div>
       ) : null}
-      <div className="border-t px-4 py-4 text-sm sm:px-5">
-        <div className="font-medium">Immutable investigation evidence</div>
-        <p className="mt-1 text-muted-foreground">Saving reruns this saved funnel and stores the exact query, result, evidence, creator and SHA-256 lineage. It does not create a causal claim or a Decisions proposal.</p>
-        {investigationId ? <p className="mt-2">Saved artifact <code className="break-all">{investigationId}</code>. Reference this id in any later release evaluation.</p> : null}
-        {investigationState === 'error' ? <p role="alert" className="mt-2 text-destructive">The evidence could not be reproduced and persisted. Rerun the funnel and try again.</p> : null}
-        {investigations.loading ? <p className="mt-2 text-muted-foreground">Reading saved investigations…</p> : investigations.error ? <p className="mt-2 text-muted-foreground">Saved investigations are temporarily unavailable.</p> : investigations.data?.length ? (
-          <div className="mt-3 space-y-2">
+      {investigations.data?.length ? (
+        <details className="group border-t">
+          <DisclosureSummary className="flex min-h-11 cursor-pointer items-center px-4 py-3 text-sm font-medium sm:px-5">
+            Investigation history
+            <span className="ml-auto font-normal text-muted-foreground">{investigations.data.length} saved</span>
+          </DisclosureSummary>
+          <div className="space-y-2 border-t px-4 py-3 text-sm sm:px-5">
             {investigations.data.map((investigation) => (
-              <div key={investigation.id} className="rounded-control border bg-muted/20 p-3">
-                <div className="font-medium">{investigation.transition.from_label} → {investigation.transition.to_label}</div>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                  <code className="break-all">{investigation.id}</code>
-                  <span>{new Date(investigation.created_at).toLocaleString()}</span>
-                  <span>by {investigation.created_by}</span>
+              <div key={investigation.id} className="grid gap-1 border-b py-2 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                <div className="min-w-0">
+                  <div className="font-medium">{investigation.transition.from_label} → {investigation.transition.to_label}</div>
+                  <code className="break-all text-xs text-muted-foreground">{investigation.id}</code>
                 </div>
+                <span className="text-xs text-muted-foreground">{new Date(investigation.created_at).toLocaleString()}</span>
               </div>
             ))}
           </div>
-        ) : <p className="mt-2 text-muted-foreground">No persisted investigation exists for this saved funnel and environment yet.</p>}
-      </div>
-      <div className="border-t px-4 py-4 text-sm sm:px-5">
-        <div className="font-medium">Explicit Ship handoff</div>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <p className="text-muted-foreground">Poolstatis does not infer a release or experiment from metric and time overlap. Persist this investigation, then explicitly choose the relevant change in Ship.</p>
-          {investigationId ? <Link className="font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground" to={`/changes?investigation=${encodeURIComponent(investigationId)}`}>Continue through Ship with artifact {investigationId.slice(0, 8)}</Link> : null}
-        </div>
-      </div>
+        </details>
+      ) : null}
       {taskVisible && (
         <div className="border-t p-4 sm:p-5">
           <p role="alert" className="mb-2 text-sm text-muted-foreground">Clipboard access was blocked. Copy the prepared task manually.</p>
@@ -875,16 +876,29 @@ function FunnelBiggestLoss({
   );
 }
 
-function FunnelFact({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0 rounded-control border bg-muted/20 p-3"><div className="text-sm text-muted-foreground">{label}</div><div className="mt-1 break-words font-medium">{value}</div></div>;
-}
-
-function FunnelTransitionFact({ label, value }: { label: string; value: string }) {
+function FunnelSteps({ result, highlightedStep }: { result: FunnelQueryResult; highlightedStep: number }) {
+  const startActors = Math.max(result.steps[0]?.actors ?? 0, 1);
   return (
-    <div className="min-w-0 rounded-control border bg-muted/20 p-3">
-      <div className="text-sm text-muted-foreground">{label}<span className="sr-only"> {value}</span></div>
-      <div aria-hidden="true" className="mt-1 break-words font-medium">{value}</div>
-    </div>
+    <ol className="mt-5 divide-y border-y" aria-label="Funnel steps">
+      {result.steps.map((step, index) => {
+        const width = Math.max(0, Math.min(100, step.actors / startActors * 100));
+        return (
+          <li key={`${step.metric_key}:${index}`} className="grid min-w-0 gap-2 py-3 sm:grid-cols-[minmax(10rem,0.8fr)_minmax(8rem,1.5fr)_auto] sm:items-center sm:gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="font-mono text-xs text-muted-foreground">{index + 1}</span>
+              <span className="truncate text-sm font-medium" title={step.label}>{step.label}</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-control bg-muted" aria-hidden="true">
+              <div className={`h-full rounded-control ${step.actors > 0 ? 'min-w-1 ' : ''}${index === highlightedStep ? 'bg-primary' : 'bg-primary/45'}`} style={{ width: `${width}%` }} />
+            </div>
+            <div className="flex items-baseline justify-between gap-3 text-sm sm:block sm:text-right">
+              <span className="font-mono tabular-nums">{step.actors.toLocaleString()} actors</span>
+              <span className="text-xs text-muted-foreground sm:ml-2">{step.conversion_from_start === null ? '—' : `${percent(step.conversion_from_start)} from start`}</span>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -911,13 +925,6 @@ function requestedFunnelTransition(from: string | null, to: string | null): Requ
   const fromStep = Number(from);
   const toStep = Number(to);
   return toStep === fromStep + 1 ? { fromStep, toStep } : null;
-}
-
-function funnelLossLabel(result: FunnelQueryResult, loss: NonNullable<FunnelQueryResult['summary']>['biggest_absolute_loss']): string {
-  if (!loss) return 'Unavailable';
-  const from = result.steps[loss.from_step];
-  const to = result.steps[loss.to_step];
-  return from && to ? `${from.label} → ${to.label}` : 'Unavailable';
 }
 
 function Control({ label, children }: { label: string; children: React.ReactNode }) {
